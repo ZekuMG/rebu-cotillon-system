@@ -1,0 +1,174 @@
+:root {
+  --text: #6b6375;
+  --text-h: #08060d;
+  --bg: #fff;
+  --border: #e5e4e7;
+  --code-bg: #f4f3ec;
+  --accent: #aa3bff;
+  --accent-bg: rgba(170, 59, 255, 0.1);
+  --accent-border: rgba(170, 59, 255, 0.5);
+  --social-bg: rgba(244, 243, 236, 0.5);
+  --shadow: rgba(0, 0, 0, 0.1) 0 10px 15px -3px,
+    rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  font: 18px/145% var(--sans);
+  letter-spacing: 0.18px;
+  color-scheme: light;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  @media (max-width: 1024px) {
+    font-size: 16px;
+  }
+}
+
+/* Forzar modo claro para toda la aplicación */
+html,
+body,
+#root {
+  color-scheme: light only !important;
+  background-color: #f1f5f9 !important;
+}
+
+/* Estilos globales para inputs - Evitar herencia de modo oscuro */
+input,
+select,
+textarea {
+  color-scheme: light only !important;
+  background-color: white !important;
+  color: #1e293b !important;
+  border-color: #e2e8f0 !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #94a3b8 !important;
+  opacity: 1 !important;
+}
+
+/* Estilos específicos para inputs de fecha - CRÍTICO para visibilidad */
+input[type='date'],
+input[type='time'],
+input[type='datetime-local'] {
+  color-scheme: light only !important;
+  background-color: white !important;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* Ícono del calendario - Chrome, Safari, Edge */
+input[type='date']::-webkit-calendar-picker-indicator,
+input[type='time']::-webkit-calendar-picker-indicator,
+input[type='datetime-local']::-webkit-calendar-picker-indicator {
+  filter: invert(0) !important;
+  opacity: 0.7 !important;
+  cursor: pointer;
+  background-color: transparent;
+  padding: 2px;
+}
+
+input[type='date']::-webkit-calendar-picker-indicator:hover,
+input[type='time']::-webkit-calendar-picker-indicator:hover,
+input[type='datetime-local']::-webkit-calendar-picker-indicator:hover {
+  opacity: 1 !important;
+}
+
+/* Inner spin button para inputs numéricos */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  opacity: 1;
+}
+
+/* Estilos para selects */
+select {
+  color-scheme: light only !important;
+  background-color: white !important;
+}
+
+select option {
+  background-color: white !important;
+  color: #1e293b !important;
+}
+
+/* Estilos para inputs de password */
+input[type='password'] {
+  color-scheme: light only !important;
+  background-color: white !important;
+  color: #1e293b !important;
+}
+
+/* Fix para Firefox */
+@-moz-document url-prefix() {
+  input,
+  select,
+  textarea {
+    color-scheme: light !important;
+  }
+}
+
+body {
+  margin: 0;
+}
+
+#root {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  text-align: left;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+h1,
+h2 {
+  font-family: var(--heading);
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+h1 {
+  font-size: 56px;
+  letter-spacing: -1.68px;
+  margin: 32px 0;
+  @media (max-width: 1024px) {
+    font-size: 36px;
+    margin: 20px 0;
+  }
+}
+h2 {
+  font-size: 24px;
+  line-height: 118%;
+  letter-spacing: -0.24px;
+  margin: 0 0 8px;
+  @media (max-width: 1024px) {
+    font-size: 20px;
+  }
+}
+p {
+  margin: 0;
+}
+
+code,
+.counter {
+  font-family: var(--mono);
+  display: inline-flex;
+  border-radius: 4px;
+  color: var(--text-h);
+}
+
+code {
+  font-size: 15px;
+  line-height: 135%;
+  padding: 4px 8px;
+  background: var(--code-bg);
+}
