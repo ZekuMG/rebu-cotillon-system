@@ -49,7 +49,7 @@ export default function HistoryView({
     dateEnd: '',
     timeStart: '09',
     timeEnd: '21',
-  });
+  }); 
 
   // =====================================================
   // HELPERS
@@ -476,7 +476,7 @@ export default function HistoryView({
           >
             <option value="">Usuario</option>
             <option value="Dueño">Dueño</option>
-            <option value="Vendedor">Vendeddor</option>
+            <option value="Vendedor">Vendedor</option>
           </select>
 
           {/* Producto */}
