@@ -205,9 +205,9 @@ export const TicketPrintLayout = ({ transaction }) => {
       <pre
         style={{
           fontFamily: '"Courier New", Courier, monospace', // CRÍTICO: Fuente monoespaciada
-          fontSize: '12px',      // Tamaño legible
+          fontSize: '10px',      // Tamaño legible
           fontWeight: 'bold',    // Negrita para mayor contraste
-          lineHeight: '1.2',     // Espaciado vertical
+          lineHeight: '1',     // Espaciado vertical
           margin: 0,
           padding: '0 2px',      // Margen de seguridad mínimo
           whiteSpace: 'pre-wrap',// Respetar espacios y saltos de línea

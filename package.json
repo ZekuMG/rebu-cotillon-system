@@ -1,9 +1,9 @@
 {
   "name": "cotillon-rebu-system",
   "productName": "Cotillon Rebu",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "private": true,
-  "main": "electron-main.js",
+  "main": "electron-main.cjs",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"cross-env BROWSER=none npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "vite build && electron-builder -w"
+    "electron:build": "vite build && electron-builder -w --publish always"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",
@@ -43,7 +43,7 @@
     "productName": "Cotillon Rebu System",
     "files": [
       "dist/**/*",
-      "electron-main.js",
+      "electron-main.cjs",
       "public/**/*"
     ],
     "directories": {
@@ -51,7 +51,7 @@
     },
     "win": {
       "target": "nsis",
-      "icon": "icon.ico"
+      "icon": "public/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -62,7 +62,7 @@
     "publish": {
       "provider": "github",
       "owner": "ZekuMG",
-      "repo": "cotillon-rebu-system"
+      "repo": "rebu-cotillon-system"
     }
   }
 }
