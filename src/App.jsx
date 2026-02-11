@@ -14,7 +14,7 @@ import { supabase } from './supabase/client';
 
 import {
   USERS,
-  getInitialState, // Mantenemos para configuraciones menores, pero no para la caja
+  getInitialState,
 } from './data';
 import Sidebar from './components/Sidebar';
 
@@ -74,14 +74,13 @@ export default function PartySupplyApp() {
   const [pastClosures, setPastClosures] = useState([]);
   const [expenses, setExpenses] = useState([]);
 
-  // ✅ CAMBIO SYNC 1/4: Estados de caja inician por defecto (se llenan desde nube)
-  // Ya no usamos getInitialState ni localStorage para esto.
+  // Estados de CAJA (Sincronizados)
   const [openingBalance, setOpeningBalance] = useState(0);
-  const [isRegisterClosed, setIsRegisterClosed] = useState(true); // Asumimos cerrada al inicio
+  const [isRegisterClosed, setIsRegisterClosed] = useState(true); 
   const [closingTime, setClosingTime] = useState('21:00');
 
   // ==========================================
-  // 1.5 CONEXIÓN SUPABASE (Fetch Inicial + Realtime)
+  // 1.5 CONEXIÓN SUPABASE (Fetch Inicial + Auto-Healing)
   // ==========================================
   const fetchCloudData = async () => {
     try {
@@ -200,15 +199,32 @@ export default function PartySupplyApp() {
          stock: r.stock
       }));
 
-      // ✅ CAMBIO SYNC 2/4: Obtener Estado Actual de la Caja
-      const { data: registerState, error: regErr } = await supabase.from('register_state').select('*').eq('id', 1).single();
-      if (!regErr && registerState) {
+      // ✅ AUTO-HEALING: Obtener Estado Caja, y si no existe, CREARLO
+      let { data: registerState, error: regErr } = await supabase.from('register_state').select('*').eq('id', 1).single();
+      
+      if (!registerState || regErr) {
+          console.warn("⚠️ Estado de caja no encontrado, inicializando DB...");
+          const { data: newState, error: createErr } = await supabase
+              .from('register_state')
+              .insert([{ id: 1, is_open: false, opening_balance: 0, closing_time: '21:00' }])
+              .select()
+              .single();
+              
+          if (!createErr && newState) {
+              registerState = newState;
+          } else {
+             console.error("Error crítico creando estado de caja:", createErr);
+          }
+      }
+
+      // Aplicar estado de caja si se recuperó/creó con éxito
+      if (registerState) {
           setIsRegisterClosed(!registerState.is_open);
           setOpeningBalance(Number(registerState.opening_balance));
           setClosingTime(registerState.closing_time || '21:00');
       }
 
-      // Actualizar estados
+      // Actualizar todos los estados
       setInventory(adaptedInventory);
       setMembers(adaptedClients);
       setTransactions(adaptedSales);
@@ -220,17 +236,17 @@ export default function PartySupplyApp() {
 
     } catch (error) {
       console.error('Error cargando nube:', error);
-      Swal.fire('Error de Conexión', 'No se pudieron cargar los datos.', 'error');
+      Swal.fire('Error de Conexión', 'No se pudieron cargar los datos. Revisa tu internet.', 'error');
     } finally {
       setIsCloudLoading(false);
     }
   };
 
-useEffect(() => {
+  useEffect(() => {
     // 1. Carga inicial
     fetchCloudData();
 
-    // 2. Suscripción Realtime (Caja y Reportes)
+    // 2. Suscripción Realtime ROBUSTA (Caja y Reportes)
     const channel = supabase
       .channel('app_realtime_updates')
       .on(
@@ -238,9 +254,11 @@ useEffect(() => {
         { event: 'UPDATE', schema: 'public', table: 'register_state', filter: 'id=eq.1' },
         (payload) => {
           const newState = payload.new;
-          setIsRegisterClosed(!newState.is_open);
-          setOpeningBalance(Number(newState.opening_balance));
-          setClosingTime(newState.closing_time);
+          if (newState) {
+            setIsRegisterClosed(!newState.is_open);
+            setOpeningBalance(Number(newState.opening_balance));
+            setClosingTime(newState.closing_time);
+          }
         }
       )
       .on(
@@ -248,41 +266,39 @@ useEffect(() => {
         { event: 'INSERT', schema: 'public', table: 'cash_closures' },
         (payload) => {
           const c = payload.new;
-          // Mapeo seguro para evitar errores en dispositivos viejos
-          const newReport = {
-             id: c.id, 
-             date: c.date,
-             openTime: c.open_time,
-             closeTime: c.close_time,
-             user: c.user_name,
-             type: c.type,
-             openingBalance: Number(c.opening_balance || 0),
-             totalSales: Number(c.total_sales || 0),
-             finalBalance: Number(c.final_balance || 0),
-             totalCost: Number(c.total_cost || 0),
-             totalExpenses: Number(c.total_expenses || 0),
-             netProfit: Number(c.net_profit || 0),
-             salesCount: c.sales_count || 0,
-             averageTicket: Number(c.average_ticket || 0),
-             paymentMethods: c.payment_methods_summary || {}, 
-             itemsSold: c.items_sold_list || [],             
-             newClients: c.new_clients_list || [],           
-             expensesSnapshot: c.expenses_snapshot || [],    
-             transactionsSnapshot: c.transactions_snapshot || []
-          };
-          setPastClosures((prev) => [newReport, ...prev]);
+          if (c) {
+             const newReport = {
+                 id: c.id, 
+                 date: c.date,
+                 openTime: c.open_time,
+                 closeTime: c.close_time,
+                 user: c.user_name,
+                 type: c.type,
+                 openingBalance: Number(c.opening_balance || 0),
+                 totalSales: Number(c.total_sales || 0),
+                 finalBalance: Number(c.final_balance || 0),
+                 totalCost: Number(c.total_cost || 0),
+                 totalExpenses: Number(c.total_expenses || 0),
+                 netProfit: Number(c.net_profit || 0),
+                 salesCount: c.sales_count || 0,
+                 averageTicket: Number(c.average_ticket || 0),
+                 paymentMethods: c.payment_methods_summary || {}, 
+                 itemsSold: c.items_sold_list || [],             
+                 newClients: c.new_clients_list || [],           
+                 expensesSnapshot: c.expenses_snapshot || [],    
+                 transactionsSnapshot: c.transactions_snapshot || []
+             };
+             setPastClosures((prev) => [newReport, ...prev]);
+          }
         }
       )
-      .subscribe((status) => {
-        // Log para depuración en dispositivos problemáticos
-        console.log("Estado Suscripción:", status);
-      });
+      .subscribe();
 
-    // 3. Lógica de "Despertar": Recargar datos al volver a la pestaña
+    // 3. Auto-actualización al volver a la app (para móviles/tablets)
     const handleReSync = () => {
       if (document.visibilityState === 'visible') {
-        console.log('App visible/enfocada: Forzando actualización...');
-        fetchCloudData(); // <--- ESTO ES LA CLAVE
+        console.log('App activa: Sincronizando datos...');
+        fetchCloudData();
       }
     };
 
@@ -296,7 +312,6 @@ useEffect(() => {
     };
   }, []);
 
-  
   // ==========================================
   // 2. ESTADOS DE SESIÓN Y UI
   // ==========================================
@@ -393,7 +408,7 @@ useEffect(() => {
     setNotification(prev => ({ ...prev, isOpen: false }));
   };
 
-  // --- LOGGING CENTRALIZADO (MODIFICADO PARA SUPABASE) ---
+  // --- LOGGING CENTRALIZADO ---
   const addLog = async (action, details, reason = '') => {
     const newLog = {
       id: Date.now(),
