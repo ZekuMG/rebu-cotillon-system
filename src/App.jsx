@@ -592,14 +592,19 @@ export default function PartySupplyApp() {
   // 7. LÓGICA DE NEGOCIO
   // ==========================================
 
-  const handleAddExpense = async (expenseData) => {
+const handleAddExpense = async (expenseData) => {
     try {
+      // VALIDACIÓN Y LIMPIEZA DE DATOS (Evita error 23502)
+      // Si description llega null/undefined, usamos 'Gasto General' para que la DB no falle.
+      const safeDescription = expenseData.description || expenseData.concept || expenseData.notes || 'Gasto General';
+      const safeAmount = Number(expenseData.amount) || 0;
+
       const payload = {
-        description: expenseData.description,
-        amount: Number(expenseData.amount),
-        category: expenseData.category,
-        payment_method: expenseData.paymentMethod,
-        user_name: currentUser.name
+        description: safeDescription,
+        amount: safeAmount,
+        category: expenseData.category || 'Varios',
+        payment_method: expenseData.paymentMethod || 'Efectivo',
+        user_name: currentUser?.name || 'Sistema'
       };
 
       const { data, error } = await supabase.from('expenses').insert([payload]).select().single();
@@ -621,10 +626,10 @@ export default function PartySupplyApp() {
       showNotification('success', 'Gasto Registrado', 'Se guardó correctamente en la nube.');
     } catch (e) {
       console.error(e);
-      showNotification('error', 'Error', 'No se pudo guardar el gasto.');
+      showNotification('error', 'Error', 'No se pudo guardar el gasto. Verifique los datos.');
     }
   };
-
+  
   const addToCart = (item) => {
     if (item.stock === 0) return;
     const existing = cart.find((c) => c.id === item.id && !c.isReward);
@@ -1139,7 +1144,7 @@ export default function PartySupplyApp() {
     showNotification('success', 'Premio Aplicado', 'El descuento se ha agregado al carrito.');
   };
 
-  // --- MODIFICADO: Checkout ahora va a SUPABASE ---
+// --- MODIFICADO: Checkout ahora va a SUPABASE con SNAPSHOT para LOGS ---
   const handleCheckout = async () => {
     const total = calculateTotal();
     const stockIssues = cart.filter(c => !c.isReward).filter(c => {
@@ -1160,7 +1165,7 @@ export default function PartySupplyApp() {
       const { data: sale, error: saleErr } = await supabase.from('sales').insert({
           total, payment_method: selectedPayment, installments, client_id: clientId,
           points_earned: clientId ? pointsEarned : 0, points_spent: pointsSpent,
-          user_name: currentUser.name // ✅ CAMBIO USUARIO: Guardar quién vendió
+          user_name: currentUser.name 
        }).select().single();
        if (saleErr) throw saleErr;
 
@@ -1207,7 +1212,21 @@ export default function PartySupplyApp() {
       };
 
       setTransactions([tx, ...transactions]);
-      addLog('Venta Realizada', { transactionId: tx.id, total: total }, 'Venta regular');
+
+      // --- CORRECCIÓN CRÍTICA: SNAPSHOT PARA LOGS ---
+      // Creamos un array limpio SOLO con los datos necesarios.
+      // Esto evita enviar imágenes Base64 gigantes al log, lo cual rompía la visualización.
+      const logItems = cart.map(item => ({
+        id: item.id,
+        title: item.title,
+        quantity: item.quantity,
+        price: item.price,
+        isReward: item.isReward || false
+      }));
+
+      addLog('Venta Realizada', { transactionId: tx.id, total: total, items: logItems }, 'Venta regular');
+      // ----------------------------------------------
+
       setSaleSuccessModal(tx);
       setCart([]); setInstallments(1); setPosSearch(''); setPosSelectedClient(null);
       Swal.close();
@@ -1224,6 +1243,7 @@ export default function PartySupplyApp() {
     setIsRefundModalOpen(true);
   };
 
+  
   const handleConfirmRefund = (e) => {
     e.preventDefault();
     const tx = transactionToRefund;

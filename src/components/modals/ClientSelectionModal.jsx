@@ -44,17 +44,20 @@ export const ClientSelectionModal = ({ isOpen, onClose, onSelectClient, clients 
       }).slice(0, 5)
     : clients.slice(0, 5);
 
-  const handleCreate = (e) => {
+const handleCreate = async (e) => {
     e.preventDefault();
     if (newMemberData.name) {
-      const newMember = addClient(newMemberData);
-      if (newMember) {
+      // 1. Esperamos (await) a que se cree el socio en Supabase
+      const newMember = await addClient(newMemberData);
+      
+      // 2. Verificamos que realmente se haya creado (y no sea null por error)
+      if (newMember && newMember.id) {
         onSelectClient(newMember, 'earn');
         onClose();
       }
     }
   };
-
+  
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[80] p-4 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">

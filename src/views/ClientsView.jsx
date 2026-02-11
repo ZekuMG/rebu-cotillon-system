@@ -66,15 +66,24 @@ export default function ClientsView({
     }
   }, [selectedMember]);
 
-  // --- FILTRADO ---
-  const filteredMembers = members.filter((m) => {
+  // --- FILTRADO SEGURO (CORRECCIÓN PANTALLA BLANCA) ---
+  const filteredMembers = (Array.isArray(members) ? members : []).filter((m) => {
+    if (!m) return false;
     const term = searchTerm.toLowerCase();
+    
+    // Protección contra valores nulos (null/undefined)
+    const name = m.name ? String(m.name).toLowerCase() : '';
+    const number = m.memberNumber ? String(m.memberNumber) : '';
+    const dni = m.dni ? String(m.dni) : '';
+    const phone = m.phone ? String(m.phone) : '';
+    const email = m.email ? String(m.email).toLowerCase() : '';
+
     return (
-      m.name.toLowerCase().includes(term) ||
-      String(m.memberNumber).includes(term) ||
-      (m.dni && m.dni.includes(term)) ||
-      (m.phone && m.phone.includes(term)) ||
-      (m.email && m.email.toLowerCase().includes(term))
+      name.includes(term) ||
+      number.includes(term) ||
+      dni.includes(term) ||
+      phone.includes(term) ||
+      email.includes(term)
     );
   });
 
@@ -89,7 +98,7 @@ export default function ClientsView({
     setModalMode('edit');
     setFormData({
       id: member.id,
-      name: member.name,
+      name: member.name || '',
       dni: member.dni || '',
       phone: member.phone || '',
       email: member.email || '',
@@ -121,7 +130,7 @@ export default function ClientsView({
 
   const startDrawerEdit = () => {
     setDrawerFormData({
-      name: selectedMember.name,
+      name: selectedMember.name || '',
       dni: selectedMember.dni || '',
       phone: selectedMember.phone || '',
       email: selectedMember.email || '',
@@ -262,16 +271,17 @@ export default function ClientsView({
                 <tr key={member.id} className="hover:bg-blue-50/30 transition-colors group">
                   <td className="p-4 text-center">
                     <span className="font-mono text-sm font-bold text-slate-600 bg-slate-100 px-2 py-1 rounded-md border border-slate-200">
-                      #{String(member.memberNumber).padStart(4, '0')}
+                      #{String(member.memberNumber || '0').padStart(4, '0')}
                     </span>
                   </td>
                   <td className="p-4">
                     <div className="flex items-center gap-3">
                       <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-100 to-blue-200 text-blue-700 flex items-center justify-center font-bold shadow-sm text-sm border border-white shrink-0">
-                        {member.name.charAt(0).toUpperCase()}
+                        {/* Renderizado Seguro: Evita crash si name es null */}
+                        {(member.name || '?').charAt(0).toUpperCase()}
                       </div>
                       <div className="min-w-0">
-                        <p className="font-bold text-gray-900 truncate">{member.name}</p>
+                        <p className="font-bold text-gray-900 truncate">{member.name || 'Sin Nombre'}</p>
                         {member.extraInfo && <p className="text-xs text-gray-400 truncate max-w-[200px]">{member.extraInfo}</p>}
                       </div>
                     </div>
@@ -304,7 +314,7 @@ export default function ClientsView({
                   <td className="p-4 text-center">
                     <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700 border border-blue-200">
                       <Trophy size={12} />
-                      {member.points} pts
+                      {member.points || 0} pts
                     </span>
                   </td>
                   <td className="p-4 text-center">
@@ -344,9 +354,9 @@ export default function ClientsView({
                 {!isDrawerEditMode ? (
                   <>
                     <div className="flex items-center gap-3 mb-1">
-                      <h2 className="text-2xl font-bold text-gray-900">{selectedMember.name}</h2>
+                      <h2 className="text-2xl font-bold text-gray-900">{selectedMember.name || 'Sin Nombre'}</h2>
                       <span className="bg-slate-800 text-white text-xs font-mono py-0.5 px-2 rounded">
-                        #{String(selectedMember.memberNumber).padStart(4, '0')}
+                        #{String(selectedMember.memberNumber || '0').padStart(4, '0')}
                       </span>
                     </div>
                     <div className="text-sm text-gray-500 space-y-0.5">
@@ -409,7 +419,7 @@ export default function ClientsView({
                     <div className="relative z-10">
                       <p className="text-blue-100 text-sm font-medium mb-1 uppercase tracking-wide">Saldo de Puntos</p>
                       <div className="flex items-baseline gap-2">
-                        <span className="text-5xl font-black tracking-tight">{selectedMember.points}</span>
+                        <span className="text-5xl font-black tracking-tight">{selectedMember.points || 0}</span>
                         <span className="text-lg font-medium opacity-80">Puntos.</span>
                       </div>
                     </div>
@@ -612,7 +622,7 @@ export default function ClientsView({
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
-             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
               <h3 className="font-bold text-lg text-gray-800">{modalMode === 'create' ? 'Nuevo Socio' : 'Editar Socio'}</h3>
               <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600 transition-colors"><X size={20} /></button>
             </div>
