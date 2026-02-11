@@ -1,7 +1,11 @@
 {
   "name": "cotillon-rebu-system",
   "productName": "Cotillon Rebu",
+<<<<<<< HEAD
   "version": "0.2.5",
+=======
+  "version": "0.2.6",
+>>>>>>> 07cc44f (release v0.2.6 - Ticket impreso realizado - fix)
   "private": true,
   "main": "electron-main.cjs",
   "type": "module",
