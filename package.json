@@ -1,7 +1,7 @@
 {
   "name": "cotillon-rebu-system",
   "productName": "Cotillon Rebu",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": true,
   "main": "electron-main.cjs",
   "type": "module",
@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"cross-env BROWSER=none npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "vite build && electron-builder -w --publish always"
+    "electron:build": "vite build && electron-builder -w --publish always",
+    "publish": "dotenv electron-builder -- --publish always"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",
@@ -29,6 +30,7 @@
     "@vitejs/plugin-react": "^4.3.3",
     "concurrently": "^9.0.1",
     "cross-env": "^7.0.3",
+    "dotenv-cli": "^11.0.0",
     "electron": "^33.0.2",
     "electron-builder": "^25.1.8",
     "eslint": "^9.13.0",
