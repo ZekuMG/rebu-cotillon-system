@@ -86,153 +86,191 @@ export default function PartySupplyApp() {
     try {
       setIsCloudLoading(true);
 
+      // ✅ TODAS LAS QUERIES EN PARALELO (no se bloquean entre sí)
+      const [
+        prodResult,
+        clientResult,
+        salesResult,
+        logsResult,
+        expResult,
+        closureResult,
+        catResult,
+        rewardsResult,
+        registerResult
+      ] = await Promise.allSettled([
+        supabase.from('products').select('*').order('title'),
+        supabase.from('clients').select('*').order('name'),
+        supabase.from('sales').select(`*, sale_items(*), clients(name, member_number)`).order('created_at', { ascending: false }).limit(100),
+        supabase.from('logs').select('*').order('created_at', { ascending: false }).limit(50),
+        supabase.from('expenses').select('*').order('created_at', { ascending: false }),
+        supabase.from('cash_closures').select('*').order('created_at', { ascending: false }),
+        supabase.from('categories').select('*').order('name'),
+        supabase.from('rewards').select('*').order('points_cost', { ascending: true }),
+        supabase.from('register_state').select('*').eq('id', 1).single()
+      ]);
+
+      // --- HELPER: Extraer data segura de cada resultado ---
+      const safeData = (result) => {
+        if (result.status === 'fulfilled' && !result.value.error) {
+          return result.value.data || [];
+        }
+        console.warn('Query falló:', result.status === 'rejected' ? result.reason : result.value.error);
+        return null; // null = falló, [] = vacío real
+      };
+
       // A. PRODUCTOS
-      const { data: prodData, error: prodErr } = await supabase.from('products').select('*').order('title');
-      if (prodErr) throw prodErr;
-      const adaptedInventory = (prodData || []).map(p => ({
-         ...p,
-         categories: p.category ? [p.category] : [], 
-         purchasePrice: p.purchasePrice || 0
-      }));
+      const prodData = safeData(prodResult);
+      if (prodData) {
+        setInventory(prodData.map(p => ({
+          ...p,
+          categories: p.category ? [p.category] : [],
+          purchasePrice: p.purchasePrice || 0
+        })));
+      }
 
       // B. CLIENTES
-      const { data: clientData, error: clientErr } = await supabase.from('clients').select('*').order('name');
-      if (clientErr) throw clientErr;
-      const adaptedClients = (clientData || []).map(c => ({
-         ...c,
-         memberNumber: c.member_number 
-      }));
+      const clientData = safeData(clientResult);
+      if (clientData) {
+        setMembers(clientData.map(c => ({
+          ...c,
+          memberNumber: c.member_number
+        })));
+      }
 
       // C. VENTAS
-      const { data: salesData, error: salesErr } = await supabase
-        .from('sales')
-        .select(`*, sale_items(*), clients(name, member_number)`)
-        .order('created_at', { ascending: false })
-        .limit(100);
-      if (salesErr) throw salesErr;
-
-      const adaptedSales = (salesData || []).map(sale => ({
-         id: sale.id,
-         date: new Date(sale.created_at).toLocaleDateString('es-AR'),
-         time: new Date(sale.created_at).toLocaleTimeString('es-AR'),
-         total: sale.total,
-         payment: sale.payment_method,
-         installments: sale.installments,
-         items: sale.sale_items.map(i => ({
+      const salesData = safeData(salesResult);
+      if (salesData) {
+        setTransactions(salesData.map(sale => ({
+          id: sale.id,
+          date: new Date(sale.created_at).toLocaleDateString('es-AR'),
+          time: new Date(sale.created_at).toLocaleTimeString('es-AR'),
+          total: sale.total,
+          payment: sale.payment_method,
+          installments: sale.installments,
+          items: (sale.sale_items || []).map(i => ({
             id: i.product_id,
             title: i.product_title,
             qty: i.quantity,
             price: i.price,
             isReward: i.is_reward,
-            productId: i.product_id 
-         })),
-         client: sale.clients ? { name: sale.clients.name, memberNumber: sale.clients.member_number } : null,
-         pointsEarned: sale.points_earned,
-         pointsSpent: sale.points_spent,
-         user: sale.user_name || 'Desconocido',
-         status: 'completed'
-      }));
+            productId: i.product_id
+          })),
+          client: sale.clients ? { name: sale.clients.name, memberNumber: sale.clients.member_number } : null,
+          pointsEarned: sale.points_earned,
+          pointsSpent: sale.points_spent,
+          user: sale.user_name || 'Desconocido',
+          status: 'completed'
+        })));
+      }
 
       // D. LOGS
-      const { data: logsData } = await supabase.from('logs').select('*').order('created_at', { ascending: false }).limit(50);
-      const adaptedLogs = (logsData || []).map(log => ({
-         id: log.id,
-         action: log.action,
-         details: log.details,
-         user: log.user,
-         reason: log.reason,
-         date: new Date(log.created_at).toLocaleDateString('es-AR'),
-         timestamp: new Date(log.created_at).toLocaleTimeString('es-AR')
-      }));
+      const logsData = safeData(logsResult);
+      if (logsData) {
+        setDailyLogs(logsData.map(log => ({
+          id: log.id,
+          action: log.action,
+          details: log.details,
+          user: log.user,
+          reason: log.reason,
+          date: new Date(log.created_at).toLocaleDateString('es-AR'),
+          timestamp: new Date(log.created_at).toLocaleTimeString('es-AR')
+        })));
+      }
 
       // E. GASTOS
-      const { data: expData, error: expErr } = await supabase.from('expenses').select('*').order('created_at', { ascending: false });
-      if (expErr) throw expErr;
-      const adaptedExpenses = (expData || []).map(e => ({
-         id: e.id,
-         description: e.description,
-         amount: e.amount,
-         category: e.category,
-         paymentMethod: e.payment_method,
-         date: new Date(e.created_at).toLocaleDateString('es-AR'),
-         time: new Date(e.created_at).toLocaleTimeString('es-AR'),
-         user: e.user_name || 'Sistema'
-      }));
+      const expData = safeData(expResult);
+      if (expData) {
+        setExpenses(expData.map(e => ({
+          id: e.id,
+          description: e.description,
+          amount: e.amount,
+          category: e.category,
+          paymentMethod: e.payment_method,
+          date: new Date(e.created_at).toLocaleDateString('es-AR'),
+          time: new Date(e.created_at).toLocaleTimeString('es-AR'),
+          user: e.user_name || 'Sistema'
+        })));
+      }
 
       // F. REPORTES (Cierres)
-      const { data: closureData, error: closureErr } = await supabase.from('cash_closures').select('*').order('created_at', { ascending: false });
-      if (closureErr) throw closureErr;
-      const adaptedClosures = (closureData || []).map(c => ({
-         id: c.id, 
-         date: c.date,
-         openTime: c.open_time,
-         closeTime: c.close_time,
-         user: c.user_name,
-         type: c.type,
-         openingBalance: Number(c.opening_balance),
-         totalSales: Number(c.total_sales),
-         finalBalance: Number(c.final_balance),
-         totalCost: Number(c.total_cost),
-         totalExpenses: Number(c.total_expenses),
-         netProfit: Number(c.net_profit),
-         salesCount: c.sales_count,
-         averageTicket: Number(c.average_ticket),
-         paymentMethods: c.payment_methods_summary, 
-         itemsSold: c.items_sold_list,             
-         newClients: c.new_clients_list,           
-         expensesSnapshot: c.expenses_snapshot,    
-         transactionsSnapshot: c.transactions_snapshot 
-      }));
-
-      // G. OTROS
-      const { data: catData } = await supabase.from('categories').select('*').order('name');
-      const categoryNames = (catData || []).map(c => c.name);
-
-      const { data: rewardsData } = await supabase.from('rewards').select('*').order('points_cost', { ascending: true });
-      const adaptedRewards = (rewardsData || []).map(r => ({
-         id: r.id,
-         title: r.title,
-         description: r.description,
-         pointsCost: r.points_cost,
-         type: r.type,
-         discountAmount: r.discount_amount,
-         stock: r.stock
-      }));
-
-      // ✅ AUTO-HEALING: Obtener Estado Caja, y si no existe, CREARLO
-      let { data: registerState, error: regErr } = await supabase.from('register_state').select('*').eq('id', 1).single();
-      
-      if (!registerState || regErr) {
-          console.warn("⚠️ Estado de caja no encontrado, inicializando DB...");
-          const { data: newState, error: createErr } = await supabase
-              .from('register_state')
-              .insert([{ id: 1, is_open: false, opening_balance: 0, closing_time: '21:00' }])
-              .select()
-              .single();
-              
-          if (!createErr && newState) {
-              registerState = newState;
-          } else {
-             console.error("Error crítico creando estado de caja:", createErr);
-          }
+      const closureData = safeData(closureResult);
+      if (closureData) {
+        setPastClosures(closureData.map(c => ({
+          id: c.id,
+          date: c.date,
+          openTime: c.open_time,
+          closeTime: c.close_time,
+          user: c.user_name,
+          type: c.type,
+          openingBalance: Number(c.opening_balance),
+          totalSales: Number(c.total_sales),
+          finalBalance: Number(c.final_balance),
+          totalCost: Number(c.total_cost),
+          totalExpenses: Number(c.total_expenses),
+          netProfit: Number(c.net_profit),
+          salesCount: c.sales_count,
+          averageTicket: Number(c.average_ticket),
+          paymentMethods: c.payment_methods_summary,
+          itemsSold: c.items_sold_list,
+          newClients: c.new_clients_list,
+          expensesSnapshot: c.expenses_snapshot,
+          transactionsSnapshot: c.transactions_snapshot
+        })));
       }
 
-      // Aplicar estado de caja si se recuperó/creó con éxito
+      // G. CATEGORÍAS
+      const catData = safeData(catResult);
+      if (catData) {
+        setCategories(catData.map(c => c.name));
+      }
+
+      // H. PREMIOS
+      const rewardsData = safeData(rewardsResult);
+      if (rewardsData) {
+        setRewards(rewardsData.map(r => ({
+          id: r.id,
+          title: r.title,
+          description: r.description,
+          pointsCost: r.points_cost,
+          type: r.type,
+          discountAmount: r.discount_amount,
+          stock: r.stock
+        })));
+      }
+
+      // I. ESTADO DE CAJA (Auto-Healing)
+      let registerState = null;
+      if (registerResult.status === 'fulfilled' && !registerResult.value.error) {
+        registerState = registerResult.value.data;
+      }
+
+      if (!registerState) {
+        console.warn("⚠️ Estado de caja no encontrado, inicializando DB...");
+        const { data: newState, error: createErr } = await supabase
+          .from('register_state')
+          .insert([{ id: 1, is_open: false, opening_balance: 0, closing_time: '21:00' }])
+          .select()
+          .single();
+        if (!createErr && newState) registerState = newState;
+      }
+
       if (registerState) {
-          setIsRegisterClosed(!registerState.is_open);
-          setOpeningBalance(Number(registerState.opening_balance));
-          setClosingTime(registerState.closing_time || '21:00');
+        setIsRegisterClosed(!registerState.is_open);
+        setOpeningBalance(Number(registerState.opening_balance));
+        setClosingTime(registerState.closing_time || '21:00');
       }
 
-      // Actualizar todos los estados
-      setInventory(adaptedInventory);
-      setMembers(adaptedClients);
-      setTransactions(adaptedSales);
-      setDailyLogs(adaptedLogs);
-      setExpenses(adaptedExpenses); 
-      setCategories(categoryNames); 
-      setRewards(adaptedRewards);
-      setPastClosures(adaptedClosures);
+      // LOG: Mostrar qué cargó y qué no (para debugging en netbook)
+      const failed = [
+        !prodData && 'Productos', !clientData && 'Clientes', !salesData && 'Ventas',
+        !logsData && 'Logs', !expData && 'Gastos', !closureData && 'Reportes',
+        !catData && 'Categorías', !rewardsData && 'Premios'
+      ].filter(Boolean);
+
+      if (failed.length > 0) {
+        console.warn('⚠️ Carga parcial. Fallaron:', failed.join(', '));
+        Swal.fire('Carga Parcial', `No se pudieron cargar: ${failed.join(', ')}. El resto funciona normal.`, 'warning');
+      }
 
     } catch (error) {
       console.error('Error cargando nube:', error);
