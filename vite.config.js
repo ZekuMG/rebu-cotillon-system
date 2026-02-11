@@ -11,7 +11,7 @@ export default defineConfig({
     react(),
     // Plugin Legacy para compatibilidad con Windows 7/8 y Tablets viejas
     legacy({
-      targets: ['chrome >= 64', 'edge >= 79', 'safari >= 11'],
+      targets: ['chrome >= 64', 'edge >= 79', 'safari >= 11', 'android >= 5'],
       additionalLegacyPolyfills: ['regenerator-runtime/runtime'],
       renderLegacyChunks: true,
       polyfills: true,
