@@ -227,12 +227,12 @@ export default function PartySupplyApp() {
   };
 
 useEffect(() => {
+    // 1. Carga inicial
     fetchCloudData();
 
-    // ✅ CAMBIO SYNC 3/4: Suscripción Realtime (Caja y Reportes)
+    // 2. Suscripción Realtime (Caja y Reportes)
     const channel = supabase
       .channel('app_realtime_updates')
-      // A. Escuchar Cambios de Estado de Caja (Abrir/Cerrar)
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'register_state', filter: 'id=eq.1' },
@@ -243,13 +243,12 @@ useEffect(() => {
           setClosingTime(newState.closing_time);
         }
       )
-      // B. Escuchar Nuevos Reportes de Cierre (Para actualizar historial en vivo)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'cash_closures' },
         (payload) => {
           const c = payload.new;
-          // Adaptamos snake_case (DB) a camelCase (Frontend)
+          // Mapeo seguro para evitar errores en dispositivos viejos
           const newReport = {
              id: c.id, 
              date: c.date,
@@ -257,27 +256,43 @@ useEffect(() => {
              closeTime: c.close_time,
              user: c.user_name,
              type: c.type,
-             openingBalance: Number(c.opening_balance),
-             totalSales: Number(c.total_sales),
-             finalBalance: Number(c.final_balance),
-             totalCost: Number(c.total_cost),
-             totalExpenses: Number(c.total_expenses),
-             netProfit: Number(c.net_profit),
-             salesCount: c.sales_count,
-             averageTicket: Number(c.average_ticket),
-             paymentMethods: c.payment_methods_summary, 
-             itemsSold: c.items_sold_list,             
-             newClients: c.new_clients_list,           
-             expensesSnapshot: c.expenses_snapshot,    
-             transactionsSnapshot: c.transactions_snapshot 
+             openingBalance: Number(c.opening_balance || 0),
+             totalSales: Number(c.total_sales || 0),
+             finalBalance: Number(c.final_balance || 0),
+             totalCost: Number(c.total_cost || 0),
+             totalExpenses: Number(c.total_expenses || 0),
+             netProfit: Number(c.net_profit || 0),
+             salesCount: c.sales_count || 0,
+             averageTicket: Number(c.average_ticket || 0),
+             paymentMethods: c.payment_methods_summary || {}, 
+             itemsSold: c.items_sold_list || [],             
+             newClients: c.new_clients_list || [],           
+             expensesSnapshot: c.expenses_snapshot || [],    
+             transactionsSnapshot: c.transactions_snapshot || []
           };
           setPastClosures((prev) => [newReport, ...prev]);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        // Log para depuración en dispositivos problemáticos
+        console.log("Estado Suscripción:", status);
+      });
+
+    // 3. Lógica de "Despertar": Recargar datos al volver a la pestaña
+    const handleReSync = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('App visible/enfocada: Forzando actualización...');
+        fetchCloudData(); // <--- ESTO ES LA CLAVE
+      }
+    };
+
+    window.addEventListener('visibilitychange', handleReSync);
+    window.addEventListener('focus', handleReSync);
 
     return () => {
       supabase.removeChannel(channel);
+      window.removeEventListener('visibilitychange', handleReSync);
+      window.removeEventListener('focus', handleReSync);
     };
   }, []);
 
