@@ -1,221 +1,289 @@
 import React from 'react';
 import { formatPrice, formatTime24 } from '../utils/helpers';
 
-// ANCHO DE PAPEL: 32 Caracteres (Estándar XP-58)
 const LINE_WIDTH = 32;
 
-// --- FUNCIONES HELPER (Manejo de Texto) ---
+/* ================================
+   HELPERS
+================================ */
 
-// Genera una línea "Texto......$Precio"
-// Corta el texto izquierdo si es muy largo para que no rompa el renglón
 const line = (left = '', right = '') => {
-  let l = String(left);
-  const r = String(right);
-  
-  // Calculamos el espacio que ocupa la derecha + 1 espacio de separación
+  const lRaw = String(left);
+  const rRaw = String(right);
+
+  let l = lRaw.toUpperCase();
+  const r = rRaw;
+
   const rightWidth = r.length + 1;
   const maxLeftWidth = LINE_WIDTH - rightWidth;
 
-  // Si la izquierda es muy larga, la cortamos
   if (l.length > maxLeftWidth) {
-    l = l.slice(0, maxLeftWidth); 
+    l = l.slice(0, maxLeftWidth);
   }
 
   const space = LINE_WIDTH - l.length - r.length;
-  // Math.max(0, ...) evita errores si el cálculo da negativo
+
   return l + ' '.repeat(Math.max(0, space)) + r;
 };
 
-// Centra un texto
 const center = (text = '') => {
-  const t = String(text).slice(0, LINE_WIDTH);
+  const t = String(text).toUpperCase().slice(0, LINE_WIDTH);
   const space = Math.floor((LINE_WIDTH - t.length) / 2);
   return ' '.repeat(Math.max(0, space)) + t;
 };
 
-// Genera una línea divisoria
 const divider = () => '-'.repeat(LINE_WIDTH);
+
+/* ================================
+   COMPONENTE
+================================ */
 
 export const TicketPrintLayout = ({ transaction }) => {
   if (!transaction) return null;
 
-  // --- 1. PREPARACIÓN DE DATOS ---
-  const formattedId = String(transaction.id).padStart(6, '0');
-  const dateStr = transaction.date?.split(',')[0] || transaction.date;
-  const timeStr = transaction.time ? formatTime24(transaction.time) : '--:--';
+  const formattedId = transaction?.id
+    ? String(transaction.id).padStart(6, '0')
+    : '';
 
-  // --- 2. CÁLCULOS MONETARIOS ---
-  // Filtramos items que no sean descuentos
-  const items = (transaction.items || []).filter(i => i.type !== 'discount');
+  const dateStr = transaction?.date
+    ? transaction.date.split(',')[0]
+    : '';
 
-  // Calcular subtotal de items
+  const timeStr = transaction?.time
+    ? formatTime24(transaction.time)
+    : '';
+
+  const items = (transaction?.items || []).filter(
+    i => i.type !== 'discount'
+  );
+
   const itemsSubtotal = items.reduce((acc, item) => {
     const qty = item.qty || item.quantity || 1;
-    return acc + Number(item.price) * qty;
+    return acc + Number(item.price || 0) * qty;
   }, 0);
 
-  // Calcular descuentos aplicados
-  const redemptionDiscounts = (transaction.items || []).filter(i => i.type === 'discount');
+  const redemptionDiscounts = (transaction?.items || []).filter(
+    i => i.type === 'discount'
+  );
+
   const totalRedemptionDiscount = redemptionDiscounts.reduce(
-    (acc, i) => acc + Math.abs(i.price),
+    (acc, i) => acc + Math.abs(Number(i.price || 0)),
     0
   );
 
-  // Calcular recargo (Si el total es mayor que subtotal - descuentos)
   let surcharge = 0;
-  // Usamos 0.5 de tolerancia por redondeos de decimales
-  if (transaction.total > itemsSubtotal - totalRedemptionDiscount + 0.5) {
-    surcharge = transaction.total - (itemsSubtotal - totalRedemptionDiscount);
+
+  if (
+    transaction?.total != null &&
+    transaction.total >
+      itemsSubtotal - totalRedemptionDiscount + 0.5
+  ) {
+    surcharge =
+      transaction.total -
+      (itemsSubtotal - totalRedemptionDiscount);
   }
 
-  // --- 3. LÓGICA DE PUNTOS ---
-  const showRedemption = (transaction.pointsSpent || 0) > 0;
-  // Obtenemos los puntos actuales (usando currentPoints del snapshot o points del cliente actual)
-  const currentPointsDisplay = transaction.client
-    ? (transaction.client.currentPoints ?? transaction.client.points ?? 0)
-    : 0;
+  const showRedemption = (transaction?.pointsSpent || 0) > 0;
 
-  // === 4. CONSTRUCCIÓN DEL TICKET (Línea por Línea) ===
+  const currentPointsDisplay = transaction?.client
+    ? transaction.client.currentPoints ??
+      transaction.client.points ??
+      0
+    : null;
+
   const lines = [];
 
-  // HEADER
+  /* ========= HEADER ========= */
+
   lines.push(center('COTILLON REBU'));
-  lines.push(center('Articulos para Fiestas'));
+  lines.push(center('ARTICULOS PARA FIESTAS'));
   lines.push(divider());
-  lines.push(center('Calle 158 4440'));
-  lines.push(center('Berazategui'));
-  lines.push(center('Tel: 11-5483-0409'));
-  lines.push(center('IG: @rebucotillon'));
+  lines.push(center('CALLE 158 4440 - BERAZATEGUI'));
+  lines.push(center('TEL: 11-5483-0409'));
+  lines.push(center('IG: @REBUCOTILLON'));
   lines.push(divider());
 
-  // SECCIÓN SOCIO (Formato Solicitado)
-  if (transaction.client) {
-    const memberNum = transaction.client.memberNumber;
-    const clientName = transaction.client.name.toUpperCase();
-    
-    // Renglón 1: Socio (N°): Nombre
-    lines.push(line(`Socio (#${memberNum}):`, clientName));
+  /* ========= SOCIO ========= */
 
-    // Renglón 2: Puntos ganados/canjeados
-    if (transaction.isPointsTicket) {
-      // Si es ticket de saldo, no mostramos movimiento
-    } else {
+  if (transaction?.client) {
+    if (transaction.client.memberNumber) {
+      lines.push(line(`SOCIO #${transaction.client.memberNumber}`, ''));
+    }
+
+    if (transaction.client.name) {
+      lines.push(
+        transaction.client.name
+          .toUpperCase()
+          .slice(0, LINE_WIDTH)
+      );
+    }
+
+    if (!transaction.isPointsTicket) {
       if (showRedemption) {
-        lines.push(line('Puntos canjeados:', `-${transaction.pointsSpent}`));
-      } else {
-        lines.push(line('Puntos ganados:', `+${transaction.pointsGainedReal || 0}`));
+        lines.push(
+          line(
+            'PUNTOS CANJEADOS:',
+            `-${transaction.pointsSpent}`
+          )
+        );
+      } else if (transaction.pointsEarned != null) {
+        lines.push(
+          line(
+            'PUNTOS GANADOS:',
+            `+${transaction.pointsEarned}`
+          )
+        );
       }
     }
 
-    // Renglón 3: Total de puntos
-    lines.push(line('Total de puntos:', `${currentPointsDisplay}`));
-    
+    if (currentPointsDisplay != null) {
+      lines.push(
+        line(
+          'PUNTOS TOTALES:',
+          `${currentPointsDisplay}`
+        )
+      );
+    }
+
     lines.push(divider());
   }
 
-  // FECHA Y HORA / ID
-  lines.push(line(`${dateStr} ${timeStr}`, `#${formattedId}`));
-  lines.push(divider());
+  /* ========= FECHA ========= */
 
-  // LISTA DE PRODUCTOS (Solo si no es ticket de saldo)
-  if (!transaction.isPointsTicket) {
-    lines.push(line('DESCRIPCION', 'IMPORTE'));
+  if (dateStr || timeStr || formattedId) {
+    lines.push(
+      line(`${dateStr} ${timeStr}`, formattedId ? `#${formattedId}` : '')
+    );
+    lines.push(divider());
+  }
 
+  /* ========= PRODUCTOS ========= */
+
+  if (!transaction?.isPointsTicket) {
     items.forEach(item => {
       const qty = item.qty || item.quantity || 1;
-      const price = Number(item.price);
-      
-      // Formato Nombre: (2) Globos...
-      const titlePrefix = qty > 1 ? `(${qty}) ` : '';
-      const fullTitle = titlePrefix + item.title;
-      
-      const totalItemPrice = qty * price;
-      const priceStr = item.isReward ? 'GRATIS' : `$${formatPrice(totalItemPrice)}`;
+      const price = Number(item.price || 0);
 
-      // La función line() se encarga de recortar si el nombre es muy largo
+      const qtyPrefix = qty > 1 ? `${qty}x ` : '';
+      const fullTitle =
+        qtyPrefix + (item.title || 'ITEM');
+
+      const totalItemPrice = qty * price;
+
+      const priceStr = item.isReward
+        ? 'GRATIS'
+        : `$${formatPrice(totalItemPrice)}`;
+
       lines.push(line(fullTitle, priceStr));
     });
 
     lines.push(divider());
 
-    // TOTALES
-    lines.push(line('Subtotal', `$${formatPrice(itemsSubtotal)}`));
+    if (
+      totalRedemptionDiscount > 0 ||
+      surcharge > 0
+    ) {
+      lines.push(
+        line('SUBTOTAL', `$${formatPrice(itemsSubtotal)}`)
+      );
+    }
 
-    // Mostrar descuentos si existen
     redemptionDiscounts.forEach(d => {
-      lines.push(line('Descuento', `-$${formatPrice(Math.abs(d.price))}`));
+      lines.push(
+        line(
+          'DESCUENTO',
+          `-$${formatPrice(Math.abs(d.price))}`
+        )
+      );
     });
 
-    // Mostrar recargo si existe
     if (surcharge > 0) {
-      lines.push(line('Recargo', `$${formatPrice(surcharge)}`));
+      lines.push(
+        line('RECARGO', `$${formatPrice(surcharge)}`)
+      );
+    }
+
+    if (transaction?.total != null) {
+      lines.push(
+        line(
+          'TOTAL A PAGAR',
+          `$${formatPrice(transaction.total)}`
+        )
+      );
     }
 
     lines.push(divider());
-    
-    // TOTAL FINAL
-    lines.push(line('TOTAL', `$${formatPrice(transaction.total)}`));
-    
-    // FORMA DE PAGO
-    lines.push(`PAGO: ${transaction.payment.toUpperCase()}`);
-    
-    // CUOTAS (Solo si es Crédito y hay cuotas)
-    if (transaction.payment === 'Credito' && transaction.installments > 1) {
-       lines.push(`CUOTAS: ${transaction.installments}`); 
+
+    // ✅ FORMA DE PAGO REAL (SIN FORZAR)
+    if (transaction?.payment) {
+      lines.push(
+        line('PAGO:', transaction.payment.toUpperCase())
+      );
+    }
+
+    if (
+      transaction?.installments &&
+      transaction.installments > 1
+    ) {
+      lines.push(
+        line('CUOTAS:', `${transaction.installments}`)
+      );
     }
   }
 
-  // FOOTER
-  lines.push(divider());
-  lines.push(center('Gracias por tu compra!'));
-  lines.push(center('Volve pronto :D'));
-  
-  // Espacio final para corte
-  lines.push('\n\n.');
+  /* ========= FOOTER ========= */
 
-  // --- RENDERIZADO ---
+  lines.push(divider());
+  lines.push(center('¡GRACIAS POR TU COMPRA!'));
+  lines.push('');
+  lines.push('');
+  lines.push('');
+
   return (
     <div id="printable-area">
-      {/* Estilos CSS para impresión térmica */}
       <style>{`
         @media print {
           @page {
-            size: auto;
-            margin: 0mm;
+            size: 58mm auto;
+            margin: 0;
           }
+
           html, body {
+            width: 58mm;
             margin: 0 !important;
             padding: 0 !important;
-            width: 100%;
+            background: #fff;
           }
+
           body * {
             visibility: hidden;
           }
-          #printable-area, #printable-area * {
+
+          #printable-area,
+          #printable-area * {
             visibility: visible;
           }
+
           #printable-area {
             position: absolute;
             left: 0;
             top: 0;
-            width: 100%;
+            width: 58mm;
           }
         }
       `}</style>
 
       <pre
         style={{
-          fontFamily: '"Courier New", Courier, monospace',
-          fontSize: '12px',
-          fontWeight: 'normal',
-          lineHeight: '1.3',
+          fontFamily: 'monospace',
+          fontSize: '11px',
+          fontWeight: '700',
+          lineHeight: '1.2',
           margin: 0,
-          padding: '2px 4px',
+          padding: '4px',
           whiteSpace: 'pre',
-          color: 'black',
+          color: '#000',
           width: '100%',
-          overflow: 'hidden',
-          letterSpacing: '0px',
         }}
       >
         {lines.join('\n')}
