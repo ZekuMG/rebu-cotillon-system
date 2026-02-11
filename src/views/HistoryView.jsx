@@ -10,17 +10,13 @@ import {
   Eye,
   X,
   Search,
-  Wand2,
   ArrowUpDown,
   FileText,
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../data';
 import { normalizeDate, isVentaLog, getVentaTotal } from '../utils/helpers';
-import { generateRandomTransactions } from '../utils/devGenerator';
 import {
   TransactionDetailModal,
-  GeneratorModal,
-  DeleteHistoryModal,
 } from '../components/modals/HistoryModals';
 
 // --- HELPER LOCAL PARA FORMATO VISUAL ---
@@ -58,17 +54,6 @@ export default function HistoryView({
 
   // Modal de detalle
   const [selectedTx, setSelectedTx] = useState(null);
-
-  // Modal generador y borrar
-  const [showGeneratorModal, setShowGeneratorModal] = useState(false);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [generatorConfig, setGeneratorConfig] = useState({
-    count: 30,
-    dateStart: '',
-    dateEnd: '',
-    timeStart: '09',
-    timeEnd: '21',
-  });
 
   // =====================================================
   // TRANSACCIONES HISTÓRICAS (desde logs)
@@ -246,49 +231,13 @@ export default function HistoryView({
     filterUser || filterProduct || searchQuery;
 
   // =====================================================
-  // ACCIONES DEL GENERADOR (delega a devGenerator.js)
-  // =====================================================
-  const handleGenerate = () => {
-    const result = generateRandomTransactions(generatorConfig, inventory);
-
-    if (result.error) {
-      if (showNotification) showNotification('warning', 'Sin productos', result.error);
-      else alert(result.error);
-      return;
-    }
-
-    if (result.logs.length > 0 && setDailyLogs) {
-      setDailyLogs((prev) => [...result.logs, ...(prev || [])]);
-    }
-    if (result.transactions.length > 0 && setTransactions) {
-      setTransactions((prev) => [...result.transactions, ...(prev || [])]);
-    }
-
-    setShowGeneratorModal(false);
-
-    if (showNotification) showNotification('success', 'Generación Exitosa', `Se generaron ${result.transactions.length} pedidos editables.`);
-    else alert(`✅ Se generaron ${result.transactions.length} pedidos editables.`);
-  };
-
-  const clearAllTransactions = () => {
-    if (setTransactions) setTransactions([]);
-    if (setDailyLogs) {
-      setDailyLogs((prev) => (prev || []).filter((log) => !isVentaLog(log)));
-    }
-    setShowDeleteModal(false);
-
-    if (showNotification) showNotification('success', 'Historial Limpio', 'Se han eliminado todas las transacciones.');
-    else alert('✅ Historial de transacciones eliminado');
-  };
-
-  // =====================================================
   // RENDER
   // =====================================================
   return (
     <div className="bg-white rounded-xl shadow-sm border overflow-hidden h-full flex flex-col">
       {/* Header Compacto */}
       <div className="p-3 border-b bg-slate-50 shrink-0 space-y-3">
-        {/* Fila 1: Título, Stats y Botones Admin */}
+        {/* Fila 1: Título y Stats */}
         <div className="flex flex-wrap justify-between items-center gap-2">
           <div className="flex items-center gap-2">
             <h3 className="font-bold text-slate-800 flex items-center gap-2 text-sm">
@@ -298,23 +247,6 @@ export default function HistoryView({
               {stats.count} ventas • ${stats.total.toLocaleString()}
             </span>
           </div>
-
-          {currentUser.role === 'admin' && (
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowGeneratorModal(true)}
-                className="flex items-center gap-1 px-2 py-1 bg-fuchsia-100 text-fuchsia-700 rounded border border-fuchsia-200 text-[10px] font-bold hover:bg-fuchsia-200 transition"
-              >
-                <Wand2 size={12} /> Generar
-              </button>
-              <button
-                onClick={() => setShowDeleteModal(true)}
-                className="flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 rounded border border-red-200 text-[10px] font-bold hover:bg-red-200 transition"
-              >
-                <Trash2 size={12} /> Limpiar
-              </button>
-            </div>
-          )}
         </div>
 
         {/* Fila 2: Filtros Compactos */}
@@ -603,7 +535,7 @@ export default function HistoryView({
         </table>
       </div>
 
-      {/* ♻️ REFACTOR: Modales extraídos a HistoryModals.jsx */}
+      {/* Modal de Detalle */}
       <TransactionDetailModal
         transaction={selectedTx}
         onClose={() => setSelectedTx(null)}
@@ -611,22 +543,6 @@ export default function HistoryView({
         onEditTransaction={onEditTransaction}
         onDeleteTransaction={onDeleteTransaction}
         onViewTicket={onViewTicket}
-      />
-
-      <GeneratorModal
-        isOpen={showGeneratorModal}
-        onClose={() => setShowGeneratorModal(false)}
-        generatorConfig={generatorConfig}
-        setGeneratorConfig={setGeneratorConfig}
-        onGenerate={handleGenerate}
-      />
-
-      <DeleteHistoryModal
-        isOpen={showDeleteModal}
-        onClose={() => setShowDeleteModal(false)}
-        activeCount={(transactions || []).length}
-        historicCount={historicTransactions.length}
-        onConfirm={clearAllTransactions}
       />
     </div>
   );

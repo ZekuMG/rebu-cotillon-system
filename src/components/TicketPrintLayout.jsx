@@ -82,7 +82,8 @@ export const TicketPrintLayout = ({ transaction }) => {
   lines.push(center('COTILLON REBU'));
   lines.push(center('Articulos para Fiestas'));
   lines.push(divider());
-  lines.push(center('Calle 158 4440 - Berazategui'));
+  lines.push(center('Calle 158 4440'));
+  lines.push(center('Berazategui'));
   lines.push(center('Tel: 11-5483-0409'));
   lines.push(center('IG: @rebucotillon'));
   lines.push(divider());
@@ -166,7 +167,7 @@ export const TicketPrintLayout = ({ transaction }) => {
 
   // FOOTER
   lines.push(divider());
-  lines.push(center('¡Gracias por tu compra!'));
+  lines.push(center('Gracias por tu compra!'));
   lines.push(center('Volve pronto :D'));
   
   // Espacio final para corte
@@ -175,12 +176,12 @@ export const TicketPrintLayout = ({ transaction }) => {
   // --- RENDERIZADO ---
   return (
     <div id="printable-area">
-      {/* Estilos CSS mínimos para asegurar que el navegador respete el texto plano */}
+      {/* Estilos CSS para impresión térmica */}
       <style>{`
         @media print {
           @page {
-            size: auto; /* Dejar que la impresora decida el largo */
-            margin: 0mm; /* CERO margen de hoja */
+            size: auto;
+            margin: 0mm;
           }
           html, body {
             margin: 0 !important;
@@ -188,10 +189,10 @@ export const TicketPrintLayout = ({ transaction }) => {
             width: 100%;
           }
           body * {
-            visibility: hidden; /* Ocultar app */
+            visibility: hidden;
           }
           #printable-area, #printable-area * {
-            visibility: visible; /* Mostrar ticket */
+            visibility: visible;
           }
           #printable-area {
             position: absolute;
@@ -204,16 +205,17 @@ export const TicketPrintLayout = ({ transaction }) => {
 
       <pre
         style={{
-          fontFamily: '"Courier New", Courier, monospace', // CRÍTICO: Fuente monoespaciada
-          fontSize: '10px',      // Tamaño legible
-          fontWeight: 'bold',    // Negrita para mayor contraste
-          lineHeight: '1',     // Espaciado vertical
+          fontFamily: '"Courier New", Courier, monospace',
+          fontSize: '12px',
+          fontWeight: 'normal',
+          lineHeight: '1.3',
           margin: 0,
-          padding: '0 2px',      // Margen de seguridad mínimo
-          whiteSpace: 'pre-wrap',// Respetar espacios y saltos de línea
+          padding: '2px 4px',
+          whiteSpace: 'pre',
           color: 'black',
           width: '100%',
-          overflow: 'hidden'
+          overflow: 'hidden',
+          letterSpacing: '0px',
         }}
       >
         {lines.join('\n')}
