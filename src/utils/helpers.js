@@ -8,8 +8,15 @@
  * @returns {string} - El precio formateado
  */
 export const formatPrice = (amount) => {
-    return Math.ceil(Number(amount) || 0).toLocaleString('es-AR');
-  };
+  if (amount === null || amount === undefined || isNaN(amount)) return '0';
+  
+  // Usamos 'de-DE' (Alemán) porque fuerza el formato 1.000,00 igual que Argentina
+  // pero sin el bug de omitir el punto en 4 dígitos.
+  return new Intl.NumberFormat('de-DE', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0, // Sin decimales visuales (cambiar a 2 si los quieres)
+  }).format(amount);
+};
   
   /**
    * Convierte una hora en formato 12h (AM/PM) a formato 24h.

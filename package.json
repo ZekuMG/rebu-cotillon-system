@@ -1,7 +1,7 @@
 {
   "name": "cotillon-rebu-system",
   "productName": "Cotillon Rebu",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "main": "electron-main.cjs",
   "type": "module",
@@ -25,6 +25,7 @@
     "@eslint/js": "^9.13.0",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-legacy": "^5.4.3",
     "@vitejs/plugin-react": "^4.3.3",
     "concurrently": "^9.0.1",
     "cross-env": "^7.0.3",
@@ -35,6 +36,7 @@
     "eslint-plugin-react-hooks": "^5.0.0",
     "eslint-plugin-react-refresh": "^0.4.13",
     "globals": "^15.11.0",
+    "terser": "^5.46.0",
     "vite": "^5.4.9",
     "wait-on": "^8.0.1"
   },
