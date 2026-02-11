@@ -7,71 +7,82 @@ Sistema de Punto de Venta (POS) y Gestión de Inventario desarrollado en React +
 
 Esta es la estructura actual del sistema de archivos. **Importante:** Cualquier refactorización debe respetar esta jerarquía.
 
-```text
-src/
-├── components/
-│   ├── ActionLogs/              # Módulo refactorizado de Registros (Antes LogsView monolítico)
-│   │   ├── LogAuxModals.jsx     # Generador y Borrado
-│   │   ├── LogDetailModal.jsx   # Wrapper del modal
-│   │   ├── LogDetailRenderer.jsx# Lógica de renderizado del detalle (Switch gigante)
-│   │   ├── LogsControls.jsx     # Filtros y botones superiores
-│   │   └── LogsTable.jsx        # Tabla de datos
-│   │
-│   ├── dashboard/               # Componentes del Dashboard
-│   │   ├── DashboardControls.jsx
-│   │   ├── KpiCards.jsx
-│   │   ├── LowStockAlert.jsx
-│   │   ├── PaymentBreakdown.jsx
-│   │   ├── SalesChart.jsx
-│   │   └── TopRanking.jsx
-│   │
-│   ├── modals/                  # Módulos individuales de Modales
-│   │   ├── BarcodeModals.jsx
-│   │   ├── CashModals.jsx
-│   │   ├── ClientSelectionModal.jsx  # <--- FOCO ACTUAL (Diseño unificado Fuchsia/Gris)
-│   │   ├── DailyReportModal.jsx
-│   │   ├── ExpenseModal.jsx
-│   │   ├── HistoryModals.jsx
-│   │   ├── NotificationModal.jsx
-│   │   ├── ProductModals.jsx
-│   │   ├── RedemptionModal.jsx
-│   │   ├── SaleModals.jsx
-│   │   └── TransactionModals.jsx
-│   │
-│   ├── AppModals.jsx            # ⚠️ Barrel File: Re-exporta los modales de /modals/
-│   ├── ProductImage.jsx
-│   ├── Sidebar.jsx
-│   └── TicketPrintLayout.jsx
-│
-├── data/                        # Datos iniciales y semillas
-│   ├── seedHelpers.js
-│   ├── seedLogs.js
-│   └── seedTransactions.js
-│
-├── hooks/                       # Lógica de negocio extraída
-│   ├── useBarcodeScanner.js
-│   ├── useClients.js
-│   ├── useDashboardData.js
-│   └── useLogsFilter.js         # Lógica de filtros para ActionLogs
-│
-├── utils/
-│   ├── devGenerator.js
-│   └── helpers.js
-│
-├── views/                       # Vistas Principales (Orquestadores)
-│   ├── CategoryManagerView.jsx
-│   ├── ClientsView.jsx
-│   ├── DashboardView.jsx
-│   ├── HistoryView.jsx
-│   ├── InventoryView.jsx
-│   ├── LogsView.jsx             # Conecta con components/ActionLogs
-│   ├── POSView.jsx              # Punto de Venta Principal
-│   ├── ReportsHistoryView.jsx
-│   └── RewardsView.jsx
-│
-├── App.jsx                      # ⚠️ LÓGICA PRINCIPAL: Manejo de estados globales y llamadas a Modales
-├── main.jsx
-└── index.css                    # Estilos globales (Tailwind)
+```
+Punto de Venta Rebu - Release
+├── public
+│   ├── favicon.svg
+│   └── icons.svg
+├── src
+│   ├── assets
+│   │   ├── react.svg
+│   │   └── vite.svg
+│   ├── components
+│   │   ├── ActionLogs
+│   │   │   ├── LogAuxModals.jsx
+│   │   │   ├── LogDetailModal.jsx
+│   │   │   ├── LogDetailRenderer.jsx
+│   │   │   ├── LogsControls.jsx
+│   │   │   └── LogsTable.jsx
+│   │   ├── dashboard
+│   │   │   ├── DashboardControls.jsx
+│   │   │   ├── KpiCards.jsx
+│   │   │   ├── LowStockAlert.jsx
+│   │   │   ├── PaymentBreakdown.jsx
+│   │   │   ├── SalesChart.jsx
+│   │   │   ├── TopRanking.jsx
+│   │   │   └── index.js
+│   │   ├── modals
+│   │   │   ├── BarcodeModals.jsx
+│   │   │   ├── CashModals.jsx
+│   │   │   ├── ClientSelectionModal.jsx
+│   │   │   ├── DailyReportModal.jsx
+│   │   │   ├── ExpenseModal.jsx
+│   │   │   ├── HistoryModals.jsx
+│   │   │   ├── NotificationModal.jsx
+│   │   │   ├── ProductModals.jsx
+│   │   │   ├── RedemptionModal.jsx
+│   │   │   ├── SaleModals.jsx
+│   │   │   └── TransactionModals.jsx
+│   │   ├── AppModals.jsx
+│   │   ├── ProductImage.jsx
+│   │   ├── Sidebar.jsx
+│   │   └── TicketPrintLayout.jsx
+│   ├── data
+│   │   ├── seedHelpers.js
+│   │   ├── seedLogs.js
+│   │   └── seedTransactions.js
+│   ├── hooks
+│   │   ├── useBarcodeScanner.js
+│   │   ├── useClients.js
+│   │   ├── useDashboardData.js
+│   │   └── useLogsFilter.js
+│   ├── supabase
+│   │   └── client.js
+│   ├── utils
+│   │   ├── devGenerator.js
+│   │   └── helpers.js
+│   ├── views # Vistas Principales (Orquestadores)
+│   │   ├── CategoryManagerView.jsx
+│   │   ├── ClientsView.jsx
+│   │   ├── DashboardView.jsx
+│   │   ├── HistoryView.jsx
+│   │   ├── InventoryView.jsx
+│   │   ├── LogsView.jsx # Conecta con components/ActionLogs
+│   │   ├── POSView.jsx # Punto de Venta Principal
+│   │   ├── ReportsHistoryView.jsx
+│   │   └── RewardsView.jsx
+│   ├── App.css
+│   ├── App.jsx # ⚠️ LÓGICA PRINCIPAL: Manejo de estados globales y llamadas a Modales
+│   ├── data.js
+│   ├── index.css # Estilos globales (Tailwind)
+│   └── main.jsx
+├── README.md
+├── electron-main.cjs
+├── eslint.config.js
+├── icon.ico
+├── index.html 
+├── package.json
+└── vite.config.js
 
 ```
 

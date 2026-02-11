@@ -74,9 +74,8 @@ export default function PartySupplyApp() {
   // INVENTARIO: Inicializamos vacío o con local, pero el useEffect lo llenará desde la nube
   const [inventory, setInventory] = useState([]);
 
-  const [categories, setCategories] = useState(() =>
-    getInitialState('party_categories', INITIAL_CATEGORIES)
-  );
+  // ✅ CAMBIO CATEGORÍAS 1/5: Ahora inicia vacío, se carga desde Supabase
+  const [categories, setCategories] = useState([]);
   
   const [rewards, setRewards] = useState(() => getInitialState('party_rewards', [
     { id: 'rew-001', title: 'Voucher $500', type: 'discount', discountAmount: 500, pointsCost: 300, description: 'Descuento aplicable en cualquier compra.' },
@@ -160,6 +159,7 @@ export default function PartySupplyApp() {
          client: sale.clients ? { name: sale.clients.name, memberNumber: sale.clients.member_number } : null,
          pointsEarned: sale.points_earned,
          pointsSpent: sale.points_spent,
+         user: sale.user_name || 'Desconocido',
          status: 'completed'
       }));
 
@@ -175,17 +175,16 @@ export default function PartySupplyApp() {
          timestamp: new Date(log.created_at).toLocaleTimeString('es-AR')
       }));
 
+      // ✅ CAMBIO CATEGORÍAS 2/5: Fetch desde tabla 'categories' en vez de extraer de productos
+      const { data: catData } = await supabase.from('categories').select('*').order('name');
+      const categoryNames = (catData || []).map(c => c.name);
+
       // Actualizamos los estados con datos REALES de la nube
       setInventory(adaptedInventory);
       setMembers(adaptedClients);
       setTransactions(adaptedSales);
       setDailyLogs(adaptedLogs);
-
-      // Unificar categorías
-      const uniqueCats = [...new Set(prodData.map(p => p.category).filter(Boolean))];
-      if (uniqueCats.length > 0) {
-         setCategories([...new Set([...categories, ...uniqueCats])]);
-      }
+      setCategories(categoryNames); // ✅ CAMBIO CATEGORÍAS 2/5: Reemplaza la lógica de "unificar"
 
     } catch (error) {
       console.error('Error cargando nube:', error);
@@ -420,7 +419,7 @@ export default function PartySupplyApp() {
   );
   const salesCount = validTransactions.length;
 
-  useEffect(() => { window.localStorage.setItem('party_categories', JSON.stringify(categories)); }, [categories]);
+  // ✅ CAMBIO CATEGORÍAS 3/5: Se eliminó el useEffect de localStorage para categorías
   useEffect(() => { window.localStorage.setItem('party_rewards', JSON.stringify(rewards)); }, [rewards]);
   // Los siguientes ya no guardan transactions/logs/inventory en localStorage porque son de nube, 
   // pero mantenemos los de configuración local:
@@ -785,17 +784,26 @@ export default function PartySupplyApp() {
     showNotification('success', 'Horario Guardado', 'La hora de cierre se ha actualizado.');
   };
 
-  const handleAddCategoryFromView = (name) => {
+  // ✅ CAMBIO CATEGORÍAS 4/5: Ahora inserta en Supabase al crear categoría
+  const handleAddCategoryFromView = async (name) => {
     if (name && !categories.includes(name)) {
-      setCategories([...categories, name]);
-      addLog('Categoría', { name, type: 'create' });
-      showNotification('success', 'Categoría Creada', `Se agregó "${name}" correctamente.`);
+      try {
+        const { error } = await supabase.from('categories').insert([{ name }]);
+        if (error) throw error;
+        setCategories([...categories, name]);
+        addLog('Categoría', { name, type: 'create' });
+        showNotification('success', 'Categoría Creada', `Se agregó "${name}" correctamente.`);
+      } catch (e) {
+        console.error(e);
+        showNotification('error', 'Error', 'No se pudo crear la categoría en la nube.');
+      }
     } else {
       showNotification('warning', 'Atención', 'La categoría ya existe o es inválida.');
     }
   };
 
-  const handleDeleteCategoryFromView = (name) => {
+  // ✅ CAMBIO CATEGORÍAS 5/5: Ahora elimina de Supabase al borrar categoría
+  const handleDeleteCategoryFromView = async (name) => {
     const inUse = inventory.some((p) =>
       Array.isArray(p.categories) ? p.categories.includes(name) : p.category === name
     );
@@ -805,8 +813,14 @@ export default function PartySupplyApp() {
       return;
     }
     if (window.confirm(`¿Eliminar categoría "${name}"?`)) {
-      setCategories(categories.filter((c) => c !== name));
-      addLog('Categoría', { name, type: 'delete' });
+      try {
+        await supabase.from('categories').delete().eq('name', name);
+        setCategories(categories.filter((c) => c !== name));
+        addLog('Categoría', { name, type: 'delete' });
+      } catch (e) {
+        console.error(e);
+        showNotification('error', 'Error', 'No se pudo eliminar de la nube.');
+      }
     }
   };
 
@@ -950,7 +964,8 @@ export default function PartySupplyApp() {
       // 1. Insertar Venta
       const { data: sale, error: saleErr } = await supabase.from('sales').insert({
           total, payment_method: selectedPayment, installments, client_id: clientId,
-          points_earned: clientId ? pointsEarned : 0, points_spent: pointsSpent
+          points_earned: clientId ? pointsEarned : 0, points_spent: pointsSpent,
+          user_name: currentUser.name // ✅ CAMBIO USUARIO: Guardar quién vendió
        }).select().single();
        if (saleErr) throw saleErr;
 
