@@ -1,4 +1,4 @@
-// ♻️ REFACTOR: Helpers movidos a utils/helpers.js, generador a utils/devGenerator.js,
+// ♻️ REFACTOR: Helpers movidos a utils/helpers.js,
 //              modales a components/modals/HistoryModals.jsx
 
 import React, { useState, useMemo } from 'react';

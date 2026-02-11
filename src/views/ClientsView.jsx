@@ -17,8 +17,7 @@ import {
   Trophy,
   XCircle,
   Printer,
-  ClockAlert, // Debug (1 segundo)
-  ClipboardCheck // Auditoría (6 meses) [NUEVO IMPORT]
+  ClipboardCheck // Auditoría (6 meses)
 } from 'lucide-react';
 
 export default function ClientsView({ 
@@ -173,16 +172,6 @@ export default function ClientsView({
     }
   };
 
-  // --- DEBUG: Forzar Vencimiento (1 Segundo) ---
-  const handleDebugExpiration = () => {
-    if (window.confirm("⚠️ MODO DEBUG (TEST)\n\n¿Simular paso del tiempo?\nEsto vencerá puntos ganados hace más de 1 segundo.")) {
-      if (checkExpirations) {
-        checkExpirations(1000); 
-        alert("✅ Simulación ejecutada.");
-      }
-    }
-  };
-
   // --- AUDITORÍA: Forzar Vencimiento Real (6 Meses) ---
   const handleRunAudit = () => {
     if (window.confirm("🛡️ AUDITORÍA RETROACTIVA\n\nSe buscarán puntos con más de 6 meses de antigüedad en todo el historial y se eliminarán del saldo actual.\n\n¿Confirmar limpieza?")) {
@@ -231,14 +220,6 @@ export default function ClientsView({
                   title="Auditoría Retroactiva (Limpiar puntos > 6 meses)"
                 >
                   <ClipboardCheck size={20} />
-                </button>
-                <div className="w-px bg-slate-200 mx-1 my-1"></div>
-                <button
-                  onClick={handleDebugExpiration}
-                  className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
-                  title="DEBUG: Simular paso del tiempo (1s)"
-                >
-                  <ClockAlert size={20} />
                 </button>
             </div>
           )}

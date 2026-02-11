@@ -260,7 +260,7 @@ export default function PartySupplyApp() {
         setClosingTime(registerState.closing_time || '21:00');
       }
 
-      // LOG: Mostrar qué cargó y qué no (para debugging en netbook)
+      // Verificar qué tablas no cargaron correctamente
       const failed = [
         !prodData && 'Productos', !clientData && 'Clientes', !salesData && 'Ventas',
         !logsData && 'Logs', !expData && 'Gastos', !closureData && 'Reportes',
@@ -617,7 +617,7 @@ export default function PartySupplyApp() {
       };
 
       setExpenses([newExpense, ...expenses]);
-      addLog('Gasto', { description: newExpense.description, amount: newExpense.amount }, 'Salida de dinero');
+      addLog('Nuevo Gasto', { description: newExpense.description, amount: newExpense.amount, category: newExpense.category, paymentMethod: newExpense.paymentMethod }, 'Salida de dinero');
       showNotification('success', 'Gasto Registrado', 'Se guardó correctamente en la nube.');
     } catch (e) {
       console.error(e);
@@ -731,7 +731,7 @@ export default function PartySupplyApp() {
   const handleLogin = (role) => {
     setCurrentUser(USERS[role]);
     setActiveTab(role === 'admin' ? 'dashboard' : 'pos');
-    addLog('Login', { role });
+    addLog('Login', { role, name: USERS[role]?.name || role });
   };
 
   const handleSelectRole = (role) => {
@@ -1073,7 +1073,7 @@ export default function PartySupplyApp() {
       if (error) throw error;
 
       setInventory(inventory.map(p => p.id === editingProduct.id ? editingProduct : p));
-      addLog('Edición Producto', { id: editingProduct.id }, editReason);
+      addLog('Edición Producto', { id: editingProduct.id, product: editingProduct.title, price: editingProduct.price, stock: editingProduct.stock, category: editingProduct.categories?.[0] || '' }, editReason);
       setEditingProduct(null);
       setEditReason('');
       showNotification('success', 'Producto Editado', 'Cambios guardados.');
@@ -1352,7 +1352,7 @@ export default function PartySupplyApp() {
       };
 
       setRewards([...rewards, newReward]);
-      addLog('Nuevo Premio', { title: newReward.title }, 'Gestión Catálogo');
+      addLog('Nuevo Premio', { title: newReward.title, description: newReward.description, pointsCost: newReward.pointsCost, type: newReward.type, stock: newReward.stock }, 'Gestión Catálogo');
       showNotification('success', 'Premio Creado', 'Se ha añadido al catálogo.');
     } catch (e) {
       console.error(e);
@@ -1375,7 +1375,7 @@ export default function PartySupplyApp() {
       if (error) throw error;
 
       setRewards(rewards.map(r => r.id === id ? { ...r, ...updatedData } : r));
-      addLog('Editar Premio', { title: updatedData.title });
+      addLog('Editar Premio', { title: updatedData.title, pointsCost: updatedData.pointsCost, type: updatedData.type, stock: updatedData.stock });
       showNotification('success', 'Premio Actualizado', 'Cambios guardados.');
     } catch (e) {
       console.error(e);
@@ -1388,8 +1388,9 @@ export default function PartySupplyApp() {
       const { error } = await supabase.from('rewards').delete().eq('id', id);
       if (error) throw error;
 
+      const deletedReward = rewards.find(r => r.id === id);
       setRewards(rewards.filter(r => r.id !== id));
-      addLog('Eliminar Premio', { id });
+      addLog('Eliminar Premio', { id, title: deletedReward?.title || 'Premio eliminado' });
       showNotification('success', 'Premio Eliminado', 'Se quitó del catálogo.');
     } catch (e) {
       console.error(e);
@@ -1502,7 +1503,7 @@ export default function PartySupplyApp() {
           {activeTab === 'history' && (<HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} setTransactions={setTransactions} setDailyLogs={setDailyLogs} />)}
           {activeTab === 'rewards' && (<RewardsView rewards={rewards} onAddReward={handleAddReward} onUpdateReward={handleUpdateReward} onDeleteReward={handleDeleteReward} />)}
           {activeTab === 'reports' && currentUser.role === 'admin' && (<ReportsHistoryView pastClosures={pastClosures} members={members}/>)}
-          {activeTab === 'logs' && currentUser.role === 'admin' && (<LogsView dailyLogs={dailyLogs} setDailyLogs={setDailyLogs} inventory={inventory} />)}
+          {activeTab === 'logs' && currentUser.role === 'admin' && (<LogsView dailyLogs={dailyLogs} />)}
           {activeTab === 'categories' && currentUser.role === 'admin' && (<CategoryManagerView categories={categories} inventory={inventory} onAddCategory={handleAddCategoryFromView} onDeleteCategory={handleDeleteCategoryFromView} />)}
         </main>
       </div>

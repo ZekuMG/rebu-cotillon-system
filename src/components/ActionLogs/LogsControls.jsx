@@ -2,8 +2,6 @@ import React from 'react';
 import {
   FileText,
   FilterX,
-  Wand2,
-  Trash2,
   Calendar,
   User,
   ChevronDown,
@@ -17,16 +15,12 @@ export default function LogsControls({
   hasActiveFilters,
   // Actions
   onClearFilters,
-  onShowGenerator,
-  onShowDelete,
   // Estados de Filtros (Binding bidireccional)
   filterDateStart, setFilterDateStart,
   filterDateEnd, setFilterDateEnd,
   filterUser, setFilterUser,
   filterAction, setFilterAction,
   filterSearch, setFilterSearch,
-  // Permisos (opcional, por si quieres ocultar botones)
-  canEdit = true
 }) {
   return (
     <div className="p-3 border-b border-slate-200 bg-slate-50 shrink-0">
@@ -52,24 +46,6 @@ export default function LogsControls({
           </span>
         </div>
       </div>
-
-      {/* Botones de Acción Globales */}
-      {canEdit && (
-        <div className="flex gap-2 mb-3">
-          <button
-            onClick={onShowGenerator}
-            className="flex items-center gap-2 px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600 transition shadow-sm hover:shadow-md"
-          >
-            <Wand2 size={14} /> Generar Acciones de Prueba
-          </button>
-          <button
-            onClick={onShowDelete}
-            className="flex items-center gap-2 px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-bold hover:bg-red-600 transition shadow-sm hover:shadow-md"
-          >
-            <Trash2 size={14} /> Limpiar Registro
-          </button>
-        </div>
-      )}
 
       {/* Grilla de Filtros */}
       <div className="flex flex-wrap gap-2 items-end">

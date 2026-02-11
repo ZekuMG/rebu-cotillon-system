@@ -71,6 +71,7 @@ export default function LogsTable({
     switch (action) {
       // --- GASTOS ---
       case 'Nuevo Gasto':
+      case 'Gasto':
         return (
             <div className="flex items-center gap-2 flex-wrap">
                 <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
@@ -227,6 +228,76 @@ export default function LogsTable({
             </span>
             <span className="text-slate-600 text-[10px] font-medium">
               {details.count} productos actualizados
+            </span>
+          </div>
+        );
+      }
+
+      case 'Categoría': {
+        const isCreate = details.type === 'create';
+        return (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 ${isCreate ? 'bg-orange-100 text-orange-700' : 'bg-orange-100 text-orange-700'}`}>
+              <Tag size={10} /> {isCreate ? 'Creada' : 'Eliminada'}
+            </span>
+            <span className={`text-[10px] font-bold ${!isCreate ? 'text-slate-500 line-through' : 'text-slate-700'}`}>
+              {details.name}
+            </span>
+          </div>
+        );
+      }
+
+      case 'Nuevo Premio':
+      case 'Editar Premio':
+      case 'Eliminar Premio': {
+        const isNewReward = action === 'Nuevo Premio';
+        const isEditReward = action === 'Editar Premio';
+        const isDeleteReward = action === 'Eliminar Premio';
+        
+        let rewardBadge = 'bg-violet-100 text-violet-700';
+        let rewardLabel = 'Nuevo';
+        let RewardIcon = PlusCircle;
+        if (isEditReward) { rewardLabel = 'Editado'; RewardIcon = Edit; }
+        if (isDeleteReward) { rewardBadge = 'bg-violet-100 text-violet-700'; rewardLabel = 'Eliminado'; RewardIcon = MinusCircle; }
+
+        return (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`${rewardBadge} px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1`}>
+              <RewardIcon size={10} /> {rewardLabel}
+            </span>
+            <span className={`text-[10px] font-bold ${isDeleteReward ? 'text-slate-500 line-through' : 'text-slate-700'}`}>
+              {details.title || `ID: ${details.id}`}
+            </span>
+            {details.pointsCost && (
+              <span className="bg-violet-50 text-violet-600 px-1.5 py-0.5 rounded text-[10px] font-mono border border-violet-200">
+                {details.pointsCost} pts
+              </span>
+            )}
+          </div>
+        );
+      }
+
+      case 'Login': {
+        return (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
+              <Power size={10} /> Inicio de Sesión
+            </span>
+            <span className="text-[10px] font-bold text-slate-700">
+              {details.name || details.role}
+            </span>
+          </div>
+        );
+      }
+
+      case 'Horario Modificado': {
+        return (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
+              <Clock size={10} /> Horario
+            </span>
+            <span className="text-[10px] text-slate-600">
+              {typeof details === 'string' ? details : 'Hora de cierre actualizada'}
             </span>
           </div>
         );

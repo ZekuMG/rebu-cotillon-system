@@ -23,7 +23,9 @@ import {
   Hash,
   TrendingDown,
   User,
-  FileText
+  FileText,
+  LogIn,
+  Gift
 } from 'lucide-react';
 import { formatPrice } from '../../utils/helpers';
 
@@ -59,7 +61,12 @@ export const getDetailTitle = (action) => {
       'Edición de Puntos': 'Movimiento de Puntos',
       'Edición de Socio': 'Actualización de Perfil',
       'Baja de Socio': 'Eliminación de Registro',
-      'Nuevo Gasto': 'Comprobante de Gasto'
+      'Nuevo Gasto': 'Comprobante de Gasto',
+      'Gasto': 'Comprobante de Gasto',
+      'Nuevo Premio': 'Alta de Premio',
+      'Editar Premio': 'Edición de Premio',
+      'Eliminar Premio': 'Baja de Premio',
+      'Login': 'Inicio de Sesión'
     };
     return titles[action] || 'Detalles del Registro';
 };
@@ -82,6 +89,7 @@ export default function LogDetailRenderer({ log }) {
     switch (action) {
       // --- NUEVO: COMPROBANTE DE GASTO ---
       case 'Nuevo Gasto':
+      case 'Gasto':
         return (
             <div className="space-y-4">
                 {/* Cabecera Roja */}
@@ -97,13 +105,21 @@ export default function LogDetailRenderer({ log }) {
                     </div>
                 </div>
 
+                {/* Descripción */}
+                {details.description && (
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Descripción</p>
+                        <p className="text-sm font-medium text-slate-700">{details.description}</p>
+                    </div>
+                )}
+
                 {/* Info Grid */}
                 <div className="grid grid-cols-2 gap-3">
                     <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
                         <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Categoría</p>
                         <div className="flex items-center gap-2">
                             <Tag size={14} className="text-slate-500" />
-                            <span className="text-sm font-bold text-slate-700">{details.category}</span>
+                            <span className="text-sm font-bold text-slate-700">{details.category || 'Sin categoría'}</span>
                         </div>
                     </div>
                     <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
@@ -897,6 +913,153 @@ export default function LogDetailRenderer({ log }) {
                   </tr>
                 </tbody>
               </table>
+            </div>
+          </div>
+        );
+      }
+
+      // --- PREMIOS (VIOLETA) ---
+      case 'Nuevo Premio': {
+        const rewardType = details.type === 'discount' ? 'Descuento' : details.type === 'product' ? 'Producto' : details.type || 'General';
+        return (
+          <div className="space-y-3">
+            <div className="bg-violet-50 p-4 rounded-xl border border-violet-200 flex items-center gap-4 shadow-sm">
+              <div className="w-12 h-12 bg-violet-500 rounded-full flex items-center justify-center text-white shadow-sm">
+                <Gift size={24} />
+              </div>
+              <div className="flex-1">
+                <p className="text-[10px] font-bold text-violet-600 uppercase tracking-wide">Nuevo Premio Registrado</p>
+                <p className="text-lg font-bold text-slate-800 mt-0.5">{details.title}</p>
+              </div>
+            </div>
+            <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+              <table className="w-full text-xs">
+                <tbody className="divide-y divide-slate-100">
+                  {details.description && (
+                    <tr className="bg-slate-50">
+                      <td className="px-4 py-3 font-bold text-slate-500 w-1/3 uppercase text-[10px]">Descripción</td>
+                      <td className="px-4 py-3 text-slate-700 font-medium">{details.description}</td>
+                    </tr>
+                  )}
+                  <tr>
+                    <td className="px-4 py-3 font-bold text-slate-500 uppercase text-[10px]">Costo en Puntos</td>
+                    <td className="px-4 py-3">
+                      <span className="bg-violet-100 text-violet-700 px-2 py-0.5 rounded-md font-bold text-xs border border-violet-200">
+                        {details.pointsCost || 0} pts
+                      </span>
+                    </td>
+                  </tr>
+                  <tr className="bg-slate-50">
+                    <td className="px-4 py-3 font-bold text-slate-500 uppercase text-[10px]">Tipo</td>
+                    <td className="px-4 py-3 font-medium text-slate-700">{rewardType}</td>
+                  </tr>
+                  {details.stock !== undefined && (
+                    <tr>
+                      <td className="px-4 py-3 font-bold text-slate-500 uppercase text-[10px]">Stock</td>
+                      <td className="px-4 py-3">
+                        <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-md font-bold text-xs border border-blue-200">
+                          {details.stock} unidades
+                        </span>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      }
+
+      case 'Editar Premio': {
+        const editRewardType = details.type === 'discount' ? 'Descuento' : details.type === 'product' ? 'Producto' : details.type || 'General';
+        return (
+          <div className="space-y-3">
+            <div className="bg-violet-50 p-4 rounded-xl border border-violet-200 flex items-center gap-4 shadow-sm">
+              <div className="w-12 h-12 bg-violet-500 rounded-full flex items-center justify-center text-white shadow-sm">
+                <Edit size={24} />
+              </div>
+              <div className="flex-1">
+                <p className="text-[10px] font-bold text-violet-600 uppercase tracking-wide">Premio Modificado</p>
+                <p className="text-lg font-bold text-slate-800 mt-0.5">{details.title}</p>
+              </div>
+            </div>
+            <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+              <table className="w-full text-xs">
+                <tbody className="divide-y divide-slate-100">
+                  {details.pointsCost !== undefined && (
+                    <tr>
+                      <td className="px-4 py-3 font-bold text-slate-500 w-1/3 uppercase text-[10px]">Costo en Puntos</td>
+                      <td className="px-4 py-3">
+                        <span className="bg-violet-100 text-violet-700 px-2 py-0.5 rounded-md font-bold text-xs border border-violet-200">
+                          {details.pointsCost} pts
+                        </span>
+                      </td>
+                    </tr>
+                  )}
+                  <tr className="bg-slate-50">
+                    <td className="px-4 py-3 font-bold text-slate-500 uppercase text-[10px]">Tipo</td>
+                    <td className="px-4 py-3 font-medium text-slate-700">{editRewardType}</td>
+                  </tr>
+                  {details.stock !== undefined && (
+                    <tr>
+                      <td className="px-4 py-3 font-bold text-slate-500 uppercase text-[10px]">Stock</td>
+                      <td className="px-4 py-3">
+                        <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-md font-bold text-xs border border-blue-200">
+                          {details.stock} unidades
+                        </span>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      }
+
+      case 'Eliminar Premio': {
+        return (
+          <div className="space-y-3">
+            <div className="bg-red-50 p-4 rounded-xl border border-red-200 flex items-center gap-4 shadow-sm">
+              <div className="w-12 h-12 bg-red-500 rounded-full flex items-center justify-center text-white shadow-sm">
+                <Gift size={24} />
+              </div>
+              <div className="flex-1">
+                <p className="text-[10px] font-bold text-red-600 uppercase tracking-wide">Premio Eliminado del Catálogo</p>
+                <p className="text-lg font-bold text-slate-500 mt-0.5 line-through">{details.title || `ID: ${details.id}`}</p>
+              </div>
+            </div>
+            <div className="bg-red-100 text-red-800 p-3 rounded-lg text-xs text-center font-medium border border-red-200">
+              ⚠ El premio fue eliminado permanentemente del catálogo de recompensas.
+            </div>
+          </div>
+        );
+      }
+
+      // --- LOGIN ---
+      case 'Login': {
+        const roleName = details.name || details.role;
+        const isAdmin = details.role === 'admin';
+        return (
+          <div className="space-y-3">
+            <div className="bg-indigo-50 p-5 rounded-xl border border-indigo-200 flex items-center gap-4 shadow-sm">
+              <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white shadow-sm ${isAdmin ? 'bg-indigo-600' : 'bg-emerald-500'}`}>
+                <LogIn size={24} />
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-wide">
+                  Sesión Iniciada
+                </p>
+                <p className="text-lg font-bold text-slate-800">{roleName}</p>
+              </div>
+            </div>
+            <div className={`p-3 rounded-xl border flex items-center justify-between shadow-sm ${isAdmin ? 'bg-indigo-50 border-indigo-200' : 'bg-emerald-50 border-emerald-200'}`}>
+              <span className={`text-xs font-bold uppercase ${isAdmin ? 'text-indigo-700' : 'text-emerald-700'}`}>
+                Nivel de Acceso
+              </span>
+              <span className={`px-3 py-1 rounded-full text-sm font-bold text-white shadow-sm ${isAdmin ? 'bg-indigo-600' : 'bg-emerald-500'}`}>
+                {isAdmin ? 'Administrador' : 'Vendedor'}
+              </span>
             </div>
           </div>
         );

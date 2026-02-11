@@ -1,6 +1,6 @@
 // src/data.js
 // ♻️ REFACTOR: Configuración central del sistema POS
-// Datos de prueba movidos a src/data/seedTransactions.js y src/data/seedLogs.js
+// Datos de prueba en src/data/seedTransactions.js
 
 // ⚠️ WARNING: Credenciales en texto plano — mover a variables de entorno en producción
 export const USERS = {
@@ -155,7 +155,6 @@ export const INITIAL_INVENTORY = [
 // ♻️ REFACTOR: Re-export datos de prueba desde módulos separados
 // Mantiene compatibilidad con todos los imports existentes
 export { INITIAL_TRANSACTIONS } from './data/seedTransactions';
-export { INITIAL_LOGS } from './data/seedLogs';
 
 export const COLORS = [
   '#f472b6',

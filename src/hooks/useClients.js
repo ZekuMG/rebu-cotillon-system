@@ -22,17 +22,12 @@ export const useClients = () => {
   };
 
   // --- SISTEMA DE VENCIMIENTO (CORE) ---
-  // Ahora envuelta en useCallback y parametrizable para DEBUG
   const checkExpirations = useCallback((customThresholdMs = null) => {
-    // Por defecto 6 Meses, o el valor que pasemos para debug (ej: 10000ms = 10 seg)
     const SIX_MONTHS_MS = 1000 * 60 * 60 * 24 * 30 * 6;
     const timeThreshold = customThresholdMs !== null ? customThresholdMs : SIX_MONTHS_MS;
     
     const now = new Date();
     const expirationDateLimit = new Date(now.getTime() - timeThreshold);
-
-    console.log(`[SYSTEM] Ejecutando vencimiento de puntos.`);
-    console.log(`[SYSTEM] Umbral: ${timeThreshold}ms. Vencen puntos anteriores a: ${expirationDateLimit.toLocaleString()}`);
 
     setMembers((prevMembers) => {
       let hasChanges = false;
@@ -66,7 +61,7 @@ export const useClients = () => {
             const remainingFromLog = logPoints - consumedPoints;
             consumedPoints = 0;
 
-            // COMPARACIÓN CONTRA EL UMBRAL (Aquí ocurre la magia del debug)
+            // COMPARACIÓN CONTRA EL UMBRAL
             if (logDate < expirationDateLimit) {
               pointsToExpireNow += remainingFromLog;
             }
@@ -86,10 +81,7 @@ export const useClients = () => {
             date: now.toISOString(),
             type: 'expired',
             points: finalPointsToExpire,
-            // Diferenciamos si fue automático o debug en el texto
-            concept: customThresholdMs !== null 
-              ? `Vencimiento DEBUG (Test ${customThresholdMs/1000}s)` 
-              : 'Vencimiento automático (6 meses)',
+            concept: 'Vencimiento automático (6 meses)',
             prevPoints: member.points,
             newPoints: member.points - finalPointsToExpire,
             totalSale: 0,
@@ -274,6 +266,6 @@ export const useClients = () => {
     searchMember,
     addPoints,
     redeemPoints,
-    checkExpirations, // <--- LA LLAVE MAESTRA DE DEBUG
+    checkExpirations,
   };
 };
