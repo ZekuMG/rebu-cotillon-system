@@ -4,28 +4,31 @@ import legacy from '@vitejs/plugin-legacy';
 import path from 'path';
 
 export default defineConfig({
-  base: './', // Tu configuración para rutas relativas (Electron/Hostings simples)
-  
+  // CRÍTICO PARA ELECTRON: Rutas relativas
+  base: './', 
+
   plugins: [
     react(),
-    // Plugin Legacy: Esto traduce el código moderno para que Android viejo lo entienda
+    // Plugin Legacy para compatibilidad con Windows 7/8 y Tablets viejas
     legacy({
-      targets: ['defaults', 'not IE 11', 'Android >= 5'],
+      targets: ['chrome >= 64', 'edge >= 79', 'safari >= 11'],
+      additionalLegacyPolyfills: ['regenerator-runtime/runtime'],
+      renderLegacyChunks: true,
       polyfills: true,
-      modernPolyfills: true,
     }),
   ],
-  
+
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'), // Permite importar usando @/components
+      '@': path.resolve(__dirname, './src'),
     },
   },
-  
+
   build: {
-    // Define objetivos específicos para asegurar compatibilidad
-    target: ['es2015', 'chrome64', 'safari11'],
-    chunkSizeWarningLimit: 2000, // Evita alertas de tamaño en consola
+    target: 'es2015',
+    outDir: 'dist',
+    assetsDir: 'assets',
+    chunkSizeWarningLimit: 2000, 
     sourcemap: false
   }
 });
