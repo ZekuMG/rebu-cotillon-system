@@ -9,12 +9,11 @@
  */
 export const formatPrice = (amount) => {
   if (amount === null || amount === undefined || isNaN(amount)) return '0';
-  
-  // Usamos 'de-DE' (Alemán) porque fuerza el formato 1.000,00 igual que Argentina
-  // pero sin el bug de omitir el punto en 4 dígitos.
+  // Usamos 'de-DE' porque tiene el mismo formato que AR (punto miles, coma decimales)
+  // pero respeta el punto incluso en 4 dígitos.
   return new Intl.NumberFormat('de-DE', {
     minimumFractionDigits: 0,
-    maximumFractionDigits: 0, // Sin decimales visuales (cambiar a 2 si los quieres)
+    maximumFractionDigits: 0, 
   }).format(amount);
 };
   
