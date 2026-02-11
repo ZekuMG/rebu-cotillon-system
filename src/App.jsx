@@ -9,12 +9,12 @@ import {
 } from 'lucide-react';
 import Swal from 'sweetalert2'; // Alertas bonitas
 
-// --- CONEXIÓN A LA NUBE (Agregado) ---
+// --- CONEXIÓN A LA NUBE ---
 import { supabase } from './supabase/client';
 
 import {
   USERS,
-  getInitialState,
+  getInitialState, // Mantenemos para configuraciones menores, pero no para la caja
 } from './data';
 import Sidebar from './components/Sidebar';
 
@@ -56,7 +56,6 @@ import { TicketPrintLayout } from './components/TicketPrintLayout';
 
 // Hooks
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
-// useClients lo integramos aquí para usar la DB directamente
 
 export default function PartySupplyApp() {
   
@@ -64,46 +63,25 @@ export default function PartySupplyApp() {
   const [isCloudLoading, setIsCloudLoading] = useState(true);
 
   // ==========================================
-  // 1. ESTADOS DE DATOS (Persistentes)
+  // 1. ESTADOS DE DATOS (Persistentes en Nube)
   // ==========================================
-  
-  // INVENTARIO: Inicializamos vacío o con local, pero el useEffect lo llenará desde la nube
   const [inventory, setInventory] = useState([]);
-
-  // ✅ CAMBIO CATEGORÍAS 1/5: Ahora inicia vacío, se carga desde Supabase
   const [categories, setCategories] = useState([]);
-  
-  // ✅ CAMBIO PREMIOS 1/4: Inicia vacío, ya no usa localStorage ni datos dummy
   const [rewards, setRewards] = useState([]);
-
   const [transactions, setTransactions] = useState([]);
-  
-  // LOGS: Ahora vienen de DB
   const [dailyLogs, setDailyLogs] = useState([]);
-  
-  // CLIENTES: Ahora vienen de DB
   const [members, setMembers] = useState([]);
-  
-  const [pastClosures, setPastClosures] = useState(() => 
-    getInitialState('party_closures', [])
-  );
+  const [pastClosures, setPastClosures] = useState([]);
+  const [expenses, setExpenses] = useState([]);
 
-  const [expenses, setExpenses] = useState(() => 
-    getInitialState('party_expenses', [])
-  );
+  // ✅ CAMBIO SYNC 1/4: Estados de caja inician por defecto (se llenan desde nube)
+  // Ya no usamos getInitialState ni localStorage para esto.
+  const [openingBalance, setOpeningBalance] = useState(0);
+  const [isRegisterClosed, setIsRegisterClosed] = useState(true); // Asumimos cerrada al inicio
+  const [closingTime, setClosingTime] = useState('21:00');
 
-  const [openingBalance, setOpeningBalance] = useState(() =>
-    getInitialState('party_openingBalance', 25000)
-  );
-  const [isRegisterClosed, setIsRegisterClosed] = useState(() =>
-    getInitialState('party_isRegisterClosed', false)
-  );
-  const [closingTime, setClosingTime] = useState(() =>
-    getInitialState('party_closingTime', '21:00')
-  );
-
-// ==========================================
-  // 1.5 CONEXIÓN SUPABASE (Fetch Inicial)
+  // ==========================================
+  // 1.5 CONEXIÓN SUPABASE (Fetch Inicial + Realtime)
   // ==========================================
   const fetchCloudData = async () => {
     try {
@@ -114,7 +92,7 @@ export default function PartySupplyApp() {
       if (prodErr) throw prodErr;
       const adaptedInventory = (prodData || []).map(p => ({
          ...p,
-         categories: p.category ? [p.category] : [],
+         categories: p.category ? [p.category] : [], 
          purchasePrice: p.purchasePrice || 0
       }));
 
@@ -123,7 +101,7 @@ export default function PartySupplyApp() {
       if (clientErr) throw clientErr;
       const adaptedClients = (clientData || []).map(c => ({
          ...c,
-         memberNumber: c.member_number
+         memberNumber: c.member_number 
       }));
 
       // C. VENTAS
@@ -168,7 +146,7 @@ export default function PartySupplyApp() {
          timestamp: new Date(log.created_at).toLocaleTimeString('es-AR')
       }));
 
-      // E. GASTOS (NUEVO)
+      // E. GASTOS
       const { data: expData, error: expErr } = await supabase.from('expenses').select('*').order('created_at', { ascending: false });
       if (expErr) throw expErr;
       const adaptedExpenses = (expData || []).map(e => ({
@@ -176,13 +154,38 @@ export default function PartySupplyApp() {
          description: e.description,
          amount: e.amount,
          category: e.category,
-         paymentMethod: e.payment_method, // snake_case a camelCase
+         paymentMethod: e.payment_method,
          date: new Date(e.created_at).toLocaleDateString('es-AR'),
          time: new Date(e.created_at).toLocaleTimeString('es-AR'),
          user: e.user_name || 'Sistema'
       }));
 
-      // F. OTROS
+      // F. REPORTES (Cierres)
+      const { data: closureData, error: closureErr } = await supabase.from('cash_closures').select('*').order('created_at', { ascending: false });
+      if (closureErr) throw closureErr;
+      const adaptedClosures = (closureData || []).map(c => ({
+         id: c.id, 
+         date: c.date,
+         openTime: c.open_time,
+         closeTime: c.close_time,
+         user: c.user_name,
+         type: c.type,
+         openingBalance: Number(c.opening_balance),
+         totalSales: Number(c.total_sales),
+         finalBalance: Number(c.final_balance),
+         totalCost: Number(c.total_cost),
+         totalExpenses: Number(c.total_expenses),
+         netProfit: Number(c.net_profit),
+         salesCount: c.sales_count,
+         averageTicket: Number(c.average_ticket),
+         paymentMethods: c.payment_methods_summary, 
+         itemsSold: c.items_sold_list,             
+         newClients: c.new_clients_list,           
+         expensesSnapshot: c.expenses_snapshot,    
+         transactionsSnapshot: c.transactions_snapshot 
+      }));
+
+      // G. OTROS
       const { data: catData } = await supabase.from('categories').select('*').order('name');
       const categoryNames = (catData || []).map(c => c.name);
 
@@ -197,14 +200,23 @@ export default function PartySupplyApp() {
          stock: r.stock
       }));
 
+      // ✅ CAMBIO SYNC 2/4: Obtener Estado Actual de la Caja
+      const { data: registerState, error: regErr } = await supabase.from('register_state').select('*').eq('id', 1).single();
+      if (!regErr && registerState) {
+          setIsRegisterClosed(!registerState.is_open);
+          setOpeningBalance(Number(registerState.opening_balance));
+          setClosingTime(registerState.closing_time || '21:00');
+      }
+
       // Actualizar estados
       setInventory(adaptedInventory);
       setMembers(adaptedClients);
       setTransactions(adaptedSales);
       setDailyLogs(adaptedLogs);
-      setExpenses(adaptedExpenses); // ✅ Seteamos gastos
+      setExpenses(adaptedExpenses); 
       setCategories(categoryNames); 
       setRewards(adaptedRewards);
+      setPastClosures(adaptedClosures);
 
     } catch (error) {
       console.error('Error cargando nube:', error);
@@ -214,10 +226,62 @@ export default function PartySupplyApp() {
     }
   };
 
-  useEffect(() => {
+useEffect(() => {
     fetchCloudData();
+
+    // ✅ CAMBIO SYNC 3/4: Suscripción Realtime (Caja y Reportes)
+    const channel = supabase
+      .channel('app_realtime_updates')
+      // A. Escuchar Cambios de Estado de Caja (Abrir/Cerrar)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'register_state', filter: 'id=eq.1' },
+        (payload) => {
+          const newState = payload.new;
+          setIsRegisterClosed(!newState.is_open);
+          setOpeningBalance(Number(newState.opening_balance));
+          setClosingTime(newState.closing_time);
+        }
+      )
+      // B. Escuchar Nuevos Reportes de Cierre (Para actualizar historial en vivo)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'cash_closures' },
+        (payload) => {
+          const c = payload.new;
+          // Adaptamos snake_case (DB) a camelCase (Frontend)
+          const newReport = {
+             id: c.id, 
+             date: c.date,
+             openTime: c.open_time,
+             closeTime: c.close_time,
+             user: c.user_name,
+             type: c.type,
+             openingBalance: Number(c.opening_balance),
+             totalSales: Number(c.total_sales),
+             finalBalance: Number(c.final_balance),
+             totalCost: Number(c.total_cost),
+             totalExpenses: Number(c.total_expenses),
+             netProfit: Number(c.net_profit),
+             salesCount: c.sales_count,
+             averageTicket: Number(c.average_ticket),
+             paymentMethods: c.payment_methods_summary, 
+             itemsSold: c.items_sold_list,             
+             newClients: c.new_clients_list,           
+             expensesSnapshot: c.expenses_snapshot,    
+             transactionsSnapshot: c.transactions_snapshot 
+          };
+          setPastClosures((prev) => [newReport, ...prev]);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
+  
   // ==========================================
   // 2. ESTADOS DE SESIÓN Y UI
   // ==========================================
@@ -316,7 +380,6 @@ export default function PartySupplyApp() {
 
   // --- LOGGING CENTRALIZADO (MODIFICADO PARA SUPABASE) ---
   const addLog = async (action, details, reason = '') => {
-    // 1. UI (Optimista)
     const newLog = {
       id: Date.now(),
       timestamp: new Date().toLocaleTimeString('es-AR'),
@@ -329,7 +392,6 @@ export default function PartySupplyApp() {
     };
     setDailyLogs((prev) => [newLog, ...prev]);
 
-    // 2. DB (Persistencia)
     try {
       await supabase.from('logs').insert([{
          action,
@@ -344,7 +406,7 @@ export default function PartySupplyApp() {
   };
 
   // ==========================================
-  // CLIENTES (Lógica traída para conectar con DB)
+  // CLIENTES
   // ==========================================
   const handleAddMemberWithLog = async (data) => {
     try {
@@ -386,7 +448,6 @@ export default function PartySupplyApp() {
     }
   };
   
-  // Función auxiliar para verificar expiraciones (la mantenemos local por ahora)
   const checkExpirations = () => { /* Lógica futura */ };
 
   // ==========================================
@@ -438,15 +499,6 @@ export default function PartySupplyApp() {
     0
   );
   const salesCount = validTransactions.length;
-
-  // ✅ CAMBIO PREMIOS 3/4: Eliminado useEffect de localStorage para rewards
-  
-  // Los siguientes ya no guardan transactions/logs/inventory en localStorage porque son de nube, 
-  // pero mantenemos los de configuración local:
-  useEffect(() => { window.localStorage.setItem('party_closures', JSON.stringify(pastClosures)); }, [pastClosures]);
-  useEffect(() => { window.localStorage.setItem('party_openingBalance', JSON.stringify(openingBalance)); }, [openingBalance]);
-  useEffect(() => { window.localStorage.setItem('party_isRegisterClosed', JSON.stringify(isRegisterClosed)); }, [isRegisterClosed]);
-  useEffect(() => { window.localStorage.setItem('party_closingTime', JSON.stringify(closingTime)); }, [closingTime]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -600,7 +652,6 @@ export default function PartySupplyApp() {
   };
 
   const handleReplaceDuplicateBarcode = () => {
-    // Nota: Esta lógica debería idealmente ir a Supabase, pero la mantenemos local por ahora
     const { existingProduct } = barcodeDuplicateModal;
     setInventory(inventory.map(p => 
       p.id === existingProduct.id ? { ...p, barcode: '' } : p
@@ -702,23 +753,20 @@ export default function PartySupplyApp() {
     }
   };
 
-  // --- LÓGICA DE CIERRE COMPLETA ---
-  const executeRegisterClose = (isAuto = false) => {
+  // --- LÓGICA DE CIERRE COMPLETA (MODIFICADO PARA SUPABASE + SYNC) ---
+  const executeRegisterClose = async (isAuto = false) => {
     const closeDate = new Date();
     
+    // ... Cálculos (sin cambios) ...
     const itemsSoldMap = {};
     let totalCost = 0; 
-
     validTransactions.forEach(tx => {
       tx.items.forEach(item => {
         const inventoryItem = inventory.find(p => p.id === (item.productId || item.id));
         const cost = Number(inventoryItem?.purchasePrice || 0);
-        
         if (!itemsSoldMap[item.id]) itemsSoldMap[item.id] = { id: item.id, title: item.title, qty: 0, revenue: 0, cost: 0 };
-        
         const qty = Number(item.qty || item.quantity || 0);
         const price = Number(item.price || 0);
-        
         itemsSoldMap[item.id].qty += qty;
         itemsSoldMap[item.id].revenue += (price * qty); 
         itemsSoldMap[item.id].cost += (cost * qty);
@@ -726,101 +774,141 @@ export default function PartySupplyApp() {
       });
     });
     const itemsSoldList = Object.values(itemsSoldMap);
-
     const paymentMethodsSummary = {};
     validTransactions.forEach(tx => {
       const method = tx.payment || 'Otros';
       if (!paymentMethodsSummary[method]) paymentMethodsSummary[method] = 0;
       paymentMethodsSummary[method] += Number(tx.total);
     });
-
     const totalExpenses = expenses.reduce((acc, curr) => acc + Number(curr.amount), 0);
-    const cashExpenses = expenses
-        .filter(e => e.paymentMethod === 'Efectivo')
-        .reduce((acc, curr) => acc + Number(curr.amount), 0);
-
+    const cashExpenses = expenses.filter(e => e.paymentMethod === 'Efectivo').reduce((acc, curr) => acc + Number(curr.amount), 0);
     const averageTicket = salesCount > 0 ? (totalSales / salesCount) : 0;
     const netProfit = totalSales - totalCost - totalExpenses;
-    const cashSales = validTransactions
-        .filter(t => t.payment === 'Efectivo')
-        .reduce((acc, t) => acc + Number(t.total), 0);
+    const cashSales = validTransactions.filter(t => t.payment === 'Efectivo').reduce((acc, t) => acc + Number(t.total), 0);
     const finalPhysicalBalance = openingBalance + cashSales - cashExpenses;
+    const todayStr = closeDate.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const newClientsList = dailyLogs.filter(l => l.date === todayStr && l.action === 'Nuevo Socio').map(l => ({ name: l.details.name, number: l.details.number, time: l.timestamp || l.time }));
 
-    const todayStr = closeDate.toLocaleDateString('es-AR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-    });
+    try {
+        const openTime = dailyLogs.find(l => l.action === 'Apertura de Caja')?.timestamp || '--:--';
+        const closeTime = closeDate.toLocaleTimeString('es-AR');
+        const user = currentUser?.name || 'Automático';
+        const type = isAuto ? 'Automático' : 'Manual';
 
-    const newClientsList = dailyLogs
-      .filter(l => l.date === todayStr && l.action === 'Nuevo Socio')
-      .map(l => {
-        // ... (lógica de reporte original mantenida)
-        return {
-            name: l.details.name,
-            number: l.details.number,
-            time: l.timestamp || l.time
+        const payload = {
+            date: closeDate.toLocaleDateString('es-AR'),
+            open_time: openTime,
+            close_time: closeTime,
+            user_name: user,
+            type: type,
+            opening_balance: openingBalance,
+            total_sales: totalSales,
+            final_balance: finalPhysicalBalance,
+            total_cost: totalCost,
+            total_expenses: totalExpenses,
+            net_profit: netProfit,
+            sales_count: salesCount,
+            average_ticket: averageTicket,
+            payment_methods_summary: paymentMethodsSummary,
+            items_sold_list: itemsSoldList,
+            new_clients_list: newClientsList,
+            expenses_snapshot: expenses,
+            transactions_snapshot: validTransactions
         };
-      });
 
-    const report = {
-      id: `rep-${Date.now()}`,
-      date: closeDate.toLocaleDateString('es-AR'),
-      openTime: dailyLogs.find(l => l.action === 'Apertura de Caja')?.timestamp || '--:--',
-      closeTime: closeDate.toLocaleTimeString('es-AR'),
-      user: currentUser?.name || 'Automático',
-      type: isAuto ? 'Automático' : 'Manual',
-      openingBalance,
-      totalSales,
-      finalBalance: finalPhysicalBalance,
-      totalCost,
-      totalExpenses,
-      netProfit,
-      salesCount,
-      averageTicket,
-      paymentMethods: paymentMethodsSummary,
-      itemsSold: itemsSoldList,
-      newClients: newClientsList, 
-      transactionsSnapshot: [...validTransactions],
-      expensesSnapshot: [...expenses]
-    };
+        const { data: savedReport, error } = await supabase.from('cash_closures').insert([payload]).select().single();
+        if (error) throw error;
 
-    setPastClosures([report, ...pastClosures]);
+        const adaptedReport = {
+            id: savedReport.id,
+            date: savedReport.date,
+            openTime: savedReport.open_time,
+            closeTime: savedReport.close_time,
+            user: savedReport.user_name,
+            type: savedReport.type,
+            openingBalance: Number(savedReport.opening_balance),
+            totalSales: Number(savedReport.total_sales),
+            finalBalance: Number(savedReport.final_balance),
+            totalCost: Number(savedReport.total_cost),
+            totalExpenses: Number(savedReport.total_expenses),
+            netProfit: Number(savedReport.net_profit),
+            salesCount: savedReport.sales_count,
+            averageTicket: Number(savedReport.average_ticket),
+            paymentMethods: savedReport.payment_methods_summary,
+            itemsSold: savedReport.items_sold_list,
+            newClients: savedReport.new_clients_list,
+            expensesSnapshot: savedReport.expenses_snapshot,
+            transactionsSnapshot: savedReport.transactions_snapshot
+        };
 
-    setIsRegisterClosed(true);
-    addLog('Cierre de Caja', { totalSales, reportId: report.id }, isAuto ? 'Automático' : 'Manual');
-    setTransactions([]);
-    setExpenses([]); 
-    setIsClosingCashModalOpen(false);
-    if (isAuto) setIsAutoCloseAlertOpen(true);
-    
-    showNotification('success', 'Reporte Generado', 'Se ha guardado el reporte del día en el historial.');
+        setPastClosures([adaptedReport, ...pastClosures]);
+        
+        // ✅ CAMBIO SYNC 4/4: Actualizar estado Global en DB (Cerrada)
+        await supabase.from('register_state').update({
+            is_open: false,
+            opening_balance: 0,
+            last_updated_by: currentUser?.name || 'Sistema'
+        }).eq('id', 1);
+
+        setIsRegisterClosed(true);
+        addLog('Cierre de Caja', { totalSales, reportId: savedReport.id }, isAuto ? 'Automático' : 'Manual');
+        setTransactions([]);
+        setExpenses([]); 
+        setIsClosingCashModalOpen(false);
+        if (isAuto) setIsAutoCloseAlertOpen(true);
+        
+        showNotification('success', 'Reporte Generado', 'Se ha guardado el reporte del día en la nube.');
+
+    } catch (e) {
+        console.error("Error guardando cierre:", e);
+        showNotification('error', 'Error al Cerrar', 'No se pudo guardar el reporte en la nube.');
+        // Fallback local
+        setIsRegisterClosed(true);
+        setIsClosingCashModalOpen(false);
+    }
   };
 
   const handleConfirmCloseCash = () => executeRegisterClose(false);
 
-  const handleSaveOpeningBalance = () => {
+  // ✅ CAMBIO SYNC 4/4: Apertura de Caja -> DB
+  const handleSaveOpeningBalance = async () => {
     const value = Number(tempOpeningBalance);
     if (!isNaN(value) && value >= 0 && tempClosingTime) {
+      
+      // Actualización optimista
       setOpeningBalance(value);
       setClosingTime(tempClosingTime);
       setIsRegisterClosed(false);
-      addLog(
-        'Apertura de Caja',
-        {
-          amount: value,
-          scheduledClosingTime: tempClosingTime,
-        },
-        'Inicio de operaciones'
-      );
       setIsOpeningBalanceModalOpen(false);
+
+      // Actualización DB
+      try {
+          await supabase.from('register_state').update({
+              is_open: true,
+              opening_balance: value,
+              closing_time: tempClosingTime,
+              last_updated_by: currentUser?.name
+          }).eq('id', 1);
+
+          addLog('Apertura de Caja', { amount: value, scheduledClosingTime: tempClosingTime }, 'Inicio de operaciones');
+      } catch(e) {
+          console.error("Error abriendo caja en nube:", e);
+          showNotification('error', 'Error de Sincronización', 'La caja se abrió localmente pero falló la nube.');
+      }
     }
   };
 
-  const handleSaveClosingTime = () => {
+  const handleSaveClosingTime = async () => {
     addLog('Horario Modificado', `Nueva hora de cierre: ${closingTime}`, 'Ajuste de horario');
     setIsClosingTimeModalOpen(false);
-    showNotification('success', 'Horario Guardado', 'La hora de cierre se ha actualizado.');
+    
+    // Actualizar DB
+    try {
+        await supabase.from('register_state').update({ closing_time: closingTime }).eq('id', 1);
+        showNotification('success', 'Horario Guardado', 'La hora de cierre se ha actualizado.');
+    } catch(e) {
+        console.error(e);
+    }
   };
 
   // ✅ CAMBIO CATEGORÍAS 4/5: Ahora inserta en Supabase al crear categoría
