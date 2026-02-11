@@ -14,10 +14,6 @@ import { supabase } from './supabase/client';
 
 import {
   USERS,
-  INITIAL_CATEGORIES,
-  INITIAL_INVENTORY,
-  INITIAL_TRANSACTIONS,
-  INITIAL_LOGS,
   getInitialState,
 } from './data';
 import Sidebar from './components/Sidebar';
@@ -77,11 +73,8 @@ export default function PartySupplyApp() {
   // ✅ CAMBIO CATEGORÍAS 1/5: Ahora inicia vacío, se carga desde Supabase
   const [categories, setCategories] = useState([]);
   
-  const [rewards, setRewards] = useState(() => getInitialState('party_rewards', [
-    { id: 'rew-001', title: 'Voucher $500', type: 'discount', discountAmount: 500, pointsCost: 300, description: 'Descuento aplicable en cualquier compra.' },
-    { id: 'rew-002', title: 'Voucher $1000', type: 'discount', discountAmount: 1000, pointsCost: 550, description: 'Descuento para compras superiores a $2000.' },
-    { id: 'rew-003', title: 'Voucher $2000', type: 'discount', discountAmount: 2000, pointsCost: 1000, description: 'Super descuento para socios fieles.' },
-  ]));
+  // ✅ CAMBIO PREMIOS 1/4: Inicia vacío, ya no usa localStorage ni datos dummy
+  const [rewards, setRewards] = useState([]);
 
   const [transactions, setTransactions] = useState([]);
   
@@ -109,7 +102,7 @@ export default function PartySupplyApp() {
     getInitialState('party_closingTime', '21:00')
   );
 
-  // ==========================================
+// ==========================================
   // 1.5 CONEXIÓN SUPABASE (Fetch Inicial)
   // ==========================================
   const fetchCloudData = async () => {
@@ -121,7 +114,7 @@ export default function PartySupplyApp() {
       if (prodErr) throw prodErr;
       const adaptedInventory = (prodData || []).map(p => ({
          ...p,
-         categories: p.category ? [p.category] : [], // Adaptador para mantener tu estructura de array
+         categories: p.category ? [p.category] : [],
          purchasePrice: p.purchasePrice || 0
       }));
 
@@ -130,7 +123,7 @@ export default function PartySupplyApp() {
       if (clientErr) throw clientErr;
       const adaptedClients = (clientData || []).map(c => ({
          ...c,
-         memberNumber: c.member_number // Adaptador camelCase
+         memberNumber: c.member_number
       }));
 
       // C. VENTAS
@@ -175,16 +168,43 @@ export default function PartySupplyApp() {
          timestamp: new Date(log.created_at).toLocaleTimeString('es-AR')
       }));
 
-      // ✅ CAMBIO CATEGORÍAS 2/5: Fetch desde tabla 'categories' en vez de extraer de productos
+      // E. GASTOS (NUEVO)
+      const { data: expData, error: expErr } = await supabase.from('expenses').select('*').order('created_at', { ascending: false });
+      if (expErr) throw expErr;
+      const adaptedExpenses = (expData || []).map(e => ({
+         id: e.id,
+         description: e.description,
+         amount: e.amount,
+         category: e.category,
+         paymentMethod: e.payment_method, // snake_case a camelCase
+         date: new Date(e.created_at).toLocaleDateString('es-AR'),
+         time: new Date(e.created_at).toLocaleTimeString('es-AR'),
+         user: e.user_name || 'Sistema'
+      }));
+
+      // F. OTROS
       const { data: catData } = await supabase.from('categories').select('*').order('name');
       const categoryNames = (catData || []).map(c => c.name);
 
-      // Actualizamos los estados con datos REALES de la nube
+      const { data: rewardsData } = await supabase.from('rewards').select('*').order('points_cost', { ascending: true });
+      const adaptedRewards = (rewardsData || []).map(r => ({
+         id: r.id,
+         title: r.title,
+         description: r.description,
+         pointsCost: r.points_cost,
+         type: r.type,
+         discountAmount: r.discount_amount,
+         stock: r.stock
+      }));
+
+      // Actualizar estados
       setInventory(adaptedInventory);
       setMembers(adaptedClients);
       setTransactions(adaptedSales);
       setDailyLogs(adaptedLogs);
-      setCategories(categoryNames); // ✅ CAMBIO CATEGORÍAS 2/5: Reemplaza la lógica de "unificar"
+      setExpenses(adaptedExpenses); // ✅ Seteamos gastos
+      setCategories(categoryNames); 
+      setRewards(adaptedRewards);
 
     } catch (error) {
       console.error('Error cargando nube:', error);
@@ -419,12 +439,11 @@ export default function PartySupplyApp() {
   );
   const salesCount = validTransactions.length;
 
-  // ✅ CAMBIO CATEGORÍAS 3/5: Se eliminó el useEffect de localStorage para categorías
-  useEffect(() => { window.localStorage.setItem('party_rewards', JSON.stringify(rewards)); }, [rewards]);
+  // ✅ CAMBIO PREMIOS 3/4: Eliminado useEffect de localStorage para rewards
+  
   // Los siguientes ya no guardan transactions/logs/inventory en localStorage porque son de nube, 
   // pero mantenemos los de configuración local:
   useEffect(() => { window.localStorage.setItem('party_closures', JSON.stringify(pastClosures)); }, [pastClosures]);
-  useEffect(() => { window.localStorage.setItem('party_expenses', JSON.stringify(expenses)); }, [expenses]);
   useEffect(() => { window.localStorage.setItem('party_openingBalance', JSON.stringify(openingBalance)); }, [openingBalance]);
   useEffect(() => { window.localStorage.setItem('party_isRegisterClosed', JSON.stringify(isRegisterClosed)); }, [isRegisterClosed]);
   useEffect(() => { window.localStorage.setItem('party_closingTime', JSON.stringify(closingTime)); }, [closingTime]);
@@ -453,17 +472,37 @@ export default function PartySupplyApp() {
   // 7. LÓGICA DE NEGOCIO
   // ==========================================
 
-  const handleAddExpense = (expenseData) => {
-    const newExpense = {
-      id: Date.now(),
-      ...expenseData,
-      date: new Date().toLocaleDateString('es-AR'),
-      time: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
-      user: currentUser.name
-    };
-    setExpenses([...expenses, newExpense]);
-    addLog('Gasto', newExpense, 'Salida de dinero');
-    showNotification('success', 'Gasto Registrado', 'Se guardó correctamente.');
+  const handleAddExpense = async (expenseData) => {
+    try {
+      const payload = {
+        description: expenseData.description,
+        amount: Number(expenseData.amount),
+        category: expenseData.category,
+        payment_method: expenseData.paymentMethod,
+        user_name: currentUser.name
+      };
+
+      const { data, error } = await supabase.from('expenses').insert([payload]).select().single();
+      if (error) throw error;
+
+      const newExpense = {
+        id: data.id,
+        description: data.description,
+        amount: data.amount,
+        category: data.category,
+        paymentMethod: data.payment_method,
+        date: new Date(data.created_at).toLocaleDateString('es-AR'),
+        time: new Date(data.created_at).toLocaleTimeString('es-AR'),
+        user: data.user_name
+      };
+
+      setExpenses([newExpense, ...expenses]);
+      addLog('Gasto', { description: newExpense.description, amount: newExpense.amount }, 'Salida de dinero');
+      showNotification('success', 'Gasto Registrado', 'Se guardó correctamente en la nube.');
+    } catch (e) {
+      console.error(e);
+      showNotification('error', 'Error', 'No se pudo guardar el gasto.');
+    }
   };
 
   const addToCart = (item) => {
@@ -1131,23 +1170,75 @@ export default function PartySupplyApp() {
     showNotification('success', 'Pedido Actualizado', 'La transacción fue modificada con éxito.');
   };
 
-  const handleAddReward = (reward) => {
-    const newReward = { ...reward, id: `rew-${Date.now()}` };
-    setRewards([...rewards, newReward]);
-    addLog('Nuevo Premio', { title: newReward.title }, 'Gestión Catálogo');
-    showNotification('success', 'Premio Creado', 'Se ha añadido al catálogo de canjes.');
+  // ✅ CAMBIO PREMIOS 4/4: Handlers CRUD conectados a Supabase
+  const handleAddReward = async (rewardData) => {
+    try {
+      const payload = {
+        title: rewardData.title,
+        description: rewardData.description,
+        points_cost: Number(rewardData.pointsCost),
+        type: rewardData.type,
+        discount_amount: Number(rewardData.discountAmount) || 0,
+        stock: Number(rewardData.stock) || 0
+      };
+
+      const { data, error } = await supabase.from('rewards').insert([payload]).select().single();
+      if (error) throw error;
+
+      const newReward = {
+        id: data.id,
+        title: data.title,
+        description: data.description,
+        pointsCost: data.points_cost,
+        type: data.type,
+        discountAmount: data.discount_amount,
+        stock: data.stock
+      };
+
+      setRewards([...rewards, newReward]);
+      addLog('Nuevo Premio', { title: newReward.title }, 'Gestión Catálogo');
+      showNotification('success', 'Premio Creado', 'Se ha añadido al catálogo.');
+    } catch (e) {
+      console.error(e);
+      showNotification('error', 'Error', 'No se pudo crear el premio.');
+    }
   };
 
-  const handleUpdateReward = (id, updatedData) => {
-    setRewards(rewards.map(r => r.id === id ? { ...r, ...updatedData } : r));
-    addLog('Editar Premio', { title: updatedData.title });
-    showNotification('success', 'Premio Actualizado', 'Cambios guardados.');
+  const handleUpdateReward = async (id, updatedData) => {
+    try {
+      const payload = {
+        title: updatedData.title,
+        description: updatedData.description,
+        points_cost: Number(updatedData.pointsCost),
+        type: updatedData.type,
+        discount_amount: Number(updatedData.discountAmount) || 0,
+        stock: Number(updatedData.stock) || 0
+      };
+
+      const { error } = await supabase.from('rewards').update(payload).eq('id', id);
+      if (error) throw error;
+
+      setRewards(rewards.map(r => r.id === id ? { ...r, ...updatedData } : r));
+      addLog('Editar Premio', { title: updatedData.title });
+      showNotification('success', 'Premio Actualizado', 'Cambios guardados.');
+    } catch (e) {
+      console.error(e);
+      showNotification('error', 'Error', 'No se pudo actualizar el premio.');
+    }
   };
 
-  const handleDeleteReward = (id) => {
-    setRewards(rewards.filter(r => r.id !== id));
-    addLog('Eliminar Premio', { id });
-    showNotification('success', 'Premio Eliminado', 'Se quitó del catálogo.');
+  const handleDeleteReward = async (id) => {
+    try {
+      const { error } = await supabase.from('rewards').delete().eq('id', id);
+      if (error) throw error;
+
+      setRewards(rewards.filter(r => r.id !== id));
+      addLog('Eliminar Premio', { id });
+      showNotification('success', 'Premio Eliminado', 'Se quitó del catálogo.');
+    } catch (e) {
+      console.error(e);
+      showNotification('error', 'Error', 'No se pudo eliminar el premio.');
+    }
   };
 
   // --- RENDERIZADO LOGIN ---

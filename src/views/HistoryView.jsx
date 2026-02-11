@@ -1,4 +1,3 @@
-// src/views/HistoryView.jsx
 // ♻️ REFACTOR: Helpers movidos a utils/helpers.js, generador a utils/devGenerator.js,
 //              modales a components/modals/HistoryModals.jsx
 
@@ -25,17 +24,14 @@ import {
 } from '../components/modals/HistoryModals';
 
 // --- HELPER LOCAL PARA FORMATO VISUAL ---
-// Fuerza el formato DD/MM/AAAA visualmente, independientemente de cómo se guardó
 const formatDisplayDate = (dateString) => {
   if (!dateString) return '';
-  // Intentamos dividir por barra
   const parts = dateString.split('/');
   if (parts.length === 3) {
     const [day, month, year] = parts;
-    // Rellenamos con 0 al principio si falta
     return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
   }
-  return dateString; // Si no es fecha válida, devolvemos original
+  return dateString;
 };
 
 export default function HistoryView({
@@ -84,24 +80,28 @@ export default function HistoryView({
     (dailyLogs || []).forEach((log) => {
       if (isVentaLog(log) && log.details) {
         const txId = log.details.transactionId || log.id;
+        // Evitar duplicados si ya está en activas
         if (activeIds.has(txId)) return;
 
         const logDate = normalizeDate(log.date);
         if (logDate) {
-          txList.push({
-            id: txId,
-            date: log.date,
-            timestamp: log.timestamp,
-            fullDate: `${log.date}, ${log.timestamp || '00:00'}:00`,
-            user: log.user,
-            items: log.details.items || [],
-            payment: log.details.payment || 'N/A',
-            installments: log.details.installments || 0,
-            total: getVentaTotal(log.details),
-            status: 'completed',
-            isHistoric: true,
-            sortDate: new Date(logDate.year, logDate.month - 1, logDate.day),
-          });
+            // CORRECCIÓN PRECIOS: Priorizamos el total explícito en details, luego el helper
+            const safeTotal = Number(log.details.total) || getVentaTotal(log.details) || 0;
+
+            txList.push({
+                id: txId,
+                date: log.date,
+                timestamp: log.timestamp,
+                fullDate: `${log.date}, ${log.timestamp || '00:00'}:00`,
+                user: log.user, // En logs antiguos, este es el usuario confiable
+                items: log.details.items || [],
+                payment: log.details.payment || 'N/A',
+                installments: log.details.installments || 0,
+                total: safeTotal,
+                status: 'completed',
+                isHistoric: true,
+                sortDate: new Date(logDate.year, logDate.month - 1, logDate.day),
+            });
         }
       }
     });
@@ -109,20 +109,35 @@ export default function HistoryView({
   }, [dailyLogs, transactions]);
 
   // =====================================================
-  // TRANSACCIONES ACTIVAS
+  // TRANSACCIONES ACTIVAS (con correlación de Logs)
   // =====================================================
   const activeTransactions = useMemo(() => {
     return (transactions || []).map((tx) => {
       const logDate = normalizeDate(tx.date);
+      
+      // CORRELACIÓN DE LOGS: 
+      // Si el usuario es 'Desconocido' o nulo, buscamos en el historial de logs (dailyLogs)
+      // quién generó esta venta para mostrar el nombre correcto.
+      let resolvedUser = tx.user;
+      if (!resolvedUser || resolvedUser === 'Desconocido') {
+          const creationLog = (dailyLogs || []).find(log => 
+              (log.action === 'Venta Realizada' && String(log.details?.transactionId) === String(tx.id))
+          );
+          if (creationLog) {
+              resolvedUser = creationLog.user;
+          }
+      }
+
       return {
         ...tx,
+        user: resolvedUser || 'Desconocido', // Usuario correlacionado
         isHistoric: false,
         sortDate: logDate
           ? new Date(logDate.year, logDate.month - 1, logDate.day)
           : new Date(),
       };
     });
-  }, [transactions]);
+  }, [transactions, dailyLogs]); // Dependencia agregada: dailyLogs
 
   // =====================================================
   // COMBINAR Y FILTRAR
@@ -203,7 +218,7 @@ export default function HistoryView({
     const validTx = filteredTransactions.filter((tx) => tx.status !== 'voided');
     return {
       count: validTx.length,
-      total: validTx.reduce((sum, tx) => sum + (tx.total || 0), 0),
+      total: validTx.reduce((sum, tx) => sum + (Number(tx.total) || 0), 0),
     };
   }, [filteredTransactions]);
 
@@ -467,6 +482,7 @@ export default function HistoryView({
                           : 'bg-green-100 text-green-700'
                       }`}
                     >
+                      {/* CORRECCIÓN: Mostramos el usuario resuelto via logs si es posible */}
                       {tx.user || 'Desconocido'}
                     </span>
                   </td>
@@ -517,6 +533,7 @@ export default function HistoryView({
                           : 'text-slate-800'
                       }
                     >
+                      {/* CORRECCIÓN PRECIOS: Aseguramos conversión a número */}
                       ${(Number(tx.total) || 0).toLocaleString()}
                     </span>
                   </td>
@@ -539,7 +556,6 @@ export default function HistoryView({
                           <FileText size={14} />
                         </button>
 
-                        {/* --- CORRECCIÓN: Botones siempre visibles si no está anulado --- */}
                         {!isVoided && (
                           <button
                             onClick={() => onEditTransaction(tx)}
