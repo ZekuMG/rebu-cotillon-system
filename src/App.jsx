@@ -46,13 +46,14 @@ import {
   TicketModal,
   BarcodeNotFoundModal,
   BarcodeDuplicateModal,
-  ClientSelectionModal
+  // ClientSelectionModal
 } from './components/AppModals';
 
 // Modales Nuevos
 import { ExpenseModal } from './components/modals/ExpenseModal';
 import { RedemptionModal } from './components/modals/RedemptionModal';
 import { TicketPrintLayout } from './components/TicketPrintLayout';
+import { ClientSelectionModal } from './components/modals/ClientSelectionModal';
 
 // Hooks
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
@@ -82,11 +83,10 @@ export default function PartySupplyApp() {
   // ==========================================
   // 1.5 CONEXIÓN SUPABASE (Fetch Inicial + Auto-Healing)
   // ==========================================
-  const fetchCloudData = async () => {
+const fetchCloudData = async () => {
     try {
       setIsCloudLoading(true);
 
-      // ✅ TODAS LAS QUERIES EN PARALELO (no se bloquean entre sí)
       const [
         prodResult,
         clientResult,
@@ -106,20 +106,19 @@ export default function PartySupplyApp() {
         supabase.from('cash_closures').select('*').order('created_at', { ascending: false }),
         supabase.from('categories').select('*').order('name'),
         supabase.from('rewards').select('*').order('points_cost', { ascending: true }),
-        supabase.from('register_state').select('*').eq('id', 1).single()
+        supabase.from('register_state').select('*').eq('id', 1).maybeSingle() // MODIFICADO: maybeSingle no falla si está vacío
       ]);
 
-      // --- HELPER: Extraer data segura de cada resultado ---
-      const safeData = (result) => {
+      const safeData = (result, tableName) => {
         if (result.status === 'fulfilled' && !result.value.error) {
           return result.value.data || [];
         }
-        console.warn('Query falló:', result.status === 'rejected' ? result.reason : result.value.error);
-        return null; // null = falló, [] = vacío real
+        // MODIFICADO: Log detallado para saber exactamente qué tabla falla y por qué
+        console.error(`Error en tabla [${tableName}]:`, result.status === 'rejected' ? result.reason : result.value.error);
+        return null;
       };
 
-      // A. PRODUCTOS
-      const prodData = safeData(prodResult);
+      const prodData = safeData(prodResult, 'productos');
       if (prodData) {
         setInventory(prodData.map(p => ({
           ...p,
@@ -128,8 +127,7 @@ export default function PartySupplyApp() {
         })));
       }
 
-      // B. CLIENTES
-      const clientData = safeData(clientResult);
+      const clientData = safeData(clientResult, 'clientes');
       if (clientData) {
         setMembers(clientData.map(c => ({
           ...c,
@@ -137,8 +135,7 @@ export default function PartySupplyApp() {
         })));
       }
 
-      // C. VENTAS
-      const salesData = safeData(salesResult);
+      const salesData = safeData(salesResult, 'ventas');
       if (salesData) {
         setTransactions(salesData.map(sale => ({
           id: sale.id,
@@ -163,8 +160,7 @@ export default function PartySupplyApp() {
         })));
       }
 
-      // D. LOGS
-      const logsData = safeData(logsResult);
+      const logsData = safeData(logsResult, 'logs');
       if (logsData) {
         setDailyLogs(logsData.map(log => ({
           id: log.id,
@@ -177,8 +173,7 @@ export default function PartySupplyApp() {
         })));
       }
 
-      // E. GASTOS
-      const expData = safeData(expResult);
+      const expData = safeData(expResult, 'gastos');
       if (expData) {
         setExpenses(expData.map(e => ({
           id: e.id,
@@ -192,8 +187,7 @@ export default function PartySupplyApp() {
         })));
       }
 
-      // F. REPORTES (Cierres)
-      const closureData = safeData(closureResult);
+      const closureData = safeData(closureResult, 'reportes');
       if (closureData) {
         setPastClosures(closureData.map(c => ({
           id: c.id,
@@ -218,14 +212,10 @@ export default function PartySupplyApp() {
         })));
       }
 
-      // G. CATEGORÍAS
-      const catData = safeData(catResult);
-      if (catData) {
-        setCategories(catData.map(c => c.name));
-      }
+      const catData = safeData(catResult, 'categorias');
+      if (catData) setCategories(catData.map(c => c.name));
 
-      // H. PREMIOS
-      const rewardsData = safeData(rewardsResult);
+      const rewardsData = safeData(rewardsResult, 'premios');
       if (rewardsData) {
         setRewards(rewardsData.map(r => ({
           id: r.id,
@@ -238,20 +228,23 @@ export default function PartySupplyApp() {
         })));
       }
 
-      // I. ESTADO DE CAJA (Auto-Healing)
+      // I. ESTADO DE CAJA (Auto-Healing mejorado con upsert)
       let registerState = null;
       if (registerResult.status === 'fulfilled' && !registerResult.value.error) {
         registerState = registerResult.value.data;
       }
 
       if (!registerState) {
-        console.warn("⚠️ Estado de caja no encontrado, inicializando DB...");
-        const { data: newState, error: createErr } = await supabase
+        console.warn("⚠️ Estado de caja no encontrado o inaccesible, intentando upsert...");
+        // MODIFICADO: upsert evita el error 500 si el registro ya existía pero no era visible
+        const { data: newState, error: upsertErr } = await supabase
           .from('register_state')
-          .insert([{ id: 1, is_open: false, opening_balance: 0, closing_time: '21:00' }])
+          .upsert([{ id: 1, is_open: false, opening_balance: 0, closing_time: '21:00' }], { onConflict: 'id' })
           .select()
-          .single();
-        if (!createErr && newState) registerState = newState;
+          .maybeSingle();
+        
+        if (!upsertErr && newState) registerState = newState;
+        else if (upsertErr) console.error("Error crítico en register_state:", upsertErr);
       }
 
       if (registerState) {
@@ -260,7 +253,6 @@ export default function PartySupplyApp() {
         setClosingTime(registerState.closing_time || '21:00');
       }
 
-      // Verificar qué tablas no cargaron correctamente
       const failed = [
         !prodData && 'Productos', !clientData && 'Clientes', !salesData && 'Ventas',
         !logsData && 'Logs', !expData && 'Gastos', !closureData && 'Reportes',
@@ -268,18 +260,18 @@ export default function PartySupplyApp() {
       ].filter(Boolean);
 
       if (failed.length > 0) {
-        console.warn('⚠️ Carga parcial. Fallaron:', failed.join(', '));
-        Swal.fire('Carga Parcial', `No se pudieron cargar: ${failed.join(', ')}. El resto funciona normal.`, 'warning');
+        Swal.fire('Carga Parcial', `Revisa los permisos de Supabase (RLS). Fallaron: ${failed.join(', ')}`, 'warning');
       }
 
     } catch (error) {
-      console.error('Error cargando nube:', error);
-      Swal.fire('Error de Conexión', 'No se pudieron cargar los datos. Revisa tu internet.', 'error');
+      console.error('Error general de conexión:', error);
+      Swal.fire('Error de Conexión', 'Fallo total de red o configuración.', 'error');
     } finally {
       setIsCloudLoading(false);
     }
   };
 
+  
   useEffect(() => {
     // 1. Carga inicial
     fetchCloudData();
