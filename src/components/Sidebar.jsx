@@ -65,15 +65,13 @@ export default function Sidebar({
       </div>
       <nav className="flex-1 space-y-2 w-full flex flex-col items-center">
         
-        {/* RESTRICCIÓN: Solo el Admin ve el Dashboard/Caja */}
-        {currentUser?.role === 'admin' && (
-          <SidebarButton
-            onClick={() => setActiveTab('dashboard')}
-            isActive={activeTab === 'dashboard'}
-            icon={LayoutDashboard}
-            label="Caja"
-          />
-        )}
+        {/* Dashboard visible para todos los roles (solo lectura para Vendedor) */}
+        <SidebarButton
+          onClick={() => setActiveTab('dashboard')}
+          isActive={activeTab === 'dashboard'}
+          icon={LayoutDashboard}
+          label="Caja"
+        />
 
         <SidebarButton
           onClick={() => setActiveTab('inventory')}
