@@ -1,7 +1,7 @@
 // src/components/modals/ProductModals.jsx
-// ♻️ REFACTOR: Extraído de AppModals.jsx — Modales de gestión de productos
+// ✅ v4: Soporte productos por PESO y CANTIDAD
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   X,
   Upload,
@@ -10,27 +10,23 @@ import {
   Trash2,
   AlertTriangle,
   ScanBarcode,
+  Loader2,
+  Scale,
+  Package,
 } from 'lucide-react';
 
 // ==========================================
-// COMPONENTE AUXILIAR: Selector multi-categoría
+// COMPONENTE: Selector multi-categoría
 // ==========================================
 
 export const CategoryMultiSelect = ({ allCategories, selectedCategories, onChange }) => {
   const safeSelected = Array.isArray(selectedCategories) ? selectedCategories : [];
-
   const handleAdd = (e) => {
     const val = e.target.value;
-    if (val && !safeSelected.includes(val)) {
-      onChange([...safeSelected, val]);
-    }
+    if (val && !safeSelected.includes(val)) onChange([...safeSelected, val]);
     e.target.value = '';
   };
-
-  const handleRemove = (catToRemove) => {
-    onChange(safeSelected.filter((c) => c !== catToRemove));
-  };
-
+  const handleRemove = (catToRemove) => onChange(safeSelected.filter((c) => c !== catToRemove));
   const availableToAdd = allCategories.filter((c) => !safeSelected.includes(c));
 
   return (
@@ -40,19 +36,13 @@ export const CategoryMultiSelect = ({ allCategories, selectedCategories, onChang
           {safeSelected.map((cat) => (
             <span key={cat} className="inline-flex items-center gap-1 bg-fuchsia-100 text-fuchsia-700 text-xs font-bold px-2 py-1 rounded-md">
               {cat}
-              <button type="button" onClick={() => handleRemove(cat)} className="hover:text-fuchsia-900 focus:outline-none">
-                <X size={12} />
-              </button>
+              <button type="button" onClick={() => handleRemove(cat)} className="hover:text-fuchsia-900 focus:outline-none"><X size={12} /></button>
             </span>
           ))}
         </div>
         <select className="w-full text-xs bg-transparent outline-none text-slate-500 cursor-pointer" onChange={handleAdd} value="">
-          <option value="" disabled>
-            {safeSelected.length === 0 ? 'Seleccionar categorías...' : '+ Agregar otra categoría'}
-          </option>
-          {availableToAdd.map((c) => (
-            <option key={c} value={c} className="text-slate-800">{c}</option>
-          ))}
+          <option value="" disabled>{safeSelected.length === 0 ? 'Seleccionar categorías...' : '+ Agregar otra categoría'}</option>
+          {availableToAdd.map((c) => (<option key={c} value={c} className="text-slate-800">{c}</option>))}
         </select>
       </div>
       {safeSelected.length === 0 && <p className="text-[10px] text-red-400 mt-1 ml-1">* Debe seleccionar al menos una</p>}
@@ -61,19 +51,151 @@ export const CategoryMultiSelect = ({ allCategories, selectedCategories, onChang
 };
 
 // ==========================================
+// COMPONENTE: Selector de Tipo de Producto
+// ==========================================
+
+const ProductTypeSelector = ({ value, onChange }) => {
+  return (
+    <div className="w-full">
+      <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Tipo de Producto</label>
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => onChange('quantity')}
+          className={`flex items-center justify-center gap-2 p-3 rounded-xl border-2 font-bold text-sm transition-all ${
+            value === 'quantity'
+              ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm'
+              : 'border-slate-200 bg-white text-slate-400 hover:border-slate-300'
+          }`}
+        >
+          <Package size={18} />
+          Cantidad
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange('weight')}
+          className={`flex items-center justify-center gap-2 p-3 rounded-xl border-2 font-bold text-sm transition-all ${
+            value === 'weight'
+              ? 'border-amber-500 bg-amber-50 text-amber-700 shadow-sm'
+              : 'border-slate-200 bg-white text-slate-400 hover:border-slate-300'
+          }`}
+        >
+          <Scale size={18} />
+          Peso
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ==========================================
+// COMPONENTE: Input de Stock según tipo
+// ==========================================
+
+const StockInput = ({ productType, stock, stockUnit, onStockChange, onUnitChange }) => {
+  if (productType === 'weight') {
+    return (
+      <div>
+        <label className="text-xs font-bold text-slate-500 uppercase block mb-1 flex items-center gap-1">
+          <Scale size={12} /> Stock (Peso)
+        </label>
+        <div className="flex gap-2">
+          <input required type="number" min="0" step="1" className="flex-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 outline-none" value={stock} onChange={(e) => onStockChange(e.target.value)} placeholder="Ej: 1000" />
+          <select className="w-20 px-2 py-2 border rounded-lg bg-white font-bold text-sm outline-none focus:ring-2 focus:ring-amber-500" value={stockUnit || 'g'} onChange={(e) => onUnitChange(e.target.value)}>
+            <option value="g">g</option>
+            <option value="kg">kg</option>
+          </select>
+        </div>
+        <p className="text-[10px] text-amber-600 mt-1 ml-1">
+          {stockUnit === 'kg'
+            ? `= ${(Number(stock) || 0) * 1000} gramos en inventario`
+            : `= ${((Number(stock) || 0) / 1000).toFixed(2)} kg`
+          }
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Stock</label>
+      <input required type="number" min="0" className="w-full px-3 py-2 border rounded-lg" value={stock} onChange={(e) => onStockChange(e.target.value)} />
+    </div>
+  );
+};
+
+// ==========================================
+// COMPONENTE: Sección de Imagen
+// ==========================================
+
+const ImageSection = ({ image, onFileChange, onUrlChange, onDelete, isUploading }) => {
+  return (
+    <div className="p-3 bg-slate-50 rounded-lg border border-dashed border-slate-300">
+      <label className="text-xs font-bold text-slate-500 uppercase block mb-2 flex items-center gap-1"><ImageIcon size={12} /> Imagen del producto</label>
+      {isUploading && (
+        <div className="mb-3 flex flex-col items-center gap-2 py-4">
+          <Loader2 size={28} className="text-fuchsia-500 animate-spin" />
+          <p className="text-xs text-fuchsia-600 font-medium">Subiendo imagen a la nube...</p>
+        </div>
+      )}
+      {!isUploading && image && (
+        <div className="mb-3 flex flex-col items-center gap-2">
+          <div className="relative group">
+            <img src={image} alt="Preview" className="h-24 w-24 object-cover rounded-lg border shadow-sm" onError={(e) => { e.target.style.display = 'none'; }} />
+            <button type="button" onClick={onDelete} className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 shadow-md transition-colors" title="Eliminar imagen"><Trash2 size={12} /></button>
+          </div>
+          <p className="text-[10px] text-green-600 font-medium">✓ Imagen cargada</p>
+        </div>
+      )}
+      {!isUploading && (
+        <>
+          <div className="mb-3">
+            <label className="flex flex-col items-center justify-center w-full h-20 border-2 border-slate-300 border-dashed rounded-lg cursor-pointer bg-white hover:bg-slate-50 transition-colors">
+              <div className="flex flex-col items-center justify-center pt-2 pb-2">
+                <Upload size={20} className="text-slate-400 mb-1" />
+                <p className="text-[10px] text-slate-500">{image ? 'Click para cambiar imagen' : 'Click para subir imagen'}</p>
+                <p className="text-[9px] text-slate-400">Máx. 5MB — JPG, PNG, WebP, GIF</p>
+              </div>
+              <input type="file" className="hidden" accept="image/jpeg,image/png,image/webp,image/gif" onChange={onFileChange} />
+            </label>
+          </div>
+          <div><input type="text" placeholder="O pega una URL de imagen aquí..." className="w-full px-3 py-2 border rounded-lg text-xs" value={image || ''} onChange={onUrlChange} /></div>
+        </>
+      )}
+    </div>
+  );
+};
+
+// ==========================================
 // MODAL: AGREGAR PRODUCTO
 // ==========================================
 
-export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categories, onImageUpload, onAdd, inventory, onDuplicateBarcode }) => {
+export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categories, onImageUpload, onAdd, inventory, onDuplicateBarcode, isUploadingImage }) => {
+  const [stockUnit, setStockUnit] = useState('g');
   if (!isOpen) return null;
+
+  const productType = newItem.product_type || 'quantity';
+
+  const handleTypeChange = (type) => {
+    setNewItem({ ...newItem, product_type: type, stock: '', price: '', purchasePrice: '' });
+    setStockUnit('g');
+  };
 
   const handleBarcodeChange = (value) => {
     setNewItem({ ...newItem, barcode: value });
     if (value && value.length >= 3) {
       const existing = inventory?.find(p => p.barcode === value);
-      if (existing && onDuplicateBarcode) {
-        onDuplicateBarcode(existing, value);
-      }
+      if (existing && onDuplicateBarcode) onDuplicateBarcode(existing, value);
+    }
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (productType === 'weight' && stockUnit === 'kg') {
+      const converted = { ...newItem, stock: Math.round(Number(newItem.stock) * 1000) };
+      onAdd(e, converted);
+    } else {
+      onAdd(e);
     }
   };
 
@@ -84,56 +206,45 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
           <h3 className="font-bold text-slate-800">Nuevo Producto</h3>
           <button onClick={onClose}><X size={20} className="text-slate-400" /></button>
         </div>
-        <form onSubmit={onAdd} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <ProductTypeSelector value={productType} onChange={handleTypeChange} />
+          {productType === 'weight' && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+              <Scale size={14} className="text-amber-600" />
+              <span className="text-xs text-amber-700 font-medium">Producto por peso — Precio y costo se definen <strong>por gramo</strong></span>
+            </div>
+          )}
           <div>
             <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Nombre</label>
             <input required type="text" className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none" value={newItem.title} onChange={(e) => setNewItem({ ...newItem, title: e.target.value })} />
           </div>
           <div>
-            <label className="text-xs font-bold text-slate-500 uppercase block mb-1 flex items-center gap-1">
-              <ScanBarcode size={12} /> Código de Barras (Opcional)
-            </label>
-            <input 
-              type="text" 
-              placeholder="Escanear o escribir código..."
-              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-mono" 
-              value={newItem.barcode || ''} 
-              onChange={(e) => handleBarcodeChange(e.target.value)} 
-            />
-            <p className="text-[10px] text-slate-400 mt-1">Usado para escaneo rápido en Punto de Venta</p>
+            <label className="text-xs font-bold text-slate-500 uppercase block mb-1 flex items-center gap-1"><ScanBarcode size={12} /> Código de Barras (Opcional)</label>
+            <input type="text" placeholder="Escanear o escribir código..." className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-mono" value={newItem.barcode || ''} onChange={(e) => handleBarcodeChange(e.target.value)} />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Costo ($)</label>
-              <input required type="number" className="w-full px-3 py-2 border rounded-lg" value={newItem.purchasePrice} onChange={(e) => setNewItem({ ...newItem, purchasePrice: e.target.value })} />
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">{productType === 'weight' ? 'Costo ($/g)' : 'Costo ($)'}</label>
+              <input required type="number" step={productType === 'weight' ? '0.01' : '1'} min="0" className="w-full px-3 py-2 border rounded-lg" value={newItem.purchasePrice} onChange={(e) => setNewItem({ ...newItem, purchasePrice: e.target.value })} />
+              {productType === 'weight' && newItem.purchasePrice && <p className="text-[10px] text-slate-400 mt-1">= ${(Number(newItem.purchasePrice) * 1000).toLocaleString('es-AR')}/kg</p>}
             </div>
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Precio ($)</label>
-              <input required type="number" className="w-full px-3 py-2 border rounded-lg font-bold text-slate-800" value={newItem.price} onChange={(e) => setNewItem({ ...newItem, price: e.target.value })} />
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">{productType === 'weight' ? 'Precio ($/g)' : 'Precio ($)'}</label>
+              <input required type="number" step={productType === 'weight' ? '0.01' : '1'} min="0" className="w-full px-3 py-2 border rounded-lg font-bold text-slate-800" value={newItem.price} onChange={(e) => setNewItem({ ...newItem, price: e.target.value })} />
+              {productType === 'weight' && newItem.price && <p className="text-[10px] text-slate-400 mt-1">= ${(Number(newItem.price) * 1000).toLocaleString('es-AR')}/kg</p>}
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Stock</label>
-              <input required type="number" className="w-full px-3 py-2 border rounded-lg" value={newItem.stock} onChange={(e) => setNewItem({ ...newItem, stock: e.target.value })} />
-            </div>
+            <StockInput productType={productType} stock={newItem.stock} stockUnit={stockUnit} onStockChange={(val) => setNewItem({ ...newItem, stock: val })} onUnitChange={setStockUnit} />
             <div>
               <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Categoría(s)</label>
               <CategoryMultiSelect allCategories={categories} selectedCategories={newItem.categories} onChange={(newCats) => setNewItem({ ...newItem, categories: newCats })} />
             </div>
           </div>
-          <div className="p-3 bg-slate-50 rounded-lg border border-dashed border-slate-300">
-            <label className="text-xs font-bold text-slate-500 uppercase block mb-2 flex items-center gap-1"><ImageIcon size={12} /> Imagen del producto</label>
-            <div className="mb-3">
-              <label className="flex flex-col items-center justify-center w-full h-20 border-2 border-slate-300 border-dashed rounded-lg cursor-pointer bg-white hover:bg-slate-50">
-                <div className="flex flex-col items-center justify-center pt-2 pb-2"><Upload size={20} className="text-slate-400 mb-1" /><p className="text-[10px] text-slate-500">Click para subir imagen</p></div>
-                <input type="file" className="hidden" accept="image/*" onChange={(e) => onImageUpload(e, false)} />
-              </label>
-            </div>
-            <div><input type="text" placeholder="O pega una URL aquí..." className="w-full px-3 py-2 border rounded-lg text-xs" value={newItem.image} onChange={(e) => setNewItem({ ...newItem, image: e.target.value })} /></div>
-            {newItem.image && (<div className="mt-3 flex justify-center"><img src={newItem.image} alt="Preview" className="h-20 w-20 object-cover rounded border shadow-sm" /></div>)}
-          </div>
-          <button type="submit" className="w-full bg-slate-900 text-white py-3 rounded-lg font-bold hover:bg-slate-800">Agregar</button>
+          <ImageSection image={newItem.image} isUploading={isUploadingImage} onFileChange={(e) => onImageUpload(e, false)} onUrlChange={(e) => setNewItem({ ...newItem, image: e.target.value })} onDelete={() => setNewItem({ ...newItem, image: '' })} />
+          <button type="submit" disabled={isUploadingImage} className={`w-full py-3 rounded-lg font-bold transition-colors ${isUploadingImage ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-slate-900 text-white hover:bg-slate-800'}`}>
+            {isUploadingImage ? 'Esperando imagen...' : 'Agregar'}
+          </button>
         </form>
       </div>
     </div>
@@ -144,16 +255,25 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
 // MODAL: EDITAR PRODUCTO
 // ==========================================
 
-export const EditProductModal = ({ product, onClose, setEditingProduct, categories, onImageUpload, editReason, setEditReason, onSave, inventory, onDuplicateBarcode }) => {
+export const EditProductModal = ({ product, onClose, setEditingProduct, categories, onImageUpload, editReason, setEditReason, onSave, inventory, onDuplicateBarcode, isUploadingImage }) => {
+  const [stockUnit, setStockUnit] = useState('g');
   if (!product) return null;
+  const productType = product.product_type || 'quantity';
 
   const handleBarcodeChange = (value) => {
     setEditingProduct({ ...product, barcode: value });
     if (value && value.length >= 3) {
       const existing = inventory?.find(p => p.barcode === value && p.id !== product.id);
-      if (existing && onDuplicateBarcode) {
-        onDuplicateBarcode(existing, value);
-      }
+      if (existing && onDuplicateBarcode) onDuplicateBarcode(existing, value);
+    }
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (productType === 'weight' && stockUnit === 'kg') {
+      onSave(e, { ...product, stock: Math.round(Number(product.stock) * 1000) });
+    } else {
+      onSave(e);
     }
   };
 
@@ -164,59 +284,46 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
           <h3 className="font-bold text-slate-800">Editar Producto</h3>
           <button onClick={onClose}><X size={20} className="text-slate-400" /></button>
         </div>
-        <form onSubmit={onSave} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg border bg-slate-50">
+            {productType === 'weight' ? <Scale size={16} className="text-amber-600" /> : <Package size={16} className="text-blue-600" />}
+            <span className="text-xs font-bold text-slate-600">Tipo: {productType === 'weight' ? 'Producto por PESO (gramos)' : 'Producto por CANTIDAD (unidades)'}</span>
+          </div>
           <div>
             <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Nombre</label>
             <input required type="text" className="w-full px-3 py-2 border rounded-lg" value={product.title} onChange={(e) => setEditingProduct({ ...product, title: e.target.value })} />
           </div>
           <div>
-            <label className="text-xs font-bold text-slate-500 uppercase block mb-1 flex items-center gap-1">
-              <ScanBarcode size={12} /> Código de Barras (Opcional)
-            </label>
-            <input 
-              type="text" 
-              placeholder="Escanear o escribir código..."
-              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-mono" 
-              value={product.barcode || ''} 
-              onChange={(e) => handleBarcodeChange(e.target.value)} 
-            />
+            <label className="text-xs font-bold text-slate-500 uppercase block mb-1 flex items-center gap-1"><ScanBarcode size={12} /> Código de Barras (Opcional)</label>
+            <input type="text" placeholder="Escanear o escribir código..." className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-mono" value={product.barcode || ''} onChange={(e) => handleBarcodeChange(e.target.value)} />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Costo ($)</label>
-              <input required type="number" className="w-full px-3 py-2 border rounded-lg" value={product.purchasePrice} onChange={(e) => setEditingProduct({ ...product, purchasePrice: e.target.value })} />
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">{productType === 'weight' ? 'Costo ($/g)' : 'Costo ($)'}</label>
+              <input required type="number" step={productType === 'weight' ? '0.01' : '1'} min="0" className="w-full px-3 py-2 border rounded-lg" value={product.purchasePrice} onChange={(e) => setEditingProduct({ ...product, purchasePrice: e.target.value })} />
+              {productType === 'weight' && product.purchasePrice && <p className="text-[10px] text-slate-400 mt-1">= ${(Number(product.purchasePrice) * 1000).toLocaleString('es-AR')}/kg</p>}
             </div>
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Precio ($)</label>
-              <input required type="number" className="w-full px-3 py-2 border rounded-lg font-bold" value={product.price} onChange={(e) => setEditingProduct({ ...product, price: e.target.value })} />
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">{productType === 'weight' ? 'Precio ($/g)' : 'Precio ($)'}</label>
+              <input required type="number" step={productType === 'weight' ? '0.01' : '1'} min="0" className="w-full px-3 py-2 border rounded-lg font-bold" value={product.price} onChange={(e) => setEditingProduct({ ...product, price: e.target.value })} />
+              {productType === 'weight' && product.price && <p className="text-[10px] text-slate-400 mt-1">= ${(Number(product.price) * 1000).toLocaleString('es-AR')}/kg</p>}
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Stock</label>
-              <input required type="number" className="w-full px-3 py-2 border rounded-lg" value={product.stock} onChange={(e) => setEditingProduct({ ...product, stock: e.target.value })} />
-            </div>
+            <StockInput productType={productType} stock={product.stock} stockUnit={stockUnit} onStockChange={(val) => setEditingProduct({ ...product, stock: val })} onUnitChange={setStockUnit} />
             <div>
               <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Categoría(s)</label>
               <CategoryMultiSelect allCategories={categories} selectedCategories={product.categories || []} onChange={(newCats) => setEditingProduct({ ...product, categories: newCats })} />
             </div>
           </div>
-          <div className="p-3 bg-slate-50 rounded-lg border border-dashed border-slate-300">
-            <label className="text-xs font-bold text-slate-500 uppercase block mb-2 flex items-center gap-1"><ImageIcon size={12} /> Imagen del producto</label>
-            <div className="mb-3">
-              <label className="flex flex-col items-center justify-center w-full h-20 border-2 border-slate-300 border-dashed rounded-lg cursor-pointer bg-white hover:bg-slate-50">
-                <div className="flex flex-col items-center justify-center pt-2 pb-2"><Upload size={20} className="text-slate-400 mb-1" /><p className="text-[10px] text-slate-500">Click para cambiar imagen</p></div>
-                <input type="file" className="hidden" accept="image/*" onChange={(e) => onImageUpload(e, true)} />
-              </label>
-            </div>
-            <div><input type="text" className="w-full px-3 py-2 border rounded-lg text-xs" value={product.image} onChange={(e) => setEditingProduct({ ...product, image: e.target.value })} /></div>
-            {product.image && (<div className="mt-3 flex justify-center"><img src={product.image} alt="Preview" className="h-20 w-20 object-cover rounded border shadow-sm" /></div>)}
-          </div>
+          <ImageSection image={product.image} isUploading={isUploadingImage} onFileChange={(e) => onImageUpload(e, true)} onUrlChange={(e) => setEditingProduct({ ...product, image: e.target.value })} onDelete={() => setEditingProduct({ ...product, image: '' })} />
           <div>
             <label className="text-xs font-bold text-amber-600 uppercase block mb-1 flex items-center gap-1"><FileText size={12} /> Motivo del cambio (Opcional)</label>
             <textarea className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-amber-50 focus:ring-2 focus:ring-amber-500 outline-none" rows="2" placeholder="¿Por qué realizas este cambio?" value={editReason} onChange={(e) => setEditReason(e.target.value)}></textarea>
           </div>
-          <button type="submit" className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold hover:bg-blue-700">Guardar Cambios</button>
+          <button type="submit" disabled={isUploadingImage} className={`w-full py-3 rounded-lg font-bold transition-colors ${isUploadingImage ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
+            {isUploadingImage ? 'Esperando imagen...' : 'Guardar Cambios'}
+          </button>
         </form>
       </div>
     </div>
@@ -224,7 +331,7 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
 };
 
 // ==========================================
-// MODAL: ELIMINAR PRODUCTO
+// MODAL: ELIMINAR PRODUCTO (sin cambios)
 // ==========================================
 
 export const DeleteProductModal = ({ product, onClose, reason, setReason, onConfirm }) => {

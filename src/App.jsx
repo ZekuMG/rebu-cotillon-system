@@ -11,6 +11,8 @@ import Swal from 'sweetalert2'; // Alertas bonitas
 
 // --- CONEXIÓN A LA NUBE ---
 import { supabase } from './supabase/client';
+import { uploadProductImage, deleteProductImage } from './utils/storage';
+
 
 import {
   USERS,
@@ -83,10 +85,10 @@ export default function PartySupplyApp() {
   // ==========================================
   // 1.5 CONEXIÓN SUPABASE (Fetch Inicial + Auto-Healing)
   // ==========================================
-const fetchCloudData = async () => {
+const fetchCloudData = async (showSpinner = true) => {
     try {
-      setIsCloudLoading(true);
-
+      if (showSpinner) setIsCloudLoading(true);
+      
       const [
         prodResult,
         clientResult,
@@ -272,75 +274,87 @@ const fetchCloudData = async () => {
   };
 
   
-  useEffect(() => {
-    // 1. Carga inicial
-    fetchCloudData();
+useEffect(() => {
+  // 1. Carga inicial (CON spinner)
+  fetchCloudData(true);
 
-    // 2. Suscripción Realtime ROBUSTA (Caja y Reportes)
-    const channel = supabase
-      .channel('app_realtime_updates')
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'register_state', filter: 'id=eq.1' },
-        (payload) => {
-          const newState = payload.new;
-          if (newState) {
-            setIsRegisterClosed(!newState.is_open);
-            setOpeningBalance(Number(newState.opening_balance));
-            setClosingTime(newState.closing_time);
-          }
+  // 2. Suscripción Realtime (sin cambios)
+  const channel = supabase
+    .channel('app_realtime_updates')
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'register_state', filter: 'id=eq.1' },
+      (payload) => {
+        const newState = payload.new;
+        if (newState) {
+          setIsRegisterClosed(!newState.is_open);
+          setOpeningBalance(Number(newState.opening_balance));
+          setClosingTime(newState.closing_time);
         }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'cash_closures' },
-        (payload) => {
-          const c = payload.new;
-          if (c) {
-             const newReport = {
-                 id: c.id, 
-                 date: c.date,
-                 openTime: c.open_time,
-                 closeTime: c.close_time,
-                 user: c.user_name,
-                 type: c.type,
-                 openingBalance: Number(c.opening_balance || 0),
-                 totalSales: Number(c.total_sales || 0),
-                 finalBalance: Number(c.final_balance || 0),
-                 totalCost: Number(c.total_cost || 0),
-                 totalExpenses: Number(c.total_expenses || 0),
-                 netProfit: Number(c.net_profit || 0),
-                 salesCount: c.sales_count || 0,
-                 averageTicket: Number(c.average_ticket || 0),
-                 paymentMethods: c.payment_methods_summary || {}, 
-                 itemsSold: c.items_sold_list || [],             
-                 newClients: c.new_clients_list || [],           
-                 expensesSnapshot: c.expenses_snapshot || [],    
-                 transactionsSnapshot: c.transactions_snapshot || []
-             };
-             setPastClosures((prev) => [newReport, ...prev]);
-          }
-        }
-      )
-      .subscribe();
-
-    // 3. Auto-actualización al volver a la app (para móviles/tablets)
-    const handleReSync = () => {
-      if (document.visibilityState === 'visible') {
-        console.log('App activa: Sincronizando datos...');
-        fetchCloudData();
       }
-    };
+    )
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'cash_closures' },
+      (payload) => {
+        const c = payload.new;
+        if (c) {
+           const newReport = {
+               id: c.id, 
+               date: c.date,
+               openTime: c.open_time,
+               closeTime: c.close_time,
+               user: c.user_name,
+               type: c.type,
+               openingBalance: Number(c.opening_balance || 0),
+               totalSales: Number(c.total_sales || 0),
+               finalBalance: Number(c.final_balance || 0),
+               totalCost: Number(c.total_cost || 0),
+               totalExpenses: Number(c.total_expenses || 0),
+               netProfit: Number(c.net_profit || 0),
+               salesCount: c.sales_count || 0,
+               averageTicket: Number(c.average_ticket || 0),
+               paymentMethods: c.payment_methods_summary || {}, 
+               itemsSold: c.items_sold_list || [],             
+               newClients: c.new_clients_list || [],           
+               expensesSnapshot: c.expenses_snapshot || [],    
+               transactionsSnapshot: c.transactions_snapshot || []
+           };
+           setPastClosures((prev) => [newReport, ...prev]);
+        }
+      }
+    )
+    .subscribe();
 
-    window.addEventListener('visibilitychange', handleReSync);
-    window.addEventListener('focus', handleReSync);
 
-    return () => {
-      supabase.removeChannel(channel);
-      window.removeEventListener('visibilitychange', handleReSync);
-      window.removeEventListener('focus', handleReSync);
-    };
-  }, []);
+let lastFetchTime = Date.now();
+  const MIN_RESYNC_INTERVAL = 15000; // 15 segundos
+
+  const handleReSync = () => {
+    if (document.visibilityState !== 'visible') return;
+
+    const elapsed = Date.now() - lastFetchTime;
+    if (elapsed < MIN_RESYNC_INTERVAL) {
+      console.log(`Re-sync ignorado (${Math.round(elapsed/1000)}s < ${MIN_RESYNC_INTERVAL/1000}s)`);
+      return;
+    }
+
+    console.log('App activa: Sincronizando datos (silencioso)...');
+    lastFetchTime = Date.now();
+    fetchCloudData(false); // ← SIN spinner
+  };
+
+  window.addEventListener('visibilitychange', handleReSync);
+  // ✅ FIX: NO agregar listener de 'focus' — es el culpable del bug
+  // El evento 'focus' se dispara al cerrar el file picker, el diálogo
+  // de impresión, alerts nativos, etc.
+
+  return () => {
+    supabase.removeChannel(channel);
+    window.removeEventListener('visibilitychange', handleReSync);
+  };
+}, []);
+
 
   // ==========================================
   // 2. ESTADOS DE SESIÓN Y UI
@@ -376,6 +390,8 @@ const fetchCloudData = async () => {
 
   const [editingProduct, setEditingProduct] = useState(null);
   const [editReason, setEditReason] = useState('');
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+
 
   const [editingTransaction, setEditingTransaction] = useState(null);
   const [transactionSearch, setTransactionSearch] = useState('');
@@ -394,16 +410,12 @@ const fetchCloudData = async () => {
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
 
   // Inputs temporales
-  const [newItem, setNewItem] = useState({
-    title: '',
-    brand: '',
-    price: '',
-    purchasePrice: '',
-    stock: '',
-    categories: [],
-    image: '',
-    barcode: ''
-  });
+const [newItem, setNewItem] = useState({
+  title: '', brand: '', price: '', purchasePrice: '', stock: '',
+  categories: [], image: '', barcode: '',
+  product_type: 'quantity'  // ✅ NUEVO
+});
+
   const [tempOpeningBalance, setTempOpeningBalance] = useState('');
   const [tempClosingTime, setTempClosingTime] = useState('21:00');
 
@@ -622,19 +634,41 @@ const handleAddExpense = async (expenseData) => {
     }
   };
   
-  const addToCart = (item) => {
-    if (item.stock === 0) return;
+const addToCart = (item, grams = null) => {
+  if (item.stock === 0) return;
+  
+  // ✅ PRODUCTO POR PESO
+  if (item.product_type === 'weight' && grams) {
     const existing = cart.find((c) => c.id === item.id && !c.isReward);
     if (existing) {
-      if (existing.quantity >= item.stock) {
-        showNotification('error', 'Stock Insuficiente', 'No quedan más unidades de este producto.');
+      const newTotal = existing.quantity + grams;
+      if (newTotal > item.stock) {
+        showNotification('error', 'Stock Insuficiente', `Solo quedan ${item.stock}g disponibles.`);
         return;
       }
-      setCart(cart.map((c) => (c.id === item.id && !c.isReward ? { ...c, quantity: c.quantity + 1 } : c)));
+      setCart(cart.map((c) => (c.id === item.id && !c.isReward ? { ...c, quantity: newTotal } : c)));
     } else {
-      setCart([...cart, { ...item, quantity: 1 }]);
+      if (grams > item.stock) {
+        showNotification('error', 'Stock Insuficiente', `Solo quedan ${item.stock}g disponibles.`);
+        return;
+      }
+      setCart([...cart, { ...item, quantity: grams }]);
     }
-  };
+    return;
+  }
+  
+  // PRODUCTO POR CANTIDAD (lógica original)
+  const existing = cart.find((c) => c.id === item.id && !c.isReward);
+  if (existing) {
+    if (existing.quantity >= item.stock) {
+      showNotification('error', 'Stock Insuficiente', 'No quedan más unidades de este producto.');
+      return;
+    }
+    setCart(cart.map((c) => (c.id === item.id && !c.isReward ? { ...c, quantity: c.quantity + 1 } : c)));
+  } else {
+    setCart([...cart, { ...item, quantity: 1 }]);
+  }
+};
 
   const handleBarcodeScan = (scannedCode, wasInInput) => {
     const product = inventory.find(
@@ -692,21 +726,16 @@ const handleAddExpense = async (expenseData) => {
     onInputScan: handleInputScan
   });
 
-  const handleAddProductFromBarcode = (barcode) => {
-    setBarcodeNotFoundModal({ isOpen: false, code: '' });
-    setPendingBarcodeForNewProduct(barcode);
-    setNewItem({
-      title: '',
-      brand: '',
-      price: '',
-      purchasePrice: '',
-      stock: '',
-      categories: [],
-      image: '',
-      barcode: barcode
-    });
-    setIsModalOpen(true);
-  };
+const handleAddProductFromBarcode = (barcode) => {
+  setBarcodeNotFoundModal({ isOpen: false, code: '' });
+  setPendingBarcodeForNewProduct(barcode);
+  setNewItem({
+    title: '', brand: '', price: '', purchasePrice: '', stock: '',
+    categories: [], image: '', barcode: barcode,
+    product_type: 'quantity'  // ✅ NUEVO: default al crear desde escaneo
+  });
+  setIsModalOpen(true);
+};
 
   const handleDuplicateBarcodeDetected = (existingProduct, newBarcode) => {
     setBarcodeDuplicateModal({
@@ -758,24 +787,47 @@ const handleAddExpense = async (expenseData) => {
     setPosSelectedClient(null);
   };
 
-  const handleImageUpload = (e, isEditing = false) => {
-    const file = e.target.files[0];
-    if (file) {
-      if (file.size > 500 * 1024) {
-        showNotification('error', 'Error de Imagen', 'La imagen es muy pesada (>500KB).');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (isEditing) {
-          setEditingProduct({ ...editingProduct, image: reader.result });
-        } else {
-          setNewItem({ ...newItem, image: reader.result });
-        }
-      };
-      reader.readAsDataURL(file);
+const handleImageUpload = async (e, isEditing = false) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  // Validar tamaño (5MB máx)
+  if (file.size > 5 * 1024 * 1024) {
+    showNotification('error', 'Imagen muy pesada', 'El máximo permitido es 5MB.');
+    return;
+  }
+
+  // Validar tipo
+  const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+  if (!validTypes.includes(file.type)) {
+    showNotification('error', 'Formato no válido', 'Solo JPG, PNG, WebP o GIF.');
+    return;
+  }
+
+  // Limpiar input para permitir re-seleccionar mismo archivo
+  e.target.value = '';
+
+  try {
+    setIsUploadingImage(true);
+
+    // Subir a Supabase Storage
+    const publicUrl = await uploadProductImage(file);
+
+    if (isEditing) {
+      setEditingProduct((prev) => prev ? { ...prev, image: publicUrl } : prev);
+    } else {
+      setNewItem((prev) => ({ ...prev, image: publicUrl }));
     }
-  };
+
+    showNotification('success', 'Imagen subida', 'Se cargó correctamente a la nube.');
+  } catch (err) {
+    console.error('Error subiendo imagen:', err);
+    showNotification('error', 'Error al subir', 'No se pudo subir la imagen. Intentá de nuevo.');
+  } finally {
+    setIsUploadingImage(false);
+  }
+};
+
 
   const handleEditTransactionRequest = (tx) => {
     const safeTx = JSON.parse(JSON.stringify(tx));
@@ -1017,67 +1069,99 @@ const handleAddExpense = async (expenseData) => {
   };
 
   // --- MODIFICADO: Add Item ahora va a SUPABASE ---
-  const handleAddItem = async (e) => {
-    e.preventDefault();
-    if (newItem.categories.length === 0) {
-      showNotification('warning', 'Faltan datos', 'Por favor selecciona al menos una categoría.');
-      return;
-    }
+const handleAddItem = async (e, overrideData = null) => {
+  e.preventDefault();
+  const itemData = overrideData || newItem;
+  
+  if (itemData.categories.length === 0) {
+    showNotification('warning', 'Faltan datos', 'Por favor selecciona al menos una categoría.');
+    return;
+  }
+  
+  try {
+    const payload = {
+      title: itemData.title,
+      brand: itemData.brand,
+      price: Number(itemData.price) || 0,
+      purchasePrice: Number(itemData.purchasePrice) || 0,
+      stock: Number(itemData.stock) || 0,
+      category: itemData.categories[0],
+      barcode: itemData.barcode || null,
+      image: itemData.image || '',
+      product_type: itemData.product_type || 'quantity'  // ✅ NUEVO
+    };
     
-    try {
-      const payload = {
-        title: newItem.title,
-        brand: newItem.brand,
-        price: Number(newItem.price) || 0,
-        purchasePrice: Number(newItem.purchasePrice) || 0,
-        stock: Number(newItem.stock) || 0,
-        category: newItem.categories[0],
-        barcode: newItem.barcode || null,
-        image: newItem.image
-      };
-      
-      const { data, error } = await supabase.from('products').insert([payload]).select().single();
-      if (error) throw error;
-
-      const itemFormatted = { ...data, categories: [data.category] };
-      setInventory([...inventory, itemFormatted]);
-      
-      addLog('Alta de Producto', itemFormatted, 'Producto Nuevo');
-      setNewItem({
-        title: '', brand: '', price: '', purchasePrice: '', stock: '', categories: [], image: '', barcode: '',
-      });
-      setIsModalOpen(false);
-      setPendingBarcodeForNewProduct('');
-      showNotification('success', 'Producto Agregado', 'Guardado en la nube.');
-    } catch (err) {
-      showNotification('error', 'Error', 'No se pudo guardar el producto.');
-    }
-  };
-
-  // --- MODIFICADO: Edit Product ahora va a SUPABASE ---
-  const saveEditProduct = async (e) => {
-    e.preventDefault();
-    if (!editingProduct) return;
+    const { data, error } = await supabase.from('products').insert([payload]).select().single();
+    if (error) throw error;
+    const itemFormatted = { ...data, categories: [data.category] };
+    setInventory([...inventory, itemFormatted]);
     
-    try {
-      const payload = {
-         title: editingProduct.title,
-         price: Number(editingProduct.price),
-         stock: Number(editingProduct.stock),
-         category: editingProduct.categories[0]
-      };
-      const { error } = await supabase.from('products').update(payload).eq('id', editingProduct.id);
-      if (error) throw error;
+    const logDetails = {
+      id: data.id, title: data.title, price: data.price,
+      stock: data.stock, category: data.category,
+      product_type: data.product_type,
+      hasImage: !!data.image
+    };
+    addLog('Alta de Producto', logDetails, 'Producto Nuevo');
+    
+    setNewItem({
+      title: '', brand: '', price: '', purchasePrice: '', stock: '',
+      categories: [], image: '', barcode: '',
+      product_type: 'quantity'  // ✅ Reset
+    });
+    setIsModalOpen(false);
+    setPendingBarcodeForNewProduct('');
+    showNotification('success', 'Producto Agregado', 'Guardado en la nube.');
+  } catch (err) {
+    console.error('Error agregando producto:', err);
+    showNotification('error', 'Error', 'No se pudo guardar el producto.');
+  }
+};
 
-      setInventory(inventory.map(p => p.id === editingProduct.id ? editingProduct : p));
-      addLog('Edición Producto', { id: editingProduct.id, product: editingProduct.title, price: editingProduct.price, stock: editingProduct.stock, category: editingProduct.categories?.[0] || '' }, editReason);
-      setEditingProduct(null);
-      setEditReason('');
-      showNotification('success', 'Producto Editado', 'Cambios guardados.');
-    } catch (err) {
-      showNotification('error', 'Error', 'Fallo al editar.');
+
+
+// --- MODIFICADO: Edit Product ahora va a SUPABASE ---
+const saveEditProduct = async (e, overrideData = null) => {
+  e.preventDefault();
+  const productData = overrideData || editingProduct;
+  if (!productData) return;
+  
+  try {
+    const originalProduct = inventory.find(p => p.id === productData.id);
+    if (originalProduct && originalProduct.image !== productData.image) {
+      await deleteProductImage(originalProduct.image).catch(() => {});
     }
-  };
+
+    const payload = {
+      title: productData.title,
+      price: Number(productData.price),
+      purchasePrice: Number(productData.purchasePrice) || 0,
+      stock: Number(productData.stock),
+      category: Array.isArray(productData.categories) ? productData.categories[0] : productData.category,
+      barcode: productData.barcode || null,
+      image: productData.image || '',
+      product_type: productData.product_type || 'quantity'  // ✅ NUEVO
+    };
+
+    const { error } = await supabase.from('products').update(payload).eq('id', productData.id);
+    if (error) throw error;
+    setInventory(inventory.map(p => p.id === productData.id ? { ...productData } : p));
+    addLog('Edición Producto', {
+      id: productData.id, product: productData.title,
+      price: productData.price, stock: productData.stock,
+      category: productData.categories?.[0] || '',
+      product_type: productData.product_type,
+      imageChanged: originalProduct?.image !== productData.image ? 'Sí' : 'No'
+    }, editReason);
+    
+    setEditingProduct(null);
+    setEditReason('');
+    showNotification('success', 'Producto Editado', 'Cambios guardados en la nube.');
+  } catch (err) {
+    console.error('Error editando producto:', err);
+    showNotification('error', 'Error', 'Fallo al guardar los cambios.');
+  }
+};
 
   // --- MODIFICADO: Delete Product ahora va a SUPABASE ---
   const handleDeleteProductRequest = (id) => {
@@ -1089,21 +1173,27 @@ const handleAddExpense = async (expenseData) => {
     }
   };
 
-  const confirmDeleteProduct = async (e) => {
-    e.preventDefault();
-    if (productToDelete) {
-      try {
-         await supabase.from('products').delete().eq('id', productToDelete.id);
-         setInventory(inventory.filter((x) => x.id !== productToDelete.id));
-         addLog('Baja Producto', productToDelete, deleteProductReason || 'Sin motivo');
-         setIsDeleteProductModalOpen(false);
-         setProductToDelete(null);
-         showNotification('success', 'Producto Eliminado', 'Se quitó de la nube.');
-      } catch (err) {
-         showNotification('error', 'Error', 'No se puede borrar (posiblemente tenga ventas).');
+const confirmDeleteProduct = async (e) => {
+  e.preventDefault();
+  if (productToDelete) {
+    try {
+      // Eliminar imagen de Storage si existe
+      if (productToDelete.image) {
+        await deleteProductImage(productToDelete.image).catch(() => {});
       }
+
+      await supabase.from('products').delete().eq('id', productToDelete.id);
+      setInventory(inventory.filter((x) => x.id !== productToDelete.id));
+      addLog('Baja Producto', { id: productToDelete.id, title: productToDelete.title }, deleteProductReason || 'Sin motivo');
+      setIsDeleteProductModalOpen(false);
+      setProductToDelete(null);
+      showNotification('success', 'Producto Eliminado', 'Se quitó de la nube.');
+    } catch (err) {
+      showNotification('error', 'Error', 'No se puede borrar (posiblemente tenga ventas).');
     }
-  };
+  }
+};
+
 
   const updateCartItemQty = (id, newQty) => {
     const qty = parseInt(newQty);
@@ -1525,8 +1615,8 @@ const handleAddExpense = async (expenseData) => {
       <NotificationModal isOpen={notification.isOpen} onClose={closeNotification} type={notification.type} title={notification.title} message={notification.message} />
       <OpeningBalanceModal isOpen={isOpeningBalanceModalOpen} onClose={() => setIsOpeningBalanceModalOpen(false)} tempOpeningBalance={tempOpeningBalance} setTempOpeningBalance={setTempOpeningBalance} tempClosingTime={tempClosingTime} setTempClosingTime={setTempClosingTime} onSave={handleSaveOpeningBalance} />
       <ClosingTimeModal isOpen={isClosingTimeModalOpen} onClose={() => setIsClosingTimeModalOpen(false)} closingTime={closingTime} setClosingTime={setClosingTime} onSave={handleSaveClosingTime} />
-      <AddProductModal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setPendingBarcodeForNewProduct(''); }} newItem={newItem} setNewItem={setNewItem} categories={categories} onImageUpload={handleImageUpload} onAdd={handleAddItem} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} />
-      <EditProductModal product={editingProduct} onClose={() => setEditingProduct(null)} setEditingProduct={setEditingProduct} categories={categories} onImageUpload={handleImageUpload} editReason={editReason} setEditReason={setEditReason} onSave={saveEditProduct} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} />
+      <AddProductModal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setPendingBarcodeForNewProduct(''); }} newItem={newItem} setNewItem={setNewItem} categories={categories} onImageUpload={handleImageUpload} onAdd={handleAddItem} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} />
+      <EditProductModal product={editingProduct} onClose={() => setEditingProduct(null)} setEditingProduct={setEditingProduct} categories={categories} onImageUpload={handleImageUpload} editReason={editReason} setEditReason={setEditReason} onSave={saveEditProduct} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} />
       <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} />
       <ImageModal isOpen={isImageModalOpen} image={selectedImage} onClose={() => setIsImageModalOpen(false)} />
       <RefundModal transaction={transactionToRefund} onClose={() => setIsRefundModalOpen(false)} refundReason={refundReason} setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />

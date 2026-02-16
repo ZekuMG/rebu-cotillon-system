@@ -137,3 +137,48 @@ export const normalizeDate = (dateStr) => {
   
   return null;
 };
+
+// ============================================================
+// AGREGAR estas funciones al final de src/utils/helpers.js
+// ============================================================
+
+/**
+ * Formatea el stock según el tipo de producto.
+ * Cantidad: "5 u." | Peso: "500g" o "1.5kg"
+ */
+export const formatStock = (product) => {
+  if (product.product_type === 'weight') {
+    const stock = Number(product.stock) || 0;
+    if (stock >= 1000) {
+      const kg = stock / 1000;
+      // Si es un número redondo (1.0, 2.0) no mostrar decimal
+      return kg % 1 === 0 ? `${kg}kg` : `${kg.toFixed(1)}kg`;
+    }
+    return `${stock}g`;
+  }
+  return `${product.stock} u.`;
+};
+
+/**
+ * Formatea gramos de forma legible.
+ * 105 → "105g" | 1000 → "1kg" | 1500 → "1.5kg"
+ */
+export const formatWeight = (grams) => {
+  const g = Number(grams) || 0;
+  if (g >= 1000) {
+    const kg = g / 1000;
+    return kg % 1 === 0 ? `${kg}kg` : `${kg.toFixed(1)}kg`;
+  }
+  return `${g}g`;
+};
+
+/**
+ * Formatea el precio según el tipo de producto.
+ * Cantidad: "$500" | Peso: "$10/g"
+ */
+export const formatProductPrice = (product) => {
+  if (product.product_type === 'weight') {
+    return `$${formatPrice(product.price)}/g`;
+  }
+  return `$${formatPrice(product.price)}`;
+};

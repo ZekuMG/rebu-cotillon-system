@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, session } = require('electron'); // AÑADIMOS 'session' AQUÍ
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 
@@ -9,24 +9,40 @@ function createWindow() {
     width: 1200,
     height: 800,
     title: "Cotillón Rebu System",
-    icon: path.join(__dirname, 'public/favicon.svg'), // Asegúrate de tener un icono aquí
+    icon: path.join(__dirname, 'public/favicon.svg'),
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
+      webSecurity: false, // Esto ya lo tenías, ¡es vital dejarlo así!
     },
   });
 
-  // Si estamos en desarrollo, espera a Vite. Si es producción, carga el archivo.
   const startUrl = process.env.ELECTRON_START_URL || `file://${path.join(__dirname, './dist/index.html')}`;
   mainWindow.loadURL(startUrl);
 
-  // Buscar actualizaciones apenas abre
   mainWindow.once('ready-to-show', () => {
     autoUpdater.checkForUpdatesAndNotify();
   });
 }
 
-app.on('ready', createWindow);
+// 👇 AQUÍ ESTÁ LA MAGIA 👇
+app.on('ready', () => {
+  // Interceptamos la red ANTES de que salga la petición
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['https://*.supabase.co/*'] }, // Solo afectamos las peticiones a Supabase
+    (details, callback) => {
+      // Engañamos a Supabase forzando el Origin y el Referer
+      details.requestHeaders['Origin'] = 'http://localhost';
+      details.requestHeaders['Referer'] = 'http://localhost/';
+      
+      // Enviamos la petición modificada
+      callback({ requestHeaders: details.requestHeaders });
+    }
+  );
+
+  // Después de configurar el "disfraz", abrimos la ventana
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -34,13 +50,10 @@ app.on('window-all-closed', () => {
   }
 });
 
-// Eventos de Actualización
 autoUpdater.on('update-available', () => {
-  // Aquí podrías avisarle al usuario (opcional)
   console.log('Actualización disponible');
 });
 
 autoUpdater.on('update-downloaded', () => {
-  // Se instala sola al cerrar y abrir, o forzamos:
   autoUpdater.quitAndInstall();
 });
