@@ -16,33 +16,24 @@ import {
   List,
   Scale,
 } from 'lucide-react';
-import { formatStock, formatWeight } from '../utils/helpers';
+import { formatStock, formatWeight, getPricePerKg } from '../utils/helpers';
 
 export default function InventoryView({
-  inventory,
-  categories,
-  inventorySearch,
-  setInventorySearch,
-  inventoryCategoryFilter,
-  setInventoryCategoryFilter,
-  setIsModalOpen,
-  setEditingProduct,
-  handleDeleteProduct,
-  inventoryViewMode,     
-  setInventoryViewMode,
-  gridColumns,
-  setGridColumns,
+  inventory, categories, inventorySearch, setInventorySearch,
+  inventoryCategoryFilter, setInventoryCategoryFilter,
+  setIsModalOpen, setEditingProduct, handleDeleteProduct,
+  inventoryViewMode, setInventoryViewMode, gridColumns, setGridColumns,
   currentUser
 }) {
   const [selectedProduct, setSelectedProduct] = useState(null); 
   const [showGridMenu, setShowGridMenu] = useState(false);
 
-  const filteredInventory = inventory.filter((item) => {
-    const term = inventorySearch.toLowerCase();
+  const filteredInventory = (inventory || []).filter((item) => {
+    const term = (inventorySearch || '').toLowerCase();
     const matchesSearch = 
-      item.title.toLowerCase().includes(term) ||
+      (item.title || '').toLowerCase().includes(term) ||
       (item.barcode && item.barcode.toString().toLowerCase().includes(term)) ||
-      item.id.toString().includes(term);
+      (item.id && item.id.toString().includes(term));
     const matchesCategory =
       inventoryCategoryFilter === 'Todas' ||
       (Array.isArray(item.categories)
@@ -59,18 +50,15 @@ export default function InventoryView({
     }
   };
 
-  // ✅ MODIFICADO: Semáforo adaptado para peso
   const getStockColorClass = (product) => {
     const stock = Number(product.stock) || 0;
     const isWeight = product.product_type === 'weight';
-    
     if (stock === 0) return 'text-slate-400';
     if (isWeight) {
-      if (stock <= 100) return 'text-red-600';   // < 100g = Crítico
-      if (stock <= 500) return 'text-amber-600';  // < 500g = Alerta
+      if (stock <= 100) return 'text-red-600';
+      if (stock <= 500) return 'text-amber-600';
       return 'text-green-600';
     }
-    // Cantidad
     if (stock <= 5) return 'text-red-600';
     if (stock <= 10) return 'text-amber-600';
     return 'text-green-600';
@@ -99,7 +87,6 @@ export default function InventoryView({
               </select>
             </div>
           </div>
-
           <div className="flex items-center gap-3">
             {inventoryViewMode === 'grid' && (
               <div className="relative">
@@ -156,14 +143,12 @@ export default function InventoryView({
                                 <span className="bg-slate-800 text-white text-[10px] font-bold px-2 py-1 rounded shadow-sm border border-slate-600">AGOTADO</span>
                             </div>
                           )}
-                          {/* Badge stock bajo */}
                           {!outOfStock && ((isWeight && product.stock <= 200) || (!isWeight && product.stock <= 5)) && (
                             <div className={`absolute top-1 right-1 bg-red-500 text-white font-bold rounded-full shadow-sm flex items-center justify-center ${gridColumns > 6 ? 'w-3 h-3 p-0' : 'px-2 py-0.5 text-[10px] gap-1'}`}>
                               {gridColumns > 6 ? '' : <AlertTriangle size={10} />}
                               {gridColumns > 6 ? '' : 'BAJO'}
                             </div>
                           )}
-                          {/* ✅ Badge tipo peso */}
                           {isWeight && (
                             <div className={`absolute top-1 left-1 bg-amber-500 text-white font-bold rounded shadow-sm flex items-center gap-0.5 ${gridColumns > 7 ? 'px-1 py-0.5' : 'px-1.5 py-0.5 text-[9px]'}`}>
                               <Scale size={gridColumns > 7 ? 7 : 9} />
@@ -185,8 +170,8 @@ export default function InventoryView({
                             <div>
                               {gridColumns <= 6 && <p className="text-[10px] text-slate-400">Precio</p>}
                               <p className={`font-bold text-slate-900 ${gridColumns > 7 ? 'text-xs' : 'text-lg'}`}>
-                                ${product.price}
-                                {isWeight && <span className="text-[9px] font-medium text-slate-400">/g</span>}
+                                ${isWeight ? getPricePerKg(product.price) : product.price}
+                                {isWeight && <span className="text-[9px] font-medium text-slate-400">/kg</span>}
                               </p>
                             </div>
                             {gridColumns <= 8 && (
@@ -244,11 +229,11 @@ export default function InventoryView({
                                     {outOfStock ? 'AGOTADO' : formatStock(product)}
                                 </p>
                             </div>
-                            <div className="text-right w-20">
+                            <div className="text-right w-24">
                                 <p className="text-[10px] text-slate-400 uppercase font-bold">Precio</p>
                                 <p className="font-bold text-lg text-fuchsia-600">
-                                  ${product.price}
-                                  {isWeight && <span className="text-[10px] font-medium">/g</span>}
+                                  ${isWeight ? getPricePerKg(product.price) : product.price}
+                                  {isWeight && <span className="text-[10px] font-medium">/kg</span>}
                                 </p>
                             </div>
                         </div>
@@ -262,8 +247,10 @@ export default function InventoryView({
         </div>
       </div>
 
-      {/* PANEL LATERAL DE GESTIÓN */}
-      {selectedProduct && (
+      {/* PANEL LATERAL */}
+      {selectedProduct && (() => {
+        const isWeight = selectedProduct.product_type === 'weight';
+        return (
         <div className="w-[320px] bg-white border-l shadow-2xl flex flex-col shrink-0 animate-in slide-in-from-right duration-300 relative z-20">
           <div className="p-4 border-b flex justify-between items-start bg-slate-50">
             <div>
@@ -292,8 +279,7 @@ export default function InventoryView({
                 {(selectedProduct.categories || []).map(cat => (
                   <span key={cat} className="px-2 py-0.5 bg-fuchsia-100 text-fuchsia-700 text-[10px] font-bold rounded-full border border-fuchsia-200">{cat}</span>
                 ))}
-                {/* ✅ Badge tipo */}
-                {selectedProduct.product_type === 'weight' && (
+                {isWeight && (
                   <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold rounded-full border border-amber-200 flex items-center gap-1">
                     <Scale size={10} /> Peso
                   </span>
@@ -305,7 +291,7 @@ export default function InventoryView({
             <div className="grid grid-cols-2 gap-3">
               <div className="p-3 bg-blue-50 rounded-xl border border-blue-100">
                 <div className="flex items-center gap-2 text-blue-600 mb-1">
-                  {selectedProduct.product_type === 'weight' ? <Scale size={16} /> : <Package size={16} />}
+                  {isWeight ? <Scale size={16} /> : <Package size={16} />}
                   <span className="text-xs font-bold uppercase">Stock</span>
                 </div>
                 <p className={`text-2xl font-bold ${getStockColorClass(selectedProduct)}`}>
@@ -318,20 +304,20 @@ export default function InventoryView({
                   <span className="text-xs font-bold uppercase">Precio</span>
                 </div>
                 <p className="text-2xl font-bold text-green-900">
-                  ${selectedProduct.price}
-                  {selectedProduct.product_type === 'weight' && <span className="text-sm font-medium">/g</span>}
+                  ${isWeight ? getPricePerKg(selectedProduct.price) : selectedProduct.price}
+                  {isWeight && <span className="text-sm font-medium">/kg</span>}
                 </p>
               </div>
             </div>
 
-            {/* ✅ Info extra para productos de peso */}
-            {selectedProduct.product_type === 'weight' && (
+            {/* Equivalencias peso */}
+            {isWeight && (
               <div className="bg-amber-50 rounded-xl p-3 border border-amber-100 space-y-2">
                 <p className="text-xs font-bold text-amber-700 flex items-center gap-1"><Scale size={12} /> Equivalencias</p>
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div className="bg-white rounded-lg p-2 text-center border">
-                    <p className="text-[10px] text-slate-400">Precio/kg</p>
-                    <p className="font-bold text-amber-700">${(Number(selectedProduct.price) * 1000).toLocaleString('es-AR')}</p>
+                    <p className="text-[10px] text-slate-400">Precio/g</p>
+                    <p className="font-bold text-amber-700">${Number(selectedProduct.price).toFixed(2)}</p>
                   </div>
                   <div className="bg-white rounded-lg p-2 text-center border">
                     <p className="text-[10px] text-slate-400">Stock en kg</p>
@@ -352,8 +338,8 @@ export default function InventoryView({
                   <div className="flex justify-between items-center text-sm border-b border-slate-200 pb-2">
                     <span className="text-slate-500 flex items-center gap-2"><DollarSign size={14} /> Costo</span>
                     <span className="font-bold text-slate-700">
-                      ${selectedProduct.purchasePrice || 0}
-                      {selectedProduct.product_type === 'weight' && <span className="text-xs text-slate-400">/g</span>}
+                      ${isWeight ? getPricePerKg(selectedProduct.purchasePrice) : (selectedProduct.purchasePrice || 0)}
+                      {isWeight && <span className="text-xs text-slate-400">/kg</span>}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-sm">
@@ -382,7 +368,8 @@ export default function InventoryView({
             )}
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

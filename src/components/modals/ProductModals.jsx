@@ -1,5 +1,5 @@
 // src/components/modals/ProductModals.jsx
-// ✅ v4: Soporte productos por PESO y CANTIDAD
+// ✅ v5: Precio por KILO, layout corregido, selector g/kg estilizado
 
 import React, { useState } from 'react';
 import {
@@ -89,37 +89,59 @@ const ProductTypeSelector = ({ value, onChange }) => {
 };
 
 // ==========================================
-// COMPONENTE: Input de Stock según tipo
+// COMPONENTE: Input de Stock para PESO
+// ✅ FIX: Full-width, toggle g/kg estilizado
 // ==========================================
 
-const StockInput = ({ productType, stock, stockUnit, onStockChange, onUnitChange }) => {
-  if (productType === 'weight') {
-    return (
-      <div>
-        <label className="text-xs font-bold text-slate-500 uppercase block mb-1 flex items-center gap-1">
-          <Scale size={12} /> Stock (Peso)
-        </label>
-        <div className="flex gap-2">
-          <input required type="number" min="0" step="1" className="flex-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 outline-none" value={stock} onChange={(e) => onStockChange(e.target.value)} placeholder="Ej: 1000" />
-          <select className="w-20 px-2 py-2 border rounded-lg bg-white font-bold text-sm outline-none focus:ring-2 focus:ring-amber-500" value={stockUnit || 'g'} onChange={(e) => onUnitChange(e.target.value)}>
-            <option value="g">g</option>
-            <option value="kg">kg</option>
-          </select>
-        </div>
-        <p className="text-[10px] text-amber-600 mt-1 ml-1">
-          {stockUnit === 'kg'
-            ? `= ${(Number(stock) || 0) * 1000} gramos en inventario`
-            : `= ${((Number(stock) || 0) / 1000).toFixed(2)} kg`
-          }
-        </p>
-      </div>
-    );
-  }
-
+const WeightStockInput = ({ stock, stockUnit, onStockChange, onUnitChange }) => {
   return (
-    <div>
-      <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Stock</label>
-      <input required type="number" min="0" className="w-full px-3 py-2 border rounded-lg" value={stock} onChange={(e) => onStockChange(e.target.value)} />
+    <div className="w-full">
+      <label className="text-xs font-bold text-slate-500 uppercase block mb-2 flex items-center gap-1">
+        <Scale size={12} /> Stock disponible
+      </label>
+      <div className="flex gap-2 items-center">
+        <input
+          required
+          type="number"
+          min="0"
+          step="1"
+          className="flex-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 outline-none text-lg font-bold"
+          value={stock}
+          onChange={(e) => onStockChange(e.target.value)}
+          placeholder="Ej: 1000"
+        />
+        {/* Toggle g/kg estilizado */}
+        <div className="flex bg-slate-100 p-1 rounded-lg border h-[42px] items-center shrink-0">
+          <button
+            type="button"
+            onClick={() => onUnitChange('g')}
+            className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${
+              stockUnit === 'g'
+                ? 'bg-amber-500 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            g
+          </button>
+          <button
+            type="button"
+            onClick={() => onUnitChange('kg')}
+            className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${
+              stockUnit === 'kg'
+                ? 'bg-amber-500 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            kg
+          </button>
+        </div>
+      </div>
+      <p className="text-[10px] text-amber-600 mt-1.5 ml-1 font-medium">
+        {stockUnit === 'kg'
+          ? `= ${((Number(stock) || 0) * 1000).toLocaleString('es-AR')} gramos en inventario`
+          : `= ${((Number(stock) || 0) / 1000).toFixed(2)} kg`
+        }
+      </p>
     </div>
   );
 };
@@ -191,12 +213,19 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (productType === 'weight' && stockUnit === 'kg') {
-      const converted = { ...newItem, stock: Math.round(Number(newItem.stock) * 1000) };
-      onAdd(e, converted);
-    } else {
-      onAdd(e);
+    let finalData = { ...newItem };
+
+    if (productType === 'weight') {
+      // Convertir stock kg → gramos si corresponde
+      if (stockUnit === 'kg') {
+        finalData.stock = Math.round(Number(newItem.stock) * 1000);
+      }
+      // ✅ Convertir precio/costo de $/kg a $/g para almacenamiento interno
+      finalData.price = Number(newItem.price) / 1000;
+      finalData.purchasePrice = Number(newItem.purchasePrice) / 1000;
     }
+
+    onAdd(e, finalData);
   };
 
   return (
@@ -207,41 +236,82 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
           <button onClick={onClose}><X size={20} className="text-slate-400" /></button>
         </div>
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          {/* Tipo */}
           <ProductTypeSelector value={productType} onChange={handleTypeChange} />
+
           {productType === 'weight' && (
             <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
               <Scale size={14} className="text-amber-600" />
-              <span className="text-xs text-amber-700 font-medium">Producto por peso — Precio y costo se definen <strong>por gramo</strong></span>
+              <span className="text-xs text-amber-700 font-medium">Producto por peso — Precio y costo se definen <strong>por kilo</strong></span>
             </div>
           )}
+
+          {/* Nombre */}
           <div>
             <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Nombre</label>
             <input required type="text" className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none" value={newItem.title} onChange={(e) => setNewItem({ ...newItem, title: e.target.value })} />
           </div>
+
+          {/* Barcode */}
           <div>
             <label className="text-xs font-bold text-slate-500 uppercase block mb-1 flex items-center gap-1"><ScanBarcode size={12} /> Código de Barras (Opcional)</label>
             <input type="text" placeholder="Escanear o escribir código..." className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-mono" value={newItem.barcode || ''} onChange={(e) => handleBarcodeChange(e.target.value)} />
           </div>
+
+          {/* Precio y Costo */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">{productType === 'weight' ? 'Costo ($/g)' : 'Costo ($)'}</label>
-              <input required type="number" step={productType === 'weight' ? '0.01' : '1'} min="0" className="w-full px-3 py-2 border rounded-lg" value={newItem.purchasePrice} onChange={(e) => setNewItem({ ...newItem, purchasePrice: e.target.value })} />
-              {productType === 'weight' && newItem.purchasePrice && <p className="text-[10px] text-slate-400 mt-1">= ${(Number(newItem.purchasePrice) * 1000).toLocaleString('es-AR')}/kg</p>}
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
+                {productType === 'weight' ? 'Costo ($/kg)' : 'Costo ($)'}
+              </label>
+              <input required type="number" step="1" min="0" className="w-full px-3 py-2 border rounded-lg" value={newItem.purchasePrice} onChange={(e) => setNewItem({ ...newItem, purchasePrice: e.target.value })} />
+              {productType === 'weight' && newItem.purchasePrice && (
+                <p className="text-[10px] text-slate-400 mt-1">= ${(Number(newItem.purchasePrice) / 1000).toFixed(2)}/g</p>
+              )}
             </div>
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">{productType === 'weight' ? 'Precio ($/g)' : 'Precio ($)'}</label>
-              <input required type="number" step={productType === 'weight' ? '0.01' : '1'} min="0" className="w-full px-3 py-2 border rounded-lg font-bold text-slate-800" value={newItem.price} onChange={(e) => setNewItem({ ...newItem, price: e.target.value })} />
-              {productType === 'weight' && newItem.price && <p className="text-[10px] text-slate-400 mt-1">= ${(Number(newItem.price) * 1000).toLocaleString('es-AR')}/kg</p>}
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
+                {productType === 'weight' ? 'Precio ($/kg)' : 'Precio ($)'}
+              </label>
+              <input required type="number" step="1" min="0" className="w-full px-3 py-2 border rounded-lg font-bold text-slate-800" value={newItem.price} onChange={(e) => setNewItem({ ...newItem, price: e.target.value })} />
+              {productType === 'weight' && newItem.price && (
+                <p className="text-[10px] text-slate-400 mt-1">= ${(Number(newItem.price) / 1000).toFixed(2)}/g</p>
+              )}
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <StockInput productType={productType} stock={newItem.stock} stockUnit={stockUnit} onStockChange={(val) => setNewItem({ ...newItem, stock: val })} onUnitChange={setStockUnit} />
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Categoría(s)</label>
-              <CategoryMultiSelect allCategories={categories} selectedCategories={newItem.categories} onChange={(newCats) => setNewItem({ ...newItem, categories: newCats })} />
+
+          {/* ✅ FIX: Layout diferente para peso vs cantidad */}
+          {productType === 'weight' ? (
+            <>
+              {/* Categoría: fila completa */}
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Categoría(s)</label>
+                <CategoryMultiSelect allCategories={categories} selectedCategories={newItem.categories} onChange={(newCats) => setNewItem({ ...newItem, categories: newCats })} />
+              </div>
+              {/* Stock con toggle g/kg: fila completa, visible */}
+              <WeightStockInput
+                stock={newItem.stock}
+                stockUnit={stockUnit}
+                onStockChange={(val) => setNewItem({ ...newItem, stock: val })}
+                onUnitChange={setStockUnit}
+              />
+            </>
+          ) : (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Stock</label>
+                <input required type="number" min="0" className="w-full px-3 py-2 border rounded-lg" value={newItem.stock} onChange={(e) => setNewItem({ ...newItem, stock: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Categoría(s)</label>
+                <CategoryMultiSelect allCategories={categories} selectedCategories={newItem.categories} onChange={(newCats) => setNewItem({ ...newItem, categories: newCats })} />
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* Imagen */}
           <ImageSection image={newItem.image} isUploading={isUploadingImage} onFileChange={(e) => onImageUpload(e, false)} onUrlChange={(e) => setNewItem({ ...newItem, image: e.target.value })} onDelete={() => setNewItem({ ...newItem, image: '' })} />
+
           <button type="submit" disabled={isUploadingImage} className={`w-full py-3 rounded-lg font-bold transition-colors ${isUploadingImage ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-slate-900 text-white hover:bg-slate-800'}`}>
             {isUploadingImage ? 'Esperando imagen...' : 'Agregar'}
           </button>
@@ -259,6 +329,26 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
   const [stockUnit, setStockUnit] = useState('g');
   if (!product) return null;
   const productType = product.product_type || 'quantity';
+
+  // ✅ Precio guardado en /g → lo mostramos en /kg
+  const displayPrice = productType === 'weight' ? Math.round(Number(product.price) * 1000) : product.price;
+  const displayCost = productType === 'weight' ? Math.round(Number(product.purchasePrice) * 1000) : product.purchasePrice;
+
+  const handlePriceChange = (val) => {
+    if (productType === 'weight') {
+      setEditingProduct({ ...product, price: Number(val) / 1000 });
+    } else {
+      setEditingProduct({ ...product, price: val });
+    }
+  };
+
+  const handleCostChange = (val) => {
+    if (productType === 'weight') {
+      setEditingProduct({ ...product, purchasePrice: Number(val) / 1000 });
+    } else {
+      setEditingProduct({ ...product, purchasePrice: val });
+    }
+  };
 
   const handleBarcodeChange = (value) => {
     setEditingProduct({ ...product, barcode: value });
@@ -285,42 +375,84 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
           <button onClick={onClose}><X size={20} className="text-slate-400" /></button>
         </div>
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          {/* Tipo (solo lectura) */}
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg border bg-slate-50">
             {productType === 'weight' ? <Scale size={16} className="text-amber-600" /> : <Package size={16} className="text-blue-600" />}
-            <span className="text-xs font-bold text-slate-600">Tipo: {productType === 'weight' ? 'Producto por PESO (gramos)' : 'Producto por CANTIDAD (unidades)'}</span>
+            <span className="text-xs font-bold text-slate-600">
+              Tipo: {productType === 'weight' ? 'Producto por PESO — Precio por kilo' : 'Producto por CANTIDAD — Precio por unidad'}
+            </span>
           </div>
+
+          {/* Nombre */}
           <div>
             <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Nombre</label>
             <input required type="text" className="w-full px-3 py-2 border rounded-lg" value={product.title} onChange={(e) => setEditingProduct({ ...product, title: e.target.value })} />
           </div>
+
+          {/* Barcode */}
           <div>
             <label className="text-xs font-bold text-slate-500 uppercase block mb-1 flex items-center gap-1"><ScanBarcode size={12} /> Código de Barras (Opcional)</label>
             <input type="text" placeholder="Escanear o escribir código..." className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-mono" value={product.barcode || ''} onChange={(e) => handleBarcodeChange(e.target.value)} />
           </div>
+
+          {/* Precio y Costo */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">{productType === 'weight' ? 'Costo ($/g)' : 'Costo ($)'}</label>
-              <input required type="number" step={productType === 'weight' ? '0.01' : '1'} min="0" className="w-full px-3 py-2 border rounded-lg" value={product.purchasePrice} onChange={(e) => setEditingProduct({ ...product, purchasePrice: e.target.value })} />
-              {productType === 'weight' && product.purchasePrice && <p className="text-[10px] text-slate-400 mt-1">= ${(Number(product.purchasePrice) * 1000).toLocaleString('es-AR')}/kg</p>}
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
+                {productType === 'weight' ? 'Costo ($/kg)' : 'Costo ($)'}
+              </label>
+              <input required type="number" step="1" min="0" className="w-full px-3 py-2 border rounded-lg" value={displayCost} onChange={(e) => handleCostChange(e.target.value)} />
+              {productType === 'weight' && displayCost > 0 && (
+                <p className="text-[10px] text-slate-400 mt-1">= ${(Number(displayCost) / 1000).toFixed(2)}/g</p>
+              )}
             </div>
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">{productType === 'weight' ? 'Precio ($/g)' : 'Precio ($)'}</label>
-              <input required type="number" step={productType === 'weight' ? '0.01' : '1'} min="0" className="w-full px-3 py-2 border rounded-lg font-bold" value={product.price} onChange={(e) => setEditingProduct({ ...product, price: e.target.value })} />
-              {productType === 'weight' && product.price && <p className="text-[10px] text-slate-400 mt-1">= ${(Number(product.price) * 1000).toLocaleString('es-AR')}/kg</p>}
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
+                {productType === 'weight' ? 'Precio ($/kg)' : 'Precio ($)'}
+              </label>
+              <input required type="number" step="1" min="0" className="w-full px-3 py-2 border rounded-lg font-bold" value={displayPrice} onChange={(e) => handlePriceChange(e.target.value)} />
+              {productType === 'weight' && displayPrice > 0 && (
+                <p className="text-[10px] text-slate-400 mt-1">= ${(Number(displayPrice) / 1000).toFixed(2)}/g</p>
+              )}
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <StockInput productType={productType} stock={product.stock} stockUnit={stockUnit} onStockChange={(val) => setEditingProduct({ ...product, stock: val })} onUnitChange={setStockUnit} />
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Categoría(s)</label>
-              <CategoryMultiSelect allCategories={categories} selectedCategories={product.categories || []} onChange={(newCats) => setEditingProduct({ ...product, categories: newCats })} />
+
+          {/* ✅ FIX: Layout diferente para peso vs cantidad */}
+          {productType === 'weight' ? (
+            <>
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Categoría(s)</label>
+                <CategoryMultiSelect allCategories={categories} selectedCategories={product.categories || []} onChange={(newCats) => setEditingProduct({ ...product, categories: newCats })} />
+              </div>
+              <WeightStockInput
+                stock={product.stock}
+                stockUnit={stockUnit}
+                onStockChange={(val) => setEditingProduct({ ...product, stock: val })}
+                onUnitChange={setStockUnit}
+              />
+            </>
+          ) : (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Stock</label>
+                <input required type="number" min="0" className="w-full px-3 py-2 border rounded-lg" value={product.stock} onChange={(e) => setEditingProduct({ ...product, stock: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Categoría(s)</label>
+                <CategoryMultiSelect allCategories={categories} selectedCategories={product.categories || []} onChange={(newCats) => setEditingProduct({ ...product, categories: newCats })} />
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* Imagen */}
           <ImageSection image={product.image} isUploading={isUploadingImage} onFileChange={(e) => onImageUpload(e, true)} onUrlChange={(e) => setEditingProduct({ ...product, image: e.target.value })} onDelete={() => setEditingProduct({ ...product, image: '' })} />
+
+          {/* Motivo */}
           <div>
             <label className="text-xs font-bold text-amber-600 uppercase block mb-1 flex items-center gap-1"><FileText size={12} /> Motivo del cambio (Opcional)</label>
             <textarea className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-amber-50 focus:ring-2 focus:ring-amber-500 outline-none" rows="2" placeholder="¿Por qué realizas este cambio?" value={editReason} onChange={(e) => setEditReason(e.target.value)}></textarea>
           </div>
+
           <button type="submit" disabled={isUploadingImage} className={`w-full py-3 rounded-lg font-bold transition-colors ${isUploadingImage ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
             {isUploadingImage ? 'Esperando imagen...' : 'Guardar Cambios'}
           </button>

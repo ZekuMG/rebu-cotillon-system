@@ -13,8 +13,6 @@ export const formatPrice = (amount) => {
   const number = Number(amount);
   if (isNaN(number)) return '0';
 
-  // Usamos 'de-DE' porque su estándar es idéntico al deseado: 1.234.567 (punto mil, coma decimal)
-  // y respeta el punto incluso en números de 4 cifras.
   return new Intl.NumberFormat('de-DE', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0, 
@@ -30,12 +28,10 @@ export const formatPrice = (amount) => {
 export const formatTime24 = (timeStr) => {
   if (!timeStr) return '--:--';
   
-  // Si ya parece formato 24h sin AM/PM, devolverla
   if (/^\d{1,2}:\d{2}$/.test(timeStr) && !timeStr.toLowerCase().includes('m')) {
     return timeStr;
   }
   
-  // Intentar parsear formato con AM/PM
   const match = timeStr.match(/(\d{1,2}):(\d{2})\s*(a\.?\s*m\.?|p\.?\s*m\.?)?/i);
   if (match) {
     let hours = parseInt(match[1], 10);
@@ -116,10 +112,8 @@ export const getVentaTotal = (details) => {
  */
 export const normalizeDate = (dateStr) => {
   if (!dateStr) return null;
-  // Limpiar posibles horas o espacios extra
   const cleanDate = dateStr.toString().split(',')[0].trim();
   
-  // Detectar separador (/ o -)
   const separator = cleanDate.includes('/') ? '/' : '-';
   const parts = cleanDate.split(separator);
   
@@ -128,19 +122,17 @@ export const normalizeDate = (dateStr) => {
     const month = parseInt(parts[1], 10);
     const year = parseInt(parts[2], 10);
     
-    // Validar números básicos
     if (!day || !month || !year) return null;
     
-    // Crear fecha (Meses en JS son 0-11)
     return new Date(year, month - 1, day);
   }
   
   return null;
 };
 
-// ============================================================
-// AGREGAR estas funciones al final de src/utils/helpers.js
-// ============================================================
+// ==========================================
+// Helpers para productos por PESO
+// ==========================================
 
 /**
  * Formatea el stock según el tipo de producto.
@@ -151,7 +143,6 @@ export const formatStock = (product) => {
     const stock = Number(product.stock) || 0;
     if (stock >= 1000) {
       const kg = stock / 1000;
-      // Si es un número redondo (1.0, 2.0) no mostrar decimal
       return kg % 1 === 0 ? `${kg}kg` : `${kg.toFixed(1)}kg`;
     }
     return `${stock}g`;
@@ -173,12 +164,9 @@ export const formatWeight = (grams) => {
 };
 
 /**
- * Formatea el precio según el tipo de producto.
- * Cantidad: "$500" | Peso: "$10/g"
+ * Devuelve el precio por kilo formateado para productos de peso.
+ * Internamente el precio está guardado en $/g, esto lo convierte a $/kg.
  */
-export const formatProductPrice = (product) => {
-  if (product.product_type === 'weight') {
-    return `$${formatPrice(product.price)}/g`;
-  }
-  return `$${formatPrice(product.price)}`;
+export const getPricePerKg = (pricePerGram) => {
+  return formatPrice(Number(pricePerGram) * 1000);
 };

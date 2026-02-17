@@ -23,7 +23,7 @@ import {
   Edit2,
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../data';
-import { formatPrice, formatStock, formatWeight } from '../utils/helpers';
+import { formatPrice, formatStock, formatWeight, getPricePerKg } from '../utils/helpers';
 
 // ==========================================
 // MINI-MODAL: Ingreso de gramos para peso
@@ -33,13 +33,11 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
   const gramsNum = parseInt(grams) || 0;
   const totalPrice = gramsNum * (Number(product.price) || 0);
   const isValid = gramsNum > 0 && gramsNum <= effectiveStock;
-
   const quickAmounts = [50, 100, 250, 500, 1000];
 
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
       <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden border border-slate-200">
-        {/* Header */}
         <div className="p-4 bg-amber-50 border-b border-amber-100 flex justify-between items-center">
           <div className="flex items-center gap-2">
             <Scale size={18} className="text-amber-600" />
@@ -47,9 +45,7 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
           </div>
           <button onClick={onClose}><X size={18} className="text-amber-400 hover:text-amber-600" /></button>
         </div>
-
         <div className="p-5 space-y-4">
-          {/* Info del producto */}
           <div className="flex items-center gap-3">
             <div className="w-14 h-14 rounded-lg bg-slate-100 overflow-hidden border shrink-0">
               {product.image ? (
@@ -61,74 +57,36 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
             <div className="flex-1 min-w-0">
               <h4 className="font-bold text-slate-800 text-sm truncate">{product.title}</h4>
               <div className="flex items-center gap-2 mt-1">
-                <span className="text-xs text-amber-600 font-bold">${formatPrice(product.price)}/g</span>
+                <span className="text-xs text-amber-600 font-bold">${getPricePerKg(product.price)}/kg</span>
                 <span className="text-[10px] text-slate-400">•</span>
                 <span className="text-[10px] text-slate-500">Disponible: {formatWeight(effectiveStock)}</span>
               </div>
             </div>
           </div>
-
-          {/* Input de gramos */}
           <div>
             <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Cantidad (gramos)</label>
-            <input
-              type="number"
-              min="1"
-              max={effectiveStock}
-              step="1"
-              autoFocus
-              placeholder="Ej: 105"
-              className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl text-center text-2xl font-bold text-slate-800 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none"
-              value={grams}
-              onChange={(e) => setGrams(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && isValid) onConfirm(gramsNum);
-              }}
-            />
+            <input type="number" min="1" max={effectiveStock} step="1" autoFocus placeholder="Ej: 105" className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl text-center text-2xl font-bold text-slate-800 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none" value={grams} onChange={(e) => setGrams(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && isValid) onConfirm(gramsNum); }} />
             {gramsNum > effectiveStock && (
               <p className="text-[10px] text-red-500 mt-1 text-center font-bold">Stock insuficiente (máx: {formatWeight(effectiveStock)})</p>
             )}
           </div>
-
-          {/* Botones rápidos */}
           <div className="flex flex-wrap gap-2 justify-center">
             {quickAmounts.filter(a => a <= effectiveStock).map((amount) => (
-              <button
-                key={amount}
-                type="button"
-                onClick={() => setGrams(String(amount))}
-                className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
-                  gramsNum === amount
-                    ? 'bg-amber-100 border-amber-400 text-amber-700'
-                    : 'bg-white border-slate-200 text-slate-500 hover:border-amber-300 hover:text-amber-600'
-                }`}
-              >
+              <button key={amount} type="button" onClick={() => setGrams(String(amount))} className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${gramsNum === amount ? 'bg-amber-100 border-amber-400 text-amber-700' : 'bg-white border-slate-200 text-slate-500 hover:border-amber-300 hover:text-amber-600'}`}>
                 {amount >= 1000 ? `${amount / 1000}kg` : `${amount}g`}
               </button>
             ))}
           </div>
-
-          {/* Total calculado */}
           {gramsNum > 0 && (
             <div className="bg-slate-50 rounded-xl p-3 border text-center">
               <p className="text-[10px] text-slate-400 uppercase font-bold">Total estimado</p>
               <p className="text-2xl font-black text-slate-900">${formatPrice(totalPrice)}</p>
-              <p className="text-[10px] text-slate-500">{formatWeight(gramsNum)} × ${formatPrice(product.price)}/g</p>
+              <p className="text-[10px] text-slate-500">{formatWeight(gramsNum)} × ${getPricePerKg(product.price)}/kg</p>
             </div>
           )}
-
-          {/* Botones */}
           <div className="flex gap-3">
             <button onClick={onClose} className="flex-1 py-3 rounded-xl font-bold border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors">Cancelar</button>
-            <button
-              onClick={() => isValid && onConfirm(gramsNum)}
-              disabled={!isValid}
-              className={`flex-1 py-3 rounded-xl font-bold transition-colors ${
-                isValid
-                  ? 'bg-amber-500 text-white hover:bg-amber-600 shadow-md'
-                  : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-              }`}
-            >
+            <button onClick={() => isValid && onConfirm(gramsNum)} disabled={!isValid} className={`flex-1 py-3 rounded-xl font-bold transition-colors ${isValid ? 'bg-amber-500 text-white hover:bg-amber-600 shadow-md' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
               Agregar {gramsNum > 0 ? formatWeight(gramsNum) : ''}
             </button>
           </div>
@@ -142,38 +100,16 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
 // VISTA PRINCIPAL: POS
 // ==========================================
 export default function POSView({
-  inventory,
-  categories,
-  addToCart,
-  cart,
-  removeFromCart,
-  updateCartItemQty,
-  selectedPayment,
-  setSelectedPayment,
-  installments,
-  setInstallments,
-  calculateTotal,
-  handleCheckout,
-  posSearch,
-  setPosSearch,
-  selectedCategory,
-  setSelectedCategory,
-  posViewMode,
-  setPosViewMode,
-  gridColumns,
-  setGridColumns,
-  selectedClient,
-  setSelectedClient,
-  onOpenClientModal,
-  onOpenRedemptionModal
+  inventory, categories, addToCart, cart, removeFromCart, updateCartItemQty,
+  selectedPayment, setSelectedPayment, installments, setInstallments,
+  calculateTotal, handleCheckout, posSearch, setPosSearch,
+  selectedCategory, setSelectedCategory, posViewMode, setPosViewMode,
+  gridColumns, setGridColumns, selectedClient, setSelectedClient,
+  onOpenClientModal, onOpenRedemptionModal
 }) {
   const [showGridMenu, setShowGridMenu] = useState(false);
   const [showClientCheckModal, setShowClientCheckModal] = useState(false);
-
-  // ✅ NUEVO: Estado para el modal de peso
   const [weightModalProduct, setWeightModalProduct] = useState(null);
-
-  // ✅ NUEVO: Estado para editar gramos en el carrito
   const [editingWeightItemId, setEditingWeightItemId] = useState(null);
   const [editingWeightValue, setEditingWeightValue] = useState('');
 
@@ -183,7 +119,6 @@ export default function POSView({
     return originalStock - qtyInCart;
   };
 
-  // ✅ MODIFICADO: Interceptar click para productos de peso
   const handleProductClick = (product) => {
     if (product.product_type === 'weight') {
       const effectiveStock = getEffectiveStock(product.id, product.stock);
@@ -194,7 +129,6 @@ export default function POSView({
     }
   };
 
-  // ✅ NUEVO: Confirmar peso desde el modal
   const handleWeightConfirm = (grams) => {
     if (weightModalProduct) {
       addToCart(weightModalProduct, grams);
@@ -202,7 +136,6 @@ export default function POSView({
     }
   };
 
-  // ✅ NUEVO: Guardar edición de gramos en carrito
   const handleSaveWeightEdit = (itemId) => {
     const newGrams = parseInt(editingWeightValue);
     if (!isNaN(newGrams) && newGrams > 0) {
@@ -230,11 +163,12 @@ export default function POSView({
     onOpenClientModal();
   };
 
-  const filteredProducts = inventory.filter((product) => {
+  const filteredProducts = (inventory || []).filter((product) => {
+    const term = (posSearch || '').toLowerCase();
     const matchesSearch =
-      product.title.toLowerCase().includes(posSearch.toLowerCase()) ||
-      String(product.id).includes(posSearch) ||
-      (product.barcode && product.barcode.includes(posSearch));
+      (product.title || '').toLowerCase().includes(term) ||
+      String(product.id).includes(posSearch || '') ||
+      (product.barcode && product.barcode.includes(posSearch || ''));
     const matchesCategory =
       selectedCategory === 'Todas' ||
       (Array.isArray(product.categories)
@@ -250,9 +184,7 @@ export default function POSView({
   return (
     <div className="flex h-full overflow-hidden bg-slate-100 relative">
       
-      {/* ========================================== */}
-      {/* COLUMNA IZQUIERDA: CATÁLOGO                */}
-      {/* ========================================== */}
+      {/* COLUMNA IZQUIERDA: CATÁLOGO */}
       <div className="flex-1 flex flex-col min-w-0">
         
         {/* Header POS */}
@@ -308,11 +240,9 @@ export default function POSView({
                       <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`group bg-white border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all text-left flex flex-col relative ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed' : 'hover:border-fuchsia-300 active:scale-[0.98]'}`}>
                         <div className="aspect-[4/3] bg-slate-50 relative overflow-hidden w-full">
                           {product.image ? (<img src={product.image} alt={product.title} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-500" />) : (<div className="w-full h-full flex flex-col items-center justify-center bg-slate-200/50 p-2 text-center group-hover:bg-slate-200 transition-colors"><span className={`font-bold text-slate-500 uppercase leading-tight ${gridColumns > 6 ? 'text-[10px]' : 'text-xs'}`}>{product.title}</span></div>)}
-                          {/* Stock badge */}
                           <div className={`absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold shadow-sm backdrop-blur-sm ${stockBadgeClass}`}>
                             {isOutOfStock ? 'SIN STOCK' : (isWeight ? formatWeight(effectiveStock) : `${effectiveStock} u.`)}
                           </div>
-                          {/* ✅ Badge tipo peso */}
                           {isWeight && !isOutOfStock && (
                             <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-500 text-white text-[9px] font-bold shadow-sm flex items-center gap-0.5">
                               <Scale size={8} /> PESO
@@ -323,9 +253,13 @@ export default function POSView({
                           <h3 className={`font-bold text-slate-800 leading-snug mb-1 line-clamp-2 ${gridColumns > 6 ? 'text-[11px]' : 'text-sm'}`}>{product.title}</h3>
                           <div className="mt-auto pt-2 flex items-end justify-between">
                             <span className={`font-bold text-fuchsia-600 ${gridColumns > 6 ? 'text-sm' : 'text-lg'}`}>
-                              ${formatPrice(product.price)}{isWeight && <span className="text-[10px] font-medium text-fuchsia-400">/g</span>}
+                              {isWeight ? (
+                                <>${getPricePerKg(product.price)}<span className="text-[10px] font-medium text-fuchsia-400">/kg</span></>
+                              ) : (
+                                <>${formatPrice(product.price)}</>
+                              )}
                             </span>
-                            <div className={`w-6 h-6 rounded-full ${isWeight ? 'bg-amber-500' : 'bg-slate-900'} text-white flex items-center justify-center shadow-lg group-hover:${isWeight ? 'bg-amber-600' : 'bg-fuchsia-600'} transition-colors ${gridColumns > 8 || isOutOfStock ? 'hidden' : 'flex'}`}>
+                            <div className={`w-6 h-6 rounded-full ${isWeight ? 'bg-amber-500' : 'bg-slate-900'} text-white flex items-center justify-center shadow-lg transition-colors ${gridColumns > 8 || isOutOfStock ? 'hidden' : 'flex'}`}>
                               {isWeight ? <Scale size={10} /> : <Plus size={12} />}
                             </div>
                           </div>
@@ -353,8 +287,8 @@ export default function POSView({
                         <div className="text-right flex items-center gap-4">
                           <div className="w-20 text-right">
                             <p className="font-bold text-lg text-fuchsia-600">
-                              ${formatPrice(product.price)}
-                              {isWeight && <span className="text-[10px] font-medium">/g</span>}
+                              ${isWeight ? getPricePerKg(product.price) : formatPrice(product.price)}
+                              {isWeight && <span className="text-[10px] font-medium">/kg</span>}
                             </p>
                           </div>
                           {!isOutOfStock && (
@@ -373,9 +307,7 @@ export default function POSView({
         </div>
       </div>
 
-      {/* ========================================== */}
-      {/* COLUMNA DERECHA: CARRITO                   */}
-      {/* ========================================== */}
+      {/* COLUMNA DERECHA: CARRITO */}
       <div className="w-[380px] bg-white border-l flex flex-col shadow-2xl z-20 shrink-0">
         
         <div className="p-5 border-b bg-white flex justify-between items-center">
@@ -387,7 +319,6 @@ export default function POSView({
           </span>
         </div>
 
-        {/* Lista de Items */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-300">
@@ -416,30 +347,15 @@ export default function POSView({
                     </div>
                     
                     <div className="flex justify-between items-end">
-                      {/* ✅ Controles adaptados según tipo */}
                       {isWeight ? (
-                        // PESO: input de gramos editable
                         <div className="flex items-center gap-1">
                           {isEditingWeight ? (
                             <div className="flex items-center gap-1">
-                              <input
-                                type="number"
-                                min="1"
-                                autoFocus
-                                className="w-16 px-2 py-1 text-xs font-bold border border-amber-300 rounded bg-white text-center outline-none focus:ring-1 focus:ring-amber-500"
-                                value={editingWeightValue}
-                                onChange={(e) => setEditingWeightValue(e.target.value)}
-                                onKeyDown={(e) => { if (e.key === 'Enter') handleSaveWeightEdit(item.id); if (e.key === 'Escape') setEditingWeightItemId(null); }}
-                                onBlur={() => handleSaveWeightEdit(item.id)}
-                              />
+                              <input type="number" min="1" autoFocus className="w-16 px-2 py-1 text-xs font-bold border border-amber-300 rounded bg-white text-center outline-none focus:ring-1 focus:ring-amber-500" value={editingWeightValue} onChange={(e) => setEditingWeightValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleSaveWeightEdit(item.id); if (e.key === 'Escape') setEditingWeightItemId(null); }} onBlur={() => handleSaveWeightEdit(item.id)} />
                               <span className="text-[10px] text-amber-600 font-bold">g</span>
                             </div>
                           ) : (
-                            <button
-                              onClick={() => { setEditingWeightItemId(item.id); setEditingWeightValue(String(item.quantity)); }}
-                              className="flex items-center gap-1 bg-amber-100 hover:bg-amber-200 text-amber-700 px-2 py-1 rounded-lg text-xs font-bold transition-colors"
-                              title="Click para editar gramos"
-                            >
+                            <button onClick={() => { setEditingWeightItemId(item.id); setEditingWeightValue(String(item.quantity)); }} className="flex items-center gap-1 bg-amber-100 hover:bg-amber-200 text-amber-700 px-2 py-1 rounded-lg text-xs font-bold transition-colors" title="Click para editar gramos">
                               <Scale size={10} />
                               {formatWeight(item.quantity)}
                               <Edit2 size={9} className="ml-0.5 opacity-50" />
@@ -447,14 +363,12 @@ export default function POSView({
                           )}
                         </div>
                       ) : (
-                        // CANTIDAD: +/- buttons clásicos
                         <div className="flex items-center gap-2 bg-slate-50 rounded-lg p-0.5 border">
                           <button onClick={() => updateCartItemQty(item.id, item.quantity - 1)} className="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:text-red-500 disabled:opacity-50" disabled={item.quantity <= 1 || item.isReward}><Minus size={12} /></button>
                           <span className="text-xs font-bold w-4 text-center">{item.quantity}</span>
                           <button onClick={() => updateCartItemQty(item.id, item.quantity + 1)} className="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:text-green-500 disabled:opacity-50" disabled={item.isReward}><Plus size={12} /></button>
                         </div>
                       )}
-
                       <p className={`font-bold ${item.isReward ? 'text-fuchsia-600' : 'text-slate-800'}`}>
                         {item.isReward ? 'GRATIS' : `$${formatPrice(item.price * item.quantity)}`}
                       </p>
@@ -466,10 +380,9 @@ export default function POSView({
           )}
         </div>
 
-        {/* Footer Totales y Pago */}
+        {/* Footer */}
         <div className="p-5 bg-slate-50 border-t space-y-4">
-          
-          {/* Sección Cliente */}
+          {/* Cliente */}
           <div className={`bg-white border rounded-xl p-3 shadow-sm transition-colors ${selectedClient ? (selectedClient.id === 0 ? 'border-slate-300' : 'border-fuchsia-200 bg-fuchsia-50/30') : 'border-slate-200'}`}>
             <div className="flex justify-between items-center mb-2">
               <span className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1">
@@ -499,7 +412,7 @@ export default function POSView({
             )}
           </div>
 
-          {/* Selector de Pago */}
+          {/* Pago */}
           <div className="grid grid-cols-4 gap-2">
             {PAYMENT_METHODS.map((method) => {
               const isSelected = selectedPayment === method.id;
@@ -542,7 +455,7 @@ export default function POSView({
         </div>
       </div>
 
-      {/* ✅ NUEVO: Modal de peso */}
+      {/* Modal peso */}
       {weightModalProduct && (
         <WeightInputModal
           product={weightModalProduct}
