@@ -100,10 +100,10 @@ const fetchCloudData = async (showSpinner = true) => {
         rewardsResult,
         registerResult
       ] = await Promise.allSettled([
-        supabase.from('products').select('*').order('title'),
-        supabase.from('clients').select('*').order('name'),
+        supabase.from('products').select('*').eq('is_active', true).order('title'),
+        supabase.from('clients').select('*').eq('is_active', true).order('name'),
         supabase.from('sales').select(`*, sale_items(*), clients(name, member_number)`).order('created_at', { ascending: false }).limit(100),
-        supabase.from('logs').select('*').order('created_at', { ascending: false }).limit(50),
+        supabase.from('logs').select('*').order('created_at', { ascending: false }),
         supabase.from('expenses').select('*').order('created_at', { ascending: false }),
         supabase.from('cash_closures').select('*').order('created_at', { ascending: false }),
         supabase.from('categories').select('*').order('name'),
@@ -500,25 +500,56 @@ const [newItem, setNewItem] = useState({
     }
   };
 
-  const handleUpdateMemberWithLog = async (id, updates) => {
-    try {
-      await supabase.from('clients').update(updates).eq('id', id);
-      setMembers(members.map(m => m.id === id ? { ...m, ...updates } : m));
-      addLog('Edición de Socio', { id, updates });
-    } catch (e) {
-      showNotification('error', 'Error', 'Fallo al actualizar socio');
-    }
-  };
+const handleUpdateMemberWithLog = async (id, updates) => {
+  try {
+    // Mapear campos del frontend a nombres de columnas en Supabase
+    const dbUpdates = {};
+    if (updates.name !== undefined) dbUpdates.name = updates.name;
+    if (updates.dni !== undefined) dbUpdates.dni = updates.dni;
+    if (updates.phone !== undefined) dbUpdates.phone = updates.phone;
+    if (updates.email !== undefined) dbUpdates.email = updates.email;
+    if (updates.points !== undefined) dbUpdates.points = updates.points;
+    if (updates.memberNumber !== undefined) dbUpdates.member_number = updates.memberNumber;
 
-  const handleDeleteMemberWithLog = async (id) => {
-    try {
-      await supabase.from('clients').delete().eq('id', id);
-      setMembers(members.filter(m => m.id !== id));
-      addLog('Baja de Socio', { id });
-    } catch (e) {
-      showNotification('error', 'Error', 'Fallo al eliminar socio');
+    const { error } = await supabase.from('clients').update(dbUpdates).eq('id', id);
+    if (error) throw error;
+
+    setMembers(members.map(m => m.id === id ? { ...m, ...updates } : m));
+    addLog('Edición de Socio', { id, updates });
+  } catch (e) {
+    console.error('Error actualizando socio:', e);
+    showNotification('error', 'Error', `Fallo al actualizar socio: ${e.message || 'Error desconocido'}`);
+  }
+};
+
+const handleDeleteMemberWithLog = async (id) => {
+  try {
+    const memberToDelete = members.find(m => m.id === id);
+
+    // Intentar hard delete primero (funciona si no tiene ventas)
+    const { error } = await supabase.from('clients').delete().eq('id', id);
+
+    if (error) {
+      // Si falla por FK constraint → soft delete
+      if (error.message?.includes('foreign key') || error.code === '23503') {
+        const { error: softErr } = await supabase
+          .from('clients')
+          .update({ is_active: false })
+          .eq('id', id);
+        if (softErr) throw softErr;
+      } else {
+        throw error;
+      }
     }
-  };
+
+    setMembers(members.filter(m => m.id !== id));
+    addLog('Baja de Socio', { id, name: memberToDelete?.name || 'Desconocido' });
+    showNotification('success', 'Socio Eliminado', 'Se quitó correctamente.');
+  } catch (e) {
+    console.error('Error eliminando socio:', e);
+    showNotification('error', 'Error al Eliminar', `No se pudo borrar: ${e.message}`);
+  }
+};
   
   const checkExpirations = () => { /* Lógica futura */ };
 
@@ -575,7 +606,7 @@ const [newItem, setNewItem] = useState({
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date());
-    }, 60000); 
+    }, 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -1177,23 +1208,30 @@ const confirmDeleteProduct = async (e) => {
   e.preventDefault();
   if (productToDelete) {
     try {
-      // Eliminar imagen de Storage si existe
+      // Soft delete: marcar como inactivo en vez de borrar
+      const { error } = await supabase
+        .from('products')
+        .update({ is_active: false })
+        .eq('id', productToDelete.id);
+      if (error) throw error;
+
+      // Limpiar imagen de Storage (ya no se necesita)
       if (productToDelete.image) {
         await deleteProductImage(productToDelete.image).catch(() => {});
       }
 
-      await supabase.from('products').delete().eq('id', productToDelete.id);
+      // Quitar de la UI
       setInventory(inventory.filter((x) => x.id !== productToDelete.id));
       addLog('Baja Producto', { id: productToDelete.id, title: productToDelete.title }, deleteProductReason || 'Sin motivo');
       setIsDeleteProductModalOpen(false);
       setProductToDelete(null);
-      showNotification('success', 'Producto Eliminado', 'Se quitó de la nube.');
+      showNotification('success', 'Producto Eliminado', 'Se quitó del inventario.');
     } catch (err) {
-      showNotification('error', 'Error', 'No se puede borrar (posiblemente tenga ventas).');
+      console.error('Error eliminando producto:', err);
+      showNotification('error', 'Error al Eliminar', `No se pudo borrar: ${err.message}`);
     }
   }
 };
-
 
   const updateCartItemQty = (id, newQty) => {
     const qty = parseInt(newQty);
@@ -1552,12 +1590,16 @@ const confirmDeleteProduct = async (e) => {
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} currentUser={currentUser} onLogout={handleLogout} />
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         <header className="bg-white border-b h-14 flex items-center justify-between px-6 shadow-sm z-10 shrink-0">
-          <div className="flex items-center gap-3">
-            <div>
-              <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
-                {activeTab === 'pos' ? 'Punto de Venta' : activeTab === 'dashboard' ? 'Control de Caja' : activeTab}
-              </h2>
-              <div className="flex items-center gap-2 text-[10px] text-slate-400"><span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span><span>Supabase ON</span></div>
+      <div className="flex items-center gap-3">
+        <div>
+          <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
+            {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', history: 'Historial de Ventas', rewards: 'Premios', reports: 'Reportes de Caja', logs: 'Registro de Acciones', categories: 'Categorías' }[activeTab] || activeTab}          </h2>
+              <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                <span>Supabase ON</span>
+                <span className="text-slate-300">|</span>
+                <span>{currentTime.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' })} {currentTime.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Argentina/Buenos_Aires' })}hrs</span>
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-4">

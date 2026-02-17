@@ -42,7 +42,7 @@ export default function LogsControls({
             </button>
           )}
           <span className="text-xs bg-white border border-slate-200 px-2 py-0.5 rounded-lg text-slate-600 font-bold shadow-sm">
-            {totalLogs} reg
+            Acciones registradas: {totalLogs}
           </span>
         </div>
       </div>

@@ -65,33 +65,30 @@ export default function Sidebar({
       </div>
       <nav className="flex-1 space-y-2 w-full flex flex-col items-center">
         
-        {/* Dashboard visible para todos los roles (solo lectura para Vendedor) */}
         <SidebarButton
           onClick={() => setActiveTab('dashboard')}
           isActive={activeTab === 'dashboard'}
           icon={LayoutDashboard}
-          label="Caja"
+          label="Control de Caja"
         />
-
         <SidebarButton
           onClick={() => setActiveTab('inventory')}
           isActive={activeTab === 'inventory'}
           icon={Package}
-          label="Stock"
+          label="Inventario"
         />
         <SidebarButton
           onClick={() => setActiveTab('pos')}
           isActive={activeTab === 'pos'}
           icon={ShoppingCart}
-          label="Venta"
+          label="Punto de Venta"
         />
         <SidebarButton
           onClick={() => setActiveTab('clients')}
           isActive={activeTab === 'clients'}
           icon={Users}
-          label="Clientes"
+          label="Socios"
         />
-        {/* Botón de Premios / Canje */}
         <SidebarButton
           onClick={() => setActiveTab('rewards')}
           isActive={activeTab === 'rewards'}
@@ -100,19 +97,17 @@ export default function Sidebar({
         />
       </nav>
 
-      {/* Botón Historial */}
       <SidebarButton
-          onClick={() => setActiveTab('history')}
-          isActive={activeTab === 'history'}
-          icon={History}
-          label="Historial"
-        />
+        onClick={() => setActiveTab('history')}
+        isActive={activeTab === 'history'}
+        icon={History}
+        label="Historial de Ventas"
+      />
 
       <div
         className="pt-4 border-t border-slate-800 w-full flex flex-col items-center gap-3 relative"
         ref={menuRef}
       >
-        {/* AVATAR COMO BOTÓN DE MENÚ */}
         <button
           onClick={() => {
             if (currentUser?.role === 'admin') {
@@ -129,41 +124,29 @@ export default function Sidebar({
           {currentUser?.avatar}
         </button>
 
-        {/* MENÚ FLOTANTE DEL DUEÑO */}
         {showAdminMenu && currentUser?.role === 'admin' && (
           <div className="absolute left-14 bottom-0 w-48 bg-white rounded-lg shadow-xl border border-slate-200 py-1 overflow-hidden z-50">
             <div className="px-3 py-2 border-b border-slate-100 bg-slate-50">
               <p className="text-xs font-bold text-slate-700">Menú de Dueño</p>
             </div>
             
-            {/* [NUEVO] Opción de Reportes Diarios */}
             <button
-              onClick={() => {
-                setActiveTab('reports');
-                setShowAdminMenu(false);
-              }}
+              onClick={() => { setActiveTab('reports'); setShowAdminMenu(false); }}
               className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2 transition-colors border-b border-slate-50"
             >
-              <FileBarChart size={14} /> Reportes de Cierre
+              <FileBarChart size={14} /> Reportes de Caja
             </button>
-
             <button
-              onClick={() => {
-                setActiveTab('logs');
-                setShowAdminMenu(false);
-              }}
+              onClick={() => { setActiveTab('logs'); setShowAdminMenu(false); }}
               className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2"
             >
               <FileText size={14} /> Registro de Acciones
             </button>
             <button
-              onClick={() => {
-                setActiveTab('categories');
-                setShowAdminMenu(false);
-              }}
+              onClick={() => { setActiveTab('categories'); setShowAdminMenu(false); }}
               className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2"
             >
-              <Tag size={14} /> Gestión de Categorías
+              <Tag size={14} /> Categorías
             </button>
           </div>
         )}
