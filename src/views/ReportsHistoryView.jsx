@@ -12,7 +12,7 @@ import {
   User,
   AlertCircle
 } from 'lucide-react';
-import { formatPrice } from '../utils/helpers';
+import { formatPrice, normalizeDate } from '../utils/helpers';
 import { DailyReportModal } from '../components/modals/DailyReportModal';
 
 // CAMBIO AQUÍ: Agregamos 'members' a las props recibidas
@@ -20,28 +20,15 @@ export default function ReportsHistoryView({ pastClosures, members }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedReport, setSelectedReport] = useState(null);
 
-  // --- HELPER PARA PARSEAR FECHAS (ROBUSTO) ---
-  const parseReportDate = (dateStr) => {
-    if (!dateStr) return new Date(0);
-    // Intenta parsear formato DD/MM/AAAA
-    const parts = dateStr.split('/');
-    if (parts.length === 3) {
-      const day = parseInt(parts[0], 10);
-      const month = parseInt(parts[1], 10) - 1; // Meses en JS son 0-11
-      const year = parseInt(parts[2], 10);
-      return new Date(year, month, day);
-    }
-    return new Date(0); // Fallback para fechas inválidas
-  };
-
   // --- ORDENAMIENTO Y FILTRADO ---
   const sortedAndFilteredClosures = useMemo(() => {
     const safeClosures = Array.isArray(pastClosures) ? pastClosures : [];
 
     // 1. Ordenar: Más reciente primero
     const sorted = [...safeClosures].sort((a, b) => {
-      const dateA = parseReportDate(a.date);
-      const dateB = parseReportDate(b.date);
+      // ✅ FIX: Usar normalizeDate que soporta DD/MM/YY y DD/MM/YYYY
+      const dateA = normalizeDate(a.date) || new Date(0);
+      const dateB = normalizeDate(b.date) || new Date(0);
       
       // Si las fechas son distintas, ordenar por fecha
       if (dateA.getTime() !== dateB.getTime()) {
@@ -49,7 +36,6 @@ export default function ReportsHistoryView({ pastClosures, members }) {
       }
       
       // Si es el mismo día, intentar desempatar por ID (que contiene timestamp)
-      // ID formato: "rep-1725483..."
       const timeA = parseInt(String(a.id).replace(/\D/g, '')) || 0;
       const timeB = parseInt(String(b.id).replace(/\D/g, '')) || 0;
       return timeB - timeA;

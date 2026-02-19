@@ -1,5 +1,6 @@
 // src/utils/helpers.js
-// ♻️ REFACTOR: Funciones helper centralizadas para evitar código duplicado (DRY)
+// ♻️ REFACTOR v2: Helpers centralizados + Formateo de fechas estandarizado
+// Formato: DD/MM/YY 24h — Timezone: America/Argentina/Buenos_Aires
 
 /**
  * Formatea un precio sin decimales, redondeando hacia arriba.
@@ -17,6 +18,63 @@ export const formatPrice = (amount) => {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0, 
   }).format(number);
+};
+
+// ==========================================
+// FORMATEO DE FECHAS Y HORAS (ESTANDARIZADO)
+// ==========================================
+
+/**
+ * Formatea una fecha al estándar DD/MM/YY con zero-padding.
+ * Usa timezone de Buenos Aires para consistencia.
+ * @param {Date|string} date - Fecha a formatear
+ * @returns {string} - "19/02/26"
+ */
+export const formatDateAR = (date) => {
+  if (!date) return '--/--/--';
+  const d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) return '--/--/--';
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+    timeZone: 'America/Argentina/Buenos_Aires',
+  }).format(d);
+};
+
+/**
+ * Formatea hora en 24h SIN segundos para display.
+ * @param {Date|string} date - Fecha/hora a formatear
+ * @returns {string} - "16:27"
+ */
+export const formatTimeAR = (date) => {
+  if (!date) return '--:--';
+  const d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) return '--:--';
+  return d.toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'America/Argentina/Buenos_Aires',
+  });
+};
+
+/**
+ * Formatea hora en 24h CON segundos para datos/logs.
+ * @param {Date|string} date - Fecha/hora a formatear
+ * @returns {string} - "16:27:43"
+ */
+export const formatTimeFullAR = (date) => {
+  if (!date) return '--:--:--';
+  const d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) return '--:--:--';
+  return d.toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    timeZone: 'America/Argentina/Buenos_Aires',
+  });
 };
 
 /**
@@ -105,9 +163,9 @@ export const getVentaTotal = (details) => {
 };
 
 /**
- * Normaliza una fecha en formato argentino (DD/MM/YYYY) a un objeto Date real.
- * Resuelve problemas de parseo local vs UTC y formatos string.
- * @param {string} dateStr - La fecha a normalizar (ej: "10/02/2024")
+ * Normaliza una fecha en formato argentino (DD/MM/YY o DD/MM/YYYY) a un objeto Date.
+ * Soporta año de 2 y 4 dígitos.
+ * @param {string} dateStr - La fecha a normalizar (ej: "19/02/26" o "19/02/2026")
  * @returns {Date|null} - Objeto Date o null si es inválido
  */
 export const normalizeDate = (dateStr) => {
@@ -120,9 +178,12 @@ export const normalizeDate = (dateStr) => {
   if (parts.length >= 3) {
     const day = parseInt(parts[0], 10);
     const month = parseInt(parts[1], 10);
-    const year = parseInt(parts[2], 10);
+    let year = parseInt(parts[2], 10);
     
-    if (!day || !month || !year) return null;
+    if (!day || !month || isNaN(year)) return null;
+    
+    // Soportar año de 2 dígitos (26 → 2026)
+    if (year < 100) year += 2000;
     
     return new Date(year, month - 1, day);
   }

@@ -3,7 +3,7 @@
 //              Widgets extraídos a components/dashboard/
 //              Este archivo conserva: estado UI, drag-and-drop, persistencia de layout
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   GripVertical, 
   Lock, 
@@ -120,6 +120,7 @@ export default function DashboardView({
   // =====================================================
   // 2. DATOS CALCULADOS (via custom hook)
   // =====================================================
+
   const {
     kpiStats,
     averageTicket,
@@ -129,24 +130,36 @@ export default function DashboardView({
     rankingStats,
     lowStockProducts,
     getEmptyStateMessage,
+    filteredData,       // ✅ NUEVO
+    filteredExpenses,   // ✅ NUEVO
   } = useDashboardData({ transactions, dailyLogs, inventory, globalFilter, rankingMode, expenses });
 
   // =====================================================
   // 2.1 DATOS LOCALES PARA EL NUEVO PANEL DE ACTIVIDAD
   // =====================================================
   // Unificamos Ventas y Gastos en una sola lista cronológica
-  const combinedActivity = [
-    ...(transactions || []).map(t => ({
+  const combinedActivity = useMemo(() => {
+    const sales = (filteredData || []).map(t => ({
       ...t,
       type: 'sale',
-      sortTime: t.id // Usamos ID como timestamp aproximado si no hay date object
-    })),
-    ...(expenses || []).map(e => ({
+      sortTime: t.date ? t.date.getTime() : 0
+    }));
+    const exps = (filteredExpenses || []).map(e => ({
       ...e,
       type: 'expense',
-      sortTime: e.id
-    }))
-  ].sort((a, b) => b.sortTime - a.sortTime); // Más reciente primero
+      sortTime: (() => {
+        try {
+          if (e.date && e.time) {
+            const [day, month, year] = e.date.split('/');
+            return new Date(`${year}-${month}-${day}T${e.time}`).getTime();
+          }
+          return 0;
+        } catch { return 0; }
+      })()
+    }));
+    return [...sales, ...exps].sort((a, b) => b.sortTime - a.sortTime);
+  }, [filteredData, filteredExpenses]);
+
 
   // =====================================================
   // 3. RENDERIZADORES DE WIDGETS
@@ -193,9 +206,14 @@ export default function DashboardView({
                 <h3 className="font-bold text-slate-700 flex items-center gap-2">
                   <Clock size={18} className="text-blue-600"/> Actividad Financiera
                 </h3>
-                <span className="text-[10px] font-bold text-slate-400 bg-white border px-2 py-0.5 rounded">En vivo</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold text-blue-500 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
+                    {{ day: 'Hoy', week: 'Semana', month: 'Mes' }[globalFilter]}
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-400 bg-white border px-2 py-0.5 rounded">En vivo</span>
+                </div>
               </div>
-              
+
               <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
                 {combinedActivity.length > 0 ? (
                   combinedActivity.slice(0, 50).map((item, idx) => ( // Mostramos hasta 50, scroll para verlos
@@ -230,7 +248,9 @@ export default function DashboardView({
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center text-slate-400 opacity-60">
                     <Clock size={32} className="mb-2" />
-                    <p className="text-xs italic">Sin movimientos hoy</p>
+                    <p className="text-xs italic">
+                      {{ day: 'Sin movimientos hoy', week: 'Sin movimientos esta semana', month: 'Sin movimientos este mes' }[globalFilter]}
+                    </p>
                   </div>
                 )}
               </div>

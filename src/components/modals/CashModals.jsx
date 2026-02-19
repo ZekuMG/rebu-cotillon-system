@@ -63,26 +63,63 @@ export const ClosingTimeModal = ({ isOpen, onClose, closingTime, setClosingTime,
   );
 };
 
-export const CloseCashModal = ({ isOpen, onClose, salesCount, totalSales, openingBalance, onConfirm }) => {
+
+
+export const CloseCashModal = ({ isOpen, onClose, salesCount, totalSales, totalExpenses = 0, cashExpenses = 0, cashSales = 0, openingBalance, onConfirm }) => {
   if (!isOpen) return null;
+  
+  const finalCashBalance = openingBalance + cashSales - cashExpenses;
+  
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
         <div className="p-4 bg-gradient-to-r from-slate-800 to-slate-700 text-white">
           <h3 className="font-bold text-lg flex items-center gap-2"><Lock size={20} /> Cerrar Caja</h3>
-          <p className="text-slate-300 text-sm">Resumen del día</p>
+          <p className="text-slate-300 text-sm">Resumen del ciclo actual</p>
         </div>
         <div className="p-5 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-blue-50 p-3 rounded-lg border border-blue-100"><p className="text-[10px] font-bold text-blue-500 uppercase">Ventas Realizadas</p><p className="text-2xl font-bold text-blue-700">{salesCount}</p></div>
-            <div className="bg-fuchsia-50 p-3 rounded-lg border border-fuchsia-100"><p className="text-[10px] font-bold text-fuchsia-500 uppercase">Total Vendido</p><p className="text-2xl font-bold text-fuchsia-700">${formatPrice(totalSales)}</p></div>
+          {/* KPIs del ciclo */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 text-center">
+              <p className="text-[10px] font-bold text-blue-500 uppercase">Ventas</p>
+              <p className="text-2xl font-bold text-blue-700">{salesCount}</p>
+            </div>
+            <div className="bg-fuchsia-50 p-3 rounded-lg border border-fuchsia-100 text-center">
+              <p className="text-[10px] font-bold text-fuchsia-500 uppercase">Facturado</p>
+              <p className="text-2xl font-bold text-fuchsia-700">${formatPrice(totalSales)}</p>
+            </div>
+            <div className="bg-red-50 p-3 rounded-lg border border-red-100 text-center">
+              <p className="text-[10px] font-bold text-red-500 uppercase">Gastos</p>
+              <p className="text-2xl font-bold text-red-600">${formatPrice(totalExpenses)}</p>
+            </div>
           </div>
+
+          {/* Desglose de caja */}
           <div className="bg-slate-50 p-4 rounded-lg border space-y-2">
-            <div className="flex justify-between items-center text-sm"><span className="text-slate-500">Caja Inicial</span><span className="font-bold text-slate-700">${formatPrice(openingBalance)}</span></div>
-            <div className="flex justify-between items-center text-sm"><span className="text-slate-500">+ Ventas del día</span><span className="font-bold text-fuchsia-600">+${formatPrice(totalSales)}</span></div>
-            <div className="border-t pt-2 flex justify-between items-center"><span className="font-bold text-slate-700">Total en Caja</span><span className="text-xl font-bold text-green-600">${formatPrice(openingBalance + totalSales)}</span></div>
+            <div className="flex justify-between items-center text-sm">
+              <span className="text-slate-500">Caja Inicial</span>
+              <span className="font-bold text-slate-700">${formatPrice(openingBalance)}</span>
+            </div>
+            <div className="flex justify-between items-center text-sm">
+              <span className="text-slate-500">+ Ventas en efectivo</span>
+              <span className="font-bold text-emerald-600">+${formatPrice(cashSales)}</span>
+            </div>
+            {cashExpenses > 0 && (
+              <div className="flex justify-between items-center text-sm">
+                <span className="text-slate-500">− Gastos en efectivo</span>
+                <span className="font-bold text-red-500">-${formatPrice(cashExpenses)}</span>
+              </div>
+            )}
+            <div className="border-t pt-2 flex justify-between items-center">
+              <span className="font-bold text-slate-700">Efectivo en Caja</span>
+              <span className="text-xl font-bold text-green-600">${formatPrice(finalCashBalance)}</span>
+            </div>
           </div>
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700"><p className="font-bold flex items-center gap-2"><AlertTriangle size={16} /> Atención</p><p className="text-xs mt-1">Esta acción reiniciará las transacciones del día. Asegurate de haber revisado el resumen.</p></div>
+
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700">
+            <p className="font-bold flex items-center gap-2"><AlertTriangle size={16} /> Atención</p>
+            <p className="text-xs mt-1">Esta acción generará el reporte de cierre y reiniciará las transacciones. Asegurate de haber revisado el resumen.</p>
+          </div>
         </div>
         <div className="p-4 bg-slate-50 border-t flex gap-3 justify-end">
           <button onClick={onClose} className="px-4 py-2 text-sm font-bold text-slate-500 hover:bg-slate-200 rounded-lg transition">Cancelar</button>

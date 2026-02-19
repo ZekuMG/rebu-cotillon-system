@@ -379,5 +379,7 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     lowStockProducts,
     getEmptyStateMessage,
     expenseStats,
+    filteredData,       // ✅ NUEVO: Ventas filtradas por período
+    filteredExpenses,   // ✅ NUEVO: Gastos filtrados por período
   };
 }

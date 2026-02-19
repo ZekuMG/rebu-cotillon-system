@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   PartyPopper,
   Lock,
@@ -12,7 +12,7 @@ import Swal from 'sweetalert2'; // Alertas bonitas
 // --- CONEXIÓN A LA NUBE ---
 import { supabase } from './supabase/client';
 import { uploadProductImage, deleteProductImage } from './utils/storage';
-
+import { formatDateAR, formatTimeAR, formatTimeFullAR } from './utils/helpers';
 
 import {
   USERS,
@@ -81,6 +81,8 @@ export default function PartySupplyApp() {
   const [openingBalance, setOpeningBalance] = useState(0);
   const [isRegisterClosed, setIsRegisterClosed] = useState(true); 
   const [closingTime, setClosingTime] = useState('21:00');
+  const [registerOpenedAt, setRegisterOpenedAt] = useState(null);
+
 
   // ==========================================
   // 1.5 CONEXIÓN SUPABASE (Fetch Inicial + Auto-Healing)
@@ -141,8 +143,8 @@ const fetchCloudData = async (showSpinner = true) => {
       if (salesData) {
         setTransactions(salesData.map(sale => ({
           id: sale.id,
-          date: new Date(sale.created_at).toLocaleDateString('es-AR'),
-          time: new Date(sale.created_at).toLocaleTimeString('es-AR'),
+          date: formatDateAR(new Date(sale.created_at)),
+          time: formatTimeFullAR(new Date(sale.created_at)),
           total: sale.total,
           payment: sale.payment_method,
           installments: sale.installments,
@@ -170,8 +172,8 @@ const fetchCloudData = async (showSpinner = true) => {
           details: log.details,
           user: log.user,
           reason: log.reason,
-          date: new Date(log.created_at).toLocaleDateString('es-AR'),
-          timestamp: new Date(log.created_at).toLocaleTimeString('es-AR')
+          date: formatDateAR(new Date(log.created_at)),
+          timestamp: formatTimeFullAR(new Date(log.created_at))
         })));
       }
 
@@ -183,8 +185,8 @@ const fetchCloudData = async (showSpinner = true) => {
           amount: e.amount,
           category: e.category,
           paymentMethod: e.payment_method,
-          date: new Date(e.created_at).toLocaleDateString('es-AR'),
-          time: new Date(e.created_at).toLocaleTimeString('es-AR'),
+          date: formatDateAR(new Date(e.created_at)),
+          time: formatTimeFullAR(new Date(e.created_at)),
           user: e.user_name || 'Sistema'
         })));
       }
@@ -252,6 +254,7 @@ const fetchCloudData = async (showSpinner = true) => {
         setIsRegisterClosed(!registerState.is_open);
         setOpeningBalance(Number(registerState.opening_balance));
         setClosingTime(registerState.closing_time || '21:00');
+        setRegisterOpenedAt(registerState.opened_at || null);
       }
 
       const failed = [
@@ -287,6 +290,7 @@ useEffect(() => {
           setIsRegisterClosed(!newState.is_open);
           setOpeningBalance(Number(newState.opening_balance));
           setClosingTime(newState.closing_time);
+          setRegisterOpenedAt(newState.opened_at || null);
         }
       }
     )
@@ -442,10 +446,11 @@ const [newItem, setNewItem] = useState({
 
   // --- LOGGING CENTRALIZADO ---
   const addLog = async (action, details, reason = '') => {
+    const now = new Date();
     const newLog = {
       id: Date.now(),
-      timestamp: new Date().toLocaleTimeString('es-AR'),
-      date: new Date().toLocaleDateString('es-AR'),
+      timestamp: formatTimeFullAR(now),
+      date: formatDateAR(now),
       action,
       user: currentUser?.name || 'Sistema',
       details,
@@ -590,6 +595,71 @@ const handleDeleteMemberWithLog = async (id) => {
   );
   const salesCount = validTransactions.length;
 
+    // ✅ Helpers para parsear fechas de transacciones y gastos locales
+  const parseTxDate = (tx) => {
+    try {
+      if (tx.date && tx.time) {
+        const [day, month, year] = tx.date.split('/');
+        let fullYear = parseInt(year, 10);
+        if (fullYear < 100) fullYear += 2000;
+        const timeClean = tx.time.split(' ')[0]; // Limpiar posible AM/PM residual
+        return new Date(fullYear, parseInt(month, 10) - 1, parseInt(day, 10),
+          ...timeClean.split(':').map(Number));
+      }
+      return null;
+    } catch { return null; }
+  };
+
+  const parseExpDate = (exp) => {
+    try {
+      if (exp.date && exp.time) {
+        const [day, month, year] = exp.date.split('/');
+        let fullYear = parseInt(year, 10);
+        if (fullYear < 100) fullYear += 2000;
+        const timeClean = exp.time.split(' ')[0];
+        return new Date(fullYear, parseInt(month, 10) - 1, parseInt(day, 10),
+          ...timeClean.split(':').map(Number));
+      }
+      return null;
+    } catch { return null; }
+  };
+
+
+
+  // ✅ FIX: Cálculos filtrados por ciclo de caja (desde apertura)
+  const cycleTransactions = useMemo(() => {
+    if (!registerOpenedAt) return validTransactions;
+    const cycleStart = new Date(registerOpenedAt);
+    return validTransactions.filter(tx => {
+      const txDate = parseTxDate(tx);
+      return txDate && txDate >= cycleStart;
+    });
+  }, [validTransactions, registerOpenedAt]);
+
+  const cycleExpenses = useMemo(() => {
+    if (!registerOpenedAt) return expenses;
+    const cycleStart = new Date(registerOpenedAt);
+    return expenses.filter(exp => {
+      const expDate = parseExpDate(exp);
+      return expDate && expDate >= cycleStart;
+    });
+  }, [expenses, registerOpenedAt]);
+
+  const cycleTotalSales = cycleTransactions.reduce(
+    (acc, tx) => acc + (Number(tx.total) || 0), 0
+  );
+  const cycleSalesCount = cycleTransactions.length;
+  const cycleTotalExpenses = cycleExpenses.reduce(
+    (acc, exp) => acc + (Number(exp.amount) || 0), 0
+  );
+  const cycleCashExpenses = cycleExpenses
+    .filter(e => e.paymentMethod === 'Efectivo')
+    .reduce((acc, exp) => acc + (Number(exp.amount) || 0), 0);
+  const cycleCashSales = cycleTransactions
+    .filter(t => t.payment === 'Efectivo')
+    .reduce((acc, t) => acc + (Number(t.total) || 0), 0);
+
+
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date());
@@ -636,8 +706,8 @@ const handleAddExpense = async (expenseData) => {
         amount: data.amount,
         category: data.category,
         paymentMethod: data.payment_method,
-        date: new Date(data.created_at).toLocaleDateString('es-AR'),
-        time: new Date(data.created_at).toLocaleTimeString('es-AR'),
+        date: formatDateAR(new Date(data.created_at)),
+        time: formatTimeFullAR(new Date(data.created_at)),
         user: data.user_name
       };
 
@@ -881,12 +951,38 @@ const handleImageUpload = async (e, isEditing = false) => {
     }
   };
 
-  const executeRegisterClose = async (isAuto = false) => {
+const executeRegisterClose = async (isAuto = false) => {
     const closeDate = new Date();
     
+    // ✅ FIX: Filtrar SOLO ventas y gastos del ciclo actual (desde apertura)
+    const cycleStart = registerOpenedAt ? new Date(registerOpenedAt) : null;
+    
+    const cycleTransactions = cycleStart
+      ? safeTransactions.filter(tx => {
+          if (!tx || tx.status === 'voided') return false;
+          // Buscar la venta en la data cruda por ID para comparar created_at
+          // Como las transacciones locales tienen date/time en formato AR, 
+          // usamos el ID (que viene de Supabase) para comparar
+          // Las ventas creadas en esta sesión tienen timestamp posterior a cycleStart
+          const txDate = parseTxDate(tx);
+          return txDate && txDate >= cycleStart;
+        })
+      : validTransactions;
+
+    const cycleExpenses = cycleStart
+      ? expenses.filter(exp => {
+          const expDate = parseExpDate(exp);
+          return expDate && expDate >= cycleStart;
+        })
+      : expenses;
+
+    // Usar cycleTransactions y cycleExpenses en vez de validTransactions y expenses
+    const cycleTotalSales = cycleTransactions.reduce((acc, tx) => acc + (Number(tx.total) || 0), 0);
+    const cycleSalesCount = cycleTransactions.length;
+
     const itemsSoldMap = {};
     let totalCost = 0; 
-    validTransactions.forEach(tx => {
+    cycleTransactions.forEach(tx => {
       tx.items.forEach(item => {
         const inventoryItem = inventory.find(p => p.id === (item.productId || item.id));
         const cost = Number(inventoryItem?.purchasePrice || 0);
@@ -900,46 +996,60 @@ const handleImageUpload = async (e, isEditing = false) => {
       });
     });
     const itemsSoldList = Object.values(itemsSoldMap);
+
     const paymentMethodsSummary = {};
-    validTransactions.forEach(tx => {
+    cycleTransactions.forEach(tx => {
       const method = tx.payment || 'Otros';
       if (!paymentMethodsSummary[method]) paymentMethodsSummary[method] = 0;
       paymentMethodsSummary[method] += Number(tx.total);
     });
-    const totalExpenses = expenses.reduce((acc, curr) => acc + Number(curr.amount), 0);
-    const cashExpenses = expenses.filter(e => e.paymentMethod === 'Efectivo').reduce((acc, curr) => acc + Number(curr.amount), 0);
-    const averageTicket = salesCount > 0 ? (totalSales / salesCount) : 0;
-    const netProfit = totalSales - totalCost - totalExpenses;
-    const cashSales = validTransactions.filter(t => t.payment === 'Efectivo').reduce((acc, t) => acc + Number(t.total), 0);
+
+    const totalExpenses = cycleExpenses.reduce((acc, curr) => acc + Number(curr.amount), 0);
+    const cashExpenses = cycleExpenses.filter(e => e.paymentMethod === 'Efectivo').reduce((acc, curr) => acc + Number(curr.amount), 0);
+    const averageTicket = cycleSalesCount > 0 ? (cycleTotalSales / cycleSalesCount) : 0;
+    const netProfit = cycleTotalSales - totalCost - totalExpenses;
+    const cashSales = cycleTransactions.filter(t => t.payment === 'Efectivo').reduce((acc, t) => acc + Number(t.total), 0);
     const finalPhysicalBalance = openingBalance + cashSales - cashExpenses;
-    const todayStr = closeDate.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    const newClientsList = dailyLogs.filter(l => l.date === todayStr && l.action === 'Nuevo Socio').map(l => ({ name: l.details.name, number: l.details.number, time: l.timestamp || l.time }));
+
+    // Nuevos clientes: filtrar los logs del ciclo actual
+    const cycleNewClients = cycleStart
+      ? dailyLogs.filter(l => {
+          if (l.action !== 'Nuevo Socio') return false;
+          const logDate = l.created_at ? new Date(l.created_at) : null;
+          return logDate && logDate >= cycleStart;
+        }).map(l => ({ name: l.details?.name, number: l.details?.number, time: l.timestamp || l.time }))
+      : (() => {
+          const todayStr = closeDate.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+          return dailyLogs.filter(l => l.date === todayStr && l.action === 'Nuevo Socio').map(l => ({ name: l.details?.name, number: l.details?.number, time: l.timestamp || l.time }));
+        })();
 
     try {
-        const openTime = dailyLogs.find(l => l.action === 'Apertura de Caja')?.timestamp || '--:--';
-        const closeTime = closeDate.toLocaleTimeString('es-AR');
+        const openTime = registerOpenedAt 
+          ? formatTimeFullAR(new Date(registerOpenedAt))
+          : (dailyLogs.find(l => l.action === 'Apertura de Caja')?.timestamp || '--:--');
+        const closeTime = formatTimeFullAR(closeDate);
         const user = currentUser?.name || 'Automático';
         const type = isAuto ? 'Automático' : 'Manual';
 
         const payload = {
-            date: closeDate.toLocaleDateString('es-AR'),
+            date: formatDateAR(closeDate),
             open_time: openTime,
             close_time: closeTime,
             user_name: user,
             type: type,
             opening_balance: openingBalance,
-            total_sales: totalSales,
+            total_sales: cycleTotalSales,
             final_balance: finalPhysicalBalance,
             total_cost: totalCost,
             total_expenses: totalExpenses,
             net_profit: netProfit,
-            sales_count: salesCount,
+            sales_count: cycleSalesCount,
             average_ticket: averageTicket,
             payment_methods_summary: paymentMethodsSummary,
             items_sold_list: itemsSoldList,
-            new_clients_list: newClientsList,
-            expenses_snapshot: expenses,
-            transactions_snapshot: validTransactions
+            new_clients_list: cycleNewClients,
+            expenses_snapshot: cycleExpenses,
+            transactions_snapshot: cycleTransactions
         };
 
         const { data: savedReport, error } = await supabase.from('cash_closures').insert([payload]).select().single();
@@ -972,11 +1082,13 @@ const handleImageUpload = async (e, isEditing = false) => {
         await supabase.from('register_state').update({
             is_open: false,
             opening_balance: 0,
+            opened_at: null,
             last_updated_by: currentUser?.name || 'Sistema'
         }).eq('id', 1);
 
         setIsRegisterClosed(true);
-        addLog('Cierre de Caja', { totalSales, reportId: savedReport.id }, isAuto ? 'Automático' : 'Manual');
+        setRegisterOpenedAt(null);
+        addLog('Cierre de Caja', { totalSales: cycleTotalSales, salesCount: cycleSalesCount, reportId: savedReport.id }, isAuto ? 'Automático' : 'Manual');
         setTransactions([]);
         setExpenses([]); 
         setIsClosingCashModalOpen(false);
@@ -998,16 +1110,19 @@ const handleImageUpload = async (e, isEditing = false) => {
     const value = Number(tempOpeningBalance);
     if (!isNaN(value) && value >= 0 && tempClosingTime) {
       
+      const now = new Date().toISOString();
       setOpeningBalance(value);
       setClosingTime(tempClosingTime);
       setIsRegisterClosed(false);
       setIsOpeningBalanceModalOpen(false);
+      setRegisterOpenedAt(now);
 
       try {
           await supabase.from('register_state').update({
               is_open: true,
               opening_balance: value,
               closing_time: tempClosingTime,
+              opened_at: now,
               last_updated_by: currentUser?.name
           }).eq('id', 1);
 
@@ -1409,8 +1524,8 @@ const handleDuplicateProduct = async (originalProduct) => {
 
       const tx = {
         id: sale.id,
-        date: new Date().toLocaleDateString('es-AR'),
-        time: new Date().toLocaleTimeString('es-AR'),
+        date: formatDateAR(new Date()),
+        time: formatTimeFullAR(new Date()),
         user: currentUser.name,
         total,
         payment: selectedPayment,
@@ -1680,8 +1795,7 @@ const handleDuplicateProduct = async (originalProduct) => {
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
                 <span>Supabase ON</span>
                 <span className="text-slate-300">|</span>
-                <span>{currentTime.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' })} {currentTime.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Argentina/Buenos_Aires' })}hrs</span>
-              </div>
+                <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>              </div>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -1755,7 +1869,7 @@ const handleDuplicateProduct = async (originalProduct) => {
       <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} />
       <ImageModal isOpen={isImageModalOpen} image={selectedImage} onClose={() => setIsImageModalOpen(false)} />
       <RefundModal transaction={transactionToRefund} onClose={() => setIsRefundModalOpen(false)} refundReason={refundReason} setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />
-      <CloseCashModal isOpen={isClosingCashModalOpen} onClose={() => setIsClosingCashModalOpen(false)} salesCount={salesCount} totalSales={totalSales} openingBalance={openingBalance} onConfirm={handleConfirmCloseCash} />
+      <CloseCashModal isOpen={isClosingCashModalOpen} onClose={() => setIsClosingCashModalOpen(false)} salesCount={cycleSalesCount} totalSales={cycleTotalSales} totalExpenses={cycleTotalExpenses} cashExpenses={cycleCashExpenses} cashSales={cycleCashSales} openingBalance={openingBalance} onConfirm={handleConfirmCloseCash} />
       <SaleSuccessModal transaction={saleSuccessModal} onClose={() => setSaleSuccessModal(null)} onViewTicket={() => { const tx = saleSuccessModal; setSaleSuccessModal(null); setTicketToView(tx); }} />
       <TicketModal transaction={ticketToView} onClose={() => setTicketToView(null)} onPrint={handlePrintTicket} />
       <AutoCloseAlertModal isOpen={isAutoCloseAlertOpen} onClose={() => setIsAutoCloseAlertOpen(false)} closingTime={closingTime} />
