@@ -10,10 +10,10 @@ import {
   Save,
   Search,
   Check,
-  CheckCircle, // Importado para el reporte
+  CheckCircle,
   PlusCircle,
   MinusCircle,
-  List, // Importado para el reporte
+  List,
 } from 'lucide-react';
 
 export default function CategoryManagerView({
@@ -124,50 +124,44 @@ export default function CategoryManagerView({
     }
   };
 
+  // FIX 2: try/catch y lógica robusta para guardar
   const handleSaveEdit = () => {
-    // Preparar datos para el reporte ANTES de ejecutar y limpiar
-    let reportData = null;
-    if (pendingChanges.length > 0) {
-      const addedItems = [];
-      const removedItems = [];
-
-      pendingChanges.forEach((change) => {
-        const prod = inventory.find((p) => p.id === change.productId);
-        if (prod) {
-          if (change.action === 'add') addedItems.push(prod.title);
-          else if (change.action === 'remove') removedItems.push(prod.title);
-        }
-      });
-
-      reportData = {
-        categoryName: editedName || selectedCategory,
-        added: addedItems,
-        removed: removedItems,
-        count: pendingChanges.length,
-      };
+    try {
+      let reportData = null;
+      if (pendingChanges.length > 0) {
+        const addedItems = [];
+        const removedItems = [];
+        pendingChanges.forEach((change) => {
+          const prod = inventory.find((p) => p.id === change.productId);
+          if (prod) {
+            if (change.action === 'add') addedItems.push(prod.title);
+            else if (change.action === 'remove') removedItems.push(prod.title);
+          }
+        });
+        reportData = {
+          categoryName: editedName || selectedCategory,
+          added: addedItems,
+          removed: removedItems,
+          count: pendingChanges.length,
+        };
+      }
+      if (pendingChanges.length > 0 && onBatchUpdateProductCategory) {
+        const sanitizedChanges = pendingChanges.map((c) => ({
+          ...c,
+          categoryName: selectedCategory,
+        }));
+        onBatchUpdateProductCategory(sanitizedChanges);
+      }
+      if (editedName.trim() && editedName !== selectedCategory) {
+        onEditCategory(selectedCategory, editedName.trim());
+        if (reportData) reportData.categoryName = editedName.trim();
+      }
+      if (reportData) {
+        setBatchReport(reportData);
+      }
+    } catch (err) {
+      console.error('Error guardando categoría:', err);
     }
-
-    // 1. Guardar cambios de productos
-    if (pendingChanges.length > 0 && onBatchUpdateProductCategory) {
-      const sanitizedChanges = pendingChanges.map((c) => ({
-        ...c,
-        categoryName: selectedCategory, 
-      }));
-      onBatchUpdateProductCategory(sanitizedChanges);
-    }
-
-    // 2. Guardar cambio de nombre
-    if (editedName.trim() && editedName !== selectedCategory) {
-      onEditCategory(selectedCategory, editedName.trim());
-      // Actualizar nombre en reporte si hubo cambio
-      if (reportData) reportData.categoryName = editedName.trim();
-    }
-
-    // Mostrar reporte si hubo cambios masivos
-    if (reportData) {
-      setBatchReport(reportData);
-    }
-
     handleCloseModal();
     setIsEditMode(false);
   };
@@ -326,10 +320,16 @@ export default function CategoryManagerView({
         </div>
       )}
 
-      {/* Modal de edición de categoría */}
+      {/* Modal de edición de categoría - FIX 1: z-[70] y onClick/stopPropagation */}
       {selectedCategory && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
+        <div
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-[70] p-4 backdrop-blur-sm"
+          onClick={handleCloseModal}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Header */}
             <div className="p-4 bg-amber-50 border-b border-amber-100 flex justify-between items-center shrink-0">
               <div className="flex items-center gap-2">
@@ -556,10 +556,16 @@ export default function CategoryManagerView({
         </div>
       )}
 
-      {/* Modal de Reporte de Resultados (NUEVO) */}
+      {/* Modal de Reporte de Resultados (NUEVO) - FIX 3: z-[80] y onClick/stopPropagation */}
       {batchReport && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200">
+        <div
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-[80] p-4 backdrop-blur-sm"
+          onClick={() => setBatchReport(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="bg-green-600 p-4 flex items-center gap-3 text-white">
               <CheckCircle size={28} />
               <div>
@@ -583,7 +589,8 @@ export default function CategoryManagerView({
               {batchReport.added.length > 0 && (
                 <div className="mb-4">
                   <p className="text-xs font-bold text-green-600 uppercase mb-2 flex items-center gap-1">
-                    <PlusCircle size={14} /> Agregados ({batchReport.added.length})
+                    <PlusCircle size={14} /> Agregados (
+                    {batchReport.added.length})
                   </p>
                   <ul className="text-xs space-y-1 bg-green-50 p-3 rounded-lg border border-green-100">
                     {batchReport.added.map((name, i) => (
@@ -598,7 +605,8 @@ export default function CategoryManagerView({
               {batchReport.removed.length > 0 && (
                 <div className="mb-4">
                   <p className="text-xs font-bold text-red-600 uppercase mb-2 flex items-center gap-1">
-                    <MinusCircle size={14} /> Quitados ({batchReport.removed.length})
+                    <MinusCircle size={14} /> Quitados (
+                    {batchReport.removed.length})
                   </p>
                   <ul className="text-xs space-y-1 bg-red-50 p-3 rounde0d-lg border border-red-100">
                     {batchReport.removed.map((name, i) => (

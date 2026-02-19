@@ -1,5 +1,5 @@
 // src/components/modals/ProductModals.jsx
-// ✅ v5: Precio por KILO, layout corregido, selector g/kg estilizado
+// ✅ v6: Duplicar producto desde modal de edición
 
 import React, { useState } from 'react';
 import {
@@ -13,6 +13,7 @@ import {
   Loader2,
   Scale,
   Package,
+  Copy,
 } from 'lucide-react';
 
 // ==========================================
@@ -323,12 +324,14 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
 
 // ==========================================
 // MODAL: EDITAR PRODUCTO
+// ✅ v6: Agregado botón "Duplicar" (solo admin)
 // ==========================================
 
-export const EditProductModal = ({ product, onClose, setEditingProduct, categories, onImageUpload, editReason, setEditReason, onSave, inventory, onDuplicateBarcode, isUploadingImage }) => {
+export const EditProductModal = ({ product, onClose, setEditingProduct, categories, onImageUpload, editReason, setEditReason, onSave, inventory, onDuplicateBarcode, isUploadingImage, onDuplicate, currentUser }) => {
   const [stockUnit, setStockUnit] = useState('g');
   if (!product) return null;
   const productType = product.product_type || 'quantity';
+  const isAdmin = currentUser?.role === 'admin';
 
   // ✅ Precio guardado en /g → lo mostramos en /kg
   const displayPrice = productType === 'weight' ? Math.round(Number(product.price) * 1000) : product.price;
@@ -365,6 +368,10 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
     } else {
       onSave(e);
     }
+  };
+
+  const handleDuplicate = () => {
+    if (onDuplicate) onDuplicate(product);
   };
 
   return (
@@ -453,9 +460,23 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
             <textarea className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-amber-50 focus:ring-2 focus:ring-amber-500 outline-none" rows="2" placeholder="¿Por qué realizas este cambio?" value={editReason} onChange={(e) => setEditReason(e.target.value)}></textarea>
           </div>
 
-          <button type="submit" disabled={isUploadingImage} className={`w-full py-3 rounded-lg font-bold transition-colors ${isUploadingImage ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
-            {isUploadingImage ? 'Esperando imagen...' : 'Guardar Cambios'}
-          </button>
+          {/* ✅ Botones: Duplicar (solo admin) + Guardar */}
+          <div className="flex gap-3">
+            {isAdmin && onDuplicate && (
+              <button
+                type="button"
+                onClick={handleDuplicate}
+                className="flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-bold border-2 border-violet-300 text-violet-600 bg-violet-50 hover:bg-violet-100 hover:border-violet-400 transition-colors"
+                title="Duplicar este producto"
+              >
+                <Copy size={16} />
+                Duplicar
+              </button>
+            )}
+            <button type="submit" disabled={isUploadingImage} className={`flex-1 py-3 rounded-lg font-bold transition-colors ${isUploadingImage ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
+              {isUploadingImage ? 'Esperando imagen...' : 'Guardar Cambios'}
+            </button>
+          </div>
         </form>
       </div>
     </div>

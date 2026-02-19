@@ -108,14 +108,13 @@ const fetchCloudData = async (showSpinner = true) => {
         supabase.from('cash_closures').select('*').order('created_at', { ascending: false }),
         supabase.from('categories').select('*').order('name'),
         supabase.from('rewards').select('*').order('points_cost', { ascending: true }),
-        supabase.from('register_state').select('*').eq('id', 1).maybeSingle() // MODIFICADO: maybeSingle no falla si está vacío
+        supabase.from('register_state').select('*').eq('id', 1).maybeSingle() 
       ]);
 
       const safeData = (result, tableName) => {
         if (result.status === 'fulfilled' && !result.value.error) {
           return result.value.data || [];
         }
-        // MODIFICADO: Log detallado para saber exactamente qué tabla falla y por qué
         console.error(`Error en tabla [${tableName}]:`, result.status === 'rejected' ? result.reason : result.value.error);
         return null;
       };
@@ -124,7 +123,8 @@ const fetchCloudData = async (showSpinner = true) => {
       if (prodData) {
         setInventory(prodData.map(p => ({
           ...p,
-          categories: p.category ? [p.category] : [],
+          // FIX MULTI-CATEGORÍA: Convertimos el string separado por comas en un Array real
+          categories: p.category ? p.category.split(',').map(c => c.trim()).filter(Boolean) : [],
           purchasePrice: p.purchasePrice || 0
         })));
       }
@@ -230,7 +230,7 @@ const fetchCloudData = async (showSpinner = true) => {
         })));
       }
 
-      // I. ESTADO DE CAJA (Auto-Healing mejorado con upsert)
+      // I. ESTADO DE CAJA 
       let registerState = null;
       if (registerResult.status === 'fulfilled' && !registerResult.value.error) {
         registerState = registerResult.value.data;
@@ -238,7 +238,6 @@ const fetchCloudData = async (showSpinner = true) => {
 
       if (!registerState) {
         console.warn("⚠️ Estado de caja no encontrado o inaccesible, intentando upsert...");
-        // MODIFICADO: upsert evita el error 500 si el registro ya existía pero no era visible
         const { data: newState, error: upsertErr } = await supabase
           .from('register_state')
           .upsert([{ id: 1, is_open: false, opening_balance: 0, closing_time: '21:00' }], { onConflict: 'id' })
@@ -275,10 +274,8 @@ const fetchCloudData = async (showSpinner = true) => {
 
   
 useEffect(() => {
-  // 1. Carga inicial (CON spinner)
   fetchCloudData(true);
 
-  // 2. Suscripción Realtime (sin cambios)
   const channel = supabase
     .channel('app_realtime_updates')
     .on(
@@ -328,26 +325,21 @@ useEffect(() => {
 
 
 let lastFetchTime = Date.now();
-  const MIN_RESYNC_INTERVAL = 15000; // 15 segundos
+  const MIN_RESYNC_INTERVAL = 15000; 
 
   const handleReSync = () => {
     if (document.visibilityState !== 'visible') return;
 
     const elapsed = Date.now() - lastFetchTime;
     if (elapsed < MIN_RESYNC_INTERVAL) {
-      console.log(`Re-sync ignorado (${Math.round(elapsed/1000)}s < ${MIN_RESYNC_INTERVAL/1000}s)`);
       return;
     }
 
-    console.log('App activa: Sincronizando datos (silencioso)...');
     lastFetchTime = Date.now();
-    fetchCloudData(false); // ← SIN spinner
+    fetchCloudData(false); 
   };
 
   window.addEventListener('visibilitychange', handleReSync);
-  // ✅ FIX: NO agregar listener de 'focus' — es el culpable del bug
-  // El evento 'focus' se dispara al cerrar el file picker, el diálogo
-  // de impresión, alerts nativos, etc.
 
   return () => {
     supabase.removeChannel(channel);
@@ -403,17 +395,15 @@ let lastFetchTime = Date.now();
   const [barcodeDuplicateModal, setBarcodeDuplicateModal] = useState({ isOpen: false, existingProduct: null, newBarcode: '' });
   const [pendingBarcodeForNewProduct, setPendingBarcodeForNewProduct] = useState('');
 
-  // Estados nuevos
   const [isClientModalOpen, setIsClientModalOpen] = useState(false);
   const [posSelectedClient, setPosSelectedClient] = useState(null);
   const [isRedemptionModalOpen, setIsRedemptionModalOpen] = useState(false);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
 
-  // Inputs temporales
 const [newItem, setNewItem] = useState({
   title: '', brand: '', price: '', purchasePrice: '', stock: '',
   categories: [], image: '', barcode: '',
-  product_type: 'quantity'  // ✅ NUEVO
+  product_type: 'quantity'  
 });
 
   const [tempOpeningBalance, setTempOpeningBalance] = useState('');
@@ -502,7 +492,6 @@ const [newItem, setNewItem] = useState({
 
 const handleUpdateMemberWithLog = async (id, updates) => {
   try {
-    // Mapear campos del frontend a nombres de columnas en Supabase
     const dbUpdates = {};
     if (updates.name !== undefined) dbUpdates.name = updates.name;
     if (updates.dni !== undefined) dbUpdates.dni = updates.dni;
@@ -526,11 +515,9 @@ const handleDeleteMemberWithLog = async (id) => {
   try {
     const memberToDelete = members.find(m => m.id === id);
 
-    // Intentar hard delete primero (funciona si no tiene ventas)
     const { error } = await supabase.from('clients').delete().eq('id', id);
 
     if (error) {
-      // Si falla por FK constraint → soft delete
       if (error.message?.includes('foreign key') || error.code === '23503') {
         const { error: softErr } = await supabase
           .from('clients')
@@ -629,8 +616,6 @@ const handleDeleteMemberWithLog = async (id) => {
 
 const handleAddExpense = async (expenseData) => {
     try {
-      // VALIDACIÓN Y LIMPIEZA DE DATOS (Evita error 23502)
-      // Si description llega null/undefined, usamos 'Gasto General' para que la DB no falle.
       const safeDescription = expenseData.description || expenseData.concept || expenseData.notes || 'Gasto General';
       const safeAmount = Number(expenseData.amount) || 0;
 
@@ -688,7 +673,6 @@ const addToCart = (item, grams = null) => {
     return;
   }
   
-  // PRODUCTO POR CANTIDAD (lógica original)
   const existing = cart.find((c) => c.id === item.id && !c.isReward);
   if (existing) {
     if (existing.quantity >= item.stock) {
@@ -763,7 +747,7 @@ const handleAddProductFromBarcode = (barcode) => {
   setNewItem({
     title: '', brand: '', price: '', purchasePrice: '', stock: '',
     categories: [], image: '', barcode: barcode,
-    product_type: 'quantity'  // ✅ NUEVO: default al crear desde escaneo
+    product_type: 'quantity'  
   });
   setIsModalOpen(true);
 };
@@ -822,26 +806,22 @@ const handleImageUpload = async (e, isEditing = false) => {
   const file = e.target.files[0];
   if (!file) return;
 
-  // Validar tamaño (5MB máx)
   if (file.size > 5 * 1024 * 1024) {
     showNotification('error', 'Imagen muy pesada', 'El máximo permitido es 5MB.');
     return;
   }
 
-  // Validar tipo
   const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
   if (!validTypes.includes(file.type)) {
     showNotification('error', 'Formato no válido', 'Solo JPG, PNG, WebP o GIF.');
     return;
   }
 
-  // Limpiar input para permitir re-seleccionar mismo archivo
   e.target.value = '';
 
   try {
     setIsUploadingImage(true);
 
-    // Subir a Supabase Storage
     const publicUrl = await uploadProductImage(file);
 
     if (isEditing) {
@@ -901,11 +881,9 @@ const handleImageUpload = async (e, isEditing = false) => {
     }
   };
 
-  // --- LÓGICA DE CIERRE COMPLETA (MODIFICADO PARA SUPABASE + SYNC) ---
   const executeRegisterClose = async (isAuto = false) => {
     const closeDate = new Date();
     
-    // ... Cálculos (sin cambios) ...
     const itemsSoldMap = {};
     let totalCost = 0; 
     validTransactions.forEach(tx => {
@@ -991,7 +969,6 @@ const handleImageUpload = async (e, isEditing = false) => {
 
         setPastClosures([adaptedReport, ...pastClosures]);
         
-        // ✅ CAMBIO SYNC 4/4: Actualizar estado Global en DB (Cerrada)
         await supabase.from('register_state').update({
             is_open: false,
             opening_balance: 0,
@@ -1010,7 +987,6 @@ const handleImageUpload = async (e, isEditing = false) => {
     } catch (e) {
         console.error("Error guardando cierre:", e);
         showNotification('error', 'Error al Cerrar', 'No se pudo guardar el reporte en la nube.');
-        // Fallback local
         setIsRegisterClosed(true);
         setIsClosingCashModalOpen(false);
     }
@@ -1018,18 +994,15 @@ const handleImageUpload = async (e, isEditing = false) => {
 
   const handleConfirmCloseCash = () => executeRegisterClose(false);
 
-  // ✅ CAMBIO SYNC 4/4: Apertura de Caja -> DB
   const handleSaveOpeningBalance = async () => {
     const value = Number(tempOpeningBalance);
     if (!isNaN(value) && value >= 0 && tempClosingTime) {
       
-      // Actualización optimista
       setOpeningBalance(value);
       setClosingTime(tempClosingTime);
       setIsRegisterClosed(false);
       setIsOpeningBalanceModalOpen(false);
 
-      // Actualización DB
       try {
           await supabase.from('register_state').update({
               is_open: true,
@@ -1050,7 +1023,6 @@ const handleImageUpload = async (e, isEditing = false) => {
     addLog('Horario Modificado', `Nueva hora de cierre: ${closingTime}`, 'Ajuste de horario');
     setIsClosingTimeModalOpen(false);
     
-    // Actualizar DB
     try {
         await supabase.from('register_state').update({ closing_time: closingTime }).eq('id', 1);
         showNotification('success', 'Horario Guardado', 'La hora de cierre se ha actualizado.');
@@ -1059,7 +1031,6 @@ const handleImageUpload = async (e, isEditing = false) => {
     }
   };
 
-  // ✅ CAMBIO CATEGORÍAS 4/5: Ahora inserta en Supabase al crear categoría
   const handleAddCategoryFromView = async (name) => {
     if (name && !categories.includes(name)) {
       try {
@@ -1077,7 +1048,6 @@ const handleImageUpload = async (e, isEditing = false) => {
     }
   };
 
-  // ✅ CAMBIO CATEGORÍAS 5/5: Ahora elimina de Supabase al borrar categoría
   const handleDeleteCategoryFromView = async (name) => {
     const inUse = inventory.some((p) =>
       Array.isArray(p.categories) ? p.categories.includes(name) : p.category === name
@@ -1099,7 +1069,84 @@ const handleImageUpload = async (e, isEditing = false) => {
     }
   };
 
-  // --- MODIFICADO: Add Item ahora va a SUPABASE ---
+  // ✅ NUEVO FIX: Handler para editar el nombre de la categoría masivamente
+  const handleEditCategory = async (oldName, newName) => {
+    try {
+      const { error: catError } = await supabase
+        .from('categories')
+        .update({ name: newName })
+        .eq('name', oldName);
+      if (catError) throw catError;
+
+      const productsToUpdate = inventory.filter(p => p.categories.includes(oldName));
+      
+      const promises = productsToUpdate.map(p => {
+        const newCats = p.categories.map(c => c === oldName ? newName : c);
+        return supabase.from('products').update({ category: newCats.join(', ') }).eq('id', p.id);
+      });
+      await Promise.all(promises);
+
+      setCategories(categories.map(c => c === oldName ? newName : c));
+      setInventory(inventory.map(p => {
+        if (p.categories.includes(oldName)) {
+          const updatedCats = p.categories.map(c => c === oldName ? newName : c);
+          return { ...p, category: updatedCats.join(', '), categories: updatedCats };
+        }
+        return p;
+      }));
+      
+      addLog('Editar Categoría', { old: oldName, new: newName });
+      showNotification('success', 'Categoría Actualizada', 'Nombre y productos actualizados.');
+    } catch (e) {
+      console.error(e);
+      showNotification('error', 'Error', 'No se pudo renombrar la categoría.');
+    }
+  };
+
+  // ✅ NUEVO FIX: Handler para mover productos en masa desde el Gestor
+  const handleBatchUpdateProductCategory = async (changes) => {
+    try {
+      const promises = changes.map(async (change) => {
+        const { productId, categoryName, action } = change;
+        const product = inventory.find(p => p.id === productId);
+        if (!product) return null;
+
+        let newCats = [...(product.categories || [])];
+        if (action === 'add' && !newCats.includes(categoryName)) newCats.push(categoryName);
+        if (action === 'remove') newCats = newCats.filter(c => c !== categoryName);
+        
+        const newCategoryString = newCats.join(', ');
+
+        const { error } = await supabase.from('products').update({ category: newCategoryString }).eq('id', productId);
+        if (error) throw error;
+        return { productId, newCats, newCategoryString };
+      });
+
+      const results = (await Promise.all(promises)).filter(Boolean);
+
+      setInventory(prevInventory => prevInventory.map(p => {
+        const update = results.find(r => r.productId === p.id);
+        if (update) {
+          return { 
+            ...p, 
+            category: update.newCategoryString, 
+            categories: update.newCats
+          };
+        }
+        return p;
+      }));
+
+      addLog('Actualización Masiva', { count: changes.length, category: changes[0]?.categoryName }, 'Gestor de Categorías');
+      showNotification('success', 'Productos Actualizados', `${changes.length} productos modificados.`);
+
+    } catch (e) {
+      console.error(e);
+      showNotification('error', 'Error', 'Falló la actualización masiva.');
+    }
+  };
+
+
+  // --- MODIFICADO: Add Item ahora maneja Múltiples Categorías (join por comas) ---
 const handleAddItem = async (e, overrideData = null) => {
   e.preventDefault();
   const itemData = overrideData || newItem;
@@ -1116,15 +1163,20 @@ const handleAddItem = async (e, overrideData = null) => {
       price: Number(itemData.price) || 0,
       purchasePrice: Number(itemData.purchasePrice) || 0,
       stock: Number(itemData.stock) || 0,
-      category: itemData.categories[0],
+      // FIX MULTI-CATEGORÍA: Guardamos el array como string separado por comas
+      category: itemData.categories.join(', '), 
       barcode: itemData.barcode || null,
       image: itemData.image || '',
-      product_type: itemData.product_type || 'quantity'  // ✅ NUEVO
+      product_type: itemData.product_type || 'quantity'
     };
     
     const { data, error } = await supabase.from('products').insert([payload]).select().single();
     if (error) throw error;
-    const itemFormatted = { ...data, categories: [data.category] };
+    
+    const itemFormatted = { 
+        ...data, 
+        categories: data.category ? data.category.split(',').map(c => c.trim()).filter(Boolean) : [] 
+    };
     setInventory([...inventory, itemFormatted]);
     
     const logDetails = {
@@ -1138,7 +1190,7 @@ const handleAddItem = async (e, overrideData = null) => {
     setNewItem({
       title: '', brand: '', price: '', purchasePrice: '', stock: '',
       categories: [], image: '', barcode: '',
-      product_type: 'quantity'  // ✅ Reset
+      product_type: 'quantity'  
     });
     setIsModalOpen(false);
     setPendingBarcodeForNewProduct('');
@@ -1151,7 +1203,7 @@ const handleAddItem = async (e, overrideData = null) => {
 
 
 
-// --- MODIFICADO: Edit Product ahora va a SUPABASE ---
+// --- MODIFICADO: Edit Product ahora maneja Múltiples Categorías ---
 const saveEditProduct = async (e, overrideData = null) => {
   e.preventDefault();
   const productData = overrideData || editingProduct;
@@ -1168,10 +1220,11 @@ const saveEditProduct = async (e, overrideData = null) => {
       price: Number(productData.price),
       purchasePrice: Number(productData.purchasePrice) || 0,
       stock: Number(productData.stock),
-      category: Array.isArray(productData.categories) ? productData.categories[0] : productData.category,
+      // FIX MULTI-CATEGORÍA
+      category: Array.isArray(productData.categories) ? productData.categories.join(', ') : productData.category,
       barcode: productData.barcode || null,
       image: productData.image || '',
-      product_type: productData.product_type || 'quantity'  // ✅ NUEVO
+      product_type: productData.product_type || 'quantity' 
     };
 
     const { error } = await supabase.from('products').update(payload).eq('id', productData.id);
@@ -1194,7 +1247,6 @@ const saveEditProduct = async (e, overrideData = null) => {
   }
 };
 
-  // --- MODIFICADO: Delete Product ahora va a SUPABASE ---
   const handleDeleteProductRequest = (id) => {
     const product = inventory.find(p => p.id === id);
     if (product) {
@@ -1208,19 +1260,16 @@ const confirmDeleteProduct = async (e) => {
   e.preventDefault();
   if (productToDelete) {
     try {
-      // Soft delete: marcar como inactivo en vez de borrar
       const { error } = await supabase
         .from('products')
         .update({ is_active: false })
         .eq('id', productToDelete.id);
       if (error) throw error;
 
-      // Limpiar imagen de Storage (ya no se necesita)
       if (productToDelete.image) {
         await deleteProductImage(productToDelete.image).catch(() => {});
       }
 
-      // Quitar de la UI
       setInventory(inventory.filter((x) => x.id !== productToDelete.id));
       addLog('Baja Producto', { id: productToDelete.id, title: productToDelete.title }, deleteProductReason || 'Sin motivo');
       setIsDeleteProductModalOpen(false);
@@ -1230,6 +1279,54 @@ const confirmDeleteProduct = async (e) => {
       console.error('Error eliminando producto:', err);
       showNotification('error', 'Error al Eliminar', `No se pudo borrar: ${err.message}`);
     }
+  }
+};
+
+const handleDuplicateProduct = async (originalProduct) => {
+  try {
+    // Construir payload del duplicado
+    const payload = {
+      title: `${originalProduct.title} (copia)`,
+      brand: originalProduct.brand || '',
+      price: Number(originalProduct.price) || 0,
+      purchasePrice: Number(originalProduct.purchasePrice) || 0,
+      stock: Number(originalProduct.stock) || 0,
+      category: Array.isArray(originalProduct.categories) 
+        ? originalProduct.categories.join(', ') 
+        : originalProduct.category || '',
+      barcode: null,       // Sin código de barras
+      image: '',           // Sin imagen
+      product_type: originalProduct.product_type || 'quantity'
+    };
+
+    const { data, error } = await supabase.from('products').insert([payload]).select().single();
+    if (error) throw error;
+
+    const newProduct = {
+      ...data,
+      categories: data.category ? data.category.split(',').map(c => c.trim()).filter(Boolean) : [],
+      purchasePrice: data.purchasePrice || 0
+    };
+
+    // Agregar al inventario local
+    setInventory(prev => [...prev, newProduct]);
+
+    // Log
+    addLog('Producto Duplicado', {
+      originalId: originalProduct.id,
+      originalTitle: originalProduct.title,
+      newId: data.id,
+      newTitle: data.title
+    }, 'Duplicado desde editor');
+
+    // Cerrar modal actual y abrir con el producto nuevo
+    setEditingProduct(newProduct);
+    setEditReason('');
+
+    showNotification('success', 'Producto Duplicado', `Se creó "${data.title}" como copia.`);
+  } catch (err) {
+    console.error('Error duplicando producto:', err);
+    showNotification('error', 'Error al Duplicar', 'No se pudo crear la copia del producto.');
   }
 };
 
@@ -1264,7 +1361,6 @@ const confirmDeleteProduct = async (e) => {
     showNotification('success', 'Premio Aplicado', 'El descuento se ha agregado al carrito.');
   };
 
-// --- MODIFICADO: Checkout ahora va a SUPABASE con SNAPSHOT para LOGS ---
   const handleCheckout = async () => {
     const total = calculateTotal();
     const stockIssues = cart.filter(c => !c.isReward).filter(c => {
@@ -1281,7 +1377,6 @@ const confirmDeleteProduct = async (e) => {
       const pointsSpent = cart.reduce((acc, i) => acc + (i.isReward ? i.pointsCost : 0), 0);
       const clientId = posSelectedClient?.id && posSelectedClient.id !== 'guest' ? posSelectedClient.id : null;
 
-      // 1. Insertar Venta
       const { data: sale, error: saleErr } = await supabase.from('sales').insert({
           total, payment_method: selectedPayment, installments, client_id: clientId,
           points_earned: clientId ? pointsEarned : 0, points_spent: pointsSpent,
@@ -1289,13 +1384,11 @@ const confirmDeleteProduct = async (e) => {
        }).select().single();
        if (saleErr) throw saleErr;
 
-      // 2. Insertar Items
       const itemsPayload = cart.map(i => ({
           sale_id: sale.id, product_id: i.id, product_title: i.title, quantity: i.quantity, price: i.price, is_reward: !!i.isReward
        }));
        await supabase.from('sale_items').insert(itemsPayload);
 
-      // 3. Update Stock DB
       for (const item of cart) {
           if (!item.isReward) {
              const prod = inventory.find(p => p.id === item.id);
@@ -1303,14 +1396,12 @@ const confirmDeleteProduct = async (e) => {
           }
       }
 
-      // 4. Update Client DB
       if (clientId) {
           const newPoints = posSelectedClient.points - pointsSpent + pointsEarned;
           await supabase.from('clients').update({ points: newPoints }).eq('id', clientId);
           setMembers(members.map(m => m.id === clientId ? { ...m, points: newPoints } : m));
       }
 
-      // 5. Update Local State
       setInventory(inventory.map(p => {
         const c = cart.find(x => x.id === p.id && !x.isReward);
         return c ? { ...p, stock: p.stock - c.quantity } : p;
@@ -1333,9 +1424,6 @@ const confirmDeleteProduct = async (e) => {
 
       setTransactions([tx, ...transactions]);
 
-      // --- CORRECCIÓN CRÍTICA: SNAPSHOT PARA LOGS ---
-      // Creamos un array limpio SOLO con los datos necesarios.
-      // Esto evita enviar imágenes Base64 gigantes al log, lo cual rompía la visualización.
       const logItems = cart.map(item => ({
         id: item.id,
         title: item.title,
@@ -1345,7 +1433,6 @@ const confirmDeleteProduct = async (e) => {
       }));
 
       addLog('Venta Realizada', { transactionId: tx.id, total: total, items: logItems }, 'Venta regular');
-      // ----------------------------------------------
 
       setSaleSuccessModal(tx);
       setCart([]); setInstallments(1); setPosSearch(''); setPosSelectedClient(null);
@@ -1369,8 +1456,6 @@ const confirmDeleteProduct = async (e) => {
     const tx = transactionToRefund;
     if (!tx) return;
     
-    // Simplificación: Solo logueamos y borramos visualmente.
-    // Devolver stock en DB requeriría más lógica, lo dejamos como "anulada" en logs.
     addLog('Venta Anulada', { id: tx.id }, refundReason);
     setTransactions(transactions.filter((t) => t.id !== tx.id));
     
@@ -1455,8 +1540,6 @@ const confirmDeleteProduct = async (e) => {
     e.preventDefault();
     if (!editingTransaction) return;
     
-    // Simplificación: Solo actualizamos estado local y log.
-    // La edición retroactiva en DB es compleja y riesgosa para los logs de caja.
     setTransactions(
       transactions.map((t) => (t.id === editingTransaction.id ? editingTransaction : t))
     );
@@ -1466,7 +1549,6 @@ const confirmDeleteProduct = async (e) => {
     showNotification('success', 'Pedido Actualizado', 'La transacción fue modificada con éxito.');
   };
 
-  // ✅ CAMBIO PREMIOS 4/4: Handlers CRUD conectados a Supabase
   const handleAddReward = async (rewardData) => {
     try {
       const payload = {
@@ -1648,7 +1730,18 @@ const confirmDeleteProduct = async (e) => {
           {activeTab === 'rewards' && (<RewardsView rewards={rewards} onAddReward={handleAddReward} onUpdateReward={handleUpdateReward} onDeleteReward={handleDeleteReward} />)}
           {activeTab === 'reports' && currentUser.role === 'admin' && (<ReportsHistoryView pastClosures={pastClosures} members={members}/>)}
           {activeTab === 'logs' && currentUser.role === 'admin' && (<LogsView dailyLogs={dailyLogs} />)}
-          {activeTab === 'categories' && currentUser.role === 'admin' && (<CategoryManagerView categories={categories} inventory={inventory} onAddCategory={handleAddCategoryFromView} onDeleteCategory={handleDeleteCategoryFromView} />)}
+          
+          {/* ✅ FIX: Añadidas las funciones de guardado al componente hijo */}
+          {activeTab === 'categories' && currentUser.role === 'admin' && (
+            <CategoryManagerView 
+              categories={categories} 
+              inventory={inventory} 
+              onAddCategory={handleAddCategoryFromView} 
+              onDeleteCategory={handleDeleteCategoryFromView} 
+              onEditCategory={handleEditCategory}
+              onBatchUpdateProductCategory={handleBatchUpdateProductCategory}
+            />
+          )}
         </main>
       </div>
 
@@ -1658,7 +1751,7 @@ const confirmDeleteProduct = async (e) => {
       <OpeningBalanceModal isOpen={isOpeningBalanceModalOpen} onClose={() => setIsOpeningBalanceModalOpen(false)} tempOpeningBalance={tempOpeningBalance} setTempOpeningBalance={setTempOpeningBalance} tempClosingTime={tempClosingTime} setTempClosingTime={setTempClosingTime} onSave={handleSaveOpeningBalance} />
       <ClosingTimeModal isOpen={isClosingTimeModalOpen} onClose={() => setIsClosingTimeModalOpen(false)} closingTime={closingTime} setClosingTime={setClosingTime} onSave={handleSaveClosingTime} />
       <AddProductModal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setPendingBarcodeForNewProduct(''); }} newItem={newItem} setNewItem={setNewItem} categories={categories} onImageUpload={handleImageUpload} onAdd={handleAddItem} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} />
-      <EditProductModal product={editingProduct} onClose={() => setEditingProduct(null)} setEditingProduct={setEditingProduct} categories={categories} onImageUpload={handleImageUpload} editReason={editReason} setEditReason={setEditReason} onSave={saveEditProduct} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} />
+      <EditProductModal product={editingProduct} onClose={() => setEditingProduct(null)} setEditingProduct={setEditingProduct} categories={categories} onImageUpload={handleImageUpload} editReason={editReason} setEditReason={setEditReason} onSave={saveEditProduct} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} onDuplicate={handleDuplicateProduct} currentUser={currentUser} />
       <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} />
       <ImageModal isOpen={isImageModalOpen} image={selectedImage} onClose={() => setIsImageModalOpen(false)} />
       <RefundModal transaction={transactionToRefund} onClose={() => setIsRefundModalOpen(false)} refundReason={refundReason} setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />
