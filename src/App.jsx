@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   PartyPopper,
   Lock,
@@ -83,6 +83,8 @@ export default function PartySupplyApp() {
   const [closingTime, setClosingTime] = useState('21:00');
   const [registerOpenedAt, setRegisterOpenedAt] = useState(null);
 
+  // ✅ FIX: Candado para evitar múltiples ejecuciones del Cierre Automático
+  const isAutoClosing = useRef(false);
 
   // ==========================================
   // 1.5 CONEXIÓN SUPABASE (Fetch Inicial + Auto-Healing)
@@ -674,8 +676,12 @@ const handleDeleteMemberWithLog = async (id) => {
         minute: '2-digit',
         hour12: false,
       });
-      if (nowStr === closingTime) {
-        executeRegisterClose(true);
+      // ✅ FIX AUTO-CLOSE: Evitar ejecuciones múltiples
+      if (nowStr === closingTime && !isAutoClosing.current) {
+        isAutoClosing.current = true;
+        executeRegisterClose(true).finally(() => {
+          setTimeout(() => { isAutoClosing.current = false; }, 65000);
+        });
       }
     }
   }, [currentTime, closingTime, isRegisterClosed]);
@@ -951,7 +957,7 @@ const handleImageUpload = async (e, isEditing = false) => {
     }
   };
 
-const executeRegisterClose = async (isAuto = false) => {
+  const executeRegisterClose = async (isAuto = false) => {
     const closeDate = new Date();
     
     // ✅ FIX: Filtrar SOLO ventas y gastos del ciclo actual (desde apertura)
@@ -1544,11 +1550,20 @@ const handleDuplicateProduct = async (originalProduct) => {
         title: item.title,
         quantity: item.quantity,
         price: item.price,
-        isReward: item.isReward || false
+        isReward: item.isReward || false,
+        product_type: item.product_type || 'quantity'
       }));
 
-      addLog('Venta Realizada', { transactionId: tx.id, total: total, items: logItems }, 'Venta regular');
-
+    const isGuest = !posSelectedClient || posSelectedClient.id === 'guest';
+      addLog('Venta Realizada', { 
+        transactionId: tx.id, 
+        total: total, 
+        items: logItems,
+        client: isGuest ? null : posSelectedClient.name,
+        memberNumber: isGuest ? null : posSelectedClient.memberNumber,
+        pointsEarned: pointsEarned
+      }, 'Venta regular');
+      
       setSaleSuccessModal(tx);
       setCart([]); setInstallments(1); setPosSearch(''); setPosSelectedClient(null);
       Swal.close();

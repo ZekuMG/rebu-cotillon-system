@@ -90,6 +90,7 @@ export default function LogsView({ dailyLogs }) {
         sortDirection={sortDirection}
         onSort={handleSort}
         onViewDetails={(log) => setSelectedLog(log)}
+        selectedLogId={selectedLog?.id}
       />
 
       {/* 3. BARRA DE PAGINACIÓN */}
