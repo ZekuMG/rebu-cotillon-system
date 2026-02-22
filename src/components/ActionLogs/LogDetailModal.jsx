@@ -14,7 +14,6 @@ const getTransactionId = (details) => {
 export default function LogDetailModal({ selectedLog, onClose }) {
   const [isVisible, setIsVisible] = useState(false);
 
-  // Efecto para animar la entrada del panel lateral
   useEffect(() => {
     if (selectedLog) {
       setTimeout(() => setIsVisible(true), 10);
@@ -40,7 +39,7 @@ export default function LogDetailModal({ selectedLog, onClose }) {
     amber: 'bg-[#fef3c7] text-[#b45309]',
     slate: 'bg-[#f1f5f9] text-[#475569]',
     indigo: 'bg-[#e0e7ff] text-[#4338ca]',
-    purple: 'bg-[#fae8ff] text-[#a21caf]' // Usaremos fuchsia para purpura
+    purple: 'bg-[#fae8ff] text-[#a21caf]' 
   };
 
   // ── Monto principal según tipo de acción (Header Gigante) ──
@@ -78,8 +77,9 @@ export default function LogDetailModal({ selectedLog, onClose }) {
       // CATEGORÍAS 
       case 'Categoría': return d.type === 'create' ? 'Creada' : d.type === 'delete' ? 'Eliminada' : 'Renombrada';
       case 'Edición Masiva Categorías':
-      case 'Actualización Masiva': return (d.count || (d.details && d.details.length) || 0) + ' cambios';
-      case 'Modificación Pedido': return d.changes?.total ? `$${formatPrice(d.changes.total.new)}` : 'Editado';
+      case 'Actualización Masiva': return (d.count || (d.details && d.details.length) || (d.changes && d.changes.length) || 0) + ' cambios';
+      case 'Modificación Pedido': 
+      case 'Venta Modificada': return d.changes?.total ? `$${formatPrice(d.changes.total.new)}` : 'Editado';
       default: return '';
     }
   };
@@ -120,77 +120,63 @@ export default function LogDetailModal({ selectedLog, onClose }) {
       case 'Apertura de Caja': return 'Inicio de operaciones';
       case 'Cierre de Caja': return 'Cierre del día';
       case 'Cierre Automático': return 'Cierre automático del sistema';
-      case 'Modificación Pedido': return `Ajuste en Transacción #${getTransactionId(d) || 'S/N'}`;
+      case 'Modificación Pedido': 
+      case 'Venta Modificada': return `Ajuste en Transacción #${getTransactionId(d) || 'S/N'}`;
       default: return d.title || d.name || d.product || action;
     }
   };
 
   return (
     <>
-      {/* Overlay oscuro */}
       <div 
         className={`fixed inset-0 bg-slate-900/20 backdrop-blur-sm z-[200] transition-opacity duration-300 ${isVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
         onClick={onClose}
       />
-
-      {/* Panel Lateral (Estilo exacto del HTML) */}
       <div 
-        className={`fixed top-0 right-0 w-full max-w-[480px] h-[100vh] z-[201] flex flex-col bg-[#eef1f6] border-l border-[#d4d9e3] shadow-[-8px_0_35px_rgba(0,0,0,0.1)] transition-transform duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] ${isVisible ? 'translate-x-0' : 'translate-x-full'}`}
+        className={`fixed top-0 right-0 w-full max-w-[480px] h-[100vh] z-[201] flex flex-col bg-[#eef1f6] border-l border-[#d4d9e3] shadow-[-8px_0_35px_rgba(0,0,0,0.1)] transition-transform duration-350 ease-[cubic-bezier(0.4,0,0.2,1)] ${isVisible ? 'translate-x-0' : 'translate-x-full'}`}
       >
-        {/* Blobs de fondo (Gradients) */}
-        <div className="absolute -top-[80px] -right-[80px] w-[350px] h-[350px] bg-fuchsia-600/10 rounded-full blur-[60px] pointer-events-none z-0" />
-        <div className="absolute -bottom-[80px] -left-[80px] w-[350px] h-[350px] bg-blue-600/10 rounded-full blur-[60px] pointer-events-none z-0" />
+        <div className="absolute -top-[80px] -right-[80px] w-[350px] h-[350px] bg-[radial-gradient(circle,rgba(192,38,211,0.1)_0%,transparent_70%)] rounded-full pointer-events-none z-0" />
+        <div className="absolute -bottom-[80px] -left-[80px] w-[350px] h-[350px] bg-[radial-gradient(circle,rgba(37,99,235,0.08)_0%,transparent_70%)] rounded-full pointer-events-none z-0" />
 
-        {/* Botón Cerrar */}
         <button 
           onClick={onClose}
-          className="absolute top-[14px] right-[14px] w-[30px] h-[30px] rounded-full flex items-center justify-center z-10 transition-colors bg-white text-[#a1a1aa] shadow-[0_1px_4px_rgba(0,0,0,0.06)] hover:text-slate-800"
+          className="absolute top-[14px] right-[14px] w-[30px] h-[30px] rounded-full flex items-center justify-center z-10 transition-colors bg-white text-[#a1a1aa] shadow-[0_1px_4px_rgba(0,0,0,0.06)] hover:text-[#1e293b]"
         >
           <X size={14} />
         </button>
 
-        {/* Header Panel */}
-        <div className="p-[28px_20px_22px] text-center border-b border-[#d4d9e3] bg-white/45 relative z-[1]">
-          {/* Animación float */}
+        <div className="p-[28px_20px_22px] text-center border-b border-[#d4d9e3] bg-[rgba(255,255,255,0.45)] relative z-[1]">
           <style>{`
             @keyframes floatAnim {
               0%, 100% { transform: translateY(0); }
               50% { transform: translateY(-6px); }
             }
-            .animate-float {
-              animation: floatAnim 3s ease-in-out infinite;
-            }
+            .animate-float { animation: floatAnim 3s ease-in-out infinite; }
           `}</style>
           
           <span className="text-[42px] block mb-3 animate-float">{icon}</span>
-          
-          <span className={`inline-flex px-4 py-1.5 rounded-[20px] text-[10px] font-extrabold tracking-[0.5px] ${colorMap[color] || colorMap.slate}`}>
-            {action}
-          </span>
-          
-          <div className="font-['Outfit'] text-[34px] font-extrabold text-slate-800 mt-2.5 tracking-tight leading-none">
+            <span className={`inline-flex px-[16px] py-[5px] rounded-[20px] text-[10px] font-extrabold tracking-[0.5px] ${colorMap[color] || colorMap.slate}`}>
+              {action === 'Modificación Pedido' ? 'Venta Modificada' : action}
+            </span>          
+            <div className="text-[34px] font-extrabold text-[#1e293b] mt-2.5 tracking-[-1px] leading-none" style={{ fontFamily: "'Outfit', sans-serif" }}>
             {getDisplayAmount()}
           </div>
-          
-          <div className="text-[13px] font-semibold text-slate-500 mt-[3px]">
+          <div className="text-[13px] font-semibold text-[#64748b] mt-[3px] px-4 truncate">
             {getDisplaySubTitle()}
           </div>
-          
-          <div className="text-[10px] text-slate-400 mt-1.5 font-mono">
+          <div className="text-[10px] text-[#94a3b8] mt-[6px] font-mono">
             {selectedLog.date} · {selectedLog.timestamp} · {selectedLog.user} · ID: {selectedLog.id}
           </div>
         </div>
 
-        {/* Body Panel (Renderizado de tarjetas) */}
         <div className="flex-1 overflow-y-auto p-[16px_18px] relative z-[1] custom-scrollbar">
           <LogDetailRenderer log={selectedLog} />
         </div>
 
-        {/* Footer Panel */}
-        <div className="p-[14px_18px] border-t border-[#d4d9e3] flex justify-end bg-white/40 relative z-[1]">
+        <div className="p-[14px_18px] border-t border-[#d4d9e3] flex justify-end bg-[rgba(255,255,255,0.4)] relative z-[1]">
           <button 
             onClick={onClose}
-            className="px-6 py-2.5 rounded-[10px] bg-[#1e293b] text-white text-[11px] font-bold hover:bg-[#334155] transition-colors"
+            className="px-[24px] py-[9px] rounded-[10px] bg-[#1e293b] text-white text-[11px] font-bold hover:bg-[#334155] transition-colors"
             style={{ fontFamily: "'DM Sans', sans-serif" }}
           >
             Cerrar Detalle

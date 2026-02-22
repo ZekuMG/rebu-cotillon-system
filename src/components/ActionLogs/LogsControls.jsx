@@ -13,7 +13,8 @@ import {
 //  CONSTANTES DE AGRUPACIÓN (Categorías)
 // ════════════════════════════════════════════
 const ACTION_GROUPS = [
-  { label: '🛒 Ventas', actions: ['Venta Realizada', 'Venta Anulada', 'Modificación Pedido'] },
+  // 🔧 FIX: Solo "Venta Modificada" — "Modificación Pedido" se normaliza abajo en el filtro
+  { label: '🛒 Ventas', actions: ['Venta Realizada', 'Venta Anulada', 'Venta Modificada'] },
   { label: '📦 Productos', actions: ['Alta de Producto', 'Edición Producto', 'Baja Producto', 'Producto Duplicado', 'Categoría', 'Actualización Masiva', 'Edición Masiva Categorías'] },
   { label: '👥 Socios', actions: ['Nuevo Socio', 'Edición de Socio', 'Edición de Puntos', 'Baja de Socio'] },
   { label: '💰 Caja / Finanzas', actions: ['Apertura de Caja', 'Cierre de Caja', 'Cierre Automático', 'Nuevo Gasto', 'Gasto', 'Nuevo Premio', 'Editar Premio', 'Eliminar Premio'] },
@@ -38,22 +39,30 @@ const CustomActionDropdown = ({ value, onChange, uniqueActions }) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // 🔧 FIX: Normalizar uniqueActions para que "Modificación Pedido" de la BD
+  // cuente como "Venta Modificada" → así aparece una sola vez en el dropdown
+  const normalizedUniqueActions = [...new Set(
+    uniqueActions.map(a => a === 'Modificación Pedido' ? 'Venta Modificada' : a)
+  )];
+
   // Filtrar grupos para mostrar solo acciones que existen en la BD
   const availableGroups = ACTION_GROUPS.map(group => ({
     ...group,
-    actions: group.actions.filter(action => uniqueActions.includes(action))
+    actions: group.actions.filter(action => normalizedUniqueActions.includes(action))
   })).filter(group => group.actions.length > 0);
 
   // Mapear acciones huérfanas
   const mappedActions = ACTION_GROUPS.flatMap(g => g.actions);
-  const unmappedActions = uniqueActions.filter(a => !mappedActions.includes(a) && a !== '' && a !== 'Todas');
+  const unmappedActions = normalizedUniqueActions.filter(a => !mappedActions.includes(a) && a !== '' && a !== 'Todas');
   
   if (unmappedActions.length > 0) {
     availableGroups.push({ label: '📌 Otros', actions: unmappedActions });
   }
 
   // Helper para saber qué mostrar en el botón
-  const displayValue = !value || value === '' || value === 'Todas' ? 'Todas las acciones' : value;
+  const displayValue = !value || value === '' || value === 'Todas' 
+    ? 'Todas las acciones' 
+    : (value === 'Modificación Pedido' ? 'Venta Modificada' : value);
 
   return (
     <div className="relative w-full" ref={dropdownRef}>
@@ -103,8 +112,8 @@ const CustomActionDropdown = ({ value, onChange, uniqueActions }) => {
                 >
                   {action}
                 </button>
-              ))}
-            </div>
+              ))}            
+              </div>
           ))}
         </div>
       )}

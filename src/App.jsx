@@ -166,17 +166,24 @@ const fetchCloudData = async (showSpinner = true) => {
         })));
       }
 
-      const logsData = safeData(logsResult, 'logs');
+    const logsData = safeData(logsResult, 'logs');
       if (logsData) {
-        setDailyLogs(logsData.map(log => ({
-          id: log.id,
-          action: log.action,
-          details: log.details,
-          user: log.user,
-          reason: log.reason,
-          date: formatDateAR(new Date(log.created_at)),
-          timestamp: formatTimeFullAR(new Date(log.created_at))
-        })));
+        setDailyLogs(logsData.map(log => {
+          
+          // 🚀 NORMALIZADOR: Unifica todos los nombres de prueba o viejos en uno solo
+          const isMod = ['Venta Modificada', 'Modificacion Pedido', 'Modificación de Pedido'].includes(log.action);
+          const finalAction = isMod ? 'Modificación Pedido' : log.action;
+
+          return {
+            id: log.id,
+            action: finalAction,
+            details: log.details,
+            user: log.user,
+            reason: log.reason,
+            date: formatDateAR(new Date(log.created_at)),
+            timestamp: formatTimeFullAR(new Date(log.created_at))
+          };
+        }));
       }
 
       const expData = safeData(expResult, 'gastos');
@@ -1666,19 +1673,149 @@ const handleDuplicateProduct = async (originalProduct) => {
     });
   };
 
-  const handleSaveEditedTransaction = (e) => {
+  const handleSaveEditedTransaction = async (e) => {
     e.preventDefault();
     if (!editingTransaction) return;
-    
-    setTransactions(
-      transactions.map((t) => (t.id === editingTransaction.id ? editingTransaction : t))
-    );
-    addLog('Modificación Pedido', { transactionId: editingTransaction.id }, editReason);
-    setEditingTransaction(null);
-    setEditReason('');
-    showNotification('success', 'Pedido Actualizado', 'La transacción fue modificada con éxito.');
-  };
 
+    const originalTx = transactions.find((t) => t.id === editingTransaction.id);
+    if (!originalTx) return;
+
+    try {
+      Swal.fire({ title: 'Guardando cambios...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+
+      // 1. Detectamos Cambios Financieros
+      const changes = {};
+      if (originalTx.total !== editingTransaction.total) changes.total = { old: originalTx.total, new: editingTransaction.total };
+      if (originalTx.payment !== editingTransaction.payment) changes.payment = { old: originalTx.payment, new: editingTransaction.payment };
+
+      // 2. Detectamos Cambios en los Productos (Stock)
+      const productChanges = [];
+      const oldMap = {};
+      originalTx.items.forEach(i => { oldMap[i.id || i.productId] = Number(i.qty || i.quantity || 0); });
+      
+      const newMap = {};
+      const newItemsDetails = {};
+      editingTransaction.items.forEach(i => { 
+         const id = i.id || i.productId;
+         newMap[id] = Number(i.qty || i.quantity || 0); 
+         newItemsDetails[id] = i;
+      });
+
+      const allIds = new Set([...Object.keys(oldMap), ...Object.keys(newMap)]);
+      allIds.forEach(id => {
+         const oldQty = oldMap[id] || 0;
+         const newQty = newMap[id] || 0;
+         if (oldQty !== newQty) {
+            const itemDef = newItemsDetails[id] || originalTx.items.find(x => (x.id || x.productId) == id);
+            productChanges.push({ 
+              id, 
+              title: itemDef.title || itemDef.name || 'Producto', 
+              oldQty, 
+              newQty, 
+              diff: newQty - oldQty // Cuánto se agregó o quitó de la venta
+            });
+         }
+      });
+
+      // 3. Detectamos Cambios en Puntos (Socios)
+      let pointsChange = null;
+      let clientObj = editingTransaction.client || originalTx.client;
+      let cName = null; let cNum = null;
+
+      if (clientObj && typeof clientObj === 'object' && clientObj.name !== 'No asociado') {
+         cName = clientObj.name; cNum = clientObj.memberNumber;
+         const oldPts = Number(originalTx.pointsEarned || 0);
+         const newPts = Math.floor(editingTransaction.total / 150);
+         if (oldPts !== newPts) pointsChange = { previous: oldPts, new: newPts, diff: newPts - oldPts };
+      } else if (typeof clientObj === 'string' && clientObj !== 'No asociado') {
+         cName = clientObj;
+      }
+
+      // ==========================================
+      // EJECUCIÓN EN LA NUBE (SUPABASE)
+      // ==========================================
+
+      // A) Actualizamos la tabla principal de Ventas
+      await supabase.from('sales').update({
+        total: editingTransaction.total,
+        payment_method: editingTransaction.payment,
+        installments: editingTransaction.installments || 1,
+        points_earned: pointsChange ? pointsChange.new : originalTx.pointsEarned
+      }).eq('id', editingTransaction.id);
+
+      // B) Borramos los items viejos y guardamos los nuevos en `sale_items`
+      await supabase.from('sale_items').delete().eq('sale_id', editingTransaction.id);
+      
+      const newItemsPayload = editingTransaction.items.map(i => ({
+        sale_id: editingTransaction.id,
+        product_id: i.id || i.productId,
+        product_title: i.title,
+        quantity: Number(i.qty),
+        price: Number(i.price),
+        is_reward: !!i.isReward
+      }));
+      await supabase.from('sale_items').insert(newItemsPayload);
+
+      // C) Ajustamos el stock del inventario devolviendo o quitando según `diff`
+      for (const change of productChanges) {
+        if (change.diff !== 0) {
+          const prod = inventory.find(p => p.id === change.id);
+          if (prod) {
+            // Si diff es positivo (se vendió más), restamos stock. Si es negativo (devolvió), sumamos stock.
+            await supabase.from('products').update({ stock: prod.stock - change.diff }).eq('id', change.id);
+          }
+        }
+      }
+
+      // D) Ajustamos los puntos del socio si aplica
+      if (pointsChange && clientObj && clientObj.id) {
+         const clientDb = members.find(m => m.id === clientObj.id);
+         if (clientDb) {
+            const finalPoints = clientDb.points + pointsChange.diff;
+            await supabase.from('clients').update({ points: finalPoints }).eq('id', clientDb.id);
+            // Actualizar estado local del cliente
+            setMembers(members.map(m => m.id === clientDb.id ? { ...m, points: finalPoints } : m));
+         }
+      }
+
+      // ==========================================
+      // ACTUALIZACIÓN DEL ESTADO LOCAL Y LOGS
+      // ==========================================
+
+      // Actualizar Transacción Local
+      const finalTx = {
+         ...editingTransaction,
+         pointsEarned: pointsChange ? pointsChange.new : originalTx.pointsEarned
+      };
+      setTransactions(transactions.map((t) => (t.id === editingTransaction.id ? finalTx : t)));
+
+      // Actualizar Inventario Local
+      setInventory(inventory.map(p => {
+         const change = productChanges.find(c => c.id === p.id);
+         if (change) return { ...p, stock: p.stock - change.diff };
+         return p;
+      }));
+
+      // Log detallado de la modificación (Manteniendo el string original para retrocompatibilidad)
+      const logDetails = {
+         transactionId: editingTransaction.id, client: cName, memberNumber: cNum,
+         changes, productChanges, itemsSnapshot: editingTransaction.items, pointsChange
+      };
+
+      addLog('Modificación Pedido', logDetails, editReason || 'Ajuste manual');
+
+      setEditingTransaction(null);
+      setEditReason('');
+      Swal.close();
+      showNotification('success', 'Pedido Actualizado', 'La venta, el stock y los puntos se han modificado correctamente.');
+
+    } catch (error) {
+      console.error("Error al actualizar la transacción:", error);
+      Swal.fire('Error', 'Fallo al sincronizar los cambios con la base de datos.', 'error');
+    }
+  };
+  
+  
   const handleAddReward = async (rewardData) => {
     try {
       const payload = {
@@ -1749,6 +1886,36 @@ const handleDuplicateProduct = async (originalProduct) => {
       showNotification('error', 'Error', 'No se pudo eliminar el premio.');
     }
   };
+
+  
+  // ==========================================
+  // 🐛 DEBUGGER DE LOGS (Solo para diagnóstico)
+  // ==========================================
+  useEffect(() => {
+    if (dailyLogs.length > 0) {
+      console.log("==== 🐛 INICIO DEBUG DE LOGS ====");
+      
+      const accionesUnicas = [...new Set(dailyLogs.map(l => l.action))];
+      console.log("1️⃣ Acciones Únicas en la BD:", accionesUnicas);
+
+      const logsSospechosos = dailyLogs.filter(l => 
+        l.action.toLowerCase().includes('modif') || 
+        l.action.toLowerCase().includes('venta')
+      );
+      
+      console.log("2️⃣ Logs sospechosos encontrados:", logsSospechosos.length);
+      console.table(logsSospechosos.map(l => ({
+        ID: l.id,
+        AccionExacta: l.action,
+        Fecha: l.date,
+        Hora: l.timestamp,
+        TieneDetalles: !!l.details?.changes
+      })));
+      
+      console.log("==== 🐛 FIN DEBUG ====");
+    }
+  }, [dailyLogs]);
+
 
   // --- RENDERIZADO LOGIN ---
   if (isCloudLoading) return <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-100"><RefreshCw className="animate-spin text-fuchsia-600 mb-4" size={48} /><h2 className="text-xl font-bold">Cargando Nube...</h2></div>;

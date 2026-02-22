@@ -20,7 +20,8 @@ export const getDetailTitle = (action) => {
     'Cierre Automático': 'Reporte Automático',
     'Venta Realizada': 'Detalle de Transacción',
     'Venta Anulada': 'Anulación de Venta',
-    'Modificación Pedido': 'Ajuste de Pedido',
+    'Modificación Pedido': 'Ajuste de Pedido',   // 🔧 FIX: Ambos nombres mapean al mismo título
+    'Venta Modificada': 'Ajuste de Pedido',       // 🔧 FIX: Registros erróneos también cubiertos
     'Nuevo Gasto': 'Comprobante de Gasto',
     'Gasto': 'Comprobante de Gasto',
     'Alta de Producto': 'Ingreso de Producto',
@@ -48,6 +49,7 @@ export const getDetailTitle = (action) => {
 export const getDetailIcon = (action) => {
   const icons = {
     'Venta Realizada': '🛒', 'Venta Anulada': '❌',
+    'Modificación Pedido': '📝', 'Venta Modificada': '📝',   // 🔧 FIX: Ambos nombres
     'Apertura de Caja': '💰', 'Cierre de Caja': '🔒', 'Cierre Automático': '⏰',
     'Edición Producto': '✏️', 'Alta de Producto': '📦', 'Baja Producto': '🗑️',
     'Producto Duplicado': '📋',
@@ -56,7 +58,7 @@ export const getDetailIcon = (action) => {
     'Nuevo Gasto': '📉', 'Gasto': '📉',
     'Nuevo Premio': '🎁', 'Editar Premio': '🎁', 'Eliminar Premio': '🎁',
     'Login': '🔑', 'Horario Modificado': '🕐', 'Sistema Iniciado': '⚡',
-    'Borrado Permanente': '🗑️', 'Modificación Pedido': '📝'
+    'Borrado Permanente': '🗑️'
   };
   return icons[action] || '📄';
 };
@@ -64,6 +66,7 @@ export const getDetailIcon = (action) => {
 export const getDetailColor = (action) => {
   const colors = {
     'Venta Realizada': 'green', 'Venta Anulada': 'red',
+    'Modificación Pedido': 'blue', 'Venta Modificada': 'blue',   // 🔧 FIX: Ambos nombres
     'Apertura de Caja': 'green', 'Cierre de Caja': 'slate', 'Cierre Automático': 'amber',
     'Edición Producto': 'blue', 'Alta de Producto': 'green', 'Baja Producto': 'red',
     'Producto Duplicado': 'blue',
@@ -72,14 +75,14 @@ export const getDetailColor = (action) => {
     'Nuevo Gasto': 'red', 'Gasto': 'red',
     'Nuevo Premio': 'violet', 'Editar Premio': 'violet', 'Eliminar Premio': 'red',
     'Login': 'indigo', 'Horario Modificado': 'amber', 'Sistema Iniciado': 'slate',
-    'Borrado Permanente': 'red', 'Modificación Pedido': 'blue'
+    'Borrado Permanente': 'red'
   };
   return colors[action] || 'slate';
 };
 
 export const ACTION_GROUPS = [
   { label: '💰 Caja', actions: ['Apertura de Caja', 'Cierre de Caja', 'Cierre Automático'] },
-  { label: '🛒 Ventas', actions: ['Venta Realizada', 'Venta Anulada', 'Modificación Pedido'] },
+  { label: '🛒 Ventas', actions: ['Venta Realizada', 'Venta Anulada', 'Venta Modificada'] },
   { label: '📉 Gastos', actions: ['Nuevo Gasto'] },
   { label: '📦 Productos', actions: ['Alta de Producto', 'Edición Producto', 'Baja Producto', 'Producto Duplicado'] },
   { label: '👤 Socios', actions: ['Nuevo Socio', 'Edición de Socio', 'Edición de Puntos', 'Baja de Socio'] },
@@ -324,51 +327,41 @@ export default function LogDetailRenderer({ log }) {
       );
     }
 
-    case 'Modificación Pedido': {
+    // 🔧 FIX: Doble case para cubrir ambos nombres en la BD
+    case 'Modificación Pedido':
+    case 'Venta Modificada': {
       const changes = details.changes || {};
       const productChanges = details.productChanges || [];
       const itemsSnapshot = details.itemsSnapshot || [];
 
+      // Detección Retrocompatible (Viejos vs Nuevos)
+      const isLegacy = !details.changes && !details.productChanges && !details.itemsSnapshot;
+      
+      if (isLegacy) {
+         return (
+           <div className="space-y-0">
+             <Card icon="📝" title="Detalle de Edición">
+               <Item label="Transacción afectada" value={`#${getTransactionId(details) || 'Desconocida'}`} />
+             </Card>
+             {(details.reason || log.reason) && <ReasonCard note={details.reason || log.reason} />}
+             <WarnCard>Este es un registro antiguo. No contiene el desglose de productos modificados.</WarnCard>
+           </div>
+         );
+      }
+
+      let clientDisplay = null;
+      if (details.client) {
+        clientDisplay = `${details.client} ${details.memberNumber && details.memberNumber !== '---' ? `#${String(details.memberNumber).padStart(4, '0')}` : ''}`.trim();
+      }
+
       return (
         <div className="space-y-0">
-          {Object.keys(changes).length > 0 && (
-            <Card icon="💰" title="Cambios Financieros">
-              {Object.entries(changes).map(([key, val]) => (
-                <ChangeRow
-                  key={key}
-                  field={key === 'total' ? 'Monto Total' : key === 'payment' ? 'Método de Pago' : key}
-                  oldVal={key === 'total' ? `$${formatPrice(val.old)}` : val.old}
-                  newVal={key === 'total' ? `$${formatPrice(val.new)}` : val.new}
-                />
-              ))}
-            </Card>
-          )}
-          {productChanges.filter(c => c.diff !== 0).length > 0 && (
-            <Card icon="📦" title="Cambios en Productos">
-              {productChanges.filter(c => c.diff !== 0).map((change, idx) => (
-                <div key={idx} className="flex justify-between items-center px-[11px] py-[9px] bg-[#f4f6f9] rounded-[9px] mb-[5px] last:mb-0 text-[11px] border border-[#eaecf1]">
-                  <span className="font-bold text-[#1e293b]">{change.title}</span>
-                  <div className="flex items-center gap-[6px]">
-                    <span className="text-[#dc2626] line-through text-[10px]">{change.oldQty}x</span>
-                    <span className="text-[#94a3b8] text-[10px]">→</span>
-                    <span className="text-[#16a34a] font-bold">
-                      {change.newQty === 0 ? 'Eliminado' : `${change.newQty}x`}
-                    </span>
-                    <span className={`px-2 py-[2px] rounded-[4px] text-[9px] font-bold ${
-                      change.diff > 0 ? 'bg-[#dcfce7] text-[#15803d]' : 'bg-[#fee2e2] text-[#dc2626]'
-                    }`}>
-                      {change.diff > 0 ? `+${change.diff}` : change.diff}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </Card>
-          )}
+          
           {itemsSnapshot.length > 0 && (
-            <Card icon="📋" title="Estado Final del Pedido">
+            <Card icon="🛒" title="Venta Resultante">
               {itemsSnapshot.map((item, idx) => {
                  const q = item.qty || item.quantity || 0;
-                 const isWeight = item.product_type === 'weight' || (q >= 20 && item.price < 50);
+                 const isWeight = item.product_type === 'weight' || item.isWeight || (q >= 20 && item.price < 50);
                  return (
                   <ProductItem
                     key={idx}
@@ -381,10 +374,68 @@ export default function LogDetailRenderer({ log }) {
               })}
             </Card>
           )}
+
+          {productChanges.length > 0 && (
+            <Card icon="📦" title="Diferencias de Stock">
+              {productChanges.map((change, idx) => (
+                <div key={idx} className="flex justify-between items-center px-2.5 py-1.5 bg-[#f4f6f9] rounded-[9px] mb-1 last:mb-0 text-[11px] border border-[#eaecf1]">
+                  <span className="font-bold text-[#1e293b]">{change.title}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[#dc2626] line-through text-[10px]">{change.oldQty}x</span>
+                    <span className="text-[#94a3b8] text-[10px]">→</span>
+                    <span className="text-[#16a34a] font-bold">
+                      {change.newQty === 0 ? 'Eliminado' : `${change.newQty}x`}
+                    </span>
+                    <span className={`px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold ${
+                      change.diff > 0 ? 'bg-[#dcfce7] text-[#15803d]' : 'bg-[#fee2e2] text-[#dc2626]'
+                    }`}>
+                      {change.diff > 0 ? `+${change.diff}` : change.diff}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </Card>
+          )}
+
+          <Card icon="💰" title="Ajuste Financiero">
+             {changes.total && (
+                <ChangeRow
+                  field="Monto Total"
+                  oldVal={`$${formatPrice(changes.total.old)}`}
+                  newVal={`$${formatPrice(changes.total.new)}`}
+                />
+             )}
+             {changes.payment && (
+                <ChangeRow
+                  field="Método Pago"
+                  oldVal={changes.payment.old}
+                  newVal={changes.payment.new}
+                />
+             )}
+             {!changes.total && !changes.payment && (
+                <Item label="Monto y Pago" value="Sin modificaciones" />
+             )}
+          </Card>
+
+          {(clientDisplay || details.pointsChange) && (
+            <Card icon="👤" title="Impacto en el Socio">
+              {clientDisplay && <Item label="Socio vinculado" value={clientDisplay} />}
+              {details.pointsChange && (
+                 <ChangeRow 
+                   field="Puntos de la venta" 
+                   oldVal={`${details.pointsChange.previous} pts`} 
+                   newVal={`${details.pointsChange.new} pts`} 
+                 />
+              )}
+            </Card>
+          )}
+
+          {(details.reason || log.reason) && <ReasonCard note={details.reason || log.reason} />}
         </div>
       );
     }
 
+    
     // ══════════════════════════════════════
     //  GASTOS
     // ══════════════════════════════════════

@@ -1,7 +1,7 @@
 {
   "name": "cotillon-rebu-system",
   "productName": "Rebu Cotillón",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "private": true,
   "main": "electron-main.cjs",
   "type": "module",

@@ -21,7 +21,7 @@ export function useLogsFilter(dailyLogs = []) {
   const normalizeAction = (action) => {
     const actionMap = {
       'Nueva Venta': 'Venta Realizada',
-      'Edición Venta': 'Modificación Pedido',
+      'Edición Venta': 'Venta Modificada',
       'Venta': 'Venta Realizada',
       'Gasto': 'Nuevo Gasto',
       'Registrar Gasto': 'Nuevo Gasto',
@@ -35,7 +35,7 @@ export function useLogsFilter(dailyLogs = []) {
     const details = log.details;
 
     const explicitActions = [
-      'Venta Realizada', 'Modificación Pedido', 'Venta Anulada', 
+      'Venta Realizada', 'Venta Modificada', 'Venta Anulada', 
       'Edición Producto', 'Nuevo Socio', 'Edición de Puntos', 
       'Edición de Socio', 'Baja de Socio', 'Nuevo Gasto'
     ];
@@ -47,7 +47,7 @@ export function useLogsFilter(dailyLogs = []) {
     if ((typeof details.product === 'string' || details.title || details.name) && !details.transactionId && !details.productChanges && !details.itemsSnapshot && (details.changes || action.includes('Edición'))) return 'Edición Producto';
     if (details.items && details.total !== undefined && !details.changes && !details.itemsSnapshot && !details.productChanges) return 'Venta Realizada';
     if (details.items && (details.originalTotal || details.status === 'voided')) return 'Venta Anulada';
-    if (details.transactionId && (details.changes || details.itemsSnapshot || details.productChanges)) return 'Modificación Pedido';
+    if (details.transactionId && (details.changes || details.itemsSnapshot || details.productChanges)) return 'Venta Modificada';
     if (details.salesCount !== undefined && details.totalSales !== undefined && details.finalBalance !== undefined) return action.includes('Automático') ? 'Cierre Automático' : 'Cierre de Caja';
     if (details.amount !== undefined && details.scheduledClosingTime !== undefined && details.salesCount === undefined) return 'Apertura de Caja';
     if (details.amount !== undefined && details.category && details.salesCount === undefined) return 'Nuevo Gasto';
