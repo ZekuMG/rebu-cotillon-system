@@ -125,7 +125,10 @@ export function useLogsFilter(dailyLogs = []) {
       }
 
       if (filterUser && !logUser.toLowerCase().includes(filterUser.toLowerCase())) return false;
-      if (filterAction && logAction !== filterAction) return false;
+
+      // 🔧 FIX: Cuando el usuario filtra por "Venta Modificada", también matchear logs con "Modificación Pedido"
+      if (filterAction && logAction !== filterAction && !(filterAction === 'Venta Modificada' && logAction === 'Modificación Pedido')) return false;
+
       if (filterSearch) { 
         const search = filterSearch.toLowerCase(); 
         const rawString = JSON.stringify(log).toLowerCase(); 
