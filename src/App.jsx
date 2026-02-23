@@ -923,11 +923,12 @@ const handleImageUpload = async (e, isEditing = false) => {
 };
 
 
-  const handleEditTransactionRequest = (tx) => {
+const handleEditTransactionRequest = (tx) => {
     const safeTx = JSON.parse(JSON.stringify(tx));
     safeTx.items = safeTx.items.map((i) => ({
       ...i,
-      qty: Number(i.qty) || 0,
+      // 👇 Aquí está la magia: busca "qty" (de la nube) o "quantity" (local)
+      qty: Number(i.qty || i.quantity) || 0,
       price: Number(i.price) || 0,
     }));
     setEditingTransaction(safeTx);
@@ -1588,18 +1589,111 @@ const handleDuplicateProduct = async (originalProduct) => {
   };
 
   
-  const handleConfirmRefund = (e) => {
+const handleConfirmRefund = async (e) => {
     e.preventDefault();
     const tx = transactionToRefund;
     if (!tx) return;
     
-    addLog('Venta Anulada', { id: tx.id }, refundReason);
-    setTransactions(transactions.filter((t) => t.id !== tx.id));
-    
-    setIsRefundModalOpen(false);
-    setTransactionToRefund(null);
-    showNotification('success', 'Registro Borrado', 'La transacción fue eliminada del historial.');
+    console.log("=== INICIANDO ANULACIÓN MODO DEBUG ===", tx);
+
+    try {
+      if (tx.status === 'voided') {
+        setTransactions(transactions.filter(t => String(t.id) !== String(tx.id)));
+        setIsRefundModalOpen(false);
+        setTransactionToRefund(null);
+        setRefundReason('');
+        showNotification('success', 'Registro Borrado', 'La transacción fue ocultada del historial.');
+        return;
+      }
+
+      // PASO 1
+      Swal.fire({ title: 'Anulando...', text: 'Paso 1: Devolviendo stock...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      const updatedInventory = [...inventory];
+      for (const item of tx.items) {
+        if (!item.isReward) { 
+          const prodId = item.productId || item.id;
+          const prodIndex = updatedInventory.findIndex(p => String(p.id) === String(prodId));
+          if (prodIndex !== -1) {
+            const qtyToReturn = Number(item.quantity || item.qty || 0);
+            const newStock = updatedInventory[prodIndex].stock + qtyToReturn;
+            updatedInventory[prodIndex] = { ...updatedInventory[prodIndex], stock: newStock };
+            
+            const { error: stockErr } = await supabase.from('products').update({ stock: newStock }).eq('id', prodId);
+            if (stockErr) throw new Error(`Fallo actualizando stock: ${stockErr.message}`);
+          }
+        }
+      }
+      setInventory(updatedInventory);
+
+      // PASO 2
+      Swal.fire({ title: 'Anulando...', text: 'Paso 2: Ajustando puntos del socio...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      const clientMemberNumber = tx.client?.memberNumber || tx.client?.number;
+      let updatedMembers = [...members];
+      if (clientMemberNumber && clientMemberNumber !== '---') {
+        const clientIndex = updatedMembers.findIndex(m => String(m.memberNumber) === String(clientMemberNumber));
+        if (clientIndex !== -1) {
+          const dbClient = updatedMembers[clientIndex];
+          const newPoints = Math.max(0, dbClient.points - (tx.pointsEarned || 0) + (tx.pointsSpent || 0));
+          updatedMembers[clientIndex] = { ...dbClient, points: newPoints };
+          
+          const { error: clientErr } = await supabase.from('clients').update({ points: newPoints }).eq('id', dbClient.id);
+          if (clientErr) throw new Error(`Fallo actualizando puntos: ${clientErr.message}`);
+        }
+      }
+      setMembers(updatedMembers);
+
+      // PASO 3
+      Swal.fire({ title: 'Anulando...', text: 'Paso 3: Borrando la venta de la nube...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      
+      const { error: itemsErr } = await supabase.from('sale_items').delete().eq('sale_id', tx.id);
+      if (itemsErr) throw new Error(`Fallo borrando items de la venta: ${itemsErr.message}`);
+
+      const { error: saleErr } = await supabase.from('sales').delete().eq('id', tx.id);
+      if (saleErr) throw new Error(`Fallo borrando la venta: ${saleErr.message}`);
+
+      // PASO 4
+      Swal.fire({ title: 'Anulando...', text: 'Paso 4: Creando el registro final...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      const logDetails = {
+        id: tx.id,
+        total: tx.total,
+        itemsReturned: tx.items.map(i => ({
+          title: i.title,
+          quantity: i.quantity || i.qty
+        }))
+      };
+      // Esto genera la fila en el historial de acciones y el modal HTML
+      addLog('Venta Anulada', logDetails, refundReason || 'Anulación manual');
+
+      // PASO 5: EL FIX VISUAL FANTASMA
+      // Si era una venta vieja que solo existía en HistoryView, la forzamos a entrar en el estado local tachada
+      const exists = transactions.some(t => String(t.id) === String(tx.id));
+      if (exists) {
+        setTransactions(transactions.map((t) => String(t.id) === String(tx.id) ? { ...t, status: 'voided' } : t));
+      } else {
+        // La metemos "a la fuerza" al array para que la vista de historial la detecte y la tache
+        setTransactions([{ ...tx, status: 'voided' }, ...transactions]);
+      }
+      
+      // Limpieza final
+      setIsRefundModalOpen(false);
+      setTransactionToRefund(null);
+      setRefundReason('');
+      
+      Swal.close();
+      showNotification('success', 'Venta Anulada', 'El stock y los puntos han sido restaurados.');
+
+    } catch (error) {
+      console.error("❌ ERROR CRÍTICO EN ANULACIÓN:", error);
+      Swal.fire({
+        icon: 'error',
+        title: 'Error de Anulación',
+        text: error.message || 'Ocurrió un error desconocido. Revisa la consola (F12).',
+        confirmButtonColor: '#d33',
+        confirmButtonText: 'Entendido'
+      });
+    }
   };
+
 
   const addTxItem = (product) => {
     if (!editingTransaction) return;
@@ -2022,7 +2116,7 @@ const handleDuplicateProduct = async (originalProduct) => {
             />
           )}
           
-          {activeTab === 'history' && (<HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} setTransactions={setTransactions} setDailyLogs={setDailyLogs} />)}
+          {activeTab === 'history' && (<HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} members={members} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} setTransactions={setTransactions} setDailyLogs={setDailyLogs} />)}
           {activeTab === 'rewards' && (<RewardsView rewards={rewards} onAddReward={handleAddReward} onUpdateReward={handleUpdateReward} onDeleteReward={handleDeleteReward} />)}
           {activeTab === 'reports' && currentUser.role === 'admin' && (<ReportsHistoryView pastClosures={pastClosures} members={members}/>)}
           {activeTab === 'logs' && currentUser.role === 'admin' && (<LogsView dailyLogs={dailyLogs} />)}
@@ -2050,7 +2144,7 @@ const handleDuplicateProduct = async (originalProduct) => {
       <EditProductModal product={editingProduct} onClose={() => setEditingProduct(null)} setEditingProduct={setEditingProduct} categories={categories} onImageUpload={handleImageUpload} editReason={editReason} setEditReason={setEditReason} onSave={saveEditProduct} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} onDuplicate={handleDuplicateProduct} currentUser={currentUser} />
       <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} />
       <ImageModal isOpen={isImageModalOpen} image={selectedImage} onClose={() => setIsImageModalOpen(false)} />
-      <RefundModal transaction={transactionToRefund} onClose={() => setIsRefundModalOpen(false)} refundReason={refundReason} setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />
+      <RefundModal   transaction={transactionToRefund}   onClose={() => {    setIsRefundModalOpen(false);    setTransactionToRefund(null);    setRefundReason('');  }}   refundReason={refundReason}  setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />
       <CloseCashModal isOpen={isClosingCashModalOpen} onClose={() => setIsClosingCashModalOpen(false)} salesCount={cycleSalesCount} totalSales={cycleTotalSales} totalExpenses={cycleTotalExpenses} cashExpenses={cycleCashExpenses} cashSales={cycleCashSales} openingBalance={openingBalance} onConfirm={handleConfirmCloseCash} />
       <SaleSuccessModal transaction={saleSuccessModal} onClose={() => setSaleSuccessModal(null)} onViewTicket={() => { const tx = saleSuccessModal; setSaleSuccessModal(null); setTicketToView(tx); }} />
       <TicketModal transaction={ticketToView} onClose={() => setTicketToView(null)} onPrint={handlePrintTicket} />

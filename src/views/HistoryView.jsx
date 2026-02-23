@@ -1,5 +1,5 @@
-// ♻️ REFACTOR: Helpers movidos a utils/helpers.js,
-//              modales a components/modals/HistoryModals.jsx
+// src/views/HistoryView.jsx
+// ♻️ REFACTOR: Interfaz de Historial Consolidada y Optimizada (Filtros, Celdas Inline, UI Premium)
 
 import React, { useState, useMemo } from 'react';
 import {
@@ -12,12 +12,13 @@ import {
   Search,
   ArrowUpDown,
   FileText,
+  UserX,
+  Calendar,
+  Filter
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../data';
 import { normalizeDate, isVentaLog, getVentaTotal } from '../utils/helpers';
-import {
-  TransactionDetailModal,
-} from '../components/modals/HistoryModals';
+import { TransactionDetailModal } from '../components/modals/HistoryModals';
 
 // --- HELPER LOCAL PARA FORMATO VISUAL ---
 const formatDisplayDate = (dateString) => {
@@ -35,6 +36,7 @@ export default function HistoryView({
   dailyLogs,
   inventory,
   currentUser,
+  members,
   onDeleteTransaction,
   onEditTransaction,
   setTransactions,
@@ -48,7 +50,7 @@ export default function HistoryView({
   const [filterDateEnd, setFilterDateEnd] = useState('');
   const [filterPayment, setFilterPayment] = useState('');
   const [filterUser, setFilterUser] = useState('');
-  const [filterProduct, setFilterProduct] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState('desc');
 
@@ -60,17 +62,23 @@ export default function HistoryView({
   // =====================================================
   const historicTransactions = useMemo(() => {
     const txList = [];
-    const activeIds = new Set((transactions || []).map(t => t.id));
+    const activeIds = new Set((transactions || []).map(t => String(t.id)));
+    const voidedIds = new Set();
+    
+    (dailyLogs || []).forEach(log => {
+      if (log.action === 'Venta Anulada' && log.details?.id) {
+        voidedIds.add(String(log.details.id));
+      }
+    });
 
     (dailyLogs || []).forEach((log) => {
       if (isVentaLog(log) && log.details) {
-        const txId = log.details.transactionId || log.id;
-        // Evitar duplicados si ya está en activas
+        const txId = String(log.details.transactionId || log.id);
         if (activeIds.has(txId)) return;
 
+        // 👇 USAMOS EL HELPER CORRECTAMENTE
         const logDate = normalizeDate(log.date);
         if (logDate) {
-            // CORRECCIÓN PRECIOS: Priorizamos el total explícito en details, luego el helper
             const safeTotal = Number(log.details.total) || getVentaTotal(log.details) || 0;
 
             txList.push({
@@ -78,14 +86,17 @@ export default function HistoryView({
                 date: log.date,
                 timestamp: log.timestamp,
                 fullDate: `${log.date}, ${log.timestamp || '00:00'}:00`,
-                user: log.user, // En logs antiguos, este es el usuario confiable
+                user: log.user,
                 items: log.details.items || [],
                 payment: log.details.payment || 'N/A',
                 installments: log.details.installments || 0,
                 total: safeTotal,
-                status: 'completed',
+                client: log.details.client || log.details.memberName || null,
+                memberNumber: log.details.client?.memberNumber || log.details.memberNumber || null,
+                status: voidedIds.has(txId) ? 'voided' : 'completed',
                 isHistoric: true,
-                sortDate: new Date(logDate.year, logDate.month - 1, logDate.day),
+                // ✅ FIX: logDate ya es un objeto Date válido devuelto por helpers.js
+                sortDate: logDate, 
             });
         }
       }
@@ -94,80 +105,89 @@ export default function HistoryView({
   }, [dailyLogs, transactions]);
 
   // =====================================================
-  // TRANSACCIONES ACTIVAS (con correlación de Logs)
+  // TRANSACCIONES ACTIVAS
   // =====================================================
   const activeTransactions = useMemo(() => {
     return (transactions || []).map((tx) => {
+      // 👇 USAMOS EL HELPER CORRECTAMENTE
       const logDate = normalizeDate(tx.date);
-      
-      // CORRELACIÓN DE LOGS: 
-      // Si el usuario es 'Desconocido' o nulo, buscamos en el historial de logs (dailyLogs)
-      // quién generó esta venta para mostrar el nombre correcto.
       let resolvedUser = tx.user;
+      
       if (!resolvedUser || resolvedUser === 'Desconocido') {
           const creationLog = (dailyLogs || []).find(log => 
               (log.action === 'Venta Realizada' && String(log.details?.transactionId) === String(tx.id))
           );
-          if (creationLog) {
-              resolvedUser = creationLog.user;
-          }
+          if (creationLog) resolvedUser = creationLog.user;
       }
 
       return {
         ...tx,
-        user: resolvedUser || 'Desconocido', // Usuario correlacionado
+        user: resolvedUser || 'Desconocido',
         isHistoric: false,
-        sortDate: logDate
-          ? new Date(logDate.year, logDate.month - 1, logDate.day)
-          : new Date(),
+        // ✅ FIX: Si el helper devolvió la fecha, la usamos, sino Date actual
+        sortDate: logDate || new Date(), 
       };
     });
-  }, [transactions, dailyLogs]); // Dependencia agregada: dailyLogs
+  }, [transactions, dailyLogs]);
 
   // =====================================================
   // COMBINAR Y FILTRAR
   // =====================================================
   const filteredTransactions = useMemo(() => {
-    let txList = [];
+    // Unimos todas las transacciones (activas + logs)
+    let txList = [...activeTransactions, ...historicTransactions];
 
+    // 1. LÓGICA DE VISTA: HOY vs HISTORIAL
     if (viewMode === 'today') {
       const today = new Date();
-      today.setHours(0,0,0,0);
-      txList = [...activeTransactions, ...historicTransactions].filter(tx => {
-         const txDate = new Date(tx.sortDate);
-         txDate.setHours(0,0,0,0);
-         return txDate.getTime() === today.getTime();
+      today.setHours(0, 0, 0, 0);
+      txList = txList.filter((tx) => {
+        if (!tx.sortDate) return false;
+        const txDate = new Date(tx.sortDate);
+        txDate.setHours(0, 0, 0, 0);
+        return txDate.getTime() === today.getTime();
       });
     } else if (viewMode === 'history') {
-      txList = historicTransactions;
-    } else {
-      txList = [...activeTransactions, ...historicTransactions];
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      txList = txList.filter((tx) => {
+        if (!tx.sortDate) return false;
+        const txDate = new Date(tx.sortDate);
+        txDate.setHours(0, 0, 0, 0);
+        return txDate.getTime() < today.getTime(); // Filtra estricto días anteriores
+      });
     }
 
+    // 2. RANGO DE FECHAS (Corrección del desfasaje horario UTC-3)
     if (filterDateStart) {
-      const startDate = new Date(filterDateStart);
+      const [year, month, day] = filterDateStart.split('-');
+      const startDate = new Date(year, month - 1, day, 0, 0, 0);
       txList = txList.filter((tx) => tx.sortDate >= startDate);
     }
     if (filterDateEnd) {
-      const endDate = new Date(filterDateEnd);
-      endDate.setHours(23, 59, 59);
+      const [year, month, day] = filterDateEnd.split('-');
+      const endDate = new Date(year, month - 1, day, 23, 59, 59);
       txList = txList.filter((tx) => tx.sortDate <= endDate);
     }
 
-    if (filterPayment) {
-      txList = txList.filter((tx) => tx.payment === filterPayment);
-    }
-    if (filterUser) {
-      txList = txList.filter((tx) => tx.user === filterUser);
-    }
-    if (filterProduct) {
+    // 3. RESTO DE FILTROS BÁSICOS
+    if (filterPayment) txList = txList.filter((tx) => tx.payment === filterPayment);
+    if (filterUser) txList = txList.filter((tx) => tx.user === filterUser);
+    
+    // 4. FILTRO DE CATEGORÍA 
+    if (filterCategory) {
       txList = txList.filter((tx) =>
-        (tx.items || []).some((item) =>
-          item.title?.toLowerCase().includes(filterProduct.toLowerCase())
-        )
+        (tx.items || []).some((item) => {
+          const invProduct = (inventory || []).find(
+            (p) => String(p.id) === String(item.productId || item.id) || p.title === item.title
+          );
+          const catString = item.category || invProduct?.category || '';
+          return catString.split(',').map(c => c.trim().toLowerCase()).includes(filterCategory.toLowerCase());
+        })
       );
     }
 
+    // 5. BÚSQUEDA GENERAL
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim();
       txList = txList.filter((tx) => {
@@ -175,29 +195,31 @@ export default function HistoryView({
         const userMatch = tx.user?.toLowerCase().includes(query);
         const paymentMatch = tx.payment?.toLowerCase().includes(query);
         const dateMatch = tx.date?.toLowerCase().includes(query);
-        const itemsMatch = (tx.items || []).some((item) =>
-          item.title?.toLowerCase().includes(query)
-        );
+        const itemsMatch = (tx.items || []).some((item) => item.title?.toLowerCase().includes(query));
         const totalMatch = String(tx.total).includes(query);
-        return idMatch || userMatch || paymentMatch || dateMatch || itemsMatch || totalMatch;
+        const clientMatch = tx.client && typeof tx.client === 'string' 
+          ? tx.client.toLowerCase().includes(query) 
+          : tx.client?.name?.toLowerCase().includes(query);
+
+        return idMatch || userMatch || paymentMatch || dateMatch || itemsMatch || totalMatch || clientMatch;
       });
     }
 
+    // 6. ORDENAMIENTO (Recientes vs Antiguos)
     txList.sort((a, b) => {
       const dateA = a.sortDate?.getTime() || 0;
       const dateB = b.sortDate?.getTime() || 0;
-      if (dateA !== dateB) {
-        return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
-      }
+      if (dateA !== dateB) return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
       return sortOrder === 'desc' ? b.id - a.id : a.id - b.id;
     });
 
     return txList;
   }, [
-    viewMode, activeTransactions, historicTransactions,
-    filterDateStart, filterDateEnd, filterPayment,
-    filterUser, filterProduct, searchQuery, sortOrder,
+    viewMode, activeTransactions, historicTransactions, 
+    filterDateStart, filterDateEnd, filterPayment, 
+    filterUser, filterCategory, searchQuery, sortOrder, inventory
   ]);
+
 
   const stats = useMemo(() => {
     const validTx = filteredTransactions.filter((tx) => tx.status !== 'voided');
@@ -207,312 +229,288 @@ export default function HistoryView({
     };
   }, [filteredTransactions]);
 
-  const productsList = useMemo(() => {
-    const products = new Set();
-    [...(transactions || []), ...historicTransactions].forEach((tx) => {
-      (tx.items || []).forEach((item) => {
-        if (item.title) products.add(item.title);
-      });
+  const categoriesList = useMemo(() => {
+    const cats = new Set();
+    (inventory || []).forEach(p => {
+      if (p.category) {
+        p.category.split(',').forEach(c => {
+          const trimmed = c.trim();
+          if (trimmed) cats.add(trimmed);
+        });
+      }
     });
-    return Array.from(products).sort();
-  }, [transactions, historicTransactions]);
+    return Array.from(cats).sort();
+  }, [inventory]);
 
   const clearFilters = () => {
-    setFilterDateStart('');
-    setFilterDateEnd('');
-    setFilterPayment('');
-    setFilterUser('');
-    setFilterProduct('');
+    setFilterDateStart(''); setFilterDateEnd('');
+    setFilterPayment(''); setFilterUser(''); setFilterCategory('');
     setSearchQuery('');
   };
 
-  const hasActiveFilters =
-    filterDateStart || filterDateEnd || filterPayment ||
-    filterUser || filterProduct || searchQuery;
+  const hasActiveFilters = filterDateStart || filterDateEnd || filterPayment || filterUser || filterCategory || searchQuery;
 
   // =====================================================
   // RENDER
   // =====================================================
   return (
     <div className="bg-white rounded-xl shadow-sm border overflow-hidden h-full flex flex-col">
-      {/* Header Compacto */}
-      <div className="p-3 border-b bg-slate-50 shrink-0 space-y-3">
+      {/* HEADER Y FILTROS */}
+      <div className="p-4 border-b bg-slate-50 shrink-0 space-y-4">
         {/* Fila 1: Título y Stats */}
         <div className="flex flex-wrap justify-between items-center gap-2">
-          <div className="flex items-center gap-2">
-            <h3 className="font-bold text-slate-800 flex items-center gap-2 text-sm">
-              <History size={16} className="text-blue-600" /> Historial
-            </h3>
-            <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold">
-              {stats.count} ventas • ${stats.total.toLocaleString()}
+          <div className="flex items-center gap-3">
+            <div className="bg-blue-100 p-1.5 rounded-lg text-blue-600">
+              <History size={18} />
+            </div>
+            <h3 className="font-bold text-slate-800 text-sm">Registro de Ventas</h3>
+            <span className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1 rounded-lg font-bold shadow-sm ml-2">
+              {stats.count} ventas válidas • <span className="text-blue-600">${stats.total.toLocaleString()}</span>
             </span>
+          </div>
+          <div className="flex items-center gap-2">
+             {hasActiveFilters && (
+              <button onClick={clearFilters} className="flex items-center gap-1 px-3 py-1.5 text-[10px] font-bold text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors border border-red-100">
+                <X size={12} /> Limpiar Filtros
+              </button>
+            )}
+            <button onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')} className="flex items-center gap-1 px-3 py-1.5 text-[10px] font-bold text-slate-600 bg-white hover:bg-slate-100 rounded-lg border border-slate-200 shadow-sm transition-colors" title="Invertir Orden">
+              <ArrowUpDown size={12} /> {sortOrder === 'desc' ? 'Más recientes' : 'Más antiguas'}
+            </button>
           </div>
         </div>
 
-        {/* Fila 2: Filtros Compactos */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+        {/* Fila 2: Barra de Filtros Estilizada */}
+        <div className="flex flex-wrap items-center gap-2">
+          
           {/* Buscador */}
-          <div className="relative min-w-[140px]">
-            <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+          <div className="relative flex-1 min-w-[180px]">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="Buscar..."
-              className="w-full pl-7 pr-2 py-1 text-xs border rounded focus:outline-none focus:border-blue-500"
+              placeholder="Buscar por ID, producto o cliente..."
+              className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-sm"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
 
           {/* Selector Vista */}
-          <select
-            className="px-2 py-1 text-xs border rounded bg-white focus:outline-none min-w-[80px]"
-            value={viewMode}
-            onChange={(e) => setViewMode(e.target.value)}
-          >
-            <option value="all">Todo</option>
-            <option value="today">Hoy</option>
-            <option value="history">Historial</option>
+          <select className="px-3 py-1.5 text-xs font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white" value={viewMode} onChange={(e) => setViewMode(e.target.value)}>
+            <option value="all">Todas las fechas</option>
+            <option value="today">Solo Hoy</option>
+            <option value="history">Solo Historial</option>
           </select>
 
           {/* Fechas */}
-          <div className="flex items-center gap-1 bg-white border rounded px-1 py-0.5">
-            <input
-              type="date"
-              className="text-[10px] bg-transparent outline-none w-20"
-              value={filterDateStart}
-              onChange={(e) => setFilterDateStart(e.target.value)}
-            />
-            <span className="text-[10px] text-slate-400">-</span>
-            <input
-              type="date"
-              className="text-[10px] bg-transparent outline-none w-20"
-              value={filterDateEnd}
-              onChange={(e) => setFilterDateEnd(e.target.value)}
-            />
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-sm">
+            <Calendar size={12} className="text-slate-400" />
+            <input type="date" className="text-[10px] bg-transparent outline-none font-medium text-slate-600 cursor-pointer" value={filterDateStart} onChange={(e) => setFilterDateStart(e.target.value)} title="Desde"/>
+            <span className="text-[10px] text-slate-300">—</span>
+            <input type="date" className="text-[10px] bg-transparent outline-none font-medium text-slate-600 cursor-pointer" value={filterDateEnd} onChange={(e) => setFilterDateEnd(e.target.value)} title="Hasta"/>
           </div>
 
-          {/* Pago */}
-          <select
-            className="px-2 py-1 text-xs border rounded bg-white focus:outline-none max-w-[145px]"
-            value={filterPayment}
-            onChange={(e) => setFilterPayment(e.target.value)}
-          >
-            <option value="">Metodo de Pago</option>
-            {PAYMENT_METHODS.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
+          {/* Filtros Dropdowns */}
+          <div className="flex items-center gap-2">
+            <div className="relative">
+               <Filter size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+               <select className="pl-7 pr-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white appearance-none cursor-pointer" value={filterPayment} onChange={(e) => setFilterPayment(e.target.value)}>
+                 <option value="">Método de Pago</option>
+                 {PAYMENT_METHODS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
+               </select>
+            </div>
+            
+            <select className="px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer" value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
+              <option value="">Todas las Categorías</option>
+              {categoriesList.map((c) => (<option key={c} value={c}>{c}</option>))}
+            </select>
 
-          {/* Usuario */}
-          <select
-            className="px-2 py-1 text-xs border rounded bg-white focus:outline-none max-w-[110px]"
-            value={filterUser}
-            onChange={(e) => setFilterUser(e.target.value)}
-          >
-            <option value="">Usuario</option>
-            <option value="Dueño">Dueño</option>
-            <option value="Vendedor">Vendedor</option>
-          </select>
+            <select className="px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer" value={filterUser} onChange={(e) => setFilterUser(e.target.value)}>
+              <option value="">Todos los Usuarios</option>
+              <option value="Dueño">Dueño</option>
+              <option value="Vendedor">Vendedor</option>
+            </select>
+          </div>
 
-          {/* Producto */}
-          <select
-            className="px-2 py-1 text-xs border rounded bg-white focus:outline-none max-w-[110px]"
-            value={filterProduct}
-            onChange={(e) => setFilterProduct(e.target.value)}
-          >
-            <option value="">Productos</option>
-            {productsList.slice(0, 20).map((p) => (
-              <option key={p} value={p}>
-                {p.length > 15 ? p.substring(0, 15) + '...' : p}
-              </option>
-            ))}
-          </select>
-
-          {/* Orden */}
-          <button
-            onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
-            className="p-1 rounded border bg-white hover:bg-slate-50 text-slate-500"
-            title="Cambiar Orden"
-          >
-            <ArrowUpDown size={12} />
-          </button>
-
-          {/* Limpiar */}
-          {hasActiveFilters && (
-            <button
-              onClick={clearFilters}
-              className="p-1 rounded bg-red-100 text-red-600 hover:bg-red-200"
-              title="Limpiar filtros"
-            >
-              <X size={12} />
-            </button>
-          )}
         </div>
       </div>
 
-      {/* Tabla */}
+      {/* TABLA PRINCIPAL */}
       <div className="flex-1 overflow-auto">
         <table className="w-full text-xs">
-          <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] sticky top-0 z-10">
+          <thead className="bg-[#f8fafc] text-slate-500 uppercase text-[9px] tracking-wider font-bold sticky top-0 z-10 border-b border-slate-200 shadow-sm">
             <tr>
-              <th className="px-4 py-3 text-left">ID & Fecha</th>
-              <th className="px-4 py-3 text-left">Usuario</th>
-              <th className="px-4 py-3 text-left">Detalle</th>
-              <th className="px-4 py-3 text-left">Pago</th>
-              <th className="px-4 py-3 text-right">Monto</th>
+              <th className="px-4 py-3.5 text-left">ID & Fecha</th>
+              <th className="px-4 py-3.5 text-left">Usuario</th>
+              <th className="px-4 py-3.5 text-left">Socio</th>
+              <th className="px-4 py-3.5 text-left">Detalle</th>
+              <th className="px-4 py-3.5 text-left">Pago</th>
+              <th className="px-4 py-3.5 text-right">Monto</th>
               {currentUser.role === 'admin' && (
-                <th className="px-4 py-3 text-center">Acciones</th>
+                <th className="px-4 py-3.5 text-center">Acciones</th>
               )}
             </tr>
           </thead>
-          <tbody className="divide-y">
+          <tbody className="divide-y divide-slate-100">
             {filteredTransactions.map((tx, index) => {
               const isVoided = tx.status === 'voided';
               const isHistoric = tx.isHistoric;
 
+              let clientName = null;
+              let memberNum = null;
+              if (tx.client && typeof tx.client === 'object') {
+                clientName = tx.client.name;
+                memberNum = tx.client.memberNumber;
+              } else if (tx.client && typeof tx.client === 'string') {
+                clientName = tx.client;
+                memberNum = tx.memberNumber;
+              } else if (tx.memberName) {
+                clientName = tx.memberName;
+                memberNum = tx.memberNumber;
+              }
+              if (clientName === 'No asociado' || clientName === 'Consumidor Final') {
+                clientName = null;
+              }
+
               return (
                 <tr
                   key={`${tx.id}-${index}`}
-                  className={`transition-colors ${
-                    isVoided
-                      ? 'bg-red-50'
-                      : isHistoric
-                      ? 'bg-slate-50/50 hover:bg-slate-100'
-                      : 'hover:bg-blue-50'
+                  className={`transition-all duration-150 ${
+                    isVoided ? 'bg-[#fef2f2] hover:bg-[#fee2e2]' 
+                             : isHistoric ? 'bg-slate-50/30 hover:bg-slate-50' 
+                             : 'hover:bg-[#f0f9ff]'
                   }`}
                 >
-                  <td className="px-4 py-3">
-                    <p
-                      className={`font-mono font-bold ${
-                        isVoided
-                          ? 'text-red-800 line-through'
-                          : 'text-slate-700'
-                      }`}
-                    >
+                  <td className="px-4 py-3 align-middle">
+                    <p className={`font-mono font-bold text-[11px] ${isVoided ? 'text-red-800 line-through' : 'text-slate-800'}`}>
                       #{String(tx.id).padStart(6, '0')}
                     </p>
-                    <p className="text-[10px] text-slate-400">
-                      {/* AQUÍ USAMOS EL HELPER PARA NORMALIZAR LA FECHA VISUALMENTE */}
+                    <p className="text-[10px] text-slate-400 font-medium mt-0.5">
                       {formatDisplayDate(tx.date)}
                       {(tx.time || tx.timestamp) && ` ${tx.time || tx.timestamp}`}
                     </p>
                     {isVoided && (
-                      <span className="text-[9px] font-bold text-red-600 uppercase bg-red-100 px-1 rounded">
+                      <span className="text-[8.5px] font-black tracking-widest text-red-600 uppercase bg-red-100 px-1.5 py-0.5 rounded mt-1.5 inline-block border border-red-200">
                         ANULADO
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        isVoided
-                          ? 'bg-red-200 text-red-800'
-                          : tx.user === 'Dueño'
-                          ? 'bg-blue-100 text-blue-700'
-                          : 'bg-green-100 text-green-700'
+                  
+                  <td className="px-4 py-3 align-middle">
+                    <span className={`px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider ${
+                        isVoided ? 'bg-red-200 text-red-800' : tx.user === 'Dueño' ? 'bg-[#eef2ff] text-indigo-600 border border-indigo-100' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
                       }`}
                     >
-                      {/* CORRECCIÓN: Mostramos el usuario resuelto via logs si es posible */}
                       {tx.user || 'Desconocido'}
                     </span>
                   </td>
-                  <td className="px-4 py-3">
-                    <div
-                      className={`max-h-20 overflow-y-auto ${
-                        isVoided ? 'opacity-50' : ''
-                      }`}
-                    >
-                      {(tx.items || []).slice(0, 3).map((i, idx) => (
-                        <div key={idx} className="text-slate-600 text-[10px]">
-                          <span className="font-bold">
-                            {i.qty || i.quantity}x
-                          </span>{' '}
-                          {i.title}
-                        </div>
-                      ))}
-                      {(tx.items || []).length > 3 && (
-                        <span className="text-[9px] text-slate-400 font-medium">
-                          +{tx.items.length - 3} más
+
+                  <td className="px-4 py-3 align-middle">
+                    <div className={`flex items-center gap-1.5 flex-wrap ${isVoided ? 'opacity-50' : ''}`}>
+                      {clientName ? (
+                        <>
+                          <span className={`text-[11px] font-bold ${isVoided ? 'text-red-800 line-through' : 'text-slate-700'}`}>
+                            {clientName}
+                          </span>
+                          {memberNum && memberNum !== '---' && (
+                            <span className="text-[9px] font-mono font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded border border-slate-200">
+                              #{String(memberNum).padStart(4, '0')}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500 inline-flex items-center gap-1 border border-slate-200">
+                          <UserX size={10} /> No asociado
                         </span>
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`px-2 py-1 rounded text-[10px] font-medium ${
-                        isVoided
-                          ? 'bg-red-100 text-red-600'
-                          : tx.payment === 'Efectivo'
-                          ? 'bg-green-100 text-green-700'
-                          : tx.payment === 'MercadoPago'
-                          ? 'bg-blue-100 text-blue-700'
-                          : tx.payment === 'Debito'
-                          ? 'bg-purple-100 text-purple-700'
-                          : 'bg-amber-100 text-amber-700'
-                      }`}
-                    >
-                      {tx.payment}{' '}
-                      {tx.installments > 0 ? `(${tx.installments}c)` : ''}
-                    </span>
+
+                  <td className="px-4 py-3 align-middle">
+                    <div className={`max-h-20 overflow-y-auto custom-scrollbar pr-1 ${isVoided ? 'opacity-50' : ''}`}>
+                      {(tx.items || []).slice(0, 3).map((i, idx) => {
+                        const qty = i.qty || i.quantity || 0;
+                        const isWeight = i.product_type === 'weight' || i.isWeight || (qty >= 20 && i.price < 50);
+                        
+                        return (
+                          <div key={idx} className="text-slate-600 text-[10px] mb-1 flex items-start gap-1.5">
+                            <span className="font-bold bg-white border border-slate-200 shadow-sm px-1 py-0.5 rounded text-[9px] text-slate-700 whitespace-nowrap">
+                              {qty}{isWeight ? 'g' : 'x'}
+                            </span>
+                            <span className="truncate flex-1 pt-0.5 font-medium" title={i.title}>{i.title}</span>
+                          </div>
+                        );
+                      })}
+                      {(tx.items || []).length > 3 && (
+                        <span className="text-[9px] text-slate-400 font-medium italic mt-1 inline-block bg-slate-50 px-2 py-0.5 rounded-full border border-slate-100">
+                          +{tx.items.length - 3} productos más
+                        </span>
+                      )}
+                    </div>
                   </td>
-                  <td className="px-4 py-3 text-right font-bold text-sm">
-                    <span
-                      className={
-                        isVoided
-                          ? 'text-red-400 line-through'
-                          : 'text-slate-800'
-                      }
-                    >
-                      {/* CORRECCIÓN PRECIOS: Aseguramos conversión a número */}
+
+                  <td className="px-4 py-3 align-middle">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className={`px-2 py-1 rounded-md text-[10px] font-bold ${
+                          isVoided ? 'bg-red-100 text-red-600 border border-red-200'
+                                   : tx.payment === 'Efectivo' ? 'bg-[#dcfce7] text-[#15803d] border border-[#bbf7d0]'
+                                   : tx.payment === 'MercadoPago' ? 'bg-[#dbeafe] text-[#1d4ed8] border border-[#bfdbfe]'
+                                   : tx.payment === 'Debito' ? 'bg-purple-100 text-purple-700 border border-purple-200'
+                                   : 'bg-[#ffedd5] text-[#c2410c] border border-[#fed7aa]'
+                        }`}
+                      >
+                        {tx.payment}
+                      </span>
+                      
+                      {tx.payment === 'Credito' && tx.installments > 0 && (
+                        <span className={`text-[8.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${
+                          isVoided ? 'text-red-500 bg-red-50 border border-red-100' : 'text-slate-500 bg-white shadow-sm border border-slate-200'
+                        }`}>
+                          {tx.installments} {tx.installments === 1 ? 'Cuota' : 'Cuotas'}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+
+                  <td className="px-4 py-3 text-right align-middle">
+                    <span className={`font-black text-sm ${isVoided ? 'text-red-400 line-through' : 'text-slate-800'}`}>
                       ${(Number(tx.total) || 0).toLocaleString()}
                     </span>
                   </td>
+
                   {currentUser.role === 'admin' && (
-                    <td className="px-4 py-3 text-center">
-                      <div className="flex items-center justify-center gap-1">
-                        <button
-                          onClick={() => setSelectedTx(tx)}
-                          className="text-slate-500 hover:bg-slate-200 p-1.5 rounded transition"
-                          title="Ver Detalles"
-                        >
-                          <Eye size={14} />
+                    <td className="px-4 py-3 align-middle">
+                      <div className="flex items-center justify-center gap-1.5">
+                        
+                        {/* Botón Ver Detalles */}
+                        <button onClick={() => setSelectedTx(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-300 transition-all shadow-sm group" title="Ver Detalles">
+                          <Eye size={14} className="group-hover:scale-110 transition-transform" />
                         </button>
                         
-                        <button
-                          onClick={() => onViewTicket(tx)}
-                          className="text-slate-700 hover:bg-slate-200 p-1.5 rounded transition"
-                          title="Ver Ticket"
-                        >
-                          <FileText size={14} />
+                        {/* Botón Ver Ticket */}
+                        <button onClick={() => onViewTicket(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 hover:border-slate-300 transition-all shadow-sm group" title="Ver Ticket">
+                          <FileText size={14} className="group-hover:scale-110 transition-transform" />
                         </button>
 
+                        {/* Botones Modificar/Anular (solo si no está anulada) */}
                         {!isVoided && (
-                          <button
-                            onClick={() => onEditTransaction(tx)}
-                            className="text-blue-500 hover:bg-blue-100 p-1.5 rounded transition"
-                            title="Modificar Pedido"
-                          >
-                            <Edit2 size={14} />
+                          <button onClick={() => onEditTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-amber-50 hover:text-amber-600 hover:border-amber-300 transition-all shadow-sm group" title="Modificar Pedido">
+                            <Edit2 size={13} className="group-hover:scale-110 transition-transform" />
                           </button>
                         )}
                         
-                        <button
-                          onClick={() => onDeleteTransaction(tx)}
-                          className={`${
-                            isVoided
-                              ? 'text-red-800 hover:bg-red-200'
-                              : 'text-red-500 hover:bg-red-100'
-                          } p-1.5 rounded transition`}
-                          title={isVoided ? 'Eliminar' : 'Anular'}
+                        <button onClick={() => onDeleteTransaction(tx)} className={`w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 transition-all shadow-sm group ${
+                            isVoided ? 'text-red-400 hover:bg-red-50 hover:text-red-600 hover:border-red-300' 
+                                     : 'text-slate-500 hover:bg-red-50 hover:text-red-600 hover:border-red-300'
+                          }`} title={isVoided ? 'Eliminar Registro' : 'Anular Venta'}
                         >
                           {isVoided ? (
-                            <XCircle size={14} />
+                            <Trash2 size={14} className="group-hover:scale-110 transition-transform" />
                           ) : (
-                            <Trash2 size={14} />
+                            <XCircle size={14} className="group-hover:scale-110 transition-transform" />
                           )}
                         </button>
+
                       </div>
                     </td>
                   )}
@@ -521,13 +519,11 @@ export default function HistoryView({
             })}
             {filteredTransactions.length === 0 && (
               <tr>
-                <td
-                  colSpan={currentUser.role === 'admin' ? 6 : 5}
-                  className="text-center py-10 text-slate-400"
-                >
-                  {hasActiveFilters
-                    ? 'No hay resultados con los filtros aplicados'
-                    : 'Sin transacciones'}
+                <td colSpan={currentUser.role === 'admin' ? 7 : 6} className="text-center py-16">
+                  <div className="flex flex-col items-center justify-center text-slate-400">
+                    <History size={32} className="mb-2 opacity-50" />
+                    <p className="text-sm font-medium">{hasActiveFilters ? 'No se encontraron ventas con estos filtros.' : 'No hay historial de ventas disponible.'}</p>
+                  </div>
                 </td>
               </tr>
             )}
@@ -540,6 +536,7 @@ export default function HistoryView({
         transaction={selectedTx}
         onClose={() => setSelectedTx(null)}
         currentUser={currentUser}
+        members={members}
         onEditTransaction={onEditTransaction}
         onDeleteTransaction={onDeleteTransaction}
         onViewTicket={onViewTicket}
