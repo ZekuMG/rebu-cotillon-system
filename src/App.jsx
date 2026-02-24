@@ -1767,7 +1767,7 @@ const handleConfirmRefund = async (e) => {
     });
   };
 
-  const handleSaveEditedTransaction = async (e) => {
+const handleSaveEditedTransaction = async (e) => {
     e.preventDefault();
     if (!editingTransaction) return;
 
@@ -1779,8 +1779,20 @@ const handleConfirmRefund = async (e) => {
 
       // 1. Detectamos Cambios Financieros
       const changes = {};
-      if (originalTx.total !== editingTransaction.total) changes.total = { old: originalTx.total, new: editingTransaction.total };
-      if (originalTx.payment !== editingTransaction.payment) changes.payment = { old: originalTx.payment, new: editingTransaction.payment };
+      if (originalTx.total !== editingTransaction.total) {
+        changes.total = { old: originalTx.total, new: editingTransaction.total };
+      }
+      if (originalTx.payment !== editingTransaction.payment) {
+        changes.payment = { old: originalTx.payment, new: editingTransaction.payment };
+      }
+
+      // 👇 FIX: Se usa 'editingTransaction.installments' en lugar de la variable inexistente
+      if (Number(originalTx.installments || 0) !== Number(editingTransaction.installments || 0)) {
+        changes.installments = { 
+          old: Number(originalTx.installments || 0), 
+          new: Number(editingTransaction.installments || 0) 
+        };
+      }
 
       // 2. Detectamos Cambios en los Productos (Stock)
       const productChanges = [];
@@ -1833,7 +1845,8 @@ const handleConfirmRefund = async (e) => {
       await supabase.from('sales').update({
         total: editingTransaction.total,
         payment_method: editingTransaction.payment,
-        installments: editingTransaction.installments || 1,
+        // 👇 FIX: Si no hay cuotas, asegura que sea 0 y no 1
+        installments: editingTransaction.installments || 0,
         points_earned: pointsChange ? pointsChange.new : originalTx.pointsEarned
       }).eq('id', editingTransaction.id);
 
@@ -1855,7 +1868,6 @@ const handleConfirmRefund = async (e) => {
         if (change.diff !== 0) {
           const prod = inventory.find(p => p.id === change.id);
           if (prod) {
-            // Si diff es positivo (se vendió más), restamos stock. Si es negativo (devolvió), sumamos stock.
             await supabase.from('products').update({ stock: prod.stock - change.diff }).eq('id', change.id);
           }
         }
@@ -1867,7 +1879,6 @@ const handleConfirmRefund = async (e) => {
          if (clientDb) {
             const finalPoints = clientDb.points + pointsChange.diff;
             await supabase.from('clients').update({ points: finalPoints }).eq('id', clientDb.id);
-            // Actualizar estado local del cliente
             setMembers(members.map(m => m.id === clientDb.id ? { ...m, points: finalPoints } : m));
          }
       }
@@ -1890,7 +1901,7 @@ const handleConfirmRefund = async (e) => {
          return p;
       }));
 
-      // Log detallado de la modificación (Manteniendo el string original para retrocompatibilidad)
+      // Log detallado de la modificación
       const logDetails = {
          transactionId: editingTransaction.id, client: cName, memberNumber: cNum,
          changes, productChanges, itemsSnapshot: editingTransaction.items, pointsChange

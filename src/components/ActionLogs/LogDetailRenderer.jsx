@@ -1,3 +1,4 @@
+// src/components/ActionLogs/LogDetailRenderer.jsx
 import React from 'react';
 import { ArrowRight, CheckCircle } from 'lucide-react';
 import { formatPrice } from '../../utils/helpers';
@@ -20,8 +21,8 @@ export const getDetailTitle = (action) => {
     'Cierre Automático': 'Reporte Automático',
     'Venta Realizada': 'Detalle de Transacción',
     'Venta Anulada': 'Anulación de Venta',
-    'Modificación Pedido': 'Ajuste de Pedido',   // 🔧 FIX: Ambos nombres mapean al mismo título
-    'Venta Modificada': 'Ajuste de Pedido',       // 🔧 FIX: Registros erróneos también cubiertos
+    'Modificación Pedido': 'Ajuste de Pedido',
+    'Venta Modificada': 'Ajuste de Pedido',
     'Nuevo Gasto': 'Comprobante de Gasto',
     'Gasto': 'Comprobante de Gasto',
     'Alta de Producto': 'Ingreso de Producto',
@@ -49,7 +50,7 @@ export const getDetailTitle = (action) => {
 export const getDetailIcon = (action) => {
   const icons = {
     'Venta Realizada': '🛒', 'Venta Anulada': '❌',
-    'Modificación Pedido': '📝', 'Venta Modificada': '📝',   // 🔧 FIX: Ambos nombres
+    'Modificación Pedido': '📝', 'Venta Modificada': '📝',
     'Apertura de Caja': '💰', 'Cierre de Caja': '🔒', 'Cierre Automático': '⏰',
     'Edición Producto': '✏️', 'Alta de Producto': '📦', 'Baja Producto': '🗑️',
     'Producto Duplicado': '📋',
@@ -66,7 +67,7 @@ export const getDetailIcon = (action) => {
 export const getDetailColor = (action) => {
   const colors = {
     'Venta Realizada': 'green', 'Venta Anulada': 'red',
-    'Modificación Pedido': 'blue', 'Venta Modificada': 'blue',   // 🔧 FIX: Ambos nombres
+    'Modificación Pedido': 'blue', 'Venta Modificada': 'blue',
     'Apertura de Caja': 'green', 'Cierre de Caja': 'slate', 'Cierre Automático': 'amber',
     'Edición Producto': 'blue', 'Alta de Producto': 'green', 'Baja Producto': 'red',
     'Producto Duplicado': 'blue',
@@ -92,29 +93,31 @@ export const ACTION_GROUPS = [
 ];
 
 // ════════════════════════════════════════════
-//  SUB-COMPONENTES REUTILIZABLES (CSS EXACTO)
+//  SUB-COMPONENTES REUTILIZABLES
 // ════════════════════════════════════════════
 
 const Card = ({ icon, title, children }) => (
-  <div className="bg-white border border-[#d4d9e3] rounded-[14px] p-3.5 mb-2.5 shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
-    <div className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 mb-2.5 flex items-center gap-1.5">
-      {icon} {title}
+  <div className="bg-white border border-[#d4d9e3] rounded-[14px] p-4 shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
+    <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-3 flex items-center gap-2">
+      <span className="text-sm">{icon}</span> {title}
     </div>
-    {children}
+    <div className="space-y-1.5">
+      {children}
+    </div>
   </div>
 );
 
 const Item = ({ label, value, children, className = '' }) => (
-  <div className={`flex justify-between items-center px-2.5 py-1.5 bg-[#f4f6f9] rounded-[9px] mb-1 last:mb-0 text-[11px] border border-[#eaecf1] ${className}`}>
+  <div className={`flex justify-between items-center px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1] ${className}`}>
     <span className="text-slate-500 font-medium">{label}</span>
     <span className="font-bold text-slate-800 text-right">{children || value}</span>
   </div>
 );
 
 const ProductItem = ({ qty, name, total, isWeight }) => (
-  <div className="flex justify-between items-center px-2.5 py-1.5 bg-[#f4f6f9] rounded-[9px] mb-1 last:mb-0 text-[11px] border border-[#eaecf1]">
+  <div className="flex justify-between items-center px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1]">
     <span className="text-slate-500 font-medium flex items-center truncate flex-1 mr-2">
-      <span className="font-mono text-[9px] font-bold bg-[#e0e4eb] text-slate-500 px-1.5 py-0.5 rounded mr-1.5 whitespace-nowrap">
+      <span className="font-mono text-[9px] font-bold bg-[#e0e4eb] text-slate-600 px-1.5 py-0.5 rounded mr-2 whitespace-nowrap">
         {isWeight ? `${qty}g` : `${qty}x`}
       </span>
       <span className="truncate">{name}</span>
@@ -124,11 +127,13 @@ const ProductItem = ({ qty, name, total, isWeight }) => (
 );
 
 const ChangeRow = ({ field, oldVal, newVal }) => (
-  <div className="flex items-center gap-2 px-2.5 py-1.5 bg-[#f4f6f9] rounded-[9px] mb-1 last:mb-0 text-[11px] border border-[#eaecf1]">
-    <span className="font-bold text-slate-800 min-w-[70px]">{field}</span>
-    <span className="text-red-500 line-through text-[10px]">{oldVal}</span>
-    <span className="text-slate-400 text-[10px]">→</span>
-    <span className="text-green-600 font-bold">{newVal}</span>
+  <div className="flex items-center justify-between px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1]">
+    <span className="font-bold text-slate-800 flex-1 truncate">{field}</span>
+    <div className="flex items-center gap-2 justify-end shrink-0">
+      <span className="text-red-500 line-through text-[10px] font-medium">{oldVal}</span>
+      <span className="text-slate-400 text-[10px] mx-0.5">→</span>
+      <span className="text-green-600 font-bold">{newVal}</span>
+    </div>
   </div>
 );
 
@@ -150,25 +155,25 @@ const Badge = ({ color, children }) => {
 };
 
 const ReasonCard = ({ note }) => (
-  <div className="bg-[#fffbeb] border border-[#fde68a] rounded-[14px] p-3.5 mb-2.5">
-    <div className="text-[9px] font-extrabold uppercase tracking-wider text-amber-600 mb-2 flex items-center gap-1.5">
+  <div className="bg-[#fffbeb] border border-[#fde68a] rounded-[14px] p-4">
+    <div className="text-[10px] font-extrabold uppercase tracking-wider text-amber-600 mb-2 flex items-center gap-1.5">
       💬 Motivo / Nota
     </div>
-    <p className="text-[11px] text-amber-800 italic">"{note}"</p>
+    <p className="text-[11px] text-amber-800 italic leading-relaxed">"{note}"</p>
   </div>
 );
 
 const WarnCard = ({ children }) => (
-  <div className="bg-[#fef2f2] border border-[#fecaca] rounded-[14px] p-3 mb-2.5 text-[11px] text-red-800 text-center font-semibold">
+  <div className="bg-[#fef2f2] border border-[#fecaca] rounded-[14px] p-3.5 text-[11px] text-red-800 text-center font-semibold">
     {children}
   </div>
 );
 
 const HighlightCard = ({ label, value, sub }) => (
-  <div className="bg-slate-800 rounded-[14px] p-4 mb-2.5 text-white">
-    <div className="text-[9px] font-bold uppercase tracking-widest text-slate-400">{label}</div>
-    <div className="text-[26px] font-extrabold font-mono mt-0.5 leading-none">{value}</div>
-    {sub && <div className="text-[10px] text-slate-500 mt-1">{sub}</div>}
+  <div className="bg-slate-800 rounded-[14px] p-4 text-white">
+    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{label}</div>
+    <div className="text-[28px] font-extrabold font-mono mt-1 leading-none">{value}</div>
+    {sub && <div className="text-[11px] text-slate-500 mt-1.5">{sub}</div>}
   </div>
 );
 
@@ -183,11 +188,32 @@ export default function LogDetailRenderer({ log }) {
   if (!details) return <p className="text-slate-400 italic text-sm text-center py-4">Sin detalles registrados.</p>;
   if (typeof details === 'string') {
     return (
-      <Card icon="📄" title="Información">
-        <Item label="Detalle" value={details} />
-      </Card>
+      <div className="space-y-4">
+        <Card icon="📄" title="Información">
+          <Item label="Detalle" value={details} />
+        </Card>
+      </div>
     );
   }
+
+  // 👇 LIMPIADOR MEJORADO: Extrae las cuotas si están escondidas en el texto viejo
+  const getFormattedPayment = (payStr, instNum) => {
+    if (typeof payStr !== 'string') return 'Efectivo';
+    
+    let extractedInst = 0;
+    const match = payStr.match(/\((\d+)c\)/i);
+    if (match) {
+      extractedInst = Number(match[1]);
+    }
+
+    let clean = payStr.replace(/\s*\(\d+c\)/i, '').trim();
+    let i = Number(instNum) || extractedInst || 0;
+    
+    if (i > 0 || clean.toLowerCase() === 'credito' || clean.toLowerCase() === 'crédito') {
+      return i > 0 ? `Crédito (${i} ${i === 1 ? 'cuota' : 'cuotas'})` : 'Crédito';
+    }
+    return clean;
+  };
 
   switch (action) {
 
@@ -197,7 +223,7 @@ export default function LogDetailRenderer({ log }) {
 
     case 'Apertura de Caja':
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="💰" title="Información de Apertura">
             <Item label="Monto Inicial">
               <span className="text-[#059669] text-[14px] font-bold">${formatPrice(details.amount)}</span>
@@ -213,9 +239,9 @@ export default function LogDetailRenderer({ log }) {
     case 'Cierre de Caja':
     case 'Cierre Automático':
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           {action === 'Cierre Automático' && (
-            <div className="bg-[#fff7ed] border border-[#ffedd5] rounded-[14px] p-3 mb-[10px] text-[11px] text-[#c2410c] font-bold flex items-center gap-2">
+            <div className="bg-[#fff7ed] border border-[#ffedd5] rounded-[14px] p-3.5 text-[11px] text-[#c2410c] font-bold flex items-center gap-2">
               ⚠ Cierre automático ejecutado por el sistema
             </div>
           )}
@@ -269,7 +295,7 @@ export default function LogDetailRenderer({ log }) {
       if (clientDisplay === 'No asociado') clientDisplay = null; 
 
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="🛒" title="Productos">
             {items.map((item, idx) => {
               const q = item.quantity || item.qty || 0;
@@ -288,10 +314,8 @@ export default function LogDetailRenderer({ log }) {
           </Card>
 
           <Card icon="💳" title="Pago">
-            <Item label="Método de pago" value={details.payment || 'Efectivo'} />
-            
+            <Item label="Método de pago" value={getFormattedPayment(details.payment, details.installments)} />
             {clientDisplay && <Item label="Cliente" value={clientDisplay} />}
-            
             {details.pointsEarned > 0 && (
               <Item label="Puntos ganados">
                 <span className="text-[#059669] font-bold">+{details.pointsEarned} pts</span>
@@ -305,21 +329,21 @@ export default function LogDetailRenderer({ log }) {
     case 'Venta Anulada': {
       const items = details.itemsReturned || details.items || [];
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="📦" title="Productos Devueltos al Stock">
             {items.map((item, idx) => (
-              <div key={idx} className="flex justify-between items-center px-[11px] py-[9px] bg-[#dcfce7] rounded-[9px] mb-[5px] last:mb-0 text-[11px] border border-[#bbf7d0]">
-                <span className="text-[#15803d] font-medium">
-                  <span className="font-mono text-[9px] font-bold bg-[#16a34a] text-white px-1.5 py-[2px] rounded-[4px] mr-[6px]">
+              <div key={idx} className="flex justify-between items-center px-3 py-2 bg-[#dcfce7] rounded-[9px] text-[11px] border border-[#bbf7d0]">
+                <span className="text-[#15803d] font-medium flex items-center">
+                  <span className="font-mono text-[9px] font-bold bg-[#16a34a] text-white px-1.5 py-[2px] rounded-[4px] mr-2">
                     +{item.quantity || item.qty}
                   </span>
                   {item.title || item.name || 'Producto'}
                 </span>
-                <span className="text-[#15803d] font-bold text-[10px] uppercase">Restaurado</span>
+                <span className="text-[#15803d] font-bold text-[10px] uppercase tracking-wider">Restaurado</span>
               </div>
             ))}
           </Card>
-          <div className="bg-[#fffbeb] border border-[#fde68a] rounded-[14px] p-[14px] mb-[10px] text-[11px] text-[#b45309] font-medium">
+          <div className="bg-[#fffbeb] border border-[#fde68a] rounded-[14px] p-3.5 text-[11px] text-[#b45309] font-medium">
             ⚠ <strong>Nota:</strong> El stock fue restaurado automáticamente.
           </div>
           {(details.reason || log.reason) && <ReasonCard note={details.reason || log.reason} />}
@@ -327,19 +351,17 @@ export default function LogDetailRenderer({ log }) {
       );
     }
 
-    // 🔧 FIX: Doble case para cubrir ambos nombres en la BD
     case 'Modificación Pedido':
     case 'Venta Modificada': {
       const changes = details.changes || {};
       const productChanges = details.productChanges || [];
       const itemsSnapshot = details.itemsSnapshot || [];
 
-      // Detección Retrocompatible (Viejos vs Nuevos)
       const isLegacy = !details.changes && !details.productChanges && !details.itemsSnapshot;
       
       if (isLegacy) {
          return (
-           <div className="space-y-0">
+           <div className="space-y-4">
              <Card icon="📝" title="Detalle de Edición">
                <Item label="Transacción afectada" value={`#${getTransactionId(details) || 'Desconocida'}`} />
              </Card>
@@ -354,8 +376,23 @@ export default function LogDetailRenderer({ log }) {
         clientDisplay = `${details.client} ${details.memberNumber && details.memberNumber !== '---' ? `#${String(details.memberNumber).padStart(4, '0')}` : ''}`.trim();
       }
 
+      const basePayment = typeof details.payment === 'string' ? details.payment : 'Efectivo';
+      
+      const oldPayText = getFormattedPayment(
+        changes.payment ? changes.payment.old : basePayment,
+        changes.installments ? changes.installments.old : (details.installments || 0)
+      );
+      
+      const newPayText = getFormattedPayment(
+        changes.payment ? changes.payment.new : basePayment,
+        changes.installments ? changes.installments.new : (details.installments || 0)
+      );
+
+      const isTotalChanged = changes.total && (changes.total.old !== changes.total.new);
+      const isPaymentChanged = oldPayText !== newPayText;
+
       return (
-        <div className="space-y-0">
+        <div className="space-y-4"> 
           
           {itemsSnapshot.length > 0 && (
             <Card icon="🛒" title="Venta Resultante">
@@ -378,15 +415,15 @@ export default function LogDetailRenderer({ log }) {
           {productChanges.length > 0 && (
             <Card icon="📦" title="Diferencias de Stock">
               {productChanges.map((change, idx) => (
-                <div key={idx} className="flex justify-between items-center px-2.5 py-1.5 bg-[#f4f6f9] rounded-[9px] mb-1 last:mb-0 text-[11px] border border-[#eaecf1]">
-                  <span className="font-bold text-[#1e293b]">{change.title}</span>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[#dc2626] line-through text-[10px]">{change.oldQty}x</span>
+                <div key={idx} className="flex justify-between items-center px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1]">
+                  <span className="font-bold text-[#1e293b] truncate mr-2 flex-1">{change.title}</span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="text-[#dc2626] line-through text-[10px] font-medium">{change.oldQty}x</span>
                     <span className="text-[#94a3b8] text-[10px]">→</span>
                     <span className="text-[#16a34a] font-bold">
                       {change.newQty === 0 ? 'Eliminado' : `${change.newQty}x`}
                     </span>
-                    <span className={`px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold ${
+                    <span className={`px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold ml-1 ${
                       change.diff > 0 ? 'bg-[#dcfce7] text-[#15803d]' : 'bg-[#fee2e2] text-[#dc2626]'
                     }`}>
                       {change.diff > 0 ? `+${change.diff}` : change.diff}
@@ -398,21 +435,23 @@ export default function LogDetailRenderer({ log }) {
           )}
 
           <Card icon="💰" title="Ajuste Financiero">
-             {changes.total && (
+             {isTotalChanged && (
                 <ChangeRow
                   field="Monto Total"
                   oldVal={`$${formatPrice(changes.total.old)}`}
                   newVal={`$${formatPrice(changes.total.new)}`}
                 />
              )}
-             {changes.payment && (
+             
+             {isPaymentChanged && (
                 <ChangeRow
-                  field="Método Pago"
-                  oldVal={changes.payment.old}
-                  newVal={changes.payment.new}
+                  field="Método de Pago"
+                  oldVal={oldPayText}
+                  newVal={newPayText}
                 />
              )}
-             {!changes.total && !changes.payment && (
+
+             {!isTotalChanged && !isPaymentChanged && (
                 <Item label="Monto y Pago" value="Sin modificaciones" />
              )}
           </Card>
@@ -435,7 +474,6 @@ export default function LogDetailRenderer({ log }) {
       );
     }
 
-    
     // ══════════════════════════════════════
     //  GASTOS
     // ══════════════════════════════════════
@@ -443,7 +481,7 @@ export default function LogDetailRenderer({ log }) {
     case 'Nuevo Gasto':
     case 'Gasto':
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="💸" title="Detalle del Gasto">
             <Item label="Monto">
               <span className="text-[#dc2626] text-[14px] font-bold">-${formatPrice(details.amount)}</span>
@@ -464,7 +502,7 @@ export default function LogDetailRenderer({ log }) {
 
     case 'Alta de Producto':
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="📋" title="Datos del Producto">
             <Item label="Nombre" value={details.title || details.name || details.product || '-'} />
             {details.brand && details.brand !== '' && <Item label="Marca" value={details.brand} />}
@@ -478,7 +516,7 @@ export default function LogDetailRenderer({ log }) {
               <span className="text-[#059669] font-bold">${formatPrice(details.price)}</span>
             </Item>
             <Item label="Stock Inicial">
-              <Badge color="blue">{details.stock || 0} {details.product_type === 'weight' ? 'gramos' : 'unidades'}</Badge>
+              <Badge color="blue">{details.stock || 0} {details.product_type === 'weight' ? 'g' : 'uds'}</Badge>
             </Item>
             {details.barcode && details.barcode !== '' && (
               <Item label="Código de Barras" value={details.barcode} />
@@ -500,7 +538,7 @@ export default function LogDetailRenderer({ log }) {
           barcode: 'Código', weight: 'Peso', product: 'Nombre'
         };
         return (
-          <div className="space-y-0">
+          <div className="space-y-4">
             <Card icon="📦" title="Producto Modificado">
               <Item label="Producto" value={productName} />
             </Card>
@@ -520,7 +558,7 @@ export default function LogDetailRenderer({ log }) {
       }
 
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="📦" title="Estado Actual del Producto">
             <Item label="Producto" value={productName} />
             <Item label="Categoría">
@@ -533,7 +571,7 @@ export default function LogDetailRenderer({ log }) {
               <Badge color="blue">{details.stock} {details.product_type === 'weight' ? 'g' : 'uds'}</Badge>
             </Item>
             {details.product_type && (
-              <Item label="Tipo" value={details.product_type === 'weight' ? 'Por peso (kg)' : 'Por unidad'} />
+              <Item label="Tipo" value={details.product_type === 'weight' ? 'Por peso (kg/g)' : 'Por unidad'} />
             )}
           </Card>
           {(details.reason || log.reason) && <ReasonCard note={details.reason || log.reason} />}
@@ -543,7 +581,7 @@ export default function LogDetailRenderer({ log }) {
 
     case 'Baja Producto':
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="📋" title="Producto Eliminado">
             <Item label="Nombre" value={details.title || details.name || details.product || '-'} />
             {details.brand && details.brand !== '' && details.brand !== 'Generico' && (
@@ -564,7 +602,7 @@ export default function LogDetailRenderer({ log }) {
 
     case 'Producto Duplicado':
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="📋" title="Producto Duplicado">
             {details.originalTitle && <Item label="Origen" value={details.originalTitle} />}
             <Item label="Nuevo Nombre" value={details.newTitle || details.title || details.name || '-'} />
@@ -605,7 +643,7 @@ export default function LogDetailRenderer({ log }) {
       const memberNumber = details.number ? String(details.number).padStart(4, '0') : null;
 
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="👤" title={isNew ? 'Ficha del Nuevo Socio' : isDelete ? 'Datos del Socio Eliminado' : 'Datos del Socio'}>
             {memberName && (
               <Item label="Nombre">
@@ -621,7 +659,6 @@ export default function LogDetailRenderer({ log }) {
             {details.email && <Item label="Email" value={details.email} />}
             {details.phone && <Item label="Teléfono" value={details.phone} />}
             
-            {/* Info específica de Baja */}
             {isDelete && details.points !== undefined && (
                <Item label="Puntos Perdidos">
                   <span className="text-[#dc2626] font-bold">{details.points} pts</span>
@@ -640,7 +677,7 @@ export default function LogDetailRenderer({ log }) {
 
           {pointsData && pointsData.previous !== undefined && (
             <Card icon="🏆" title="Movimiento de Puntos">
-              <div className="flex items-center gap-[6px] px-[11px] py-[9px] bg-[#f4f6f9] rounded-[9px] mb-[5px] border border-[#eaecf1]">
+              <div className="flex items-center gap-[6px] px-[11px] py-[9px] bg-[#f4f6f9] rounded-[9px] border border-[#eaecf1]">
                 <div className="flex-1 text-center">
                   <div className="text-[9px] text-[#64748b] font-bold uppercase">Anterior</div>
                   <div className="text-[14px] font-mono text-[#64748b]">{pointsData.previous} pts</div>
@@ -687,7 +724,7 @@ export default function LogDetailRenderer({ log }) {
       const rewardType = details.type === 'discount' ? 'Descuento' : details.type === 'product' ? 'Producto' : details.type || 'General';
       const isDelete = action === 'Eliminar Premio';
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="🎁" title="Datos del Premio">
             <Item label="Nombre">
               <span className={isDelete ? 'line-through text-[#94a3b8]' : ''}>{details.title || details.name || '-'}</span>
@@ -716,7 +753,7 @@ export default function LogDetailRenderer({ log }) {
     case 'Edición Masiva Categorías': {
       const changeList = details.changes || details.details || [];
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="🏷️" title="Resumen de Operación">
             <Item label="Productos Afectados">
               <Badge color="fuchsia">{details.count || changeList.length || 0}</Badge>
@@ -732,7 +769,6 @@ export default function LogDetailRenderer({ log }) {
                   let isAdd = true;
                   let text = '';
                   
-                  // Soporta arrays de strings antiguos o arrays de objetos nuevos
                   if (typeof item === 'string') {
                     isAdd = item.includes('✅') || item.includes('Agregado') || !item.includes('❌');
                     text = item;
@@ -768,7 +804,7 @@ export default function LogDetailRenderer({ log }) {
       const isEdit = details.type === 'edit';
 
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="🏷️" title="Gestión de Categoría">
             <Item label="Operación">
               <Badge color={isCreate ? 'green' : isDelete ? 'red' : 'amber'}>
@@ -795,7 +831,7 @@ export default function LogDetailRenderer({ log }) {
       const roleName = details.name || details.role;
       const isAdmin = details.role === 'admin' || roleName === 'Dueño';
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="🔑" title="Sesión Iniciada">
             <Item label="Usuario" value={roleName} />
             <Item label="Nivel de Acceso">
@@ -810,7 +846,7 @@ export default function LogDetailRenderer({ log }) {
 
     case 'Horario Modificado':
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="🕐" title="Configuración de Sistema">
             <Item label="Nuevo Horario de Cierre" value={typeof details === 'string' ? details : (details.time || 'Actualizado')} />
           </Card>
@@ -819,7 +855,7 @@ export default function LogDetailRenderer({ log }) {
 
     case 'Sistema Iniciado':
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="⚡" title="Estado del Sistema">
             <Item label="Estado" value="Sistema inicializado correctamente" />
           </Card>
@@ -828,7 +864,7 @@ export default function LogDetailRenderer({ log }) {
 
     case 'Borrado Permanente':
       return (
-        <div className="space-y-0">
+        <div className="space-y-4">
           <Card icon="🗑️" title="Registro Eliminado">
             <Item label="Elemento" value={typeof details === 'string' ? details : `ID: ${getTransactionId(details) || 'N/A'}`} />
           </Card>
@@ -842,13 +878,15 @@ export default function LogDetailRenderer({ log }) {
 
     default: {
       return (
-        <Card icon="📄" title="Datos del Registro">
-          <div className="bg-[#1e293b] rounded-[9px] p-3 overflow-x-auto">
-            <pre className="text-[10px] text-[#4ade80] font-mono whitespace-pre-wrap">
-              {JSON.stringify(details, null, 2)}
-            </pre>
-          </div>
-        </Card>
+        <div className="space-y-4">
+          <Card icon="📄" title="Datos del Registro">
+            <div className="bg-[#1e293b] rounded-[9px] p-3 overflow-x-auto">
+              <pre className="text-[10px] text-[#4ade80] font-mono whitespace-pre-wrap">
+                {JSON.stringify(details, null, 2)}
+              </pre>
+            </div>
+          </Card>
+        </div>
       );
     }
   }

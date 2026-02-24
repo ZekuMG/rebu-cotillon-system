@@ -1,3 +1,4 @@
+// src/components/ActionLogs/LogsTable.jsx
 import React from 'react';
 import {
   ChevronsUpDown,
@@ -16,6 +17,25 @@ const getTransactionId = (details) => {
     return id.replace('TRX-', '');
   }
   return id;
+};
+
+// 👇 LIMPIADOR MEJORADO: Extrae las cuotas si están escondidas en el texto viejo
+const getFormattedPayment = (payStr, instNum) => {
+  if (typeof payStr !== 'string') return 'Efectivo';
+  
+  let extractedInst = 0;
+  const match = payStr.match(/\((\d+)c\)/i);
+  if (match) {
+    extractedInst = Number(match[1]);
+  }
+
+  let clean = payStr.replace(/\s*\(\d+c\)/i, '').trim();
+  let i = Number(instNum) || extractedInst || 0;
+  
+  if (i > 0 || clean.toLowerCase() === 'credito' || clean.toLowerCase() === 'crédito') {
+    return i > 0 ? `Crédito (${i} ${i === 1 ? 'cuota' : 'cuotas'})` : 'Crédito';
+  }
+  return clean;
 };
 
 const SortIcon = ({ column, sortColumn, sortDirection }) => {
@@ -110,7 +130,7 @@ export default function LogsTable({
             <span className={`${s.b} ${c.bf}`}>${formatPrice(d.total || 0)}</span>
             <span className={s.se}>{parts.join(' + ')} ({items.length} items)</span>
             <div className={s.ss}></div>
-            <span className={`${s.b} ${c.bs}`}>{d.payment || 'Efectivo'}</span>
+            <span className={`${s.b} ${c.bs}`}>{getFormattedPayment(d.payment, d.installments)}</span>
             {clientDisplay && <><div className={s.ss}></div><span className={s.se}>👤 {clientDisplay}</span></>}
           </div>
         );
@@ -127,12 +147,9 @@ export default function LogsTable({
         );
       }
 
-      // 🔧 FIX: Doble case para cubrir tanto "Modificación Pedido" (BD) como "Venta Modificada" (registros erróneos)
       case 'Modificación Pedido':
       case 'Venta Modificada': {
         const txId = getTransactionId(d);
-        
-        // 🌟 LÓGICA RETROCOMPATIBLE: Detecta registro legacy vs nuevo
         const isLegacy = !d.changes && !d.productChanges && !d.itemsSnapshot;
 
         if (isLegacy) {
@@ -145,19 +162,60 @@ export default function LogsTable({
         }
 
         const changes = d.changes || {};
+
+        // 1. Textos base
+        const oldTotalText = changes.total ? `$${formatPrice(changes.total.old)}` : `$${formatPrice(d.total || 0)}`;
+        const newTotalText = changes.total ? `$${formatPrice(changes.total.new)}` : `$${formatPrice(d.total || 0)}`;
+        
+        const basePayment = typeof d.payment === 'string' ? d.payment : 'Efectivo';
+        
+        const oldPayText = getFormattedPayment(
+          changes.payment ? changes.payment.old : basePayment,
+          changes.installments ? changes.installments.old : (d.installments || 0)
+        );
+        const newPayText = getFormattedPayment(
+          changes.payment ? changes.payment.new : basePayment,
+          changes.installments ? changes.installments.new : (d.installments || 0)
+        );
+
+        // 2. Comprobación estricta (Escudo Anti-Falsos Cambios)
+        const isTotalChanged = oldTotalText !== newTotalText;
+        const isPaymentChanged = oldPayText !== newPayText;
+
+        let oldDesc = '';
+        let newDesc = '';
+
+        if (isTotalChanged && isPaymentChanged) {
+          oldDesc = `${oldTotalText} | ${oldPayText}`;
+          newDesc = `${newTotalText} | ${newPayText}`;
+        } else if (isTotalChanged) {
+          oldDesc = oldTotalText;
+          newDesc = newTotalText;
+        } else if (isPaymentChanged) {
+          oldDesc = oldPayText;
+          newDesc = newPayText;
+        }
+
+        const hasFinancialChanges = isTotalChanged || isPaymentChanged;
+
         return (
           <div className={s.sr}>
             <span className={`${s.b} ${c.bb}`}>📝 #{txId}</span>
-            {changes.total ? (
+            
+            {hasFinancialChanges ? (
               <>
                 <div className={s.ss}></div>
-                <span style={{ fontSize: '10px', color: '#dc2626', textDecoration: 'line-through' }}>${formatPrice(changes.total.old)}</span>
-                <span style={{ fontSize: '10px', color: '#94a3b8' }}>→</span>
-                <span style={{ fontSize: '10px', fontWeight: 700, color: '#16a34a' }}>${formatPrice(changes.total.new)}</span>
+                <span className={`${s.b} ${c.bg}`}>
+                  <span style={{ textDecoration: 'line-through', opacity: 0.65, marginRight: '5px' }}>
+                    {oldDesc}
+                  </span>
+                  → {newDesc}
+                </span>
               </>
             ) : (
-              <span className={s.se} style={{ fontStyle: 'italic' }}>Ajuste de stock</span>
+              <span className={s.se} style={{ fontStyle: 'italic', marginLeft: '5px' }}>Ajuste de stock</span>
             )}
+
             {d.productChanges && d.productChanges.length > 0 && (
                <>
                  <div className={s.ss}></div>
@@ -356,11 +414,9 @@ export default function LogsTable({
           </tr>
         </thead>
         <tbody>
-          {/* 🛡️ ESCUDO: Protege a React de crashear si sortedLogs es undefined */}
           {(sortedLogs || []).map((log) => {
             const userClass = log.user === 'Dueño' || log.user === 'admin' ? s.ubAdm : log.user === 'Vendedor' || log.user === 'seller' ? s.ubSel : s.ubSys;
             
-            // 🎨 FIX MAQUILLAJE VISUAL: Cubre ambos nombres de la BD → siempre muestra "Venta Modificada"
             const displayAction = (log.action === 'Modificación Pedido' || log.action === 'Venta Modificada')
               ? 'Venta Modificada' 
               : log.action;

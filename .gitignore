@@ -27,3 +27,4 @@ release/
 dist/
 
 .env
+database supabas/

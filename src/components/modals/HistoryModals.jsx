@@ -58,7 +58,7 @@ export const TransactionDetailModal = ({
   const ptsSpent = transaction.pointsSpent || transaction.client?.pointsSpent || 0;
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-in fade-in duration-200">
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-40 p-4 animate-in fade-in duration-200">
       <div className="bg-[#f8fafc] rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
         
         {/* HEADER */}
