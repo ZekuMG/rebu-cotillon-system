@@ -4,27 +4,26 @@
 
 import { useMemo } from 'react';
 import { PAYMENT_METHODS } from '../data';
-import { isVentaLog, normalizeDate } from '../utils/helpers'; // Importamos el parser robusto
+import { isVentaLog, normalizeDate } from '../utils/helpers';
 
-/**
- * Custom hook que calcula todos los datos derivados del Dashboard.
- * @param {object} params
- * @param {Array} params.transactions - Transacciones activas
- * @param {Array} params.dailyLogs - Logs del día
- * @param {Array} params.inventory - Inventario actual
- * @param {string} params.globalFilter - 'day' | 'week' | 'month'
- * @param {string} params.rankingMode - 'products' | 'categories'
- * @param {Array} params.expenses - Gastos registrados
- * @returns {object} Datos calculados para el Dashboard
- */
 export default function useDashboardData({ transactions, dailyLogs, inventory, globalFilter, rankingMode, expenses = [] }) {
   const currentHour = new Date().getHours();
 
   // Función interna segura usando el helper
   const safeParseDate = (dateStr) => {
-    // Si ya es un objeto Date, devolverlo
+    if (!dateStr) return null;
     if (dateStr instanceof Date) return dateStr;
-    // Si es string, normalizarlo con nuestro helper
+    
+    // FIX: Parseo manual robusto para dd/mm/aaaa o dd/mm/aa
+    if (typeof dateStr === 'string' && dateStr.includes('/')) {
+       const parts = dateStr.split('/');
+       if (parts.length === 3) {
+         let y = parseInt(parts[2], 10);
+         if (y < 100) y += 2000;
+         return new Date(y, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+       }
+    }
+    
     return normalizeDate(dateStr);
   };
 
@@ -35,35 +34,39 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
   };
 
   // =====================================================
-  // HELPER: Filtro de rango por período (reutilizable)
+  // HELPER: Filtro de rango por período MATEMÁTICO (Robusto)
   // =====================================================
   const isInRange = useMemo(() => {
     const now = new Date();
-    // Normalizamos 'now' al inicio del día para comparaciones justas
-    now.setHours(0,0,0,0);
-    const oneDay = 24 * 60 * 60 * 1000;
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+    const currentDay = now.getDate();
+    
+    // Convertimos HOY a un valor absoluto numérico (Ej: 20260224)
+    const todayNum = (currentYear * 10000) + ((currentMonth + 1) * 100) + currentDay;
+
+    // Calculamos el inicio de la semana (hace 7 días)
+    const weekAgo = new Date(now);
+    weekAgo.setDate(now.getDate() - 6); // 7 días contando hoy
+    const weekAgoNum = (weekAgo.getFullYear() * 10000) + ((weekAgo.getMonth() + 1) * 100) + weekAgo.getDate();
 
     return (dateObj) => {
       if (!dateObj) return false;
       
-      // Normalizamos la fecha a comparar
-      const compDate = new Date(dateObj);
-      compDate.setHours(0,0,0,0); // Ignorar hora para comparar días
+      const compYear = dateObj.getFullYear();
+      const compMonth = dateObj.getMonth();
+      const compDay = dateObj.getDate();
+      
+      const compNum = (compYear * 10000) + ((compMonth + 1) * 100) + compDay;
 
       if (globalFilter === 'day') {
-        // Mismo día, mes y año
-        return compDate.getTime() === now.getTime();
+        return compNum === todayNum;
       }
       if (globalFilter === 'week') {
-        // Diferencia en días
-        const diffTime = now.getTime() - compDate.getTime();
-        const diffDays = diffTime / oneDay;
-        // La semana incluye hoy (0) y hasta hace 7 días
-        return diffDays >= 0 && diffDays < 7;
+        return compNum >= weekAgoNum && compNum <= todayNum;
       }
       if (globalFilter === 'month') {
-        // Mismo mes y año
-        return compDate.getMonth() === now.getMonth() && compDate.getFullYear() === now.getFullYear();
+        return compYear === currentYear && compMonth === currentMonth;
       }
       return false;
     };
@@ -80,13 +83,13 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     (transactions || []).forEach(tx => {
       if (tx.status === 'voided') return;
       
-      const txDate = safeParseDate(tx.date); // Parser robusto DD/MM/YYYY
+      const txDate = safeParseDate(tx.date); 
       
       if (txDate && isInRange(txDate)) {
         validTransactions.push({
           source: 'tx', 
           id: tx.id, 
-          date: txDate, // Guardamos el objeto Date real
+          date: txDate, 
           time: tx.time,
           total: Number(tx.total) || 0, 
           payment: tx.payment, 
@@ -100,15 +103,14 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     (dailyLogs || []).forEach(log => {
       if (isVentaLog(log) && log.details) {
         const txId = log.details.transactionId;
-        if (!processedTxIds.has(txId)) { // Evitar duplicados
-          
-          const logDate = safeParseDate(log.date); // Parser robusto
+        if (!processedTxIds.has(txId)) { 
+          const logDate = safeParseDate(log.date);
           
           if (logDate && isInRange(logDate)) {
             validTransactions.push({
               source: 'log', 
               id: txId || log.id, 
-              date: logDate, // Guardamos el objeto Date real
+              date: logDate, 
               time: log.timestamp || '00:00',
               total: Number(log.details.total) || 0,
               payment: log.details.payment || 'Efectivo',
@@ -127,7 +129,7 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
   // =====================================================
   const filteredExpenses = useMemo(() => {
     return (expenses || []).filter(exp => {
-      const expDate = safeParseDate(exp.date);
+      const expDate = safeParseDate(exp.date || exp.created_at);
       return expDate && isInRange(expDate);
     });
   }, [expenses, isInRange]);
@@ -224,7 +226,6 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     for (let i = daysToShow - 1; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
-      // Clave única día/mes
       const key = `${d.getDate()}/${d.getMonth() + 1}`;
       const label = key;
       const dayName = d.toLocaleDateString('es-AR', { weekday: 'short' });
@@ -232,9 +233,7 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     }
 
     filteredData.forEach(tx => {
-      // Usamos el objeto Date real que ya parseamos en filteredData
       if (!tx.date) return;
-      
       const d = tx.date;
       const key = `${d.getDate()}/${d.getMonth() + 1}`;
       
@@ -248,7 +247,6 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     const dayArray = Array.from(daysMap.values());
 
     if (globalFilter === 'month') {
-      // Lógica de semanas dentro del mes actual
       const currentDayOfMonth = new Date().getDate();
       const getCurrentWeekIndex = () => {
         if (currentDayOfMonth <= 7) return 0;
@@ -379,7 +377,7 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     lowStockProducts,
     getEmptyStateMessage,
     expenseStats,
-    filteredData,       // ✅ NUEVO: Ventas filtradas por período
-    filteredExpenses,   // ✅ NUEVO: Gastos filtrados por período
+    filteredData,       
+    filteredExpenses,  
   };
 }

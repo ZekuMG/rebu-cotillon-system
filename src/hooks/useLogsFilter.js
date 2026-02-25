@@ -58,16 +58,28 @@ export function useLogsFilter(dailyLogs = []) {
     return action;
   };
 
-  const parseDate = (dateStr) => {
-    if (!dateStr) return null;
+  // ✨ FIX DEFINITIVO PARA FECHAS ✨
+  // Convertimos todo a números enteros (Ej: 20260224) para comparar matemáticamente
+  const getLogDateNumber = (dateStr) => {
+    if (!dateStr) return 0;
     const parts = dateStr.split('/');
-    if (parts.length !== 3) return null;
-    return new Date(parts[2], parts[1] - 1, parts[0]);
+    if (parts.length !== 3) return 0;
+    let y = parseInt(parts[2], 10);
+    if (y < 100) y += 2000; // Si es 26, lo pasa a 2026
+    let m = parseInt(parts[1], 10);
+    let d = parseInt(parts[0], 10);
+    return (y * 10000) + (m * 100) + d; // Ej: 20260224
   };
 
-  const parseInputDate = (dateStr) => { 
-    if (!dateStr) return null; 
-    return new Date(dateStr + 'T00:00:00'); 
+  const getInputDateNumber = (dateStr) => {
+    if (!dateStr) return 0;
+    // El input type="date" de HTML siempre devuelve YYYY-MM-DD
+    const parts = dateStr.split('-'); 
+    if (parts.length !== 3) return 0;
+    let y = parseInt(parts[0], 10);
+    let m = parseInt(parts[1], 10);
+    let d = parseInt(parts[2], 10);
+    return (y * 10000) + (m * 100) + d; // Ej: 20260224
   };
 
   const parseTime = (timeStr) => { 
@@ -78,8 +90,12 @@ export function useLogsFilter(dailyLogs = []) {
   };
 
   const getFullTimestamp = (log) => { 
-    const date = parseDate(log.date); 
-    if (!date) return 0; 
+    if (!log.date) return 0;
+    const parts = log.date.split('/');
+    if (parts.length !== 3) return 0;
+    let y = parseInt(parts[2], 10);
+    if (y < 100) y += 2000;
+    const date = new Date(y, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)); 
     return date.getTime() + parseTime(log.timestamp) * 1000; 
   };
 
@@ -111,22 +127,23 @@ export function useLogsFilter(dailyLogs = []) {
       const logUser = log.user || 'Sistema';
       const logAction = log.action || 'Acción';
 
+      // COMPARACIÓN MATEMÁTICA DE FECHAS (A prueba de fallos)
       if (filterDateStart || filterDateEnd) {
-        const logDateParsed = parseDate(logDate);
-        if (!logDateParsed) return false;
+        const logNum = getLogDateNumber(logDate);
+        if (logNum === 0) return false;
+        
         if (filterDateStart) { 
-          const startDate = parseInputDate(filterDateStart); 
-          if (startDate && logDateParsed < startDate) return false; 
+          const startNum = getInputDateNumber(filterDateStart); 
+          if (startNum > 0 && logNum < startNum) return false; 
         }
         if (filterDateEnd) { 
-          const endDate = parseInputDate(filterDateEnd); 
-          if (endDate && logDateParsed > endDate) return false; 
+          const endNum = getInputDateNumber(filterDateEnd); 
+          if (endNum > 0 && logNum > endNum) return false; 
         }
       }
 
       if (filterUser && !logUser.toLowerCase().includes(filterUser.toLowerCase())) return false;
 
-      // 🔧 FIX: Cuando el usuario filtra por "Venta Modificada", también matchear logs con "Modificación Pedido"
       if (filterAction && logAction !== filterAction && !(filterAction === 'Venta Modificada' && logAction === 'Modificación Pedido')) return false;
 
       if (filterSearch) { 
@@ -181,7 +198,7 @@ export function useLogsFilter(dailyLogs = []) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
     } else {
       setSortColumn(column);
-      setSortDirection('asc');
+      setSortDirection('desc');
     }
   };
 
@@ -194,23 +211,16 @@ export function useLogsFilter(dailyLogs = []) {
   };
 
   return {
-    // Datos
     sortedLogs,
     uniqueActions,
     hasActiveFilters,
-    
-    // Estados Filtros
     filterDateStart, setFilterDateStart,
     filterDateEnd, setFilterDateEnd,
     filterUser, setFilterUser,
     filterAction, setFilterAction,
     filterSearch, setFilterSearch,
-    
-    // Estados Orden
     sortColumn,
     sortDirection,
-    
-    // Acciones
     handleSort,
     clearAllFilters
   };

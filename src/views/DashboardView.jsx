@@ -1,8 +1,4 @@
 // src/views/DashboardView.jsx
-// ♻️ REFACTOR: Lógica de cálculo extraída a hooks/useDashboardData.js
-//              Widgets extraídos a components/dashboard/
-//              Este archivo conserva: estado UI, drag-and-drop, persistencia de layout
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   GripVertical, 
@@ -25,10 +21,7 @@ import {
 } from '../components/dashboard';
 import { formatPrice } from '../utils/helpers';
 
-// Órdenes por defecto (Constantes)
-// Agregamos 'activityPanel' al final de la sección inferior
-const DEFAULT_BOTTOM_ORDER = ['chart', 'payments', 'topProducts', 'lowStock', 'activityPanel'];
-// Reemplazamos 'placeholder' por 'expenses' si deseas que aparezca por defecto
+const DEFAULT_BOTTOM_ORDER = ['chart', 'payments', 'topProducts', 'lowStock', 'financialActivity', 'systemLogs'];
 const DEFAULT_TOP_ORDER = ['sales', 'revenue', 'net', 'opening', 'average', 'expenses'];
 
 export default function DashboardView({
@@ -41,28 +34,25 @@ export default function DashboardView({
   transactions,
   dailyLogs,
   inventory,
-  // Props nuevas recuperadas
   expenses = [],
   onOpenExpenseModal
 }) {
-  // =====================================================
-  // 1. ESTADOS Y PERMISOS
-  // =====================================================
   const isAdmin = currentUser?.role === 'admin';
 
-  // Filtro global de período
   const [globalFilter, setGlobalFilter] = useState('day');
-
-  // Switch Productos / Categorías
   const [rankingMode, setRankingMode] = useState('products');
 
-  // --- GESTIÓN DE ORDEN Y PERSISTENCIA ---
   const [widgetOrder, setWidgetOrder] = useState(() => {
     const saved = localStorage.getItem('party_dashboard_order_bottom');
     if (saved) {
-      const parsed = JSON.parse(saved);
-      // Seguridad: Si el guardado viejo no tiene el nuevo panel, lo agregamos
-      if (!parsed.includes('activityPanel')) return [...parsed, 'activityPanel'];
+      let parsed = JSON.parse(saved);
+      if (parsed.includes('activityPanel')) {
+        const idx = parsed.indexOf('activityPanel');
+        parsed.splice(idx, 1, 'financialActivity', 'systemLogs');
+      } else {
+        if (!parsed.includes('financialActivity')) parsed.push('financialActivity');
+        if (!parsed.includes('systemLogs')) parsed.push('systemLogs');
+      }
       return parsed;
     }
     return DEFAULT_BOTTOM_ORDER;
@@ -72,7 +62,6 @@ export default function DashboardView({
     const saved = localStorage.getItem('party_dashboard_order_top');
     if (saved) {
         const parsed = JSON.parse(saved);
-        // Seguridad: Si el guardado viejo tiene placeholder, lo migramos a expenses
         const migrated = parsed.map(k => k === 'placeholder' ? 'expenses' : k);
         if (!migrated.includes('expenses')) return [...migrated, 'expenses'];
         return migrated;
@@ -84,7 +73,6 @@ export default function DashboardView({
   const [draggedItem, setDraggedItem] = useState(null);
   const [draggedTopItem, setDraggedTopItem] = useState(null);
 
-  // Detectar cambios sin guardar
   useEffect(() => {
     const savedBottom = localStorage.getItem('party_dashboard_order_bottom');
     const savedTop = localStorage.getItem('party_dashboard_order_top');
@@ -109,17 +97,12 @@ export default function DashboardView({
   };
 
   const handleRestoreLayout = () => {
-    // Borramos localStorage para resetear a los nuevos Defaults
     localStorage.removeItem('party_dashboard_order_bottom');
     localStorage.removeItem('party_dashboard_order_top');
     setWidgetOrder(DEFAULT_BOTTOM_ORDER);
     setTopWidgetOrder(DEFAULT_TOP_ORDER);
     setHasUnsavedChanges(false);
   };
-
-  // =====================================================
-  // 2. DATOS CALCULADOS (via custom hook)
-  // =====================================================
 
   const {
     kpiStats,
@@ -130,14 +113,10 @@ export default function DashboardView({
     rankingStats,
     lowStockProducts,
     getEmptyStateMessage,
-    filteredData,       // ✅ NUEVO
-    filteredExpenses,   // ✅ NUEVO
+    filteredData,       
+    filteredExpenses,  
   } = useDashboardData({ transactions, dailyLogs, inventory, globalFilter, rankingMode, expenses });
 
-  // =====================================================
-  // 2.1 DATOS LOCALES PARA EL NUEVO PANEL DE ACTIVIDAD
-  // =====================================================
-  // Unificamos Ventas y Gastos en una sola lista cronológica
   const combinedActivity = useMemo(() => {
     const sales = (filteredData || []).map(t => ({
       ...t,
@@ -160,48 +139,19 @@ export default function DashboardView({
     return [...sales, ...exps].sort((a, b) => b.sortTime - a.sortTime);
   }, [filteredData, filteredExpenses]);
 
-
-  // =====================================================
-  // 3. RENDERIZADORES DE WIDGETS
-  // =====================================================
   const renderWidget = (widgetKey) => {
     switch (widgetKey) {
       case 'chart':
-        return (
-          <SalesChart
-            chartData={chartData}
-            maxSales={maxSales}
-            globalFilter={globalFilter}
-            getEmptyStateMessage={getEmptyStateMessage}
-          />
-        );
+        return <SalesChart chartData={chartData} maxSales={maxSales} globalFilter={globalFilter} getEmptyStateMessage={getEmptyStateMessage} />;
       case 'payments':
-        return (
-          <PaymentBreakdown
-            paymentStats={paymentStats}
-            totalGross={kpiStats.gross}
-            globalFilter={globalFilter}
-          />
-        );
+        return <PaymentBreakdown paymentStats={paymentStats} totalGross={kpiStats.gross} globalFilter={globalFilter} />;
       case 'topProducts':
-        return (
-          <TopRanking
-            rankingStats={rankingStats}
-            rankingMode={rankingMode}
-            setRankingMode={setRankingMode}
-            getEmptyStateMessage={getEmptyStateMessage}
-          />
-        );
+        return <TopRanking rankingStats={rankingStats} rankingMode={rankingMode} setRankingMode={setRankingMode} getEmptyStateMessage={getEmptyStateMessage} />;
       case 'lowStock':
         return <LowStockAlert lowStockProducts={lowStockProducts} />;
-      
-      // --- NUEVO WIDGET: PANEL DE ACTIVIDAD Y BITÁCORA ---
-      case 'activityPanel':
+      case 'financialActivity':
         return (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 h-full min-h-[450px]">
-            
-            {/* COLUMNA 1: Actividad Financiera (Ventas + Gastos) */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden h-full max-h-[450px]">
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden h-[380px]">
               <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center shrink-0">
                 <h3 className="font-bold text-slate-700 flex items-center gap-2">
                   <Clock size={18} className="text-blue-600"/> Actividad Financiera
@@ -213,15 +163,12 @@ export default function DashboardView({
                   <span className="text-[10px] font-bold text-slate-400 bg-white border px-2 py-0.5 rounded">En vivo</span>
                 </div>
               </div>
-
               <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
                 {combinedActivity.length > 0 ? (
-                  combinedActivity.slice(0, 50).map((item, idx) => ( // Mostramos hasta 50, scroll para verlos
+                  combinedActivity.slice(0, 50).map((item, idx) => ( 
                     <div key={idx} className="flex items-center justify-between p-3 mb-1 hover:bg-slate-50 rounded-lg transition-colors border-b border-dashed border-slate-100 last:border-0">
                       <div className="flex items-center gap-3">
-                        <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 shadow-sm ${
-                            item.type === 'sale' ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'
-                        }`}>
+                        <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 shadow-sm ${item.type === 'sale' ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>
                           {item.type === 'sale' ? <ShoppingCart size={16} /> : <TrendingDown size={16} />}
                         </div>
                         <div className="flex flex-col">
@@ -229,9 +176,7 @@ export default function DashboardView({
                               {item.type === 'sale' ? `Venta #${item.id}` : item.category}
                           </span>
                           <span className="text-[10px] text-slate-400 leading-tight">
-                              {item.type === 'sale' 
-                                  ? `${item.payment} • ${item.items?.length || 0} items` 
-                                  : `${item.paymentMethod} • ${item.note || '-'}`}
+                              {item.type === 'sale' ? `${item.payment} • ${item.items?.length || 0} items` : `${item.paymentMethod} • ${item.note || '-'}`}
                           </span>
                         </div>
                       </div>
@@ -248,27 +193,25 @@ export default function DashboardView({
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center text-slate-400 opacity-60">
                     <Clock size={32} className="mb-2" />
-                    <p className="text-xs italic">
-                      {{ day: 'Sin movimientos hoy', week: 'Sin movimientos esta semana', month: 'Sin movimientos este mes' }[globalFilter]}
-                    </p>
+                    <p className="text-xs italic">{{ day: 'Sin movimientos hoy', week: 'Sin movimientos esta semana', month: 'Sin movimientos este mes' }[globalFilter]}</p>
                   </div>
                 )}
               </div>
             </div>
-
-            {/* COLUMNA 2: Bitácora de Acciones (Logs) */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden h-full max-h-[450px]">
+        );
+      case 'systemLogs':
+        return (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden h-[380px]">
               <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center shrink-0">
                 <h3 className="font-bold text-slate-700 flex items-center gap-2">
                   <FileText size={18} className="text-fuchsia-600"/> Bitácora del Sistema
                 </h3>
                 <span className="text-[10px] font-bold text-slate-400 bg-white border px-2 py-0.5 rounded">Auditoría</span>
               </div>
-
               <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                 <div className="space-y-0">
                   {dailyLogs && dailyLogs.length > 0 ? (
-                    dailyLogs.slice(0, 50).map((log) => ( // Scroll para ver más de 10
+                    dailyLogs.slice(0, 50).map((log) => (
                       <div key={log.id} className="flex gap-3 relative pb-5 border-l border-slate-200 ml-1.5 last:border-0 last:pb-0 group">
                         <div className="absolute -left-[5px] top-1.5 w-2.5 h-2.5 rounded-full bg-slate-300 ring-4 ring-white group-hover:bg-fuchsia-400 transition-colors" />
                         <div className="pl-3 -mt-1 w-full">
@@ -294,40 +237,25 @@ export default function DashboardView({
                 </div>
               </div>
             </div>
-
-          </div>
         );
-
-      default:
-        return null;
+      default: return null;
     }
   };
 
-  // =====================================================
-  // 4. RENDER PRINCIPAL
-  // =====================================================
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-10">
-      {/* HEADER & CONTROLES */}
       <div className="flex flex-col lg:flex-row justify-between items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold text-slate-800">Panel de Control</h2>
           <p className="text-xs text-slate-400">Resumen de operaciones en tiempo real</p>
         </div>
-
         <div className="flex flex-wrap items-center gap-3">
-          <LayoutManagerControls
-            isAdmin={isAdmin}
-            hasUnsavedChanges={hasUnsavedChanges}
-            onSave={handleSaveLayout}
-            onRestore={handleRestoreLayout}
-          />
+          <LayoutManagerControls isAdmin={isAdmin} hasUnsavedChanges={hasUnsavedChanges} onSave={handleSaveLayout} onRestore={handleRestoreLayout} />
           <div className="h-6 w-px bg-slate-200 hidden sm:block"></div>
           <GlobalTimeSwitch globalFilter={globalFilter} setGlobalFilter={setGlobalFilter} />
         </div>
       </div>
 
-      {/* Tarjetas principales (KPIs) - Draggable condicional */}
       <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {topWidgetOrder.map((widgetKey, index) => (
           <div
@@ -338,6 +266,7 @@ export default function DashboardView({
               setDraggedTopItem(widgetKey);
               e.dataTransfer.effectAllowed = 'move';
             }}
+            onDragEnd={() => setDraggedTopItem(null)} // ✨ EVENTO SALVAVIDAS AGREGADO
             onDragOver={(e) => {
               e.preventDefault();
               if (!isAdmin || draggedTopItem === widgetKey) return;
@@ -353,9 +282,7 @@ export default function DashboardView({
               e.preventDefault();
               setDraggedTopItem(null);
             }}
-            className={`transition-all duration-200 ${
-              draggedTopItem === widgetKey ? 'opacity-40 scale-95' : 'opacity-100'
-            }`}
+            className={`transition-all duration-200 ${draggedTopItem === widgetKey ? 'opacity-40 scale-95' : 'opacity-100'}`}
           >
             <div className="group relative h-full">
               {isAdmin && (
@@ -372,8 +299,7 @@ export default function DashboardView({
                 setTempOpeningBalance={setTempOpeningBalance}
                 setIsOpeningBalanceModalOpen={setIsOpeningBalanceModalOpen}
                 globalFilter={globalFilter}
-                // Pasamos props de Gastos para que KpiCards.jsx pueda renderizar la tarjeta 'expenses'
-                expenses={expenses}
+                expenses={filteredExpenses} 
                 onOpenExpenseModal={onOpenExpenseModal}
               />
             </div>
@@ -381,58 +307,48 @@ export default function DashboardView({
         ))}
       </div>
 
-      {/* Gráficos y Widgets Inferiores - Draggable condicional */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {widgetOrder.map((widgetKey, index) => {
-          // El panel de actividad ocupará todo el ancho si es posible (lg:col-span-2)
-          const isFullWidth = widgetKey === 'activityPanel';
-
-          return (
-            <div
-              key={widgetKey}
-              draggable={isAdmin}
-              onDragStart={(e) => {
-                if (!isAdmin) return;
-                setDraggedItem(widgetKey);
-                e.dataTransfer.effectAllowed = 'move';
-              }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                if (!isAdmin || draggedItem === widgetKey) return;
-                const currentIdx = widgetOrder.indexOf(draggedItem);
-                if (currentIdx !== -1 && currentIdx !== index) {
-                  const newOrder = [...widgetOrder];
-                  newOrder.splice(currentIdx, 1);
-                  newOrder.splice(index, 0, draggedItem);
-                  setWidgetOrder(newOrder);
-                }
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDraggedItem(null);
-              }}
-              className={`transition-all duration-200 h-full ${
-                draggedItem === widgetKey ? 'opacity-40 scale-95 border-dashed border-2 border-slate-300 rounded-xl' : ''
-              } ${isFullWidth ? 'lg:col-span-2' : ''}`}
-            >
-              <div className={`group relative h-full ${widgetKey === 'activityPanel' ? '' : ''}`}>
-                {isAdmin ? (
-                  <div className="absolute top-4 right-4 z-20 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 bg-white/80 p-1 rounded backdrop-blur-sm">
-                    <GripVertical size={16} />
-                  </div>
-                ) : (
-                  // Solo mostramos candado si NO es el panel de actividad (para no tapar info)
-                  widgetKey !== 'activityPanel' && (
-                    <div className="absolute top-4 right-4 z-20 opacity-0 group-hover:opacity-50 transition-opacity text-slate-200 pointer-events-none">
-                      <Lock size={16} />
-                    </div>
-                  )
-                )}
-                {renderWidget(widgetKey)}
-              </div>
+        {widgetOrder.map((widgetKey, index) => (
+          <div
+            key={widgetKey}
+            draggable={isAdmin}
+            onDragStart={(e) => {
+              if (!isAdmin) return;
+              setDraggedItem(widgetKey);
+              e.dataTransfer.effectAllowed = 'move';
+            }}
+            onDragEnd={() => setDraggedItem(null)} // ✨ EVENTO SALVAVIDAS AGREGADO
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!isAdmin || draggedItem === widgetKey) return;
+              const currentIdx = widgetOrder.indexOf(draggedItem);
+              if (currentIdx !== -1 && currentIdx !== index) {
+                const newOrder = [...widgetOrder];
+                newOrder.splice(currentIdx, 1);
+                newOrder.splice(index, 0, draggedItem);
+                setWidgetOrder(newOrder);
+              }
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDraggedItem(null);
+            }}
+            className={`transition-all duration-200 h-full ${draggedItem === widgetKey ? 'opacity-40 scale-95 border-dashed border-2 border-slate-300 rounded-xl' : ''}`}
+          >
+            <div className="group relative h-full">
+              {isAdmin ? (
+                <div className="absolute top-4 right-4 z-20 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 bg-white/80 p-1 rounded backdrop-blur-sm">
+                  <GripVertical size={16} />
+                </div>
+              ) : (
+                <div className="absolute top-4 right-4 z-20 opacity-0 group-hover:opacity-50 transition-opacity text-slate-200 pointer-events-none">
+                  <Lock size={16} />
+                </div>
+              )}
+              {renderWidget(widgetKey)}
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
     </div>
   );

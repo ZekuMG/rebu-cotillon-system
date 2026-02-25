@@ -965,7 +965,7 @@ const handleEditTransactionRequest = (tx) => {
     }
   };
 
-  const executeRegisterClose = async (isAuto = false) => {
+const executeRegisterClose = async (isAuto = false) => {
     const closeDate = new Date();
     
     // ✅ FIX: Filtrar SOLO ventas y gastos del ciclo actual (desde apertura)
@@ -1038,6 +1038,29 @@ const handleEditTransactionRequest = (tx) => {
         })();
 
     try {
+        // ✨ FIX ANTI-DUPLICADOS (Evita que múltiples dispositivos guarden a la vez) ✨
+        if (isAuto) {
+            const hoyStr = formatDateAR(closeDate);
+            const { count } = await supabase
+                .from('cash_closures')
+                .select('*', { count: 'exact', head: true })
+                .eq('date', hoyStr)
+                .eq('type', 'Automático')
+                // Revisa si ya se hizo un cierre automático en los últimos 3 minutos
+                .gte('created_at', new Date(Date.now() - 3 * 60000).toISOString());
+
+            if (count > 0) {
+                console.log("Cierre interceptado: Otro dispositivo ya cerró la caja.");
+                setIsRegisterClosed(true);
+                setRegisterOpenedAt(null);
+                setIsClosingCashModalOpen(false);
+                setTransactions([]);
+                setExpenses([]);
+                if (isAuto) setIsAutoCloseAlertOpen(true);
+                return; // Corta la ejecución aquí, no guarda duplicado
+            }
+        }
+
         const openTime = registerOpenedAt 
           ? formatTimeFullAR(new Date(registerOpenedAt))
           : (dailyLogs.find(l => l.action === 'Apertura de Caja')?.timestamp || '--:--');
@@ -1118,6 +1141,7 @@ const handleEditTransactionRequest = (tx) => {
     }
   };
 
+  
   const handleConfirmCloseCash = () => executeRegisterClose(false);
 
   const handleSaveOpeningBalance = async () => {
@@ -1589,23 +1613,52 @@ const handleDuplicateProduct = async (originalProduct) => {
   };
 
   
-const handleConfirmRefund = async (e) => {
+  const handleConfirmRefund = async (e) => {
     e.preventDefault();
     const tx = transactionToRefund;
     if (!tx) return;
     
-    console.log("=== INICIANDO ANULACIÓN MODO DEBUG ===", tx);
+    console.log("=== INICIANDO ANULACIÓN / BORRADO MODO DEBUG ===", tx);
 
     try {
+      // ========================================================
+      // 🗑️ MODO BORRADO DEFINITIVO (Si la venta ya estaba anulada)
+      // ========================================================
       if (tx.status === 'voided') {
+        Swal.fire({ title: 'Borrando...', text: 'Eliminando registro permanentemente...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+        
+        // 1. Borrar de la base de datos (si existe en la tabla de logs como "Venta Anulada" o "Venta Realizada")
+        // Como la tabla de ventas ya se borró en el paso anterior, aquí limpiamos el historial (Logs)
+        const { error: logErr } = await supabase
+          .from('logs')
+          .delete()
+          .or(`and(action.eq.Venta Realizada,details->>transactionId.eq.${tx.id}),and(action.eq.Venta Anulada,details->>id.eq.${tx.id})`);
+        
+        if (logErr) {
+          console.warn("No se pudo borrar el log en la BD (o ya no existía):", logErr);
+        }
+
+        // 2. Limpiar estado local
         setTransactions(transactions.filter(t => String(t.id) !== String(tx.id)));
+        setDailyLogs(dailyLogs.filter(l => {
+          const detailId = l.details?.transactionId || l.details?.id;
+          return String(detailId) !== String(tx.id);
+        }));
+        
+        // 3. Registrar el borrado permanente (opcional, por seguridad)
+        addLog('Borrado Permanente', `Transacción #${tx.id} eliminada por completo`, refundReason || 'Limpieza de historial');
+
         setIsRefundModalOpen(false);
         setTransactionToRefund(null);
         setRefundReason('');
-        showNotification('success', 'Registro Borrado', 'La transacción fue ocultada del historial.');
+        Swal.close();
+        showNotification('success', 'Registro Borrado', 'La transacción fue eliminada permanentemente del sistema.');
         return;
       }
 
+      // ========================================================
+      // ❌ MODO ANULACIÓN NORMAL (Si es la primera vez que se toca)
+      // ========================================================
       // PASO 1
       Swal.fire({ title: 'Anulando...', text: 'Paso 1: Devolviendo stock...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       const updatedInventory = [...inventory];
@@ -1661,16 +1714,15 @@ const handleConfirmRefund = async (e) => {
           quantity: i.quantity || i.qty
         }))
       };
-      // Esto genera la fila en el historial de acciones y el modal HTML
+      
+      // Guardar el log de anulación
       addLog('Venta Anulada', logDetails, refundReason || 'Anulación manual');
 
       // PASO 5: EL FIX VISUAL FANTASMA
-      // Si era una venta vieja que solo existía en HistoryView, la forzamos a entrar en el estado local tachada
       const exists = transactions.some(t => String(t.id) === String(tx.id));
       if (exists) {
         setTransactions(transactions.map((t) => String(t.id) === String(tx.id) ? { ...t, status: 'voided' } : t));
       } else {
-        // La metemos "a la fuerza" al array para que la vista de historial la detecte y la tache
         setTransactions([{ ...tx, status: 'voided' }, ...transactions]);
       }
       

@@ -10,15 +10,15 @@ import {
   ChevronRight,
   TrendingUp,
   User,
-  AlertCircle
+  Filter
 } from 'lucide-react';
 import { formatPrice, normalizeDate } from '../utils/helpers';
 import { DailyReportModal } from '../components/modals/DailyReportModal';
 
-// CAMBIO AQUÍ: Agregamos 'members' a las props recibidas
 export default function ReportsHistoryView({ pastClosures, members }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedReport, setSelectedReport] = useState(null);
+  const [typeFilter, setTypeFilter] = useState('Todas');
 
   // --- ORDENAMIENTO Y FILTRADO ---
   const sortedAndFilteredClosures = useMemo(() => {
@@ -26,91 +26,99 @@ export default function ReportsHistoryView({ pastClosures, members }) {
 
     // 1. Ordenar: Más reciente primero
     const sorted = [...safeClosures].sort((a, b) => {
-      // ✅ FIX: Usar normalizeDate que soporta DD/MM/YY y DD/MM/YYYY
       const dateA = normalizeDate(a.date) || new Date(0);
       const dateB = normalizeDate(b.date) || new Date(0);
       
-      // Si las fechas son distintas, ordenar por fecha
       if (dateA.getTime() !== dateB.getTime()) {
         return dateB.getTime() - dateA.getTime();
       }
       
-      // Si es el mismo día, intentar desempatar por ID (que contiene timestamp)
-      const timeA = parseInt(String(a.id).replace(/\D/g, '')) || 0;
       const timeB = parseInt(String(b.id).replace(/\D/g, '')) || 0;
+      const timeA = parseInt(String(a.id).replace(/\D/g, '')) || 0;
       return timeB - timeA;
     });
 
     // 2. Filtrar
     return sorted.filter(report => {
-      if (!searchTerm) return true;
       const term = searchTerm.toLowerCase();
-      const dateMatch = report.date?.toLowerCase().includes(term);
-      const userMatch = report.user?.toLowerCase().includes(term);
-      const idMatch = String(report.id).toLowerCase().includes(term);
-      return dateMatch || userMatch || idMatch;
+      const matchesSearch = 
+        (report.date?.toLowerCase().includes(term)) ||
+        (report.user?.toLowerCase().includes(term)) ||
+        (String(report.id).toLowerCase().includes(term));
+      
+      const matchesType = 
+        typeFilter === 'Todas' || 
+        report.type === typeFilter;
+
+      return matchesSearch && matchesType;
     });
-  }, [pastClosures, searchTerm]);
+  }, [pastClosures, searchTerm, typeFilter]);
 
   return (
-    <div className="h-full flex flex-col bg-slate-50 p-6 relative">
+    <div className="flex flex-col h-full overflow-hidden bg-slate-100">
       
-      {/* HEADER */}
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-           <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-             <FileText className="text-fuchsia-600" /> Registro de Cierres
-           </h1>
-           <p className="text-sm text-slate-500 mt-1">Historial de reportes diarios y balances de caja.</p>
+      {/* HEADER (ESTILO INVENTARIO) */}
+      <div className="p-4 bg-white border-b shrink-0 flex flex-wrap gap-3 justify-between items-center z-30 relative shadow-sm">
+        <div className="flex items-center gap-2 flex-1 min-w-[300px]">
+          {/* Buscador */}
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <input 
+              type="text" 
+              placeholder="Buscar por fecha, ID o usuario..." 
+              className="w-full pl-10 pr-4 py-2 border rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-fuchsia-500 outline-none transition-all text-sm" 
+              value={searchTerm} 
+              onChange={(e) => setSearchTerm(e.target.value)} 
+            />
+          </div>
+          {/* Filtro de Tipo (Símil Categoría) */}
+          <div className="relative">
+            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            <select 
+              className="pl-9 pr-8 py-2 border rounded-lg bg-slate-50 text-sm focus:ring-2 focus:ring-fuchsia-500 outline-none appearance-none cursor-pointer"
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+            >
+              <option value="Todas">Todos los tipos</option>
+              <option value="Manual">Manual</option>
+              <option value="Automático">Automático</option>
+            </select>
+          </div>
         </div>
-        
-        <div className="relative w-full sm:w-72">
-          <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Buscar fecha, usuario..."
-            className="w-full rounded-xl border border-gray-200 pl-10 p-2.5 bg-white focus:border-fuchsia-500 focus:ring-2 focus:ring-fuchsia-100 outline-none shadow-sm transition-all"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
+
+        {/* Título de Vista */}
+        <div className="hidden md:flex items-center gap-3 px-4 py-2 bg-fuchsia-50 rounded-lg border border-fuchsia-100">
+           <FileText className="text-fuchsia-600" size={18} />
+           <span className="text-sm font-bold text-fuchsia-900 uppercase tracking-tight">Registro de Cierres</span>
         </div>
       </div>
 
-      {/* LISTA DE REPORTES */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
+      {/* CUERPO / GRID DE REPORTES */}
+      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
         {sortedAndFilteredClosures.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-400 opacity-60">
-            {searchTerm ? (
-               <>
-                 <Search size={64} className="mb-4 text-slate-300" />
-                 <p>No se encontraron reportes con esa búsqueda.</p>
-               </>
-            ) : (
-               <>
-                 <FileText size={64} className="mb-4 text-slate-300" />
-                 <p>No hay reportes registrados aún.</p>
-                 <p className="text-xs mt-2 text-slate-400">Los cierres de caja aparecerán aquí.</p>
-               </>
-            )}
+          <div className="h-full flex flex-col items-center justify-center text-slate-400">
+            <FileText size={64} className="mb-4 text-slate-300" />
+            <p className="text-lg font-medium">No se encontraron reportes</p>
+            <p className="text-sm">Intenta ajustar los filtros de búsqueda</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-10">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-8">
             {sortedAndFilteredClosures.map((report) => (
               <button
                 key={report.id}
                 onClick={() => setSelectedReport(report)}
-                className="bg-white border border-gray-200 rounded-xl p-0 hover:shadow-lg hover:border-fuchsia-300 transition-all text-left group overflow-hidden flex flex-col relative"
+                className="bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col cursor-pointer transition-all hover:shadow-xl hover:border-fuchsia-300 group relative"
               >
                 {/* Tipo de Cierre Badge */}
-                <div className={`absolute top-0 right-0 px-2 py-1 rounded-bl-lg text-[10px] font-bold text-white
+                <div className={`absolute top-0 right-0 px-2 py-1 rounded-bl-lg text-[10px] font-bold text-white shadow-sm
                     ${report.type === 'Automático' ? 'bg-amber-500' : 'bg-slate-700'}`}>
                     {report.type === 'Automático' ? 'AUTO' : 'MANUAL'}
                 </div>
 
-                {/* Header Card: Fecha y Usuario */}
-                <div className="p-4 border-b border-gray-50 bg-gray-50/50 flex justify-between items-start">
+                {/* Header Card */}
+                <div className="p-4 border-b border-slate-50 bg-slate-50/50 flex justify-between items-start">
                   <div>
-                    <div className="flex items-center gap-1.5 text-fuchsia-700 font-bold mb-1">
+                    <div className="flex items-center gap-1.5 text-fuchsia-700 font-bold mb-1 text-sm">
                       <Calendar size={16} />
                       <span>{report.date}</span>
                     </div>
@@ -119,41 +127,41 @@ export default function ReportsHistoryView({ pastClosures, members }) {
                       <span>{report.closeTime || '??:??'}</span>
                     </div>
                   </div>
-                  <div className="bg-slate-200 text-slate-600 p-1.5 rounded-lg mt-1">
+                  <div className="bg-white text-slate-400 p-1.5 rounded-lg border shadow-sm group-hover:text-fuchsia-500 transition-colors">
                     <FileText size={18} />
                   </div>
                 </div>
 
-                {/* Body Card: Métricas Clave */}
-                <div className="p-4 space-y-3 flex-1 w-full">
-                  <div className="flex justify-between items-end w-full">
-                    <span className="text-xs font-bold text-slate-400 uppercase">Total Ventas</span>
-                    <span className="text-xl font-black text-slate-800">${formatPrice(report.totalSales)}</span>
+                {/* Body Card */}
+                <div className="p-4 space-y-4 flex-1">
+                  <div className="flex justify-between items-end">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Ventas</span>
+                    <span className="text-2xl font-black text-slate-800 leading-none">${formatPrice(report.totalSales)}</span>
                   </div>
                   
-                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-dashed border-gray-100 w-full">
+                  <div className="grid grid-cols-2 gap-2 pt-3 border-t border-dashed border-slate-100">
                     <div>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase mb-0.5">Operaciones</p>
-                      <div className="flex items-center gap-1 text-sm font-bold text-slate-600">
-                        <TrendingUp size={12} /> {report.salesCount}
+                      <p className="text-[10px] text-slate-400 font-bold uppercase mb-1">Operaciones</p>
+                      <div className="flex items-center gap-1 text-sm font-bold text-slate-700">
+                        <TrendingUp size={14} className="text-blue-500" /> {report.salesCount}
                       </div>
                     </div>
                     <div>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase mb-0.5">Ganancia Neta</p>
-                      <div className={`flex items-center gap-1 text-sm font-bold ${report.netProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        <DollarSign size={12} /> ${formatPrice(report.netProfit)}
+                      <p className="text-[10px] text-slate-400 font-bold uppercase mb-1">Ganancia Neta</p>
+                      <div className={`flex items-center gap-1 text-sm font-bold ${report.netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        <DollarSign size={14} /> ${formatPrice(report.netProfit)}
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {/* Footer Card: Responsable */}
-                <div className="px-4 py-3 bg-slate-50 border-t border-gray-100 flex justify-between items-center text-xs w-full">
-                  <div className="flex items-center gap-1.5 text-slate-500 font-medium">
-                    <User size={12} />
+                {/* Footer Card */}
+                <div className="px-4 py-3 bg-slate-50 border-t border-slate-100 flex justify-between items-center text-xs">
+                  <div className="flex items-center gap-1.5 text-slate-500 font-bold">
+                    <User size={12} className="text-slate-400" />
                     {report.user || 'Sistema'}
                   </div>
-                  <span className="text-fuchsia-600 font-bold flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <span className="text-fuchsia-600 font-bold flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0">
                     Ver Detalle <ChevronRight size={14} />
                   </span>
                 </div>
@@ -163,7 +171,7 @@ export default function ReportsHistoryView({ pastClosures, members }) {
         )}
       </div>
 
-      {/* MODAL DETALLE (VISOR TIPO PDF) */}
+      {/* MODAL DETALLE */}
       <DailyReportModal 
         isOpen={!!selectedReport} 
         onClose={() => setSelectedReport(null)} 

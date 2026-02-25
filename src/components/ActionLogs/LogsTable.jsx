@@ -19,7 +19,7 @@ const getTransactionId = (details) => {
   return id;
 };
 
-// 👇 LIMPIADOR MEJORADO: Extrae las cuotas si están escondidas en el texto viejo
+// LIMPIADOR UNIVERSAL
 const getFormattedPayment = (payStr, instNum) => {
   if (typeof payStr !== 'string') return 'Efectivo';
   
@@ -38,19 +38,31 @@ const getFormattedPayment = (payStr, instNum) => {
   return clean;
 };
 
+// ✨ NUEVO: Formateador visual para asegurar que el año siempre tenga 4 dígitos (AAAA)
+const formatDisplayDate = (dateStr) => {
+  if (!dateStr) return '-';
+  const parts = dateStr.split('/');
+  if (parts.length === 3) {
+    let year = parts[2];
+    if (year.length === 2) year = '20' + year; // Convierte "26" en "2026"
+    return `${parts[0]}/${parts[1]}/${year}`;
+  }
+  return dateStr;
+};
+
 const SortIcon = ({ column, sortColumn, sortDirection }) => {
   if (sortColumn !== column)
-    return <ChevronsUpDown size={14} className="text-slate-300 ml-1 inline" />;
+    return <ChevronsUpDown size={14} className="text-slate-300" />;
   return sortDirection === 'asc' ? (
-    <ChevronUp size={14} className="text-amber-600 ml-1 inline" />
+    <ChevronUp size={14} className="text-amber-600" />
   ) : (
-    <ChevronDown size={14} className="text-amber-600 ml-1 inline" />
+    <ChevronDown size={14} className="text-amber-600" />
   );
 };
 
 const s = {
   table: "w-full border-collapse bg-white rounded-xl overflow-hidden border border-[#e2e8f0] shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
-  th: "text-left p-[10px_14px] text-[9px] font-bold uppercase tracking-[0.5px] text-[#94a3b8] border-b border-[#e2e8f0] bg-[#f8fafc] cursor-pointer hover:bg-slate-100 select-none transition-colors",
+  th: "text-left p-[10px_14px] text-[9px] font-bold uppercase tracking-[0.5px] text-[#94a3b8] border-b border-[#e2e8f0] bg-[#f8fafc] cursor-pointer hover:bg-slate-100 select-none transition-colors whitespace-nowrap",
   td: "p-[11px_14px] text-[11px] border-b border-[#f1f5f9] align-middle",
   tr: "cursor-pointer transition-colors duration-150 hover:bg-[#fef3c7]",
   trSelected: "bg-[#fef9c3]",
@@ -67,18 +79,15 @@ const s = {
   b: "inline-flex items-center gap-[3px] px-[7px] py-[2px] rounded-[4px] text-[9px] font-bold",
 };
 
+// ESQUEMA SEMÁNTICO DE COLORES
 const c = {
-  bg: "bg-[#dcfce7] text-[#15803d]", 
-  br: "bg-[#fee2e2] text-[#dc2626]", 
-  bf: "bg-[#fae8ff] text-[#a21caf]", 
-  bv: "bg-[#ede9fe] text-[#6d28d9]", 
-  bs: "bg-[#f1f5f9] text-[#475569] border border-[#e2e8f0]", 
-  bb: "bg-[#dbeafe] text-[#2563eb]", 
-  bo: "bg-[#fff7ed] text-[#c2410c]", 
-  bk: "bg-[#1e293b] text-white",     
-  bi: "bg-[#eef2ff] text-[#4338ca]", 
-  ba: "bg-[#fef3c7] text-[#b45309]", 
-  bp: "bg-[#fae8ff] text-[#a21caf]"  
+  bg: "bg-[#dcfce7] text-[#15803d]", // Verde (Dinero)
+  br: "bg-[#fee2e2] text-[#dc2626]", // Rojo (Destructivo / Gastos)
+  bb: "bg-[#dbeafe] text-[#2563eb]", // Azul (Inventario)
+  bv: "bg-[#ede9fe] text-[#6d28d9]", // Violeta (Socios / Fidelización)
+  ba: "bg-[#fef3c7] text-[#b45309]", // Ámbar (Ediciones / Alertas)
+  bs: "bg-[#f1f5f9] text-[#475569] border border-[#e2e8f0]", // Pizarra claro (Sistema / Neutro)
+  bk: "bg-[#1e293b] text-white",     // Pizarra oscuro (Cierres)
 };
 
 export default function LogsTable({
@@ -99,6 +108,7 @@ export default function LogsTable({
     if (typeof d === 'string') return <span className="text-slate-600 text-[10px]">{d}</span>;
 
     switch (action) {
+      // 🟢 VERDE (Dinero Entrante)
       case 'Venta Realizada': {
         const txId = getTransactionId(d);
         const items = d.items || [];
@@ -127,7 +137,9 @@ export default function LogsTable({
         return (
           <div className={s.sr}>
             <span className={`${s.b} ${c.bg}`}>🛒 #{txId}</span>
-            <span className={`${s.b} ${c.bf}`}>${formatPrice(d.total || 0)}</span>
+            <div className={s.ss}></div>
+            <span className={`${s.b} ${c.bg}`}>${formatPrice(d.total || 0)}</span>
+            <div className={s.ss}></div>
             <span className={s.se}>{parts.join(' + ')} ({items.length} items)</span>
             <div className={s.ss}></div>
             <span className={`${s.b} ${c.bs}`}>{getFormattedPayment(d.payment, d.installments)}</span>
@@ -136,17 +148,170 @@ export default function LogsTable({
         );
       }
 
+      case 'Apertura de Caja':
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bg}`}>$ Apertura</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#15803d' }}>${formatPrice(d.amount || 0)}</span>
+          </div>
+        );
+
+      // 🔴 ROJO (Salidas / Eliminaciones)
       case 'Venta Anulada': {
         const txId = getTransactionId(d);
         return (
           <div className={s.sr}>
             <span className={`${s.b} ${c.br}`}>❌ #{txId}</span>
+            <div className={s.ss}></div>
             <span style={{ fontSize: '10px', color: '#dc2626', textDecoration: 'line-through' }}>${formatPrice(d.originalTotal || d.total || 0)}</span>
-            {reason && <span className={s.se} style={{ color: '#b45309', fontStyle: 'italic', maxWidth: '150px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>"{reason}"</span>}
+            {reason && <><div className={s.ss}></div><span className={s.se} style={{ color: '#b45309', fontStyle: 'italic', maxWidth: '150px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>"{reason}"</span></>}
           </div>
         );
       }
 
+      case 'Nuevo Gasto':
+      case 'Gasto':
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.br}`}>📉 -${formatPrice(d.amount || 0)}</span>
+            <div className={s.ss}></div>
+            <span className={`${s.b} ${c.bs}`}>{d.category || 'Varios'}</span>
+            <div className={s.ss}></div>
+            <span className={s.se}>{d.paymentMethod || 'Efectivo'}</span>
+          </div>
+        );
+
+      case 'Baja de Socio':
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.br}`}>👤 Baja</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8', textDecoration: 'line-through' }}>{d.name || 'Desconocido'}</span>
+            {d.number && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>#{String(d.number).padStart(4, '0')}</span></>}
+          </div>
+        );
+
+      // 🔵 AZUL (Inventario)
+      case 'Alta de Producto': {
+        const title = d.title || d.name || 'Producto';
+        return (
+          <div className={s.sr}>
+            {d.id && (
+              <>
+                <span className={`${s.b} ${c.bb}`}>#{d.id}</span>
+                <div className={s.ss}></div>
+              </>
+            )}
+            <span className={`${s.b} ${c.bb}`}>⊕ {title}</span>
+            {d.price !== undefined && <><div className={s.ss}></div><span className={s.se}>${formatPrice(d.price)} · {d.stock} {d.product_type === 'weight' ? 'g' : 'uds'}</span></>}
+            {d.category && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{d.category}</span></>}
+          </div>
+        );
+      }
+
+      case 'Edición Producto': {
+        return (
+          <div className={s.sr}>
+            {d.id && (
+              <>
+                <span className={`${s.b} ${c.bb}`}>#{d.id}</span>
+                <div className={s.ss}></div>
+              </>
+            )}
+            <span className={`${s.b} ${c.bb}`}>📦 {d.product || d.title || d.name || 'Producto'}</span>
+            {d.price !== undefined && <><div className={s.ss}></div><span className={s.se}>${formatPrice(d.price)}</span></>}
+          </div>
+        );
+      }
+
+      case 'Baja Producto': {
+        return (
+          <div className={s.sr}>
+            {d.id && (
+              <>
+                <span className={`${s.b} ${c.bb}`}>#{d.id}</span>
+                <div className={s.ss}></div>
+              </>
+            )}
+            <span className={`${s.b} ${c.bb}`}>⊖ {d.title || d.name || 'Producto'}</span>
+            <div className={s.ss}></div>
+            <span className={s.se} style={{ color: '#dc2626' }}>Stock: {d.stock || 0}</span>
+          </div>
+        );
+      }
+
+      case 'Producto Duplicado': {
+        const originalName = d.originalTitle || 'Producto Original';
+        const newName = d.newTitle || d.title || d.name || 'Copia';
+        return (
+          <div className={s.sr}>
+            {d.originalId && (
+              <>
+                <span className={`${s.b} ${c.bb}`}>#{d.originalId}</span>
+                <div className={s.ss}></div>
+              </>
+            )}
+            <span className={`${s.b} ${c.bb}`}>📋 Duplicado</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>
+              <span style={{ color: '#94a3b8', fontWeight: 600 }}>({originalName})</span>
+              <span style={{ color: '#cbd5e1', margin: '0 4px' }}>→</span>
+              ({newName})
+            </span>
+          </div>
+        );
+      }
+
+      // 🟣 VIOLETA (Socios y Premios)
+      case 'Nuevo Socio':
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bb}`}>👤 Alta</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name}</span>
+            {d.number && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>#{String(d.number).padStart(4, '0')}</span></>}
+          </div>
+        );
+
+      case 'Edición de Socio':
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bb}`}>👤 Edición</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name || d.member}</span>
+            <div className={s.ss}></div>
+            <span className={s.se}>{(d.changes ? d.changes.length : 0)} cambios</span>
+          </div>
+        );
+
+      case 'Edición de Puntos': {
+        const pts = d.pointsChange || d;
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bp}`}>🏆 Puntos</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name || d.member}</span>
+            {pts.diff !== undefined && <><div className={s.ss}></div><span className={`${s.b} ${pts.diff > 0 ? c.bg : c.br}`} style={{ fontFamily: 'monospace' }}>{pts.diff > 0 ? '+' : ''}{pts.diff} pts</span></>}
+          </div>
+        );
+      }
+
+      case 'Nuevo Premio':
+      case 'Editar Premio':
+      case 'Eliminar Premio': {
+        const isDelete = action === 'Eliminar Premio';
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${isDelete ? c.br : c.bv}`}>🎁 {isDelete ? 'Eliminado' : action === 'Nuevo Premio' ? 'Nuevo' : 'Editado'}</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: isDelete ? '#94a3b8' : '#334155', textDecoration: isDelete ? 'line-through' : 'none' }}>{d.title || d.name}</span>
+            {d.pointsCost && <><div className={s.ss}></div><span className={`${s.b} ${c.bv}`} style={{ fontFamily: 'monospace' }}>{d.pointsCost} pts</span></>}
+          </div>
+        );
+      }
+
+      // 🟠 ÁMBAR (Ajustes y Modificaciones)
       case 'Modificación Pedido':
       case 'Venta Modificada': {
         const txId = getTransactionId(d);
@@ -155,7 +320,8 @@ export default function LogsTable({
         if (isLegacy) {
           return (
             <div className={s.sr}>
-              <span className={`${s.b} ${c.bb}`}>📝 #{txId || 'S/N'}</span>
+              <span className={`${s.b} ${c.ba}`}>📝 #{txId || 'S/N'}</span>
+              <div className={s.ss}></div>
               <span className={s.se} style={{ fontStyle: 'italic' }}>Ajuste de pedido antiguo</span>
             </div>
           );
@@ -163,7 +329,6 @@ export default function LogsTable({
 
         const changes = d.changes || {};
 
-        // 1. Textos base
         const oldTotalText = changes.total ? `$${formatPrice(changes.total.old)}` : `$${formatPrice(d.total || 0)}`;
         const newTotalText = changes.total ? `$${formatPrice(changes.total.new)}` : `$${formatPrice(d.total || 0)}`;
         
@@ -178,7 +343,6 @@ export default function LogsTable({
           changes.installments ? changes.installments.new : (d.installments || 0)
         );
 
-        // 2. Comprobación estricta (Escudo Anti-Falsos Cambios)
         const isTotalChanged = oldTotalText !== newTotalText;
         const isPaymentChanged = oldPayText !== newPayText;
 
@@ -200,7 +364,7 @@ export default function LogsTable({
 
         return (
           <div className={s.sr}>
-            <span className={`${s.b} ${c.bb}`}>📝 #{txId}</span>
+            <span className={`${s.b} ${c.ba}`}>📝 #{txId}</span>
             
             {hasFinancialChanges ? (
               <>
@@ -213,7 +377,10 @@ export default function LogsTable({
                 </span>
               </>
             ) : (
-              <span className={s.se} style={{ fontStyle: 'italic', marginLeft: '5px' }}>Ajuste de stock</span>
+              <>
+                <div className={s.ss}></div>
+                <span className={s.se} style={{ fontStyle: 'italic' }}>Ajuste de stock</span>
+              </>
             )}
 
             {d.productChanges && d.productChanges.length > 0 && (
@@ -226,117 +393,20 @@ export default function LogsTable({
         );
       }
 
-      case 'Alta de Producto': {
-        const title = d.title || d.name || 'Producto';
-        return (
-          <div className={s.sr}>
-            <span className={`${s.b} ${c.bg}`}>⊕ {title}</span>
-            {d.price !== undefined && <><div className={s.ss}></div><span className={s.se}>${formatPrice(d.price)} · {d.stock} {d.product_type === 'weight' ? 'g' : 'uds'}</span></>}
-            {d.category && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{d.category}</span></>}
-          </div>
-        );
-      }
-
-      case 'Baja Producto': {
-        return (
-          <div className={s.sr}>
-            <span className={`${s.b} ${c.br}`}>⊖ {d.title || d.name || 'Producto'}</span>
-            <div className={s.ss}></div>
-            <span className={s.se} style={{ color: '#dc2626' }}>Stock: {d.stock || 0}</span>
-          </div>
-        );
-      }
-
-      case 'Edición Producto': {
-        return (
-          <div className={s.sr}>
-            <span className={`${s.b} ${c.bb}`}>📦 {d.product || d.title || d.name || 'Producto'}</span>
-            {d.price !== undefined && <><div className={s.ss}></div><span className={s.se}>${formatPrice(d.price)}</span></>}
-          </div>
-        );
-      }
-
-      case 'Producto Duplicado': {
-        return (
-          <div className={s.sr}>
-            <span className={`${s.b} ${c.bb}`}>📋 Duplicado</span>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.newTitle || d.title || d.name || 'Copia'}</span>
-          </div>
-        );
-      }
-
-      case 'Apertura de Caja':
-        return (
-          <div className={s.sr}>
-            <span className={`${s.b} ${c.bg}`}>$ Apertura</span>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#15803d' }}>${formatPrice(d.amount || 0)}</span>
-          </div>
-        );
-
-      case 'Cierre de Caja':
-      case 'Cierre Automático':
-        return (
-          <div className={s.sr}>
-            <span className={`${s.b} ${action === 'Cierre Automático' ? c.bo : c.bk}`}>{action === 'Cierre Automático' ? '⏰ Auto' : '🔒 Cierre'}</span>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#1e293b' }}>${formatPrice(d.finalBalance || d.netProfit || d.totalSales || 0)}</span>
-            {d.salesCount !== undefined && <><div className={s.ss}></div><span className={s.se}>{d.salesCount} ventas</span></>}
-          </div>
-        );
-
-      case 'Nuevo Gasto':
-      case 'Gasto':
-        return (
-          <div className={s.sr}>
-            <span className={`${s.b} ${c.br}`}>📉 -${formatPrice(d.amount || 0)}</span>
-            <span className={`${s.b} ${c.bs}`}>{d.category || 'Varios'}</span>
-            <span className={s.se}>{d.paymentMethod || 'Efectivo'}</span>
-          </div>
-        );
-
-      case 'Nuevo Socio':
-        return (
-          <div className={s.sr}>
-            <span className={`${s.b} ${c.bg}`}>👤 Alta</span>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name}</span>
-            {d.number && <span className={`${s.b} ${c.bs}`}>#{String(d.number).padStart(4, '0')}</span>}
-          </div>
-        );
-
-      case 'Baja de Socio':
-        return (
-          <div className={s.sr}>
-            <span className={`${s.b} ${c.br}`}>👤 Baja</span>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8', textDecoration: 'line-through' }}>{d.name || 'Desconocido'}</span>
-            {d.number && <span className={`${s.b} ${c.bs}`}>#{String(d.number).padStart(4, '0')}</span>}
-          </div>
-        );
-
-      case 'Edición de Socio':
-        return (
-          <div className={s.sr}>
-            <span className={`${s.b} ${c.bb}`}>👤 Edición</span>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name || d.member}</span>
-            <span className={s.se}>{(d.changes ? d.changes.length : 0)} cambios</span>
-          </div>
-        );
-
-      case 'Edición de Puntos': {
-        const pts = d.pointsChange || d;
-        return (
-          <div className={s.sr}>
-            <span className={`${s.b} ${c.bp}`}>🏆 Puntos</span>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name || d.member}</span>
-            {pts.diff !== undefined && <span className={`${s.b} ${pts.diff > 0 ? c.bg : c.br}`} style={{ fontFamily: 'monospace' }}>{pts.diff > 0 ? '+' : ''}{pts.diff} pts</span>}
-          </div>
-        );
-      }
-
       case 'Categoría': {
         const isCreate = d.type === 'create';
         const isDelete = d.type === 'delete';
+        const isEdit = d.type === 'edit';
         return (
           <div className={s.sr}>
-            <span className={`${s.b} ${isCreate ? c.bg : isDelete ? c.br : c.bo}`}>🏷️ {isCreate ? 'Creada' : isDelete ? 'Eliminada' : 'Editada'}</span>
+            {d.id && (
+              <>
+                <span className={`${s.b} ${c.ba}`}>#{d.id}</span>
+                <div className={s.ss}></div>
+              </>
+            )}
+            <span className={`${s.b} ${c.ba}`}>🏷️ {isCreate ? 'Creada' : isDelete ? 'Eliminada' : 'Editada'}</span>
+            <div className={s.ss}></div>
             <span style={{ fontSize: '10px', fontWeight: 700, color: isDelete ? '#94a3b8' : '#334155', textDecoration: isDelete ? 'line-through' : 'none' }}>{d.name}</span>
           </div>
         );
@@ -347,29 +417,9 @@ export default function LogsTable({
         const affectedCount = d.count || (d.details && d.details.length) || (d.changes && d.changes.length) || 0;
         return (
           <div className={s.sr}>
-            <span className={`${s.b} ${c.bf}`}>🏷️ Edición Masiva</span>
+            <span className={`${s.b} ${c.ba}`}>🏷️ Edición Masiva</span>
+            <div className={s.ss}></div>
             <span className={s.se}>{affectedCount} productos actualizados</span>
-          </div>
-        );
-
-      case 'Nuevo Premio':
-      case 'Editar Premio':
-      case 'Eliminar Premio': {
-        const isDelete = action === 'Eliminar Premio';
-        return (
-          <div className={s.sr}>
-            <span className={`${s.b} ${isDelete ? c.br : c.bv}`}>🎁 {isDelete ? 'Eliminado' : action === 'Nuevo Premio' ? 'Nuevo' : 'Editado'}</span>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: isDelete ? '#94a3b8' : '#334155', textDecoration: isDelete ? 'line-through' : 'none' }}>{d.title || d.name}</span>
-            {d.pointsCost && <span className={`${s.b} ${c.bv}`} style={{ fontFamily: 'monospace' }}>{d.pointsCost} pts</span>}
-          </div>
-        );
-      }
-
-      case 'Login':
-        return (
-          <div className={s.sr}>
-            <span className={`${s.b} ${c.bi}`}>🔑 Ingreso</span>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name || d.role}</span>
           </div>
         );
 
@@ -377,7 +427,29 @@ export default function LogsTable({
         return (
           <div className={s.sr}>
             <span className={`${s.b} ${c.ba}`}>🕐 Horario</span>
+            <div className={s.ss}></div>
             <span className={s.se}>{typeof d === 'string' ? d : 'Modificado'}</span>
+          </div>
+        );
+
+      // ⚫ PIZARRA (Sistema y Cierres)
+      case 'Cierre de Caja':
+      case 'Cierre Automático':
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bk}`}>{action === 'Cierre Automático' ? '⏰ Auto' : '🔒 Cierre'}</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#1e293b' }}>${formatPrice(d.finalBalance || d.netProfit || d.totalSales || 0)}</span>
+            {d.salesCount !== undefined && <><div className={s.ss}></div><span className={s.se}>{d.salesCount} ventas</span></>}
+          </div>
+        );
+
+      case 'Login':
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bs}`}>🔑 Ingreso</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name || d.role}</span>
           </div>
         );
 
@@ -397,13 +469,13 @@ export default function LogsTable({
         <thead className="sticky top-0 z-10">
           <tr>
             <th className={s.th} style={{ width: '130px' }} onClick={() => onSort('datetime')}>
-              Fecha / Hora <SortIcon column="datetime" sortColumn={sortColumn} sortDirection={sortDirection} />
+              <div className="flex items-center gap-1">Fecha / Hora <SortIcon column="datetime" sortColumn={sortColumn} sortDirection={sortDirection} /></div>
             </th>
-            <th className={s.th} style={{ width: '80px' }} onClick={() => onSort('user')}>
-              Usuario <SortIcon column="user" sortColumn={sortColumn} sortDirection={sortDirection} />
+            <th className={s.th} style={{ width: '100px' }} onClick={() => onSort('user')}>
+              <div className="flex items-center gap-1">Usuario <SortIcon column="user" sortColumn={sortColumn} sortDirection={sortDirection} /></div>
             </th>
             <th className={s.th} style={{ width: '150px' }} onClick={() => onSort('action')}>
-              Acción <SortIcon column="action" sortColumn={sortColumn} sortDirection={sortDirection} />
+              <div className="flex items-center gap-1">Acción <SortIcon column="action" sortColumn={sortColumn} sortDirection={sortDirection} /></div>
             </th>
             <th className={s.th}>
               Resumen
@@ -428,7 +500,8 @@ export default function LogsTable({
                 onClick={() => onViewDetails(log)}
               >
                 <td className={s.td}>
-                  <div className={s.date}>{log.date || '-'}</div>
+                  {/* AQUÍ SE APLICA EL FORMATEADOR VISUAL */}
+                  <div className={s.date}>{formatDisplayDate(log.date)}</div>
                   <div className={s.time}>{log.timestamp || '--:--'}</div>
                 </td>
                 <td className={s.td}><span className={userClass}>{log.user}</span></td>

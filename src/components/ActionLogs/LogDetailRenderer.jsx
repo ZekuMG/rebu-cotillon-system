@@ -64,19 +64,22 @@ export const getDetailIcon = (action) => {
   return icons[action] || '📄';
 };
 
+// 🎨 NUEVO ESQUEMA SEMÁNTICO EN EL MODAL (Coincide con la Tabla)
 export const getDetailColor = (action) => {
   const colors = {
-    'Venta Realizada': 'green', 'Venta Anulada': 'red',
-    'Modificación Pedido': 'blue', 'Venta Modificada': 'blue',
-    'Apertura de Caja': 'green', 'Cierre de Caja': 'slate', 'Cierre Automático': 'amber',
-    'Edición Producto': 'blue', 'Alta de Producto': 'green', 'Baja Producto': 'red',
-    'Producto Duplicado': 'blue',
-    'Categoría': 'amber', 'Edición Masiva Categorías': 'fuchsia', 'Actualización Masiva': 'fuchsia',
-    'Nuevo Socio': 'green', 'Edición de Socio': 'blue', 'Edición de Puntos': 'purple', 'Baja de Socio': 'red',
-    'Nuevo Gasto': 'red', 'Gasto': 'red',
-    'Nuevo Premio': 'violet', 'Editar Premio': 'violet', 'Eliminar Premio': 'red',
-    'Login': 'indigo', 'Horario Modificado': 'amber', 'Sistema Iniciado': 'slate',
-    'Borrado Permanente': 'red'
+    // Verde (Dinero)
+    'Venta Realizada': 'green', 'Apertura de Caja': 'green',
+    // Rojo (Destructivo/Salidas)
+    'Venta Anulada': 'red', 'Baja Producto': 'red', 'Baja de Socio': 'red', 'Eliminar Premio': 'red', 'Borrado Permanente': 'red', 'Nuevo Gasto': 'red', 'Gasto': 'red',
+    // Azul (Inventario y Socios base)
+    'Alta de Producto': 'blue', 'Edición Producto': 'blue', 'Producto Duplicado': 'blue',
+    'Nuevo Socio': 'blue', 'Edición de Socio': 'blue', 
+    // Violeta (Comunidad/Fidelización)
+    'Edición de Puntos': 'violet', 'Nuevo Premio': 'violet', 'Editar Premio': 'violet',
+    // Ámbar (Ajustes/Alertas)
+    'Modificación Pedido': 'amber', 'Venta Modificada': 'amber', 'Categoría': 'amber', 'Actualización Masiva': 'amber', 'Edición Masiva Categorías': 'amber', 'Horario Modificado': 'amber',
+    // Pizarra (Sistema)
+    'Cierre de Caja': 'slate', 'Cierre Automático': 'slate', 'Login': 'slate', 'Sistema Iniciado': 'slate'
   };
   return colors[action] || 'slate';
 };
@@ -196,7 +199,7 @@ export default function LogDetailRenderer({ log }) {
     );
   }
 
-  // 👇 LIMPIADOR MEJORADO: Extrae las cuotas si están escondidas en el texto viejo
+  // 👇 LIMPIADOR UNIVERSAL
   const getFormattedPayment = (payStr, instNum) => {
     if (typeof payStr !== 'string') return 'Efectivo';
     
@@ -376,6 +379,7 @@ export default function LogDetailRenderer({ log }) {
         clientDisplay = `${details.client} ${details.memberNumber && details.memberNumber !== '---' ? `#${String(details.memberNumber).padStart(4, '0')}` : ''}`.trim();
       }
 
+      // 👇 CÁLCULO ESTRICTO DE PAGOS Y CUOTAS EN EL MODAL
       const basePayment = typeof details.payment === 'string' ? details.payment : 'Efectivo';
       
       const oldPayText = getFormattedPayment(
@@ -388,8 +392,8 @@ export default function LogDetailRenderer({ log }) {
         changes.installments ? changes.installments.new : (details.installments || 0)
       );
 
-      const isTotalChanged = changes.total && (changes.total.old !== changes.total.new);
-      const isPaymentChanged = oldPayText !== newPayText;
+      const isTotalActuallyChanged = changes.total && (changes.total.old !== changes.total.new);
+      const isPaymentActuallyChanged = oldPayText !== newPayText;
 
       return (
         <div className="space-y-4"> 
@@ -435,7 +439,7 @@ export default function LogDetailRenderer({ log }) {
           )}
 
           <Card icon="💰" title="Ajuste Financiero">
-             {isTotalChanged && (
+             {isTotalActuallyChanged && (
                 <ChangeRow
                   field="Monto Total"
                   oldVal={`$${formatPrice(changes.total.old)}`}
@@ -443,7 +447,7 @@ export default function LogDetailRenderer({ log }) {
                 />
              )}
              
-             {isPaymentChanged && (
+             {isPaymentActuallyChanged && (
                 <ChangeRow
                   field="Método de Pago"
                   oldVal={oldPayText}
@@ -451,7 +455,7 @@ export default function LogDetailRenderer({ log }) {
                 />
              )}
 
-             {!isTotalChanged && !isPaymentChanged && (
+             {!isTotalActuallyChanged && !isPaymentActuallyChanged && (
                 <Item label="Monto y Pago" value="Sin modificaciones" />
              )}
           </Card>
