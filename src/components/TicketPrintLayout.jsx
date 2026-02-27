@@ -44,13 +44,14 @@ export const TicketPrintLayout = ({ transaction }) => {
   const items = (transaction.items || []).filter(i => i.type !== 'discount');
 
   const itemsSubtotal = items.reduce((acc, item) => {
-    const qty = item.qty || item.quantity || 1;
+    // Aseguramos que qty y price se traten estrictamente como números
+    const qty = Number(item.qty || item.quantity || 1);
     return acc + Number(item.price) * qty;
   }, 0);
 
   const redemptionDiscounts = (transaction.items || []).filter(i => i.type === 'discount');
   const totalRedemptionDiscount = redemptionDiscounts.reduce(
-    (acc, i) => acc + Math.abs(i.price),
+    (acc, i) => acc + Math.abs(Number(i.price)),
     0
   );
 
@@ -59,10 +60,16 @@ export const TicketPrintLayout = ({ transaction }) => {
     surcharge = transaction.total - (itemsSubtotal - totalRedemptionDiscount);
   }
 
-  // --- 3. LÓGICA DE PUNTOS ---
-  const showRedemption = (transaction.pointsSpent || 0) > 0;
+  // --- 3. LÓGICA DE PUNTOS (SINCRONIZADA CON APP.JSX) ---
+  const pointsSpent = Number(transaction.pointsSpent || 0);
+  const showRedemption = pointsSpent > 0;
+  
+  // Ahora leemos directamente lo que calculó App.jsx (pointsEarned).
+  // Se dejan los otros nombres como respaldo por si imprimen un ticket viejo del historial.
+  const pointsGained = Number(transaction.pointsEarned || transaction.pointsGainedReal || transaction.pointsGained || 0);
+
   const currentPointsDisplay = transaction.client
-    ? (transaction.client.currentPoints ?? transaction.client.points ?? 0)
+    ? (Number(transaction.client.currentPoints ?? transaction.client.points ?? 0))
     : 0;
 
   // === 4. CONSTRUCCIÓN DEL TICKET ===
@@ -80,7 +87,8 @@ export const TicketPrintLayout = ({ transaction }) => {
 
   // SECCIÓN SOCIO
   if (transaction.client) {
-    const memberNum = transaction.client.memberNumber;
+    // Formateamos el número para que siempre tenga 4 dígitos (Ej: #0045)
+    const memberNum = String(transaction.client.memberNumber || '0').padStart(4, '0');
     const clientName = transaction.client.name.toUpperCase();
     
     lines.push(`Socio (#${memberNum}):`);
@@ -88,13 +96,14 @@ export const TicketPrintLayout = ({ transaction }) => {
 
     if (!transaction.isPointsTicket) {
       if (showRedemption) {
-        lines.push(line('Pts canjeados:', `-${transaction.pointsSpent}`));
-      } else {
-        lines.push(line('Pts ganados:', `+${transaction.pointsGainedReal || 0}`));
+        lines.push(line('Pts canjeados:', `-${pointsSpent}`));
       }
+      // Eliminamos el "else" para que SIEMPRE muestre los puntos ganados,
+      // incluso si en la misma compra canjeó puntos.
+      lines.push(line('Pts ganados:', `+${pointsGained}`));
     }
 
-    lines.push(line('Total puntos:', `${currentPointsDisplay}`));
+    lines.push(line('Saldo actual:', `${currentPointsDisplay}`));
     
     lines.push(divider());
   }
@@ -109,7 +118,7 @@ export const TicketPrintLayout = ({ transaction }) => {
     lines.push(line('DESCRIPCION', 'IMPORTE'));
 
     items.forEach(item => {
-      const qty = item.qty || item.quantity || 1;
+      const qty = Number(item.qty || item.quantity || 1);
       const price = Number(item.price);
       
       const titlePrefix = qty > 1 ? `(${qty}) ` : '';
@@ -127,7 +136,7 @@ export const TicketPrintLayout = ({ transaction }) => {
     lines.push(line('Subtotal', `$${formatPrice(itemsSubtotal)}`));
 
     redemptionDiscounts.forEach(d => {
-      lines.push(line('Descuento', `-$${formatPrice(Math.abs(d.price))}`));
+      lines.push(line('Descuento Pts', `-$${formatPrice(Math.abs(Number(d.price)))}`));
     });
 
     if (surcharge > 0) {
@@ -138,7 +147,7 @@ export const TicketPrintLayout = ({ transaction }) => {
     
     lines.push(line('TOTAL', `$${formatPrice(transaction.total)}`));
     
-    lines.push(`PAGO: ${transaction.payment.toUpperCase()}`);
+    lines.push(`PAGO: ${String(transaction.payment).toUpperCase()}`);
     
     if (transaction.payment === 'Credito' && transaction.installments > 1) {
        lines.push(`CUOTAS: ${transaction.installments}`); 

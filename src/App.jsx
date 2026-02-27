@@ -1514,7 +1514,7 @@ const handleDuplicateProduct = async (originalProduct) => {
     showNotification('success', 'Premio Aplicado', 'El descuento se ha agregado al carrito.');
   };
 
-  const handleCheckout = async () => {
+const handleCheckout = async () => {
     const total = calculateTotal();
     const stockIssues = cart.filter(c => !c.isReward).filter(c => {
       const i = inventory.find(x => x.id === c.id);
@@ -1526,6 +1526,7 @@ const handleDuplicateProduct = async (originalProduct) => {
     try {
       Swal.fire({ title: 'Procesando...', didOpen: () => Swal.showLoading() });
 
+      // 1. Calculamos puntos EXACTAMENTE igual que en la vista visual (total / 150)
       const pointsEarned = Math.floor(total / 150);
       const pointsSpent = cart.reduce((acc, i) => acc + (i.isReward ? i.pointsCost : 0), 0);
       const clientId = posSelectedClient?.id && posSelectedClient.id !== 'guest' ? posSelectedClient.id : null;
@@ -1534,13 +1535,13 @@ const handleDuplicateProduct = async (originalProduct) => {
           total, payment_method: selectedPayment, installments, client_id: clientId,
           points_earned: clientId ? pointsEarned : 0, points_spent: pointsSpent,
           user_name: currentUser.name 
-       }).select().single();
-       if (saleErr) throw saleErr;
+        }).select().single();
+        if (saleErr) throw saleErr;
 
       const itemsPayload = cart.map(i => ({
           sale_id: sale.id, product_id: i.id, product_title: i.title, quantity: i.quantity, price: i.price, is_reward: !!i.isReward
-       }));
-       await supabase.from('sale_items').insert(itemsPayload);
+        }));
+        await supabase.from('sale_items').insert(itemsPayload);
 
       for (const item of cart) {
           if (!item.isReward) {
@@ -1549,10 +1550,14 @@ const handleDuplicateProduct = async (originalProduct) => {
           }
       }
 
+      // 2. Actualizamos al cliente y guardamos SU SALDO FINAL para el ticket
+      let updatedClientForTicket = null;
       if (clientId) {
           const newPoints = posSelectedClient.points - pointsSpent + pointsEarned;
           await supabase.from('clients').update({ points: newPoints }).eq('id', clientId);
-          setMembers(members.map(m => m.id === clientId ? { ...m, points: newPoints } : m));
+          
+          updatedClientForTicket = { ...posSelectedClient, points: newPoints, currentPoints: newPoints };
+          setMembers(members.map(m => m.id === clientId ? updatedClientForTicket : m));
       }
 
       setInventory(inventory.map(p => {
@@ -1560,6 +1565,7 @@ const handleDuplicateProduct = async (originalProduct) => {
         return c ? { ...p, stock: p.stock - c.quantity } : p;
       }));
 
+      // 3. Armamos la transacción enviando las propiedades CLARAS para el ticket
       const tx = {
         id: sale.id,
         date: formatDateAR(new Date()),
@@ -1570,30 +1576,24 @@ const handleDuplicateProduct = async (originalProduct) => {
         installments: selectedPayment === 'Credito' ? installments : 0,
         items: cart,
         status: 'completed',
-        client: posSelectedClient,
-        pointsEarned: pointsEarned,
+        client: updatedClientForTicket || posSelectedClient, 
+        pointsEarned: clientId ? pointsEarned : 0, // Mandamos el nombre correcto
         pointsSpent: pointsSpent,
       };
 
       setTransactions([tx, ...transactions]);
 
       const logItems = cart.map(item => ({
-        id: item.id,
-        title: item.title,
-        quantity: item.quantity,
-        price: item.price,
-        isReward: item.isReward || false,
-        product_type: item.product_type || 'quantity'
+        id: item.id, title: item.title, quantity: item.quantity, price: item.price,
+        isReward: item.isReward || false, product_type: item.product_type || 'quantity'
       }));
 
-    const isGuest = !posSelectedClient || posSelectedClient.id === 'guest';
+      const isGuest = !posSelectedClient || posSelectedClient.id === 'guest';
       addLog('Venta Realizada', { 
-        transactionId: tx.id, 
-        total: total, 
-        items: logItems,
+        transactionId: tx.id, total: total, items: logItems,
         client: isGuest ? null : posSelectedClient.name,
         memberNumber: isGuest ? null : posSelectedClient.memberNumber,
-        pointsEarned: pointsEarned
+        pointsEarned: clientId ? pointsEarned : 0
       }, 'Venta regular');
       
       setSaleSuccessModal(tx);
@@ -1605,13 +1605,12 @@ const handleDuplicateProduct = async (originalProduct) => {
       Swal.fire('Error', 'Fallo al guardar la venta', 'error');
     }
   };
-
+      
   const handleDeleteTransaction = (tx) => {
     setTransactionToRefund(tx);
     setRefundReason('');
     setIsRefundModalOpen(true);
   };
-
   
   const handleConfirmRefund = async (e) => {
     e.preventDefault();
