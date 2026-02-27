@@ -30,6 +30,7 @@ import LogsView from './views/LogsView';
 import CategoryManagerView from './views/CategoryManagerView';
 import RewardsView from './views/RewardsView';
 import ReportsHistoryView from './views/ReportsHistoryView';
+import BulkEditorView from './views/BulkEditorView';
 
 // Modales
 import {
@@ -106,8 +107,7 @@ const fetchCloudData = async (showSpinner = true) => {
       ] = await Promise.allSettled([
         supabase.from('products').select('*').eq('is_active', true).order('title'),
         supabase.from('clients').select('*').eq('is_active', true).order('name'),
-        supabase.from('sales').select(`*, sale_items(*), clients(name, member_number)`).order('created_at', { ascending: false }).limit(100),
-        supabase.from('logs').select('*').order('created_at', { ascending: false }),
+        supabase.from('sales').select(`*, sale_items(*), clients(name, member_number)`).order('created_at', { ascending: false }).limit(1000),        supabase.from('logs').select('*').order('created_at', { ascending: false }),
         supabase.from('expenses').select('*').order('created_at', { ascending: false }),
         supabase.from('cash_closures').select('*').order('created_at', { ascending: false }),
         supabase.from('categories').select('*').order('name'),
@@ -950,7 +950,7 @@ const handleEditTransactionRequest = (tx) => {
   };
 
   // --- CAJA ---
-  const toggleRegisterStatus = () => {
+  const toggleRegisterStatus = async () => {
     if (currentUser.role !== 'admin') {
       showNotification('error', 'Acceso Denegado', 'Solo el dueño puede gestionar la caja.');
       return;
@@ -961,6 +961,17 @@ const handleEditTransactionRequest = (tx) => {
       setTempClosingTime('21:00');
       setIsOpeningBalanceModalOpen(true);
     } else {
+      // ✅ FIX: Sincronización forzada con la nube antes de cerrar
+      Swal.fire({ 
+        title: 'Sincronizando Caja...', 
+        text: 'Obteniendo ventas y modificaciones del vendedor...', 
+        allowOutsideClick: false, 
+        didOpen: () => Swal.showLoading() 
+      });
+      
+      await fetchCloudData(false); // Trae los datos más frescos de Supabase
+      Swal.close();
+      
       setIsClosingCashModalOpen(true);
     }
   };
@@ -1409,6 +1420,76 @@ const saveEditProduct = async (e, overrideData = null) => {
     }
   };
 
+  // ==========================================
+  // FUNCIONES DE EDICIÓN MASIVA (BULK EDITOR)
+  // ==========================================
+  const handleBulkSaveSingle = async (product, editData) => {
+    try {
+      const isWeight = product.product_type === 'weight';
+      // Convertimos de la vista (precio por kilo) al formato interno de la BD (precio por gramo)
+      const finalPrice = isWeight ? Number(editData.price) / 1000 : Number(editData.price);
+      const finalCost = isWeight ? Number(editData.purchasePrice) / 1000 : Number(editData.purchasePrice);
+      const finalStock = isWeight ? Number(editData.stock) : Number(editData.stock);
+
+      const payload = { price: finalPrice, purchasePrice: finalCost, stock: finalStock };
+
+      const { error } = await supabase.from('products').update(payload).eq('id', product.id);
+      if (error) throw error;
+
+      // Actualizamos el inventario local en pantalla
+      setInventory(inventory.map(p => p.id === product.id ? { ...p, price: finalPrice, purchasePrice: finalCost, stock: finalStock } : p));
+      
+      // Registramos en el historial
+      addLog('Edición Rápida', { id: product.id, title: product.title, changes: payload }, 'Editor Masivo');
+      showNotification('success', 'Guardado', 'Producto actualizado.');
+    } catch (e) {
+      console.error(e);
+      showNotification('error', 'Error', 'No se pudo actualizar el producto.');
+    }
+  };
+
+  const handleBulkSaveMasive = async (bulkData) => {
+    try {
+      Swal.fire({ title: 'Guardando masivamente...', text: `Actualizando ${bulkData.length} productos. Por favor espera.`, allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      
+      // Armamos todas las peticiones a la base de datos en simultáneo
+      const promises = bulkData.map(item => {
+        const { product, edits } = item;
+        const isWeight = product.product_type === 'weight';
+        const finalPrice = isWeight ? Number(edits.price) / 1000 : Number(edits.price);
+        const finalCost = isWeight ? Number(edits.purchasePrice) / 1000 : Number(edits.purchasePrice);
+        const finalStock = isWeight ? Number(edits.stock) : Number(edits.stock);
+
+        return supabase.from('products').update({ price: finalPrice, purchasePrice: finalCost, stock: finalStock })
+          .eq('id', product.id)
+          .then(({error}) => {
+             if(error) throw error;
+             return { id: product.id, finalPrice, finalCost, finalStock };
+          });
+      });
+
+      const results = await Promise.all(promises);
+
+      // Actualizamos el inventario local de un solo golpe
+      setInventory(prev => prev.map(p => {
+        const updated = results.find(r => r.id === p.id);
+        if (updated) {
+          return { ...p, price: updated.finalPrice, purchasePrice: updated.finalCost, stock: updated.finalStock };
+        }
+        return p;
+      }));
+
+      // Un solo log resumido para no saturar el historial
+      addLog('Edición Masiva', { count: bulkData.length, items: bulkData.map(b => b.product.title) }, 'Editor Masivo');
+      
+      Swal.close();
+      showNotification('success', 'Actualización Masiva', `Se actualizaron ${bulkData.length} productos correctamente.`);
+    } catch (e) {
+      console.error(e);
+      Swal.fire('Error', 'Fallo la actualización masiva. Revisa tu conexión.', 'error');
+    }
+  };
+
 const confirmDeleteProduct = async (e) => {
   e.preventDefault();
   if (productToDelete) {
@@ -1605,7 +1686,7 @@ const handleCheckout = async () => {
       Swal.fire('Error', 'Fallo al guardar la venta', 'error');
     }
   };
-      
+
   const handleDeleteTransaction = (tx) => {
     setTransactionToRefund(tx);
     setRefundReason('');
@@ -2128,7 +2209,8 @@ const handleSaveEditedTransaction = async (e) => {
       <div className="flex items-center gap-3">
         <div>
           <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
-            {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', history: 'Historial de Ventas', rewards: 'Premios', reports: 'Reportes de Caja', logs: 'Registro de Acciones', categories: 'Categorías' }[activeTab] || activeTab}          </h2>
+            {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', history: 'Historial de Ventas', rewards: 'Premios', reports: 'Reportes de Caja', logs: 'Registro de Acciones', categories: 'Categorías', 'bulk-editor': 'Edición Masiva' }[activeTab] || activeTab}
+          </h2>
               <div className="flex items-center gap-2 text-[10px] text-slate-400">
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
                 <span>Supabase ON</span>
@@ -2194,6 +2276,13 @@ const handleSaveEditedTransaction = async (e) => {
               onBatchUpdateProductCategory={handleBatchUpdateProductCategory}
             />
           )}
+                {activeTab === 'bulk-editor' && currentUser.role === 'admin' && (
+        <BulkEditorView 
+          inventory={inventory} 
+          categories={categories} 
+          onSaveSingle={handleBulkSaveSingle} 
+          onSaveBulk={handleBulkSaveMasive} 
+        />)}
         </main>
       </div>
 
@@ -2211,8 +2300,7 @@ const handleSaveEditedTransaction = async (e) => {
       <SaleSuccessModal transaction={saleSuccessModal} onClose={() => setSaleSuccessModal(null)} onViewTicket={() => { const tx = saleSuccessModal; setSaleSuccessModal(null); setTicketToView(tx); }} />
       <TicketModal transaction={ticketToView} onClose={() => setTicketToView(null)} onPrint={handlePrintTicket} />
       <AutoCloseAlertModal isOpen={isAutoCloseAlertOpen} onClose={() => setIsAutoCloseAlertOpen(false)} closingTime={closingTime} />
-      <DeleteProductModal product={productToDelete} onClose={() => setIsDeleteProductModalOpen(false)} reason={deleteProductReason} setReason={setDeleteProductReason} onConfirm={confirmDeleteProduct} />
-      <BarcodeNotFoundModal isOpen={barcodeNotFoundModal.isOpen} scannedCode={barcodeNotFoundModal.code} onClose={() => setBarcodeNotFoundModal({ isOpen: false, code: '' })} onAddProduct={handleAddProductFromBarcode} />
+      <DeleteProductModal product={productToDelete} onClose={() => { setIsDeleteProductModalOpen(false); setProductToDelete(null); setDeleteProductReason(''); }} reason={deleteProductReason} setReason={setDeleteProductReason} onConfirm={confirmDeleteProduct} />      <BarcodeNotFoundModal isOpen={barcodeNotFoundModal.isOpen} scannedCode={barcodeNotFoundModal.code} onClose={() => setBarcodeNotFoundModal({ isOpen: false, code: '' })} onAddProduct={handleAddProductFromBarcode} />
       <BarcodeDuplicateModal isOpen={barcodeDuplicateModal.isOpen} existingProduct={barcodeDuplicateModal.existingProduct} onClose={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onKeepExisting={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onReplaceBarcode={handleReplaceDuplicateBarcode} />
       <ClientSelectionModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} clients={members} addClient={handleAddMemberWithLog} onSelectClient={(client) => setPosSelectedClient(client)} onCancelFlow={() => { setPosSelectedClient({ id: 'guest', name: 'No asociado', memberNumber: '---', points: 0 }); setIsClientModalOpen(false); }} />
       <RedemptionModal isOpen={isRedemptionModalOpen} onClose={() => setIsRedemptionModalOpen(false)} client={posSelectedClient} rewards={rewards} onRedeem={handleRedeemReward} />

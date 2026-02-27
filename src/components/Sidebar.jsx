@@ -10,7 +10,8 @@ import {
   Tag,
   Users,
   Gift,
-  FileBarChart 
+  FileBarChart,
+  Percent // ✅ Ícono agregado para la edición masiva
 } from 'lucide-react';
 
 const SidebarButton = ({ onClick, isActive, icon: Icon, label }) => {
@@ -147,6 +148,13 @@ export default function Sidebar({
               className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2"
             >
               <Tag size={14} /> Categorías
+            </button>
+            {/* ✅ Botón de Edición Masiva (Debug Mode) */}
+            <button
+              onClick={() => { setActiveTab('bulk-editor'); setShowAdminMenu(false); }}
+              className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2 border-t border-slate-50"
+            >
+              <Percent size={14} /> Edición Masiva (Debug)
             </button>
           </div>
         )}

@@ -29,16 +29,23 @@ export default function InventoryView({
   const [showGridMenu, setShowGridMenu] = useState(false);
 
   const filteredInventory = (inventory || []).filter((item) => {
-    const term = (inventorySearch || '').toLowerCase();
-    const matchesSearch = 
-      (item.title || '').toLowerCase().includes(term) ||
-      (item.barcode && item.barcode.toString().toLowerCase().includes(term)) ||
-      (item.id && item.id.toString().includes(term));
+    // 1. Limpiamos espacios extra y dividimos la búsqueda en palabras sueltas
+    const searchString = (inventorySearch || '').toLowerCase().trim();
+    const searchWords = searchString ? searchString.split(/\s+/) : [];
+
+    // 2. Verificamos que TODAS las palabras coincidan (sin importar el orden)
+    const matchesSearch = searchWords.length === 0 || searchWords.every(word =>
+      (item.title || '').toLowerCase().includes(word) ||
+      String(item.id).toLowerCase().includes(word) ||
+      (item.barcode && String(item.barcode).toLowerCase().includes(word))
+    );
+
     const matchesCategory =
       inventoryCategoryFilter === 'Todas' ||
       (Array.isArray(item.categories)
         ? item.categories.includes(inventoryCategoryFilter)
         : item.category === inventoryCategoryFilter);
+        
     return matchesSearch && matchesCategory;
   });
 

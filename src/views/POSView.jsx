@@ -164,16 +164,23 @@ export default function POSView({
   };
 
   const filteredProducts = (inventory || []).filter((product) => {
-    const term = (posSearch || '').toLowerCase();
-    const matchesSearch =
-      (product.title || '').toLowerCase().includes(term) ||
-      String(product.id).includes(posSearch || '') ||
-      (product.barcode && product.barcode.includes(posSearch || ''));
+    // 1. Limpiamos espacios extra y dividimos la búsqueda en palabras sueltas
+    const searchString = (posSearch || '').toLowerCase().trim();
+    const searchWords = searchString ? searchString.split(/\s+/) : [];
+
+    // 2. Verificamos que TODAS las palabras estén incluidas en algún lado del producto
+    const matchesSearch = searchWords.length === 0 || searchWords.every(word =>
+      (product.title || '').toLowerCase().includes(word) ||
+      String(product.id).toLowerCase().includes(word) ||
+      (product.barcode && String(product.barcode).toLowerCase().includes(word))
+    );
+
     const matchesCategory =
       selectedCategory === 'Todas' ||
       (Array.isArray(product.categories)
         ? product.categories.includes(selectedCategory)
         : product.category === selectedCategory);
+        
     return matchesSearch && matchesCategory;
   });
 
