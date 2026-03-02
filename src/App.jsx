@@ -976,19 +976,15 @@ const handleEditTransactionRequest = (tx) => {
     }
   };
 
-const executeRegisterClose = async (isAuto = false) => {
+  const executeRegisterClose = async (isAuto = false) => {
     const closeDate = new Date();
     
-    // ✅ FIX: Filtrar SOLO ventas y gastos del ciclo actual (desde apertura)
+    // 1. Filtrar SOLO ventas y gastos del ciclo actual (desde apertura)
     const cycleStart = registerOpenedAt ? new Date(registerOpenedAt) : null;
     
     const cycleTransactions = cycleStart
       ? safeTransactions.filter(tx => {
           if (!tx || tx.status === 'voided') return false;
-          // Buscar la venta en la data cruda por ID para comparar created_at
-          // Como las transacciones locales tienen date/time en formato AR, 
-          // usamos el ID (que viene de Supabase) para comparar
-          // Las ventas creadas en esta sesión tienen timestamp posterior a cycleStart
           const txDate = parseTxDate(tx);
           return txDate && txDate >= cycleStart;
         })
@@ -1001,7 +997,6 @@ const executeRegisterClose = async (isAuto = false) => {
         })
       : expenses;
 
-    // Usar cycleTransactions y cycleExpenses en vez de validTransactions y expenses
     const cycleTotalSales = cycleTransactions.reduce((acc, tx) => acc + (Number(tx.total) || 0), 0);
     const cycleSalesCount = cycleTransactions.length;
 
@@ -1036,7 +1031,6 @@ const executeRegisterClose = async (isAuto = false) => {
     const cashSales = cycleTransactions.filter(t => t.payment === 'Efectivo').reduce((acc, t) => acc + Number(t.total), 0);
     const finalPhysicalBalance = openingBalance + cashSales - cashExpenses;
 
-    // Nuevos clientes: filtrar los logs del ciclo actual
     const cycleNewClients = cycleStart
       ? dailyLogs.filter(l => {
           if (l.action !== 'Nuevo Socio') return false;
@@ -1049,29 +1043,36 @@ const executeRegisterClose = async (isAuto = false) => {
         })();
 
     try {
-        // ✨ FIX ANTI-DUPLICADOS (Evita que múltiples dispositivos guarden a la vez) ✨
-        if (isAuto) {
-            const hoyStr = formatDateAR(closeDate);
-            const { count } = await supabase
-                .from('cash_closures')
-                .select('*', { count: 'exact', head: true })
-                .eq('date', hoyStr)
-                .eq('type', 'Automático')
-                // Revisa si ya se hizo un cierre automático en los últimos 3 minutos
-                .gte('created_at', new Date(Date.now() - 3 * 60000).toISOString());
+        // ✨ FIX ANTI-DUPLICADOS SUPREMO (Bloqueo Atómico) ✨
+        // Intentamos cambiar la caja a "Cerrada", SÓLO SI actualmente está "Abierta".
+        const { data: lockData, error: lockError } = await supabase
+            .from('register_state')
+            .update({
+                is_open: false,
+                opening_balance: 0,
+                opened_at: null,
+                last_updated_by: currentUser?.name || 'Sistema (Auto)'
+            })
+            .eq('id', 1)
+            .eq('is_open', true) // <--- ESTA LÍNEA ES LA CLAVE DE TODO
+            .select();
 
-            if (count > 0) {
-                console.log("Cierre interceptado: Otro dispositivo ya cerró la caja.");
-                setIsRegisterClosed(true);
-                setRegisterOpenedAt(null);
-                setIsClosingCashModalOpen(false);
-                setTransactions([]);
-                setExpenses([]);
-                if (isAuto) setIsAutoCloseAlertOpen(true);
-                return; // Corta la ejecución aquí, no guarda duplicado
-            }
+        if (lockError) throw lockError;
+
+        // Si lockData vuelve vacío, significa que OTRO dispositivo nos ganó de mano y ya la cerró.
+        if (!lockData || lockData.length === 0) {
+            console.log("Cierre cancelado: OTRO dispositivo ya ejecutó el cierre exitosamente.");
+            setIsRegisterClosed(true);
+            setRegisterOpenedAt(null);
+            setIsClosingCashModalOpen(false);
+            setTransactions([]);
+            setExpenses([]);
+            if (isAuto) setIsAutoCloseAlertOpen(true);
+            return; // 🛑 Cortamos la ejecución acá para no crear el reporte duplicado en 0.
         }
 
+        // --- SI EL CÓDIGO LLEGÓ ACÁ, ESTE DISPOSITIVO ES EL PRIMERO Y GENERA EL REPORTE REAL ---
+        
         const openTime = registerOpenedAt 
           ? formatTimeFullAR(new Date(registerOpenedAt))
           : (dailyLogs.find(l => l.action === 'Apertura de Caja')?.timestamp || '--:--');
@@ -1127,13 +1128,6 @@ const executeRegisterClose = async (isAuto = false) => {
 
         setPastClosures([adaptedReport, ...pastClosures]);
         
-        await supabase.from('register_state').update({
-            is_open: false,
-            opening_balance: 0,
-            opened_at: null,
-            last_updated_by: currentUser?.name || 'Sistema'
-        }).eq('id', 1);
-
         setIsRegisterClosed(true);
         setRegisterOpenedAt(null);
         addLog('Cierre de Caja', { totalSales: cycleTotalSales, salesCount: cycleSalesCount, reportId: savedReport.id }, isAuto ? 'Automático' : 'Manual');
@@ -1147,11 +1141,9 @@ const executeRegisterClose = async (isAuto = false) => {
     } catch (e) {
         console.error("Error guardando cierre:", e);
         showNotification('error', 'Error al Cerrar', 'No se pudo guardar el reporte en la nube.');
-        setIsRegisterClosed(true);
         setIsClosingCashModalOpen(false);
     }
   };
-
   
   const handleConfirmCloseCash = () => executeRegisterClose(false);
 
@@ -1608,7 +1600,7 @@ const handleCheckout = async () => {
       Swal.fire({ title: 'Procesando...', didOpen: () => Swal.showLoading() });
 
       // 1. Calculamos puntos EXACTAMENTE igual que en la vista visual (total / 150)
-      const pointsEarned = Math.floor(total / 150);
+      const pointsEarned = Math.floor(total / 500)
       const pointsSpent = cart.reduce((acc, i) => acc + (i.isReward ? i.pointsCost : 0), 0);
       const clientId = posSelectedClient?.id && posSelectedClient.id !== 'guest' ? posSelectedClient.id : null;
 

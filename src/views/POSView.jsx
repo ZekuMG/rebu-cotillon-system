@@ -186,7 +186,7 @@ export default function POSView({
 
   const subtotal = cart.reduce((t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
   const total = calculateTotal();
-  const pointsToEarn = Math.floor(Math.max(0, total) / 150);
+  const pointsToEarn = Math.floor(Math.max(0, total) / 500);
 
   return (
     <div className="flex h-full overflow-hidden bg-slate-100 relative">

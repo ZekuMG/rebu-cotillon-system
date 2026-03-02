@@ -59,6 +59,49 @@ export default function ClientsView({
   const [isDrawerEditMode, setIsDrawerEditMode] = useState(false);
   const [drawerFormData, setDrawerFormData] = useState({});
 
+    // --- GENERADOR DE HISTORIAL DINÁMICO ---
+  // Busca las transacciones del socio seleccionado y las formatea para la línea de tiempo
+  const getMemberHistory = (member) => {
+    if (!member) return [];
+    
+    // Filtramos las ventas donde el ID o el Número de Socio coincidan
+    const memberSales = transactions.filter(tx => {
+      if (!tx.client) return false;
+      return String(tx.client.id) === String(member.id) || 
+             String(tx.client.memberNumber) === String(member.memberNumber);
+    });
+
+    // Formateamos las ventas para que coincidan con la estructura visual del historial
+    return memberSales.map(tx => {
+      const isRedemption = Number(tx.pointsSpent) > 0;
+      const pointsDiff = isRedemption ? Number(tx.pointsSpent) : Number(tx.pointsEarned || 0);
+      
+      return {
+        id: tx.id,
+        orderId: tx.id,
+        date: tx.date || new Date().toISOString(), // Fallback por si la fecha viene rara
+        type: isRedemption ? 'redeemed' : 'earned',
+        concept: isRedemption ? 'Canje en Compra' : 'Compra Regular',
+        totalSale: tx.total,
+        points: pointsDiff,
+        // Al no guardar saldos históricos por transacción, mostramos el saldo actual como ref.
+        newPoints: member.points, 
+        prevPoints: isRedemption ? member.points + pointsDiff : member.points - pointsDiff
+      };
+    }).sort((a, b) => {
+      // Ordenamos para que las más recientes queden arriba. Parseamos las fechas locales (DD/MM/YYYY)
+      const parseDate = (dStr) => {
+        if (!dStr) return 0;
+        if (dStr.includes('/')) {
+          const [day, month, year] = dStr.split('/');
+          return new Date(`${year}-${month}-${day}`).getTime();
+        }
+        return new Date(dStr).getTime();
+      };
+      return parseDate(b.date) - parseDate(a.date);
+    });
+  };
+
   useEffect(() => {
     if (selectedMember) {
       setIsDrawerEditMode(false);
@@ -209,50 +252,51 @@ export default function ClientsView({
   return (
     <div className="h-full flex flex-col relative bg-slate-50 p-6">
       
-      {/* HEADER */}
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-           <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-             <User className="text-blue-600" /> Gestión de Socios
-           </h1>
-           <p className="text-sm text-gray-500 mt-1">Administra la base de datos de fidelización y puntos.</p>
-        </div>
-        
-        <div className="flex items-center gap-3 w-full sm:w-auto">
-          
-          {/* BOTONES DE CONTROL DE PUNTOS (Solo Admin) */}
-          {checkExpirations && currentUser?.role === 'admin' && (
-            <div className="flex bg-white border border-slate-200 rounded-xl p-1 shadow-sm">
-                <button
-                  onClick={handleRunAudit}
-                  className="p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                  title="Auditoría Retroactiva (Limpiar puntos > 6 meses)"
-                >
-                  <ClipboardCheck size={20} />
-                </button>
-            </div>
-          )}
+{/* HEADER COMPACTO */}
+      <div className="bg-white p-2.5 rounded-xl shadow-sm border border-slate-200 mb-4 flex flex-wrap items-center justify-between gap-3 shrink-0 z-10">
+        
+        {/* Título Pequeño y Buscador */}
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          <h2 className="text-sm font-black text-slate-800 flex items-center gap-1.5 uppercase tracking-wide hidden sm:flex shrink-0 pl-2">
+            <User className="text-blue-600" size={16} /> Socios
+          </h2>
+          
+          <div className="relative flex-1 max-w-2xl">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            <input
+              type="text"
+              placeholder="Buscar por Nombre, N° Socio, DNI, Email..."
+              className="w-full rounded-lg border border-slate-200 pl-9 pr-3 py-1.5 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm font-bold transition-all"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+        </div>
+        
+        {/* Botones de Acción */}
+        <div className="flex items-center gap-2 shrink-0">
+          {checkExpirations && currentUser?.role === 'admin' && (
+            <button
+              onClick={handleRunAudit}
+              className="py-1.5 px-3 text-slate-600 bg-white border border-slate-200 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
+              title="Auditoría Retroactiva (Limpiar puntos > 6 meses)"
+            >
+              <ClipboardCheck size={16} />
+              <span className="hidden md:inline text-xs font-bold">Auditoría</span>
+            </button>
+          )}
 
-          <div className="relative flex-1 sm:w-80">
-            <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Buscar por Nombre, N° Socio, DNI, Email..."
-              className="w-full rounded-xl border border-gray-200 pl-10 p-2.5 bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none shadow-sm transition-all"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-          <button
-            onClick={openCreateModal}
-            className="bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-xl flex items-center gap-2 font-bold shadow-lg transition-all active:scale-95"
-          >
-            <Plus size={20} />
-            <span className="hidden sm:inline">Nuevo Socio</span>
-          </button>
-        </div>
-      </div>
+          <button
+            onClick={openCreateModal}
+            className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shadow-md transition-all active:scale-95 text-xs uppercase tracking-wide"
+          >
+            <Plus size={14} />
+            <span>Nuevo Socio</span>
+          </button>
+        </div>
+      </div>
 
+      
       {/* TABLA DE SOCIOS */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex-1 overflow-y-auto">
         <table className="w-full text-left">
@@ -441,8 +485,8 @@ export default function ClientsView({
                   </h3>
 
                   <div className="space-y-4">
-                    {selectedMember.history && selectedMember.history.length > 0 ? (
-                      selectedMember.history.map((mov) => (
+                    {getMemberHistory(selectedMember).length > 0 ? (
+                        getMemberHistory(selectedMember).map((mov) => (
                         <div key={mov.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all">
                           <div className="flex justify-between items-start mb-3 border-b border-gray-50 pb-2">
                             <div>
