@@ -6,6 +6,8 @@ import {
   Edit2, XCircle, X, FileText, Calendar, User,
   CreditCard, ShoppingCart, Trash2, UserCheck, ArrowRight 
 } from 'lucide-react';
+// ♻️ FIX: Importamos los formateadores oficiales
+import { formatCurrency, formatNumber } from '../../utils/helpers';
 
 // ==========================================
 // MODAL: DETALLE DE TRANSACCIÓN
@@ -141,8 +143,9 @@ export const TransactionDetailModal = ({
                   <div className={`flex items-center bg-slate-50 border border-slate-100 rounded-lg p-2 ${isVoided ? 'opacity-50 grayscale' : ''}`}>
                     <div className="flex flex-col items-end pr-2 border-r border-slate-200">
                       <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">En esta venta</span>
-                      {ptsEarned > 0 && <span className="text-[11px] font-black text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded">+{ptsEarned} pts</span>}
-                      {ptsSpent > 0 && <span className="text-[11px] font-black text-rose-600 bg-rose-100 px-1.5 py-0.5 rounded">-{ptsSpent} pts</span>}
+                      {/* ♻️ FIX: formatNumber para los puntos */}
+                      {ptsEarned > 0 && <span className="text-[11px] font-black text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded">+{formatNumber(ptsEarned)} pts</span>}
+                      {ptsSpent > 0 && <span className="text-[11px] font-black text-rose-600 bg-rose-100 px-1.5 py-0.5 rounded">-{formatNumber(ptsSpent)} pts</span>}
                       {ptsEarned === 0 && ptsSpent === 0 && <span className="text-[11px] font-bold text-slate-400">0 pts</span>}
                     </div>
                     <div className="px-2 text-slate-300">
@@ -151,7 +154,8 @@ export const TransactionDetailModal = ({
                     <div className="flex flex-col items-start pl-1 min-w-[50px]">
                       <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Total Actual</span>
                       <span className="text-[12px] font-black text-indigo-600">
-                        {currentTotal !== null ? `${currentTotal} pts` : '--'}
+                        {/* ♻️ FIX: formatNumber para el total de puntos */}
+                        {currentTotal !== null ? `${formatNumber(currentTotal)} pts` : '--'}
                       </span>
                     </div>
                   </div>
@@ -191,13 +195,16 @@ export const TransactionDetailModal = ({
                       </p>
                       <p className="text-[10px] text-slate-400 font-medium flex items-center gap-1.5">
                         <span className="font-bold text-slate-600 bg-white border border-slate-200 shadow-sm px-1.5 py-0.5 rounded">
-                          {qty}{isWeight ? 'g' : ' u.'}
+                          {/* ♻️ FIX: formatNumber para las cantidades */}
+                          {formatNumber(qty)}{isWeight ? 'g' : ' u.'}
                         </span>
-                        x ${Number(item.price)?.toLocaleString()} c/u
+                        {/* ♻️ FIX: formatCurrency para el precio unitario */}
+                        x {formatCurrency(item.price)} c/u
                       </p>
                     </div>
+                    {/* ♻️ FIX: formatCurrency para el subtotal del ítem */}
                     <p className={`font-black text-sm ${isVoided ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
-                      ${(qty * item.price).toLocaleString()}
+                      {formatCurrency(qty * item.price)}
                     </p>
                   </div>
                 );
@@ -208,8 +215,9 @@ export const TransactionDetailModal = ({
               <span className={`text-xs font-black uppercase tracking-widest ${isVoided ? 'text-red-700' : 'text-blue-800'}`}>
                 Total Final
               </span>
+              {/* ♻️ FIX: formatCurrency para el total global */}
               <span className={`text-2xl font-black tracking-tight ${isVoided ? 'text-red-700 line-through' : 'text-blue-600'}`}>
-                ${(Number(transaction.total) || 0).toLocaleString()}
+                {formatCurrency(transaction.total || 0)}
               </span>
             </div>
           </div>

@@ -11,7 +11,8 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../../data';
-import { formatPrice } from '../../utils/helpers';
+// ♻️ FIX: Importamos formatCurrency y quitamos formatPrice
+import { formatCurrency } from '../../utils/helpers';
 
 export const EditTransactionModal = ({
   transaction, onClose, inventory, setEditingTransaction,
@@ -142,7 +143,8 @@ export const EditTransactionModal = ({
                     <span className="font-medium text-slate-700 group-hover:text-blue-700 flex items-center gap-2">
                       <Package size={14} className="text-slate-400" /> {p.title}
                     </span>
-                    <span className="font-bold text-slate-800">${formatPrice(p.price)}</span>
+                    {/* ♻️ FIX: formatCurrency al precio */}
+                    <span className="font-bold text-slate-800">{formatCurrency(p.price)}</span>
                   </button>
                 ))}
                 {inventory.filter((p) => p.title.toLowerCase().includes(transactionSearch.toLowerCase())).length === 0 && (
@@ -200,7 +202,8 @@ export const EditTransactionModal = ({
                   {/* Total Fila */}
                   <div className="w-[70px] text-right">
                     <label className="text-[9px] font-bold text-slate-400 uppercase mb-0.5 block">Total</label>
-                    <p className="text-sm font-black text-slate-800">${formatPrice(rowTotal)}</p>
+                    {/* ♻️ FIX: formatCurrency al subtotal */}
+                    <p className="text-sm font-black text-slate-800">{formatCurrency(rowTotal)}</p>
                   </div>
 
                   {/* Eliminar */}
@@ -231,7 +234,8 @@ export const EditTransactionModal = ({
             <div>
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Total a Cobrar</label>
               <div className="w-full px-3 py-1.5 border border-green-200 rounded-lg bg-green-50 text-green-700 text-lg font-black text-right">
-                ${formatPrice(transaction.total)}
+                {/* ♻️ FIX: formatCurrency al Total final */}
+                {formatCurrency(transaction.total)}
               </div>
             </div>
           </div>

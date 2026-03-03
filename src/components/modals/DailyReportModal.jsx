@@ -12,7 +12,8 @@ import {
   FileText,
   Users // Icono para clientes
 } from 'lucide-react';
-import { formatPrice } from '../../utils/helpers';
+// ♻️ FIX: Importamos formatCurrency y formatNumber
+import { formatCurrency, formatNumber } from '../../utils/helpers';
 
 export const DailyReportModal = ({ isOpen, onClose, report }) => {
   if (!isOpen || !report) return null;
@@ -103,28 +104,28 @@ export const DailyReportModal = ({ isOpen, onClose, report }) => {
                 <div className="space-y-3">
                   <div className="flex justify-between items-center text-sm border-b border-dashed border-slate-200 pb-2">
                     <span className="text-slate-500 font-medium">Caja Inicial (Apertura)</span>
-                    <span className="font-bold text-slate-700">${formatPrice(report.openingBalance)}</span>
+                    <span className="font-bold text-slate-700">{formatCurrency(report.openingBalance)}</span>
                   </div>
                   <div className="flex justify-between items-center text-sm border-b border-dashed border-slate-200 pb-2">
                     <span className="text-slate-500 font-medium">Ingresos por Ventas (Bruto)</span>
-                    <span className="font-bold text-green-600">+ ${formatPrice(report.totalSales)}</span>
+                    <span className="font-bold text-green-600">+ {formatCurrency(report.totalSales)}</span>
                   </div>
                   {/* Mostrar gastos si existen */}
                   {report.totalExpenses > 0 && (
                     <div className="flex justify-between items-center text-sm border-b border-dashed border-slate-200 pb-2">
                         <span className="text-slate-500 font-medium">Gastos Operativos</span>
-                        <span className="font-bold text-red-500">- ${formatPrice(report.totalExpenses)}</span>
+                        <span className="font-bold text-red-500">- {formatCurrency(report.totalExpenses)}</span>
                     </div>
                   )}
                   <div className="flex justify-between items-center text-sm border-b border-dashed border-slate-200 pb-2">
                     <span className="text-slate-500 font-medium">Costo Mercadería (Estimado)</span>
-                    <span className="font-bold text-slate-400">- ${formatPrice(report.totalCost)}</span>
+                    <span className="font-bold text-slate-400">- {formatCurrency(report.totalCost)}</span>
                   </div>
                 </div>
                 
                 <div className="bg-slate-900 text-white p-4 rounded-xl flex flex-col justify-center items-center text-center print:bg-slate-100 print:text-slate-900 print:border-2 print:border-slate-900">
                   <p className="text-xs font-bold uppercase tracking-widest opacity-70 mb-1">Ganancia Neta (Aprox)</p>
-                  <p className="text-3xl font-black">${formatPrice(report.netProfit)}</p>
+                  <p className="text-3xl font-black">{formatCurrency(report.netProfit)}</p>
                 </div>
               </div>
             </div>
@@ -138,7 +139,7 @@ export const DailyReportModal = ({ isOpen, onClose, report }) => {
                 {Object.entries(report.paymentMethods || {}).map(([method, amount]) => (
                   <div key={method} className="bg-slate-50 p-3 rounded-lg border border-slate-100 text-center print:border-slate-300">
                     <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">{method}</p>
-                    <p className="font-bold text-lg text-slate-800">${formatPrice(amount)}</p>
+                    <p className="font-bold text-lg text-slate-800">{formatCurrency(amount)}</p>
                   </div>
                 ))}
               </div>
@@ -162,8 +163,8 @@ export const DailyReportModal = ({ isOpen, onClose, report }) => {
                   {(report.itemsSold || []).map((item, idx) => (
                     <tr key={idx}>
                       <td className="py-2 px-2 text-slate-700 font-medium truncate max-w-[200px]">{item.title}</td>
-                      <td className="py-2 px-2 text-slate-600 text-center font-bold">{item.qty}</td>
-                      <td className="py-2 px-2 text-slate-800 text-right font-bold">${formatPrice(item.revenue)}</td>
+                      <td className="py-2 px-2 text-slate-600 text-center font-bold">{formatNumber(item.qty, item.qty % 1 !== 0 ? 2 : 0)}</td>
+                      <td className="py-2 px-2 text-slate-800 text-right font-bold">{formatCurrency(item.revenue)}</td>
                     </tr>
                   ))}
                 </tbody>

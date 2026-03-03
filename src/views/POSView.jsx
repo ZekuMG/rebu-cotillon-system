@@ -23,7 +23,8 @@ import {
   Edit2,
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../data';
-import { formatPrice, formatStock, formatWeight, getPricePerKg } from '../utils/helpers';
+// ♻️ FIX: Importamos formatCurrency y quitamos formatPrice viejo
+import { formatCurrency, formatStock, formatWeight, getPricePerKg } from '../utils/helpers';
 
 // ==========================================
 // MINI-MODAL: Ingreso de gramos para peso
@@ -57,7 +58,8 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
             <div className="flex-1 min-w-0">
               <h4 className="font-bold text-slate-800 text-sm truncate">{product.title}</h4>
               <div className="flex items-center gap-2 mt-1">
-                <span className="text-xs text-amber-600 font-bold">${getPricePerKg(product.price)}/kg</span>
+                {/* ♻️ FIX: formatCurrency para precio/kg */}
+                <span className="text-xs text-amber-600 font-bold">{formatCurrency(product.price * 1000)}/kg</span>
                 <span className="text-[10px] text-slate-400">•</span>
                 <span className="text-[10px] text-slate-500">Disponible: {formatWeight(effectiveStock)}</span>
               </div>
@@ -80,8 +82,9 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
           {gramsNum > 0 && (
             <div className="bg-slate-50 rounded-xl p-3 border text-center">
               <p className="text-[10px] text-slate-400 uppercase font-bold">Total estimado</p>
-              <p className="text-2xl font-black text-slate-900">${formatPrice(totalPrice)}</p>
-              <p className="text-[10px] text-slate-500">{formatWeight(gramsNum)} × ${getPricePerKg(product.price)}/kg</p>
+              {/* ♻️ FIX: formatCurrency para total calculado */}
+              <p className="text-2xl font-black text-slate-900">{formatCurrency(totalPrice)}</p>
+              <p className="text-[10px] text-slate-500">{formatWeight(gramsNum)} × {formatCurrency(product.price * 1000)}/kg</p>
             </div>
           )}
           <div className="flex gap-3">
@@ -164,11 +167,9 @@ export default function POSView({
   };
 
   const filteredProducts = (inventory || []).filter((product) => {
-    // 1. Limpiamos espacios extra y dividimos la búsqueda en palabras sueltas
     const searchString = (posSearch || '').toLowerCase().trim();
     const searchWords = searchString ? searchString.split(/\s+/) : [];
 
-    // 2. Verificamos que TODAS las palabras estén incluidas en algún lado del producto
     const matchesSearch = searchWords.length === 0 || searchWords.every(word =>
       (product.title || '').toLowerCase().includes(word) ||
       String(product.id).toLowerCase().includes(word) ||
@@ -261,9 +262,10 @@ export default function POSView({
                           <div className="mt-auto pt-2 flex items-end justify-between">
                             <span className={`font-bold text-fuchsia-600 ${gridColumns > 6 ? 'text-sm' : 'text-lg'}`}>
                               {isWeight ? (
-                                <>${getPricePerKg(product.price)}<span className="text-[10px] font-medium text-fuchsia-400">/kg</span></>
+                                /* ♻️ FIX: formatCurrency a los precios en grilla */
+                                <>{formatCurrency(product.price * 1000)}<span className="text-[10px] font-medium text-fuchsia-400">/kg</span></>
                               ) : (
-                                <>${formatPrice(product.price)}</>
+                                <>{formatCurrency(product.price)}</>
                               )}
                             </span>
                             <div className={`w-6 h-6 rounded-full ${isWeight ? 'bg-amber-500' : 'bg-slate-900'} text-white flex items-center justify-center shadow-lg transition-colors ${gridColumns > 8 || isOutOfStock ? 'hidden' : 'flex'}`}>
@@ -294,7 +296,8 @@ export default function POSView({
                         <div className="text-right flex items-center gap-4">
                           <div className="w-20 text-right">
                             <p className="font-bold text-lg text-fuchsia-600">
-                              ${isWeight ? getPricePerKg(product.price) : formatPrice(product.price)}
+                              {/* ♻️ FIX: formatCurrency a los precios en lista */}
+                              {isWeight ? formatCurrency(product.price * 1000) : formatCurrency(product.price)}
                               {isWeight && <span className="text-[10px] font-medium">/kg</span>}
                             </p>
                           </div>
@@ -377,7 +380,8 @@ export default function POSView({
                         </div>
                       )}
                       <p className={`font-bold ${item.isReward ? 'text-fuchsia-600' : 'text-slate-800'}`}>
-                        {item.isReward ? 'GRATIS' : `$${formatPrice(item.price * item.quantity)}`}
+                        {/* ♻️ FIX: formatCurrency en el subtotal del item del carrito */}
+                        {item.isReward ? 'GRATIS' : formatCurrency(item.price * item.quantity)}
                       </p>
                     </div>
                   </div>
@@ -447,11 +451,12 @@ export default function POSView({
           )}
 
           <div className="space-y-1 pt-2 border-t border-slate-200">
-            <div className="flex justify-between text-xs text-slate-500"><span>Subtotal</span><span>${formatPrice(subtotal)}</span></div>
-            {selectedPayment === 'Credito' && (<div className="flex justify-between text-xs text-amber-600 font-bold"><span>Recargo (10%)</span><span>+${formatPrice(subtotal * 0.1)}</span></div>)}
+            {/* ♻️ FIX: formatCurrency en subtotales y totales */}
+            <div className="flex justify-between text-xs text-slate-500"><span>Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
+            {selectedPayment === 'Credito' && (<div className="flex justify-between text-xs text-amber-600 font-bold"><span>Recargo (10%)</span><span>+{formatCurrency(subtotal * 0.1)}</span></div>)}
             <div className="flex justify-between items-end pt-2">
               <span className="text-sm font-bold text-slate-800 uppercase">Total a Pagar</span>
-              <span className="text-3xl font-black text-slate-900">${formatPrice(total)}</span>
+              <span className="text-3xl font-black text-slate-900">{formatCurrency(total)}</span>
             </div>
           </div>
 

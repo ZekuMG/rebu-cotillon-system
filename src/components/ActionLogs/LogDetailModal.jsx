@@ -1,7 +1,9 @@
+// src/components/ActionLogs/LogDetailModal.jsx
 import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import LogDetailRenderer, { getDetailTitle, getDetailIcon, getDetailColor } from './LogDetailRenderer';
-import { formatPrice } from '../../utils/helpers';
+// ♻️ FIX: Importamos formatCurrency y formatNumber
+import { formatCurrency, formatNumber } from '../../utils/helpers';
 
 // Helper local para extraer ID
 const getTransactionId = (details) => {
@@ -48,38 +50,40 @@ export default function LogDetailModal({ selectedLog, onClose }) {
 
     switch (action) {
       // CAJA
-      case 'Apertura de Caja': return d.amount != null ? `$${formatPrice(d.amount)}` : '';
+      case 'Apertura de Caja': return d.amount != null ? formatCurrency(d.amount) : '';
       case 'Cierre de Caja':
-      case 'Cierre Automático': return d.finalBalance != null ? `$${formatPrice(d.finalBalance)}` : (d.totalSales != null ? `$${formatPrice(d.totalSales)}` : '');
+      case 'Cierre Automático': return d.finalBalance != null ? formatCurrency(d.finalBalance) : (d.totalSales != null ? formatCurrency(d.totalSales) : '');
       // VENTAS
-      case 'Venta Realizada': return d.total != null ? `$${formatPrice(d.total)}` : '';
-      case 'Venta Anulada': return (d.originalTotal || d.total) != null ? `$${formatPrice(d.originalTotal || d.total)}` : '';
+      case 'Venta Realizada': return d.total != null ? formatCurrency(d.total) : '';
+      case 'Venta Anulada': return (d.originalTotal || d.total) != null ? formatCurrency(d.originalTotal || d.total) : '';
       // GASTOS
       case 'Nuevo Gasto':
-      case 'Gasto': return d.amount != null ? `-$${formatPrice(d.amount)}` : '';
+      case 'Gasto': return d.amount != null ? `-${formatCurrency(d.amount)}` : '';
       // PRODUCTOS 
       case 'Alta de Producto':
       case 'Baja Producto':
       case 'Producto Duplicado':
-      case 'Edición Producto': return d.price != null ? `$${formatPrice(d.price)}` : '';
+      case 'Edición Producto': return d.price != null ? formatCurrency(d.price) : '';
       // SOCIOS 
       case 'Nuevo Socio': return d.number ? `#${String(d.number).padStart(4, '0')}` : '';
       case 'Baja de Socio': return d.number ? `#${String(d.number).padStart(4, '0')}` : (d.id ? `ID: ${d.id}` : '');
       case 'Edición de Socio': return d.number ? `#${String(d.number).padStart(4, '0')}` : '';
       case 'Edición de Puntos': {
         const pts = d.pointsChange || d;
-        return pts.diff !== undefined ? `${pts.diff > 0 ? '+' : ''}${pts.diff} pts` : '';
+        // ♻️ FIX: formatNumber a los puntos del Header
+        return pts.diff !== undefined ? `${pts.diff > 0 ? '+' : ''}${formatNumber(pts.diff)} pts` : '';
       }
       // PREMIOS
       case 'Nuevo Premio':
       case 'Editar Premio':
-      case 'Eliminar Premio': return d.pointsCost ? `${d.pointsCost} pts` : '';
+      // ♻️ FIX: formatNumber a los puntos
+      case 'Eliminar Premio': return d.pointsCost ? `${formatNumber(d.pointsCost)} pts` : '';
       // CATEGORÍAS 
       case 'Categoría': return d.type === 'create' ? 'Creada' : d.type === 'delete' ? 'Eliminada' : 'Renombrada';
       case 'Edición Masiva Categorías':
       case 'Actualización Masiva': return (d.count || (d.details && d.details.length) || (d.changes && d.changes.length) || 0) + ' cambios';
       case 'Modificación Pedido': 
-      case 'Venta Modificada': return d.changes?.total ? `$${formatPrice(d.changes.total.new)}` : 'Editado';
+      case 'Venta Modificada': return d.changes?.total ? formatCurrency(d.changes.total.new) : 'Editado';
       default: return '';
     }
   };

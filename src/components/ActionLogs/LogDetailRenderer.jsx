@@ -1,7 +1,8 @@
 // src/components/ActionLogs/LogDetailRenderer.jsx
 import React from 'react';
 import { ArrowRight, CheckCircle } from 'lucide-react';
-import { formatPrice } from '../../utils/helpers';
+// ♻️ FIX: Importamos formatCurrency (sacamos formatPrice viejo)
+import { formatCurrency } from '../../utils/helpers';
 
 // ════════════════════════════════════════════
 //  HELPERS EXPORTABLES
@@ -229,7 +230,8 @@ export default function LogDetailRenderer({ log }) {
         <div className="space-y-4">
           <Card icon="💰" title="Información de Apertura">
             <Item label="Monto Inicial">
-              <span className="text-[#059669] text-[14px] font-bold">${formatPrice(details.amount)}</span>
+              {/* ♻️ FIX: formatCurrency */}
+              <span className="text-[#059669] text-[14px] font-bold">{formatCurrency(details.amount)}</span>
             </Item>
             {details.scheduledClosingTime && (
               <Item label="Cierre Programado" value={details.scheduledClosingTime} />
@@ -249,19 +251,23 @@ export default function LogDetailRenderer({ log }) {
             </div>
           )}
           <Card icon="💰" title="Balance del Día">
-            <Item label="Caja Inicial" value={`$${formatPrice(details.openingBalance || 0)}`} />
+            {/* ♻️ FIX: formatCurrency */}
+            <Item label="Caja Inicial" value={formatCurrency(details.openingBalance || 0)} />
             <Item label="Ventas del Día">
-              <span className="text-[#059669] font-bold">+${formatPrice(details.totalSales || 0)}</span>
+              {/* ♻️ FIX: formatCurrency */}
+              <span className="text-[#059669] font-bold">+{formatCurrency(details.totalSales || 0)}</span>
             </Item>
             {details.totalExpenses !== undefined && (
               <Item label="Gastos">
-                <span className="text-[#dc2626] font-bold">-${formatPrice(details.totalExpenses || 0)}</span>
+                {/* ♻️ FIX: formatCurrency */}
+                <span className="text-[#dc2626] font-bold">-{formatCurrency(details.totalExpenses || 0)}</span>
               </Item>
             )}
           </Card>
           <HighlightCard
             label="Total al Cierre (Neto)"
-            value={`$${formatPrice(details.finalBalance || details.netProfit || details.totalSales || 0)}`}
+            /* ♻️ FIX: formatCurrency */
+            value={formatCurrency(details.finalBalance || details.netProfit || details.totalSales || 0)}
             sub={`${details.closingTime || log.timestamp} · ${details.salesCount || 0} operaciones`}
           />
           <Card icon="📊" title="Estadísticas de Operación">
@@ -309,7 +315,8 @@ export default function LogDetailRenderer({ log }) {
                   key={idx}
                   qty={q}
                   name={item.title || item.name || 'Producto'}
-                  total={`$${formatPrice((item.price || 0) * q)}`}
+                  /* ♻️ FIX: formatCurrency */
+                  total={formatCurrency((item.price || 0) * q)}
                   isWeight={isWeight}
                 />
               );
@@ -408,7 +415,8 @@ export default function LogDetailRenderer({ log }) {
                     key={idx}
                     qty={q}
                     name={item.title || item.name}
-                    total={`$${formatPrice((Number(item.price) || 0) * q)}`}
+                    /* ♻️ FIX: formatCurrency */
+                    total={formatCurrency((Number(item.price) || 0) * q)}
                     isWeight={isWeight}
                   />
                 );
@@ -442,8 +450,9 @@ export default function LogDetailRenderer({ log }) {
              {isTotalActuallyChanged && (
                 <ChangeRow
                   field="Monto Total"
-                  oldVal={`$${formatPrice(changes.total.old)}`}
-                  newVal={`$${formatPrice(changes.total.new)}`}
+                  /* ♻️ FIX: formatCurrency */
+                  oldVal={formatCurrency(changes.total.old)}
+                  newVal={formatCurrency(changes.total.new)}
                 />
              )}
              
@@ -488,7 +497,8 @@ export default function LogDetailRenderer({ log }) {
         <div className="space-y-4">
           <Card icon="💸" title="Detalle del Gasto">
             <Item label="Monto">
-              <span className="text-[#dc2626] text-[14px] font-bold">-${formatPrice(details.amount)}</span>
+              {/* ♻️ FIX: formatCurrency */}
+              <span className="text-[#dc2626] text-[14px] font-bold">-{formatCurrency(details.amount)}</span>
             </Item>
             {details.description && <Item label="Descripción" value={details.description} />}
           </Card>
@@ -514,10 +524,12 @@ export default function LogDetailRenderer({ log }) {
               <Badge color="fuchsia">{details.category || 'Sin categoría'}</Badge>
             </Item>
             {details.purchasePrice !== undefined && details.purchasePrice !== null && (
-              <Item label="Precio Costo" value={`$${formatPrice(details.purchasePrice)}`} />
+              /* ♻️ FIX: formatCurrency */
+              <Item label="Precio Costo" value={formatCurrency(details.purchasePrice)} />
             )}
             <Item label="Precio Venta">
-              <span className="text-[#059669] font-bold">${formatPrice(details.price)}</span>
+              {/* ♻️ FIX: formatCurrency */}
+              <span className="text-[#059669] font-bold">{formatCurrency(details.price)}</span>
             </Item>
             <Item label="Stock Inicial">
               <Badge color="blue">{details.stock || 0} {details.product_type === 'weight' ? 'g' : 'uds'}</Badge>
@@ -551,8 +563,9 @@ export default function LogDetailRenderer({ log }) {
                 <ChangeRow
                   key={key}
                   field={fieldNames[key] || key}
-                  oldVal={key.toLowerCase().includes('price') ? `$${formatPrice(val.old)}` : String(val.old)}
-                  newVal={key.toLowerCase().includes('price') ? `$${formatPrice(val.new)}` : String(val.new)}
+                  /* ♻️ FIX: formatCurrency */
+                  oldVal={key.toLowerCase().includes('price') ? formatCurrency(val.old) : String(val.old)}
+                  newVal={key.toLowerCase().includes('price') ? formatCurrency(val.new) : String(val.new)}
                 />
               ))}
             </Card>
@@ -569,7 +582,8 @@ export default function LogDetailRenderer({ log }) {
               <Badge color="fuchsia">{details.category || '-'}</Badge>
             </Item>
             <Item label="Precio">
-              <span className="text-[#059669] font-bold">${formatPrice(details.price)}</span>
+              {/* ♻️ FIX: formatCurrency */}
+              <span className="text-[#059669] font-bold">{formatCurrency(details.price)}</span>
             </Item>
             <Item label="Stock">
               <Badge color="blue">{details.stock} {details.product_type === 'weight' ? 'g' : 'uds'}</Badge>
@@ -593,7 +607,8 @@ export default function LogDetailRenderer({ log }) {
             )}
             <Item label="Categoría" value={details.category || '-'} />
             {details.price !== undefined && (
-              <Item label="Precio al momento de baja" value={`$${formatPrice(details.price)}`} />
+              /* ♻️ FIX: formatCurrency */
+              <Item label="Precio al momento de baja" value={formatCurrency(details.price)} />
             )}
             <Item label="Stock descartado" className="!bg-[#fef2f2] !border-[#fecaca]">
               <span className="text-[#dc2626] font-bold">{details.stock || 0} {details.product_type === 'weight' ? 'g' : 'unidades'}</span>
@@ -618,11 +633,13 @@ export default function LogDetailRenderer({ log }) {
               </Item>
             )}
             {details.purchasePrice !== undefined && (
-              <Item label="Precio Costo" value={`$${formatPrice(details.purchasePrice)}`} />
+              /* ♻️ FIX: formatCurrency */
+              <Item label="Precio Costo" value={formatCurrency(details.purchasePrice)} />
             )}
             {details.price !== undefined && (
               <Item label="Precio Venta">
-                <span className="text-[#059669] font-bold">${formatPrice(details.price)}</span>
+                {/* ♻️ FIX: formatCurrency */}
+                <span className="text-[#059669] font-bold">{formatCurrency(details.price)}</span>
               </Item>
             )}
             <Item label="Stock Inicial">

@@ -1,5 +1,6 @@
 import React from 'react';
-import { formatPrice, formatTime24 } from '../utils/helpers';
+// ♻️ FIX: Importamos formatCurrency y formatNumber
+import { formatCurrency, formatNumber, formatTime24 } from '../utils/helpers';
 
 // =============================================
 // VERSIÓN A: 24 Caracteres por línea
@@ -96,14 +97,15 @@ export const TicketPrintLayout = ({ transaction }) => {
 
     if (!transaction.isPointsTicket) {
       if (showRedemption) {
-        lines.push(line('Pts canjeados:', `-${pointsSpent}`));
+        // ♻️ FIX: formatNumber para los puntos canjeados
+        lines.push(line('Pts canjeados:', `-${formatNumber(pointsSpent)}`));
       }
-      // Eliminamos el "else" para que SIEMPRE muestre los puntos ganados,
-      // incluso si en la misma compra canjeó puntos.
-      lines.push(line('Pts ganados:', `+${pointsGained}`));
+      // ♻️ FIX: formatNumber para los puntos ganados
+      lines.push(line('Pts ganados:', `+${formatNumber(pointsGained)}`));
     }
 
-    lines.push(line('Saldo actual:', `${currentPointsDisplay}`));
+    // ♻️ FIX: formatNumber para el saldo final de puntos
+    lines.push(line('Saldo actual:', `${formatNumber(currentPointsDisplay)}`));
     
     lines.push(divider());
   }
@@ -121,11 +123,13 @@ export const TicketPrintLayout = ({ transaction }) => {
       const qty = Number(item.qty || item.quantity || 1);
       const price = Number(item.price);
       
-      const titlePrefix = qty > 1 ? `(${qty}) ` : '';
+      // ♻️ FIX: formatNumber para las cantidades
+      const titlePrefix = qty !== 1 ? `(${formatNumber(qty)}) ` : '';
       const fullTitle = titlePrefix + item.title;
 
       const totalItemPrice = qty * price;
-      const priceStr = item.isReward ? 'GRATIS' : `$${formatPrice(totalItemPrice)}`;
+      // ♻️ FIX: formatCurrency (ya trae el $)
+      const priceStr = item.isReward ? 'GRATIS' : formatCurrency(totalItemPrice);
 
       lines.push(line(fullTitle, priceStr));
     });
@@ -133,19 +137,20 @@ export const TicketPrintLayout = ({ transaction }) => {
     lines.push(divider());
 
     // TOTALES
-    lines.push(line('Subtotal', `$${formatPrice(itemsSubtotal)}`));
+    // ♻️ FIX: formatCurrency para todos los totales monetarios
+    lines.push(line('Subtotal', formatCurrency(itemsSubtotal)));
 
     redemptionDiscounts.forEach(d => {
-      lines.push(line('Descuento Pts', `-$${formatPrice(Math.abs(Number(d.price)))}`));
+      lines.push(line('Descuento Pts', `-${formatCurrency(Math.abs(Number(d.price)))}`));
     });
 
     if (surcharge > 0) {
-      lines.push(line('Recargo', `$${formatPrice(surcharge)}`));
+      lines.push(line('Recargo', formatCurrency(surcharge)));
     }
 
     lines.push(divider());
     
-    lines.push(line('TOTAL', `$${formatPrice(transaction.total)}`));
+    lines.push(line('TOTAL', formatCurrency(transaction.total)));
     
     lines.push(`PAGO: ${String(transaction.payment).toUpperCase()}`);
     

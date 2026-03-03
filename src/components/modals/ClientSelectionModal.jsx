@@ -11,6 +11,8 @@ import {
   Users,
   ArrowRight,
 } from 'lucide-react';
+// ♻️ FIX: Importamos formatNumber
+import { formatNumber } from '../../utils/helpers';
 
 export const ClientSelectionModal = ({ isOpen, onClose, onSelectClient, clients = [], addClient, onCancelFlow }) => {
   if (!isOpen) return null;
@@ -141,7 +143,8 @@ const handleCreate = async (e) => {
                         </p>
                       </div>
                       <div className="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-1 rounded">
-                        {member.points} pts
+                        {/* ♻️ FIX: formatNumber para los puntos del socio */}
+                        {formatNumber(member.points)} pts
                       </div>
                     </button>
                   ))

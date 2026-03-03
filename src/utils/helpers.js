@@ -20,6 +20,38 @@ export const formatPrice = (amount) => {
   }).format(number);
 };
 
+/**
+ * 💰 Formatea un monto como moneda argentina (Ej: $1.234,56 o $1.234,00)
+ * Siempre muestra 2 decimales para los precios.
+ */
+export const formatCurrency = (amount) => {
+  if (amount === null || amount === undefined || isNaN(amount) || amount === '') return '$0,00';
+  
+  const number = Number(amount);
+  if (isNaN(number)) return '$0,00';
+
+  return '$' + new Intl.NumberFormat('es-AR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2, 
+  }).format(number);
+};
+
+/**
+ * 📦 Formatea un número regular (cantidades, stock, gramos) (Ej: 1.234,56 o 1.234)
+ * Permite elegir cuántos decimales mostrar (por defecto 0 para unidades enteras).
+ */
+export const formatNumber = (amount, decimals = 0) => {
+  if (amount === null || amount === undefined || isNaN(amount) || amount === '') return '0';
+  
+  const number = Number(amount);
+  if (isNaN(number)) return '0';
+
+  return new Intl.NumberFormat('es-AR', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals, 
+  }).format(number);
+};
+
 // ==========================================
 // FORMATEO DE FECHAS Y HORAS (ESTANDARIZADO)
 // ==========================================

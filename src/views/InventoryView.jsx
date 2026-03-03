@@ -16,7 +16,8 @@ import {
   List,
   Scale,
 } from 'lucide-react';
-import { formatStock, formatWeight, getPricePerKg } from '../utils/helpers';
+// ♻️ FIX: Importamos los formateadores oficiales
+import { formatStock, formatCurrency, formatNumber } from '../utils/helpers';
 
 export default function InventoryView({
   inventory, categories, inventorySearch, setInventorySearch,
@@ -29,11 +30,9 @@ export default function InventoryView({
   const [showGridMenu, setShowGridMenu] = useState(false);
 
   const filteredInventory = (inventory || []).filter((item) => {
-    // 1. Limpiamos espacios extra y dividimos la búsqueda en palabras sueltas
     const searchString = (inventorySearch || '').toLowerCase().trim();
     const searchWords = searchString ? searchString.split(/\s+/) : [];
 
-    // 2. Verificamos que TODAS las palabras coincidan (sin importar el orden)
     const matchesSearch = searchWords.length === 0 || searchWords.every(word =>
       (item.title || '').toLowerCase().includes(word) ||
       String(item.id).toLowerCase().includes(word) ||
@@ -176,8 +175,9 @@ export default function InventoryView({
                           <div className={`flex justify-between items-end mt-auto ${gridColumns > 7 ? 'pt-1' : 'pt-2 border-t border-slate-100'}`}>
                             <div>
                               {gridColumns <= 6 && <p className="text-[10px] text-slate-400">Precio</p>}
+                              {/* ♻️ FIX: Aplicamos formatCurrency y calculamos precio/kg si es necesario */}
                               <p className={`font-bold text-slate-900 ${gridColumns > 7 ? 'text-xs' : 'text-lg'}`}>
-                                ${isWeight ? getPricePerKg(product.price) : product.price}
+                                {formatCurrency(isWeight ? product.price * 1000 : product.price)}
                                 {isWeight && <span className="text-[9px] font-medium text-slate-400">/kg</span>}
                               </p>
                             </div>
@@ -238,8 +238,9 @@ export default function InventoryView({
                             </div>
                             <div className="text-right w-24">
                                 <p className="text-[10px] text-slate-400 uppercase font-bold">Precio</p>
+                                {/* ♻️ FIX: Aplicamos formatCurrency en modo lista */}
                                 <p className="font-bold text-lg text-fuchsia-600">
-                                  ${isWeight ? getPricePerKg(product.price) : product.price}
+                                  {formatCurrency(isWeight ? product.price * 1000 : product.price)}
                                   {isWeight && <span className="text-[10px] font-medium">/kg</span>}
                                 </p>
                             </div>
@@ -302,7 +303,7 @@ export default function InventoryView({
                   <span className="text-xs font-bold uppercase">Stock</span>
                 </div>
                 <p className={`text-2xl font-bold ${getStockColorClass(selectedProduct)}`}>
-                    {formatStock(selectedProduct)}
+                  {formatStock(selectedProduct)}
                 </p>
               </div>
               <div className="p-3 bg-green-50 rounded-xl border border-green-100">
@@ -310,8 +311,9 @@ export default function InventoryView({
                   <DollarSign size={16} />
                   <span className="text-xs font-bold uppercase">Precio</span>
                 </div>
+                {/* ♻️ FIX: Aplicamos formatCurrency en el Panel Lateral */}
                 <p className="text-2xl font-bold text-green-900">
-                  ${isWeight ? getPricePerKg(selectedProduct.price) : selectedProduct.price}
+                  {formatCurrency(isWeight ? selectedProduct.price * 1000 : selectedProduct.price)}
                   {isWeight && <span className="text-sm font-medium">/kg</span>}
                 </p>
               </div>
@@ -324,11 +326,13 @@ export default function InventoryView({
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div className="bg-white rounded-lg p-2 text-center border">
                     <p className="text-[10px] text-slate-400">Precio/g</p>
-                    <p className="font-bold text-amber-700">${Number(selectedProduct.price).toFixed(2)}</p>
+                    {/* ♻️ FIX: formatCurrency al precio por gramo */}
+                    <p className="font-bold text-amber-700">{formatCurrency(selectedProduct.price)}</p>
                   </div>
                   <div className="bg-white rounded-lg p-2 text-center border">
                     <p className="text-[10px] text-slate-400">Stock en kg</p>
-                    <p className="font-bold text-amber-700">{(Number(selectedProduct.stock) / 1000).toFixed(2)}kg</p>
+                    {/* ♻️ FIX: formatNumber a los kilogramos */}
+                    <p className="font-bold text-amber-700">{formatNumber(Number(selectedProduct.stock) / 1000, 2)} kg</p>
                   </div>
                 </div>
               </div>
@@ -344,8 +348,9 @@ export default function InventoryView({
                 <>
                   <div className="flex justify-between items-center text-sm border-b border-slate-200 pb-2">
                     <span className="text-slate-500 flex items-center gap-2"><DollarSign size={14} /> Costo</span>
+                    {/* ♻️ FIX: formatCurrency al Costo (multiplicado si es por kg) */}
                     <span className="font-bold text-slate-700">
-                      ${isWeight ? getPricePerKg(selectedProduct.purchasePrice) : (selectedProduct.purchasePrice || 0)}
+                      {formatCurrency(isWeight ? (selectedProduct.purchasePrice * 1000) : (selectedProduct.purchasePrice || 0))}
                       {isWeight && <span className="text-xs text-slate-400">/kg</span>}
                     </span>
                   </div>

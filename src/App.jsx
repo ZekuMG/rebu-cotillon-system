@@ -12,7 +12,8 @@ import Swal from 'sweetalert2'; // Alertas bonitas
 // --- CONEXIÓN A LA NUBE ---
 import { supabase } from './supabase/client';
 import { uploadProductImage, deleteProductImage } from './utils/storage';
-import { formatDateAR, formatTimeAR, formatTimeFullAR } from './utils/helpers';
+// ♻️ FIX: Importamos los nuevos formateadores
+import { formatDateAR, formatTimeAR, formatTimeFullAR, formatCurrency, formatNumber } from './utils/helpers';
 
 import {
   USERS,
@@ -49,7 +50,6 @@ import {
   TicketModal,
   BarcodeNotFoundModal,
   BarcodeDuplicateModal,
-  // ClientSelectionModal
 } from './components/AppModals';
 
 // Modales Nuevos
@@ -107,7 +107,8 @@ const fetchCloudData = async (showSpinner = true) => {
       ] = await Promise.allSettled([
         supabase.from('products').select('*').eq('is_active', true).order('title'),
         supabase.from('clients').select('*').eq('is_active', true).order('name'),
-        supabase.from('sales').select(`*, sale_items(*), clients(name, member_number)`).order('created_at', { ascending: false }).limit(1000),        supabase.from('logs').select('*').order('created_at', { ascending: false }),
+        supabase.from('sales').select(`*, sale_items(*), clients(name, member_number)`).order('created_at', { ascending: false }).limit(1000),        
+        supabase.from('logs').select('*').order('created_at', { ascending: false }),
         supabase.from('expenses').select('*').order('created_at', { ascending: false }),
         supabase.from('cash_closures').select('*').order('created_at', { ascending: false }),
         supabase.from('categories').select('*').order('name'),
@@ -326,7 +327,7 @@ useEffect(() => {
                averageTicket: Number(c.average_ticket || 0),
                paymentMethods: c.payment_methods_summary || {}, 
                itemsSold: c.items_sold_list || [],             
-               newClients: c.new_clients_list || [],           
+               newClients: c.new_clients_list || [],            
                expensesSnapshot: c.expenses_snapshot || [],    
                transactionsSnapshot: c.transactions_snapshot || []
            };
@@ -487,43 +488,61 @@ const [newItem, setNewItem] = useState({
   const handleAddMemberWithLog = async (data) => {
     try {
        const memberNum = Math.floor(10000 + Math.random() * 90000);
-       const { data: newClient, error } = await supabase.from('clients').insert([{
-          name: data.name, dni: data.dni, phone: data.phone, email: data.email, points: data.points || 0, member_number: memberNum
-       }]).select().single();
-       if (error) throw error;
+       
+       const payload = { 
+         name: data.name, 
+         dni: data.dni?.trim() || null, 
+         phone: data.phone?.trim() || null, 
+         email: data.email?.trim() || null, 
+         points: Number(data.points) || 0, 
+         member_number: memberNum 
+       };
 
+       const { data: newClient, error } = await supabase.from('clients').insert([payload]).select().single();
+       if (error) throw error;
+       
        const clientFormatted = { ...newClient, memberNumber: newClient.member_number };
        setMembers([...members, clientFormatted]);
-       
        addLog('Nuevo Socio', { name: clientFormatted.name, number: clientFormatted.memberNumber }, 'Registro manual');
        showNotification('success', 'Socio Creado', `#${memberNum}`);
        return clientFormatted;
     } catch (e) { 
        console.error(e);
-       showNotification('error', 'Error', 'No se pudo crear socio'); 
+       if (e.message?.includes('clients_dni_key') || e.code === '23505') {
+         showNotification('error', 'DNI Duplicado', 'Ese DNI ya pertenece a otro socio.');
+       } else {
+         showNotification('error', 'Error', 'No se pudo crear el socio.'); 
+       }
     }
   };
 
-const handleUpdateMemberWithLog = async (id, updates) => {
-  try {
-    const dbUpdates = {};
-    if (updates.name !== undefined) dbUpdates.name = updates.name;
-    if (updates.dni !== undefined) dbUpdates.dni = updates.dni;
-    if (updates.phone !== undefined) dbUpdates.phone = updates.phone;
-    if (updates.email !== undefined) dbUpdates.email = updates.email;
-    if (updates.points !== undefined) dbUpdates.points = updates.points;
-    if (updates.memberNumber !== undefined) dbUpdates.member_number = updates.memberNumber;
-
-    const { error } = await supabase.from('clients').update(dbUpdates).eq('id', id);
-    if (error) throw error;
-
-    setMembers(members.map(m => m.id === id ? { ...m, ...updates } : m));
-    addLog('Edición de Socio', { id, updates });
-  } catch (e) {
-    console.error('Error actualizando socio:', e);
-    showNotification('error', 'Error', `Fallo al actualizar socio: ${e.message || 'Error desconocido'}`);
-  }
-};
+  const handleUpdateMemberWithLog = async (id, updates) => {
+    try {
+      const dbUpdates = {};
+      if (updates.name !== undefined) dbUpdates.name = updates.name;
+      
+      if (updates.dni !== undefined) dbUpdates.dni = updates.dni?.trim() || null;
+      if (updates.phone !== undefined) dbUpdates.phone = updates.phone?.trim() || null;
+      if (updates.email !== undefined) dbUpdates.email = updates.email?.trim() || null;
+      
+      if (updates.points !== undefined) dbUpdates.points = Number(updates.points) || 0;
+      if (updates.memberNumber !== undefined) dbUpdates.member_number = updates.memberNumber;
+      
+      const { error } = await supabase.from('clients').update(dbUpdates).eq('id', id);
+      if (error) throw error;
+      
+      setMembers(members.map(m => m.id === id ? { ...m, ...updates } : m));
+      addLog('Edición de Socio', { id, updates });
+      showNotification('success', 'Socio Actualizado', 'Cambios guardados.');
+    } catch (e) { 
+      console.error(e);
+      if (e.message?.includes('clients_dni_key') || e.code === '23505') {
+        showNotification('error', 'DNI Duplicado', 'Ese DNI ya pertenece a otro socio.');
+      } else {
+        showNotification('error', 'Error', 'Fallo al actualizar el socio.'); 
+      }
+    }
+  };
 
 const handleDeleteMemberWithLog = async (id) => {
   try {
@@ -927,7 +946,6 @@ const handleEditTransactionRequest = (tx) => {
     const safeTx = JSON.parse(JSON.stringify(tx));
     safeTx.items = safeTx.items.map((i) => ({
       ...i,
-      // 👇 Aquí está la magia: busca "qty" (de la nube) o "quantity" (local)
       qty: Number(i.qty || i.quantity) || 0,
       price: Number(i.price) || 0,
     }));
@@ -961,7 +979,6 @@ const handleEditTransactionRequest = (tx) => {
       setTempClosingTime('21:00');
       setIsOpeningBalanceModalOpen(true);
     } else {
-      // ✅ FIX: Sincronización forzada con la nube antes de cerrar
       Swal.fire({ 
         title: 'Sincronizando Caja...', 
         text: 'Obteniendo ventas y modificaciones del vendedor...', 
@@ -979,7 +996,6 @@ const handleEditTransactionRequest = (tx) => {
   const executeRegisterClose = async (isAuto = false) => {
     const closeDate = new Date();
     
-    // 1. Filtrar SOLO ventas y gastos del ciclo actual (desde apertura)
     const cycleStart = registerOpenedAt ? new Date(registerOpenedAt) : null;
     
     const cycleTransactions = cycleStart
@@ -1043,8 +1059,6 @@ const handleEditTransactionRequest = (tx) => {
         })();
 
     try {
-        // ✨ FIX ANTI-DUPLICADOS SUPREMO (Bloqueo Atómico) ✨
-        // Intentamos cambiar la caja a "Cerrada", SÓLO SI actualmente está "Abierta".
         const { data: lockData, error: lockError } = await supabase
             .from('register_state')
             .update({
@@ -1054,12 +1068,11 @@ const handleEditTransactionRequest = (tx) => {
                 last_updated_by: currentUser?.name || 'Sistema (Auto)'
             })
             .eq('id', 1)
-            .eq('is_open', true) // <--- ESTA LÍNEA ES LA CLAVE DE TODO
+            .eq('is_open', true)
             .select();
 
         if (lockError) throw lockError;
 
-        // Si lockData vuelve vacío, significa que OTRO dispositivo nos ganó de mano y ya la cerró.
         if (!lockData || lockData.length === 0) {
             console.log("Cierre cancelado: OTRO dispositivo ya ejecutó el cierre exitosamente.");
             setIsRegisterClosed(true);
@@ -1068,11 +1081,9 @@ const handleEditTransactionRequest = (tx) => {
             setTransactions([]);
             setExpenses([]);
             if (isAuto) setIsAutoCloseAlertOpen(true);
-            return; // 🛑 Cortamos la ejecución acá para no crear el reporte duplicado en 0.
+            return;
         }
 
-        // --- SI EL CÓDIGO LLEGÓ ACÁ, ESTE DISPOSITIVO ES EL PRIMERO Y GENERA EL REPORTE REAL ---
-        
         const openTime = registerOpenedAt 
           ? formatTimeFullAR(new Date(registerOpenedAt))
           : (dailyLogs.find(l => l.action === 'Apertura de Caja')?.timestamp || '--:--');
@@ -1225,7 +1236,6 @@ const handleEditTransactionRequest = (tx) => {
     }
   };
 
-  // ✅ NUEVO FIX: Handler para editar el nombre de la categoría masivamente
   const handleEditCategory = async (oldName, newName) => {
     try {
       const { error: catError } = await supabase
@@ -1259,7 +1269,6 @@ const handleEditTransactionRequest = (tx) => {
     }
   };
 
-  // ✅ NUEVO FIX: Handler para mover productos en masa desde el Gestor
   const handleBatchUpdateProductCategory = async (changes) => {
     try {
       const promises = changes.map(async (change) => {
@@ -1301,8 +1310,6 @@ const handleEditTransactionRequest = (tx) => {
     }
   };
 
-
-  // --- MODIFICADO: Add Item ahora maneja Múltiples Categorías (join por comas) ---
 const handleAddItem = async (e, overrideData = null) => {
   e.preventDefault();
   const itemData = overrideData || newItem;
@@ -1319,7 +1326,6 @@ const handleAddItem = async (e, overrideData = null) => {
       price: Number(itemData.price) || 0,
       purchasePrice: Number(itemData.purchasePrice) || 0,
       stock: Number(itemData.stock) || 0,
-      // FIX MULTI-CATEGORÍA: Guardamos el array como string separado por comas
       category: itemData.categories.join(', '), 
       barcode: itemData.barcode || null,
       image: itemData.image || '',
@@ -1358,8 +1364,6 @@ const handleAddItem = async (e, overrideData = null) => {
 };
 
 
-
-// --- MODIFICADO: Edit Product ahora maneja Múltiples Categorías ---
 const saveEditProduct = async (e, overrideData = null) => {
   e.preventDefault();
   const productData = overrideData || editingProduct;
@@ -1376,7 +1380,6 @@ const saveEditProduct = async (e, overrideData = null) => {
       price: Number(productData.price),
       purchasePrice: Number(productData.purchasePrice) || 0,
       stock: Number(productData.stock),
-      // FIX MULTI-CATEGORÍA
       category: Array.isArray(productData.categories) ? productData.categories.join(', ') : productData.category,
       barcode: productData.barcode || null,
       image: productData.image || '',
@@ -1412,13 +1415,9 @@ const saveEditProduct = async (e, overrideData = null) => {
     }
   };
 
-  // ==========================================
-  // FUNCIONES DE EDICIÓN MASIVA (BULK EDITOR)
-  // ==========================================
   const handleBulkSaveSingle = async (product, editData) => {
     try {
       const isWeight = product.product_type === 'weight';
-      // Convertimos de la vista (precio por kilo) al formato interno de la BD (precio por gramo)
       const finalPrice = isWeight ? Number(editData.price) / 1000 : Number(editData.price);
       const finalCost = isWeight ? Number(editData.purchasePrice) / 1000 : Number(editData.purchasePrice);
       const finalStock = isWeight ? Number(editData.stock) : Number(editData.stock);
@@ -1428,10 +1427,8 @@ const saveEditProduct = async (e, overrideData = null) => {
       const { error } = await supabase.from('products').update(payload).eq('id', product.id);
       if (error) throw error;
 
-      // Actualizamos el inventario local en pantalla
       setInventory(inventory.map(p => p.id === product.id ? { ...p, price: finalPrice, purchasePrice: finalCost, stock: finalStock } : p));
       
-      // Registramos en el historial
       addLog('Edición Rápida', { id: product.id, title: product.title, changes: payload }, 'Editor Masivo');
       showNotification('success', 'Guardado', 'Producto actualizado.');
     } catch (e) {
@@ -1444,7 +1441,6 @@ const saveEditProduct = async (e, overrideData = null) => {
     try {
       Swal.fire({ title: 'Guardando masivamente...', text: `Actualizando ${bulkData.length} productos. Por favor espera.`, allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       
-      // Armamos todas las peticiones a la base de datos en simultáneo
       const promises = bulkData.map(item => {
         const { product, edits } = item;
         const isWeight = product.product_type === 'weight';
@@ -1462,7 +1458,6 @@ const saveEditProduct = async (e, overrideData = null) => {
 
       const results = await Promise.all(promises);
 
-      // Actualizamos el inventario local de un solo golpe
       setInventory(prev => prev.map(p => {
         const updated = results.find(r => r.id === p.id);
         if (updated) {
@@ -1471,7 +1466,6 @@ const saveEditProduct = async (e, overrideData = null) => {
         return p;
       }));
 
-      // Un solo log resumido para no saturar el historial
       addLog('Edición Masiva', { count: bulkData.length, items: bulkData.map(b => b.product.title) }, 'Editor Masivo');
       
       Swal.close();
@@ -1510,7 +1504,6 @@ const confirmDeleteProduct = async (e) => {
 
 const handleDuplicateProduct = async (originalProduct) => {
   try {
-    // Construir payload del duplicado
     const payload = {
       title: `${originalProduct.title} (copia)`,
       brand: originalProduct.brand || '',
@@ -1520,8 +1513,8 @@ const handleDuplicateProduct = async (originalProduct) => {
       category: Array.isArray(originalProduct.categories) 
         ? originalProduct.categories.join(', ') 
         : originalProduct.category || '',
-      barcode: null,       // Sin código de barras
-      image: '',           // Sin imagen
+      barcode: null,       
+      image: '',           
       product_type: originalProduct.product_type || 'quantity'
     };
 
@@ -1534,10 +1527,8 @@ const handleDuplicateProduct = async (originalProduct) => {
       purchasePrice: data.purchasePrice || 0
     };
 
-    // Agregar al inventario local
     setInventory(prev => [...prev, newProduct]);
 
-    // Log
     addLog('Producto Duplicado', {
       originalId: originalProduct.id,
       originalTitle: originalProduct.title,
@@ -1545,7 +1536,6 @@ const handleDuplicateProduct = async (originalProduct) => {
       newTitle: data.title
     }, 'Duplicado desde editor');
 
-    // Cerrar modal actual y abrir con el producto nuevo
     setEditingProduct(newProduct);
     setEditReason('');
 
@@ -1599,7 +1589,6 @@ const handleCheckout = async () => {
     try {
       Swal.fire({ title: 'Procesando...', didOpen: () => Swal.showLoading() });
 
-      // 1. Calculamos puntos EXACTAMENTE igual que en la vista visual (total / 150)
       const pointsEarned = Math.floor(total / 500)
       const pointsSpent = cart.reduce((acc, i) => acc + (i.isReward ? i.pointsCost : 0), 0);
       const clientId = posSelectedClient?.id && posSelectedClient.id !== 'guest' ? posSelectedClient.id : null;
@@ -1623,7 +1612,6 @@ const handleCheckout = async () => {
           }
       }
 
-      // 2. Actualizamos al cliente y guardamos SU SALDO FINAL para el ticket
       let updatedClientForTicket = null;
       if (clientId) {
           const newPoints = posSelectedClient.points - pointsSpent + pointsEarned;
@@ -1638,7 +1626,6 @@ const handleCheckout = async () => {
         return c ? { ...p, stock: p.stock - c.quantity } : p;
       }));
 
-      // 3. Armamos la transacción enviando las propiedades CLARAS para el ticket
       const tx = {
         id: sale.id,
         date: formatDateAR(new Date()),
@@ -1650,7 +1637,7 @@ const handleCheckout = async () => {
         items: cart,
         status: 'completed',
         client: updatedClientForTicket || posSelectedClient, 
-        pointsEarned: clientId ? pointsEarned : 0, // Mandamos el nombre correcto
+        pointsEarned: clientId ? pointsEarned : 0,
         pointsSpent: pointsSpent,
       };
 
@@ -1693,14 +1680,9 @@ const handleCheckout = async () => {
     console.log("=== INICIANDO ANULACIÓN / BORRADO MODO DEBUG ===", tx);
 
     try {
-      // ========================================================
-      // 🗑️ MODO BORRADO DEFINITIVO (Si la venta ya estaba anulada)
-      // ========================================================
       if (tx.status === 'voided') {
         Swal.fire({ title: 'Borrando...', text: 'Eliminando registro permanentemente...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
         
-        // 1. Borrar de la base de datos (si existe en la tabla de logs como "Venta Anulada" o "Venta Realizada")
-        // Como la tabla de ventas ya se borró en el paso anterior, aquí limpiamos el historial (Logs)
         const { error: logErr } = await supabase
           .from('logs')
           .delete()
@@ -1710,14 +1692,12 @@ const handleCheckout = async () => {
           console.warn("No se pudo borrar el log en la BD (o ya no existía):", logErr);
         }
 
-        // 2. Limpiar estado local
         setTransactions(transactions.filter(t => String(t.id) !== String(tx.id)));
         setDailyLogs(dailyLogs.filter(l => {
           const detailId = l.details?.transactionId || l.details?.id;
           return String(detailId) !== String(tx.id);
         }));
         
-        // 3. Registrar el borrado permanente (opcional, por seguridad)
         addLog('Borrado Permanente', `Transacción #${tx.id} eliminada por completo`, refundReason || 'Limpieza de historial');
 
         setIsRefundModalOpen(false);
@@ -1728,10 +1708,6 @@ const handleCheckout = async () => {
         return;
       }
 
-      // ========================================================
-      // ❌ MODO ANULACIÓN NORMAL (Si es la primera vez que se toca)
-      // ========================================================
-      // PASO 1
       Swal.fire({ title: 'Anulando...', text: 'Paso 1: Devolviendo stock...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       const updatedInventory = [...inventory];
       for (const item of tx.items) {
@@ -1750,7 +1726,6 @@ const handleCheckout = async () => {
       }
       setInventory(updatedInventory);
 
-      // PASO 2
       Swal.fire({ title: 'Anulando...', text: 'Paso 2: Ajustando puntos del socio...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       const clientMemberNumber = tx.client?.memberNumber || tx.client?.number;
       let updatedMembers = [...members];
@@ -1767,7 +1742,6 @@ const handleCheckout = async () => {
       }
       setMembers(updatedMembers);
 
-      // PASO 3
       Swal.fire({ title: 'Anulando...', text: 'Paso 3: Borrando la venta de la nube...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       
       const { error: itemsErr } = await supabase.from('sale_items').delete().eq('sale_id', tx.id);
@@ -1776,7 +1750,6 @@ const handleCheckout = async () => {
       const { error: saleErr } = await supabase.from('sales').delete().eq('id', tx.id);
       if (saleErr) throw new Error(`Fallo borrando la venta: ${saleErr.message}`);
 
-      // PASO 4
       Swal.fire({ title: 'Anulando...', text: 'Paso 4: Creando el registro final...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       const logDetails = {
         id: tx.id,
@@ -1787,10 +1760,8 @@ const handleCheckout = async () => {
         }))
       };
       
-      // Guardar el log de anulación
       addLog('Venta Anulada', logDetails, refundReason || 'Anulación manual');
 
-      // PASO 5: EL FIX VISUAL FANTASMA
       const exists = transactions.some(t => String(t.id) === String(tx.id));
       if (exists) {
         setTransactions(transactions.map((t) => String(t.id) === String(tx.id) ? { ...t, status: 'voided' } : t));
@@ -1798,7 +1769,6 @@ const handleCheckout = async () => {
         setTransactions([{ ...tx, status: 'voided' }, ...transactions]);
       }
       
-      // Limpieza final
       setIsRefundModalOpen(false);
       setTransactionToRefund(null);
       setRefundReason('');
@@ -1901,7 +1871,6 @@ const handleSaveEditedTransaction = async (e) => {
     try {
       Swal.fire({ title: 'Guardando cambios...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
-      // 1. Detectamos Cambios Financieros
       const changes = {};
       if (originalTx.total !== editingTransaction.total) {
         changes.total = { old: originalTx.total, new: editingTransaction.total };
@@ -1910,7 +1879,6 @@ const handleSaveEditedTransaction = async (e) => {
         changes.payment = { old: originalTx.payment, new: editingTransaction.payment };
       }
 
-      // 👇 FIX: Se usa 'editingTransaction.installments' en lugar de la variable inexistente
       if (Number(originalTx.installments || 0) !== Number(editingTransaction.installments || 0)) {
         changes.installments = { 
           old: Number(originalTx.installments || 0), 
@@ -1918,7 +1886,6 @@ const handleSaveEditedTransaction = async (e) => {
         };
       }
 
-      // 2. Detectamos Cambios en los Productos (Stock)
       const productChanges = [];
       const oldMap = {};
       originalTx.items.forEach(i => { oldMap[i.id || i.productId] = Number(i.qty || i.quantity || 0); });
@@ -1942,12 +1909,11 @@ const handleSaveEditedTransaction = async (e) => {
               title: itemDef.title || itemDef.name || 'Producto', 
               oldQty, 
               newQty, 
-              diff: newQty - oldQty // Cuánto se agregó o quitó de la venta
+              diff: newQty - oldQty
             });
          }
       });
 
-      // 3. Detectamos Cambios en Puntos (Socios)
       let pointsChange = null;
       let clientObj = editingTransaction.client || originalTx.client;
       let cName = null; let cNum = null;
@@ -1961,20 +1927,14 @@ const handleSaveEditedTransaction = async (e) => {
          cName = clientObj;
       }
 
-      // ==========================================
-      // EJECUCIÓN EN LA NUBE (SUPABASE)
-      // ==========================================
 
-      // A) Actualizamos la tabla principal de Ventas
       await supabase.from('sales').update({
         total: editingTransaction.total,
         payment_method: editingTransaction.payment,
-        // 👇 FIX: Si no hay cuotas, asegura que sea 0 y no 1
         installments: editingTransaction.installments || 0,
         points_earned: pointsChange ? pointsChange.new : originalTx.pointsEarned
       }).eq('id', editingTransaction.id);
 
-      // B) Borramos los items viejos y guardamos los nuevos en `sale_items`
       await supabase.from('sale_items').delete().eq('sale_id', editingTransaction.id);
       
       const newItemsPayload = editingTransaction.items.map(i => ({
@@ -1987,7 +1947,6 @@ const handleSaveEditedTransaction = async (e) => {
       }));
       await supabase.from('sale_items').insert(newItemsPayload);
 
-      // C) Ajustamos el stock del inventario devolviendo o quitando según `diff`
       for (const change of productChanges) {
         if (change.diff !== 0) {
           const prod = inventory.find(p => p.id === change.id);
@@ -1997,7 +1956,6 @@ const handleSaveEditedTransaction = async (e) => {
         }
       }
 
-      // D) Ajustamos los puntos del socio si aplica
       if (pointsChange && clientObj && clientObj.id) {
          const clientDb = members.find(m => m.id === clientObj.id);
          if (clientDb) {
@@ -2007,25 +1965,18 @@ const handleSaveEditedTransaction = async (e) => {
          }
       }
 
-      // ==========================================
-      // ACTUALIZACIÓN DEL ESTADO LOCAL Y LOGS
-      // ==========================================
-
-      // Actualizar Transacción Local
       const finalTx = {
          ...editingTransaction,
          pointsEarned: pointsChange ? pointsChange.new : originalTx.pointsEarned
       };
       setTransactions(transactions.map((t) => (t.id === editingTransaction.id ? finalTx : t)));
 
-      // Actualizar Inventario Local
       setInventory(inventory.map(p => {
          const change = productChanges.find(c => c.id === p.id);
          if (change) return { ...p, stock: p.stock - change.diff };
          return p;
       }));
 
-      // Log detallado de la modificación
       const logDetails = {
          transactionId: editingTransaction.id, client: cName, memberNumber: cNum,
          changes, productChanges, itemsSnapshot: editingTransaction.items, pointsChange

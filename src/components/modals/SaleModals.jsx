@@ -8,7 +8,8 @@ import {
   Printer,
   FileOutput,
 } from 'lucide-react';
-import { formatPrice } from '../../utils/helpers';
+// ♻️ FIX: Importamos formatCurrency
+import { formatCurrency } from '../../utils/helpers';
 // [MODIFICADO] Importamos el layout real para unificar diseño de impresión y vista previa
 import { TicketPrintLayout } from '../TicketPrintLayout';
 
@@ -42,7 +43,8 @@ export const SaleSuccessModal = ({ transaction, onClose, onViewTicket }) => {
             <div className="bg-blue-50 p-3 rounded-lg"><p className="text-[10px] font-bold text-blue-400 uppercase">Vendedor</p><p className="font-bold text-blue-700">{transaction.user}</p></div>
             <div className="bg-fuchsia-50 p-3 rounded-lg"><p className="text-[10px] font-bold text-fuchsia-400 uppercase">Método de Pago</p><p className="font-bold text-fuchsia-700">{transaction.payment}{transaction.installments > 1 && ` (${transaction.installments} cuotas)`}</p></div>
           </div>
-          <div className="border-t pt-3 flex justify-between items-end"><span className="font-bold text-slate-600">TOTAL</span><span className="text-2xl font-bold text-green-600">${formatPrice(transaction.total)}</span></div>
+          {/* ♻️ FIX: formatCurrency al total (ya trae el $) */}
+          <div className="border-t pt-3 flex justify-between items-end"><span className="font-bold text-slate-600">TOTAL</span><span className="text-2xl font-bold text-green-600">{formatCurrency(transaction.total)}</span></div>
         </div>
 
         <div className="p-4 bg-slate-50 border-t flex gap-3">
@@ -71,12 +73,12 @@ export const TicketModal = ({ transaction, onClose, onPrint }) => {
         {/* Body Modal (Preview Ticket Real) */}
         <div className="overflow-y-auto p-6 bg-slate-200 flex justify-center">
           {/* [CAMBIO CRÍTICO] 
-             Usamos el componente TicketPrintLayout DIRECTAMENTE.
-             Esto garantiza que la previsualización tenga:
-             1. Formato "Socio (N°): Nombre [#ID]"
-             2. Lógica de Puntos Ganados/Totales
-             3. Sin DNI/Tel
-             4. Misma tipografía Arial 10px Negrita
+              Usamos el componente TicketPrintLayout DIRECTAMENTE.
+              Esto garantiza que la previsualización tenga:
+              1. Formato "Socio (N°): Nombre [#ID]"
+              2. Lógica de Puntos Ganados/Totales
+              3. Sin DNI/Tel
+              4. Misma tipografía Arial 10px Negrita
           */}
           <TicketPrintLayout transaction={transaction} />
         </div>

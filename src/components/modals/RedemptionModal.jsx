@@ -7,7 +7,7 @@ import {
   Search,
   AlertCircle
 } from 'lucide-react';
-import { formatPrice } from '../../utils/helpers';
+import { formatCurrency, formatNumber } from '../../utils/helpers';
 
 export const RedemptionModal = ({ 
   isOpen, 
@@ -56,7 +56,7 @@ export const RedemptionModal = ({
             </div>
             <div className="text-right">
               <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Puntos Disponibles</p>
-              <p className="text-3xl font-black text-fuchsia-400">{client?.points}</p>
+            <p className="text-3xl font-black text-fuchsia-400">{formatNumber(client?.points || 0)}</p>           
             </div>
           </div>
         </div>
@@ -114,7 +114,7 @@ export const RedemptionModal = ({
                     {/* Costo en Puntos (Overlay) */}
                     <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-3 pt-8 flex items-end">
                       <p className="text-white font-black text-xl flex items-baseline gap-1">
-                        {reward.pointsCost} <span className="text-xs font-normal opacity-80">pts</span>
+                      {formatNumber(reward.pointsCost)} <span className="text-xs font-normal opacity-80">pts</span>                      
                       </p>
                     </div>
                   </div>
@@ -132,12 +132,12 @@ export const RedemptionModal = ({
                       {reward.type === 'product' ? (
                         <div className="flex items-center gap-1.5 text-xs text-slate-500">
                           <Package size={14} />
-                          <span>Stock: {reward.stock} unid.</span>
+                          <span>Stock: {formatNumber(reward.stock)} unid.</span>
                         </div>
                       ) : (
                         <div className="flex items-center gap-1.5 text-xs text-emerald-600 font-bold">
                           <Tag size={14} />
-                          <span>Valor: ${formatPrice(reward.discountAmount)}</span>
+                          <span>Valor: {formatCurrency(reward.discountAmount)}</span>
                         </div>
                       )}
 
@@ -152,7 +152,7 @@ export const RedemptionModal = ({
                         }`}
                       >
                         {!canAfford ? (
-                          <>Faltan {reward.pointsCost - client.points} pts</>
+                          <>Faltan {formatNumber(reward.pointsCost - (client?.points || 0))} pts</>
                         ) : !hasStock ? (
                           'Sin Stock'
                         ) : (

@@ -3,7 +3,8 @@ import {
   Search, Save, Percent, CheckSquare, Square, 
   Scale, Package, ArrowRight, Loader2, RotateCcw
 } from 'lucide-react';
-import { formatPrice } from '../utils/helpers';
+// ♻️ FIX: Importamos el nuevo formateador de moneda
+import { formatCurrency } from '../utils/helpers';
 
 export default function BulkEditorView({ inventory: realInventory, categories }) {
   // --- SANDBOX (Inventario Clonado) ---
@@ -287,8 +288,9 @@ export default function BulkEditorView({ inventory: realInventory, categories })
                       <div className="flex flex-col gap-0.5">
                         {costDiff ? (
                           <div className="flex items-center justify-between text-[9px] text-slate-400 font-medium px-1">
-                            <span className="line-through">${formatPrice(origCost)}</span>
-                            <span className={`font-black ${costDiff.includes('+') ? 'text-emerald-500' : 'text-red-500'}`}>
+                            {/* ♻️ FIX: Usamos formatCurrency y quitamos el $ fijo */}
+                            <span className="line-through">{formatCurrency(origCost)}</span>
+                            <span className={`font-black ${costDiff.includes('+') ? 'text-red-500' : 'text-emerald-500'}`}>
                               ({costDiff})
                             </span>
                           </div>
@@ -311,7 +313,8 @@ export default function BulkEditorView({ inventory: realInventory, categories })
                       <div className="flex flex-col gap-0.5">
                         {priceDiff ? (
                           <div className="flex items-center justify-between text-[9px] text-slate-400 font-medium px-1">
-                            <span className="line-through">${formatPrice(origPrice)}</span>
+                            {/* ♻️ FIX: Usamos formatCurrency y quitamos el $ fijo */}
+                            <span className="line-through">{formatCurrency(origPrice)}</span>
                             <span className={`font-black ${priceDiff.includes('+') ? 'text-emerald-500' : 'text-red-500'}`}>
                               ({priceDiff})
                             </span>

@@ -8,7 +8,8 @@ import {
   AlertTriangle,
   Lock,
 } from 'lucide-react';
-import { formatPrice } from '../../utils/helpers';
+// ♻️ FIX: Importamos el nuevo formateador
+import { formatCurrency } from '../../utils/helpers';
 
 export const OpeningBalanceModal = ({ isOpen, onClose, tempOpeningBalance, setTempOpeningBalance, tempClosingTime, setTempClosingTime, onSave }) => {
   if (!isOpen) return null;
@@ -24,6 +25,7 @@ export const OpeningBalanceModal = ({ isOpen, onClose, tempOpeningBalance, setTe
             <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Monto Inicial en Caja</label>
             <div className="relative">
               <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+              {/* ⚠️ El input queda en bruto para no romper la edición */}
               <input type="number" placeholder="0" className="w-full pl-10 pr-4 py-3 text-xl font-bold border-2 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none" value={tempOpeningBalance} onChange={(e) => setTempOpeningBalance(e.target.value)} autoFocus />
             </div>
           </div>
@@ -37,7 +39,8 @@ export const OpeningBalanceModal = ({ isOpen, onClose, tempOpeningBalance, setTe
           </div>
           <div className="bg-slate-50 p-3 rounded-lg border">
             <p className="text-xs text-slate-500 mb-2">Resumen de apertura:</p>
-            <div className="flex justify-between text-sm"><span className="text-slate-600">Monto inicial:</span><span className="font-bold text-slate-800">${formatPrice(tempOpeningBalance)}</span></div>
+            {/* ♻️ FIX: formatCurrency en el resumen visual */}
+            <div className="flex justify-between text-sm"><span className="text-slate-600">Monto inicial:</span><span className="font-bold text-slate-800">{formatCurrency(tempOpeningBalance)}</span></div>
             <div className="flex justify-between text-sm mt-1"><span className="text-slate-600">Cierre programado:</span><span className="font-bold text-slate-800">{tempClosingTime || '--:--'}</span></div>
           </div>
           <div className="flex gap-3">
@@ -86,11 +89,13 @@ export const CloseCashModal = ({ isOpen, onClose, salesCount, totalSales, totalE
             </div>
             <div className="bg-fuchsia-50 p-3 rounded-lg border border-fuchsia-100 text-center">
               <p className="text-[10px] font-bold text-fuchsia-500 uppercase">Facturado</p>
-              <p className="text-2xl font-bold text-fuchsia-700">${formatPrice(totalSales)}</p>
+              {/* ♻️ FIX: formatCurrency */}
+              <p className="text-2xl font-bold text-fuchsia-700">{formatCurrency(totalSales)}</p>
             </div>
             <div className="bg-red-50 p-3 rounded-lg border border-red-100 text-center">
               <p className="text-[10px] font-bold text-red-500 uppercase">Gastos</p>
-              <p className="text-2xl font-bold text-red-600">${formatPrice(totalExpenses)}</p>
+              {/* ♻️ FIX: formatCurrency */}
+              <p className="text-2xl font-bold text-red-600">{formatCurrency(totalExpenses)}</p>
             </div>
           </div>
 
@@ -98,21 +103,25 @@ export const CloseCashModal = ({ isOpen, onClose, salesCount, totalSales, totalE
           <div className="bg-slate-50 p-4 rounded-lg border space-y-2">
             <div className="flex justify-between items-center text-sm">
               <span className="text-slate-500">Caja Inicial</span>
-              <span className="font-bold text-slate-700">${formatPrice(openingBalance)}</span>
+              {/* ♻️ FIX: formatCurrency */}
+              <span className="font-bold text-slate-700">{formatCurrency(openingBalance)}</span>
             </div>
             <div className="flex justify-between items-center text-sm">
               <span className="text-slate-500">+ Ventas en efectivo</span>
-              <span className="font-bold text-emerald-600">+${formatPrice(cashSales)}</span>
+              {/* ♻️ FIX: formatCurrency */}
+              <span className="font-bold text-emerald-600">+{formatCurrency(cashSales)}</span>
             </div>
             {cashExpenses > 0 && (
               <div className="flex justify-between items-center text-sm">
                 <span className="text-slate-500">− Gastos en efectivo</span>
-                <span className="font-bold text-red-500">-${formatPrice(cashExpenses)}</span>
+                {/* ♻️ FIX: formatCurrency */}
+                <span className="font-bold text-red-500">-{formatCurrency(cashExpenses)}</span>
               </div>
             )}
             <div className="border-t pt-2 flex justify-between items-center">
               <span className="font-bold text-slate-700">Efectivo en Caja</span>
-              <span className="text-xl font-bold text-green-600">${formatPrice(finalCashBalance)}</span>
+              {/* ♻️ FIX: formatCurrency */}
+              <span className="text-xl font-bold text-green-600">{formatCurrency(finalCashBalance)}</span>
             </div>
           </div>
 

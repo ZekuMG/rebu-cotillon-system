@@ -17,7 +17,8 @@ import {
   Filter
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../data';
-import { normalizeDate, isVentaLog, getVentaTotal } from '../utils/helpers';
+// ♻️ FIX: Importamos formatCurrency para el dinero
+import { normalizeDate, isVentaLog, getVentaTotal, formatCurrency } from '../utils/helpers';
 import { TransactionDetailModal } from '../components/modals/HistoryModals';
 
 // --- HELPER LOCAL PARA FORMATO VISUAL ---
@@ -76,7 +77,6 @@ export default function HistoryView({
         const txId = String(log.details.transactionId || log.id);
         if (activeIds.has(txId)) return;
 
-        // 👇 USAMOS EL HELPER CORRECTAMENTE
         const logDate = normalizeDate(log.date);
         if (logDate) {
             const safeTotal = Number(log.details.total) || getVentaTotal(log.details) || 0;
@@ -95,7 +95,6 @@ export default function HistoryView({
                 memberNumber: log.details.client?.memberNumber || log.details.memberNumber || null,
                 status: voidedIds.has(txId) ? 'voided' : 'completed',
                 isHistoric: true,
-                // ✅ FIX: logDate ya es un objeto Date válido devuelto por helpers.js
                 sortDate: logDate, 
             });
         }
@@ -109,7 +108,6 @@ export default function HistoryView({
   // =====================================================
   const activeTransactions = useMemo(() => {
     return (transactions || []).map((tx) => {
-      // 👇 USAMOS EL HELPER CORRECTAMENTE
       const logDate = normalizeDate(tx.date);
       let resolvedUser = tx.user;
       
@@ -124,7 +122,6 @@ export default function HistoryView({
         ...tx,
         user: resolvedUser || 'Desconocido',
         isHistoric: false,
-        // ✅ FIX: Si el helper devolvió la fecha, la usamos, sino Date actual
         sortDate: logDate || new Date(), 
       };
     });
@@ -134,7 +131,6 @@ export default function HistoryView({
   // COMBINAR Y FILTRAR
   // =====================================================
   const filteredTransactions = useMemo(() => {
-    // Unimos todas las transacciones (activas + logs)
     let txList = [...activeTransactions, ...historicTransactions];
 
     // 1. LÓGICA DE VISTA: HOY vs HISTORIAL
@@ -154,11 +150,11 @@ export default function HistoryView({
         if (!tx.sortDate) return false;
         const txDate = new Date(tx.sortDate);
         txDate.setHours(0, 0, 0, 0);
-        return txDate.getTime() < today.getTime(); // Filtra estricto días anteriores
+        return txDate.getTime() < today.getTime(); 
       });
     }
 
-    // 2. RANGO DE FECHAS (Corrección del desfasaje horario UTC-3)
+    // 2. RANGO DE FECHAS
     if (filterDateStart) {
       const [year, month, day] = filterDateStart.split('-');
       const startDate = new Date(year, month - 1, day, 0, 0, 0);
@@ -265,7 +261,8 @@ export default function HistoryView({
             </div>
             <h3 className="font-bold text-slate-800 text-sm">Registro de Ventas</h3>
             <span className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1 rounded-lg font-bold shadow-sm ml-2">
-              {stats.count} ventas válidas • <span className="text-blue-600">${stats.total.toLocaleString()}</span>
+              {/* ♻️ FIX: Formateamos el total global */}
+              {stats.count} ventas válidas • <span className="text-blue-600">{formatCurrency(stats.total)}</span>
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -474,7 +471,8 @@ export default function HistoryView({
 
                   <td className="px-4 py-3 text-right align-middle">
                     <span className={`font-black text-sm ${isVoided ? 'text-red-400 line-through' : 'text-slate-800'}`}>
-                      ${(Number(tx.total) || 0).toLocaleString()}
+                      {/* ♻️ FIX: Formateamos el Total de la venta */}
+                      {formatCurrency(Number(tx.total) || 0)}
                     </span>
                   </td>
 

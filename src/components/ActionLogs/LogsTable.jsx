@@ -7,7 +7,8 @@ import {
   Eye,
   Search
 } from 'lucide-react';
-import { formatPrice } from '../../utils/helpers';
+// ♻️ FIX: Importamos formatCurrency y formatNumber
+import { formatCurrency, formatNumber } from '../../utils/helpers';
 
 const getTransactionId = (details) => {
   if (!details || typeof details === 'string') return null;
@@ -122,8 +123,8 @@ export default function LogsTable({
         });
 
         const parts = [];
-        if (totalUnits > 0) parts.push(`${totalUnits} uds`);
-        if (totalGrams > 0) parts.push(`${totalGrams}g`);
+        if (totalUnits > 0) parts.push(`${formatNumber(totalUnits)} uds`);
+        if (totalGrams > 0) parts.push(`${formatNumber(totalGrams)}g`);
 
         let clientName = null; let memberNum = null;
         if (d.client && typeof d.client === 'object') { clientName = d.client.name; memberNum = d.client.memberNumber; } 
@@ -138,7 +139,7 @@ export default function LogsTable({
           <div className={s.sr}>
             <span className={`${s.b} ${c.bg}`}>🛒 #{txId}</span>
             <div className={s.ss}></div>
-            <span className={`${s.b} ${c.bg}`}>${formatPrice(d.total || 0)}</span>
+            <span className={`${s.b} ${c.bg}`}>{formatCurrency(d.total || 0)}</span>
             <div className={s.ss}></div>
             <span className={s.se}>{parts.join(' + ')} ({items.length} items)</span>
             <div className={s.ss}></div>
@@ -153,7 +154,7 @@ export default function LogsTable({
           <div className={s.sr}>
             <span className={`${s.b} ${c.bg}`}>$ Apertura</span>
             <div className={s.ss}></div>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#15803d' }}>${formatPrice(d.amount || 0)}</span>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#15803d' }}>{formatCurrency(d.amount || 0)}</span>
           </div>
         );
 
@@ -164,7 +165,7 @@ export default function LogsTable({
           <div className={s.sr}>
             <span className={`${s.b} ${c.br}`}>❌ #{txId}</span>
             <div className={s.ss}></div>
-            <span style={{ fontSize: '10px', color: '#dc2626', textDecoration: 'line-through' }}>${formatPrice(d.originalTotal || d.total || 0)}</span>
+            <span style={{ fontSize: '10px', color: '#dc2626', textDecoration: 'line-through' }}>{formatCurrency(d.originalTotal || d.total || 0)}</span>
             {reason && <><div className={s.ss}></div><span className={s.se} style={{ color: '#b45309', fontStyle: 'italic', maxWidth: '150px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>"{reason}"</span></>}
           </div>
         );
@@ -174,7 +175,7 @@ export default function LogsTable({
       case 'Gasto':
         return (
           <div className={s.sr}>
-            <span className={`${s.b} ${c.br}`}>📉 -${formatPrice(d.amount || 0)}</span>
+            <span className={`${s.b} ${c.br}`}>📉 -{formatCurrency(d.amount || 0)}</span>
             <div className={s.ss}></div>
             <span className={`${s.b} ${c.bs}`}>{d.category || 'Varios'}</span>
             <div className={s.ss}></div>
@@ -204,7 +205,7 @@ export default function LogsTable({
               </>
             )}
             <span className={`${s.b} ${c.bb}`}>⊕ {title}</span>
-            {d.price !== undefined && <><div className={s.ss}></div><span className={s.se}>${formatPrice(d.price)} · {d.stock} {d.product_type === 'weight' ? 'g' : 'uds'}</span></>}
+            {d.price !== undefined && <><div className={s.ss}></div><span className={s.se}>{formatCurrency(d.price)} · {formatNumber(d.stock)} {d.product_type === 'weight' ? 'g' : 'uds'}</span></>}
             {d.category && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{d.category}</span></>}
           </div>
         );
@@ -220,7 +221,7 @@ export default function LogsTable({
               </>
             )}
             <span className={`${s.b} ${c.bb}`}>📦 {d.product || d.title || d.name || 'Producto'}</span>
-            {d.price !== undefined && <><div className={s.ss}></div><span className={s.se}>${formatPrice(d.price)}</span></>}
+            {d.price !== undefined && <><div className={s.ss}></div><span className={s.se}>{formatCurrency(d.price)}</span></>}
           </div>
         );
       }
@@ -236,7 +237,7 @@ export default function LogsTable({
             )}
             <span className={`${s.b} ${c.bb}`}>⊖ {d.title || d.name || 'Producto'}</span>
             <div className={s.ss}></div>
-            <span className={s.se} style={{ color: '#dc2626' }}>Stock: {d.stock || 0}</span>
+            <span className={s.se} style={{ color: '#dc2626' }}>Stock: {formatNumber(d.stock || 0)}</span>
           </div>
         );
       }
@@ -292,7 +293,7 @@ export default function LogsTable({
             <span className={`${s.b} ${c.bp}`}>🏆 Puntos</span>
             <div className={s.ss}></div>
             <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name || d.member}</span>
-            {pts.diff !== undefined && <><div className={s.ss}></div><span className={`${s.b} ${pts.diff > 0 ? c.bg : c.br}`} style={{ fontFamily: 'monospace' }}>{pts.diff > 0 ? '+' : ''}{pts.diff} pts</span></>}
+            {pts.diff !== undefined && <><div className={s.ss}></div><span className={`${s.b} ${pts.diff > 0 ? c.bg : c.br}`} style={{ fontFamily: 'monospace' }}>{pts.diff > 0 ? '+' : ''}{formatNumber(pts.diff)} pts</span></>}
           </div>
         );
       }
@@ -306,7 +307,7 @@ export default function LogsTable({
             <span className={`${s.b} ${isDelete ? c.br : c.bv}`}>🎁 {isDelete ? 'Eliminado' : action === 'Nuevo Premio' ? 'Nuevo' : 'Editado'}</span>
             <div className={s.ss}></div>
             <span style={{ fontSize: '10px', fontWeight: 700, color: isDelete ? '#94a3b8' : '#334155', textDecoration: isDelete ? 'line-through' : 'none' }}>{d.title || d.name}</span>
-            {d.pointsCost && <><div className={s.ss}></div><span className={`${s.b} ${c.bv}`} style={{ fontFamily: 'monospace' }}>{d.pointsCost} pts</span></>}
+            {d.pointsCost && <><div className={s.ss}></div><span className={`${s.b} ${c.bv}`} style={{ fontFamily: 'monospace' }}>{formatNumber(d.pointsCost)} pts</span></>}
           </div>
         );
       }
@@ -329,8 +330,8 @@ export default function LogsTable({
 
         const changes = d.changes || {};
 
-        const oldTotalText = changes.total ? `$${formatPrice(changes.total.old)}` : `$${formatPrice(d.total || 0)}`;
-        const newTotalText = changes.total ? `$${formatPrice(changes.total.new)}` : `$${formatPrice(d.total || 0)}`;
+        const oldTotalText = changes.total ? formatCurrency(changes.total.old) : formatCurrency(d.total || 0);
+        const newTotalText = changes.total ? formatCurrency(changes.total.new) : formatCurrency(d.total || 0);
         
         const basePayment = typeof d.payment === 'string' ? d.payment : 'Efectivo';
         
@@ -439,8 +440,8 @@ export default function LogsTable({
           <div className={s.sr}>
             <span className={`${s.b} ${c.bk}`}>{action === 'Cierre Automático' ? '⏰ Auto' : '🔒 Cierre'}</span>
             <div className={s.ss}></div>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#1e293b' }}>${formatPrice(d.finalBalance || d.netProfit || d.totalSales || 0)}</span>
-            {d.salesCount !== undefined && <><div className={s.ss}></div><span className={s.se}>{d.salesCount} ventas</span></>}
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#1e293b' }}>{formatCurrency(d.finalBalance || d.netProfit || d.totalSales || 0)}</span>
+            {d.salesCount !== undefined && <><div className={s.ss}></div><span className={s.se}>{formatNumber(d.salesCount)} ventas</span></>}
           </div>
         );
 

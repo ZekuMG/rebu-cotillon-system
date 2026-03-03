@@ -3,6 +3,8 @@
 
 import React, { useState } from 'react';
 import { BarChart3 } from 'lucide-react';
+// ♻️ FIX: Importamos el formateador oficial
+import { formatCurrency } from '../../utils/helpers';
 
 export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMessage }) => {
   const [hoveredIndex, setHoveredIndex] = useState(null);
@@ -22,10 +24,11 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
       </div>
 
       <div className="flex">
+        {/* ♻️ FIX: formatCurrency en el eje Y */}
         <div className="flex flex-col justify-between pr-2 py-1 text-right" style={{ height: '180px', minWidth: '50px' }}>
-          <span className="text-[9px] text-slate-400">${maxSales.toLocaleString()}</span>
-          <span className="text-[9px] text-slate-400">${Math.round(maxSales / 2).toLocaleString()}</span>
-          <span className="text-[9px] text-slate-400">$0</span>
+          <span className="text-[9px] text-slate-400">{formatCurrency(maxSales)}</span>
+          <span className="text-[9px] text-slate-400">{formatCurrency(Math.round(maxSales / 2))}</span>
+          <span className="text-[9px] text-slate-400">{formatCurrency(0)}</span>
         </div>
 
         <div className="flex-1 relative">
@@ -58,7 +61,8 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                   <div
                     className={`absolute -top-10 left-1/2 -translate-x-1/2 transition-all duration-200 bg-slate-800 text-white text-[10px] px-2 py-1 rounded whitespace-nowrap z-30 shadow-lg pointer-events-none ${isHovered ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}
                   >
-                    <p className="font-bold">${item.sales.toLocaleString()}</p>
+                    {/* ♻️ FIX: formatCurrency en el Tooltip */}
+                    <p className="font-bold">{formatCurrency(item.sales)}</p>
                     <p className="text-slate-300">{item.count} Ventas</p>
                   </div>
 

@@ -16,6 +16,9 @@ import {
   Copy,
 } from 'lucide-react';
 
+// ♻️ FIX: Importamos formatNumber
+import { formatNumber } from '../../utils/helpers';
+
 // ==========================================
 // COMPONENTE: Selector multi-categoría
 // ==========================================
@@ -138,9 +141,10 @@ const WeightStockInput = ({ stock, stockUnit, onStockChange, onUnitChange }) => 
         </div>
       </div>
       <p className="text-[10px] text-amber-600 mt-1.5 ml-1 font-medium">
+        {/* ♻️ FIX: formatNumber para la equivalencia de stock */}
         {stockUnit === 'kg'
-          ? `= ${((Number(stock) || 0) * 1000).toLocaleString('es-AR')} gramos en inventario`
-          : `= ${((Number(stock) || 0) / 1000).toFixed(2)} kg`
+          ? `= ${formatNumber((Number(stock) || 0) * 1000)} gramos en inventario`
+          : `= ${formatNumber((Number(stock) || 0) / 1000, 2)} kg`
         }
       </p>
     </div>

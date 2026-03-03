@@ -19,7 +19,8 @@ import {
   GlobalTimeSwitch,
   LayoutManagerControls,
 } from '../components/dashboard';
-import { formatPrice } from '../utils/helpers';
+// ♻️ FIX: Importamos el formateador oficial
+import { formatCurrency } from '../utils/helpers';
 
 const DEFAULT_BOTTOM_ORDER = ['chart', 'payments', 'topProducts', 'lowStock', 'financialActivity', 'systemLogs'];
 const DEFAULT_TOP_ORDER = ['sales', 'revenue', 'net', 'opening', 'average', 'expenses'];
@@ -181,8 +182,9 @@ export default function DashboardView({
                         </div>
                       </div>
                       <div className="text-right">
+                        {/* ♻️ FIX: Formateamos el dinero correctamente */}
                         <p className={`text-sm font-bold ${item.type === 'sale' ? 'text-emerald-600' : 'text-red-600'}`}>
-                          {item.type === 'sale' ? '+' : '-'}${formatPrice(item.type === 'sale' ? item.total : item.amount)}
+                          {item.type === 'sale' ? '+' : '-'}{formatCurrency(item.type === 'sale' ? item.total : item.amount)}
                         </p>
                         <p className="text-[10px] text-slate-400">
                           {item.time || new Date(item.sortTime).toLocaleTimeString('es-AR', {hour: '2-digit', minute:'2-digit'})}

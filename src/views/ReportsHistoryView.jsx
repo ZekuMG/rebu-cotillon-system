@@ -12,7 +12,8 @@ import {
   User,
   Filter
 } from 'lucide-react';
-import { formatPrice, normalizeDate } from '../utils/helpers';
+// ♻️ FIX: Importamos formatCurrency y quitamos formatPrice
+import { formatCurrency, normalizeDate } from '../utils/helpers';
 import { DailyReportModal } from '../components/modals/DailyReportModal';
 
 export default function ReportsHistoryView({ pastClosures, members }) {
@@ -133,10 +134,11 @@ export default function ReportsHistoryView({ pastClosures, members }) {
                 </div>
 
                 {/* Body Card */}
-                <div className="p-4 space-y-4 flex-1">
+                <div className="p-4 space-y-4 flex-1 w-full text-left">
                   <div className="flex justify-between items-end">
                     <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Ventas</span>
-                    <span className="text-2xl font-black text-slate-800 leading-none">${formatPrice(report.totalSales)}</span>
+                    {/* ♻️ FIX: formatCurrency a Total Ventas */}
+                    <span className="text-2xl font-black text-slate-800 leading-none">{formatCurrency(report.totalSales)}</span>
                   </div>
                   
                   <div className="grid grid-cols-2 gap-2 pt-3 border-t border-dashed border-slate-100">
@@ -149,14 +151,15 @@ export default function ReportsHistoryView({ pastClosures, members }) {
                     <div>
                       <p className="text-[10px] text-slate-400 font-bold uppercase mb-1">Ganancia Neta</p>
                       <div className={`flex items-center gap-1 text-sm font-bold ${report.netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                        <DollarSign size={14} /> ${formatPrice(report.netProfit)}
+                        {/* ♻️ FIX: formatCurrency a Ganancia Neta */}
+                        <DollarSign size={14} /> {formatCurrency(report.netProfit)}
                       </div>
                     </div>
                   </div>
                 </div>
 
                 {/* Footer Card */}
-                <div className="px-4 py-3 bg-slate-50 border-t border-slate-100 flex justify-between items-center text-xs">
+                <div className="px-4 py-3 w-full bg-slate-50 border-t border-slate-100 flex justify-between items-center text-xs">
                   <div className="flex items-center gap-1.5 text-slate-500 font-bold">
                     <User size={12} className="text-slate-400" />
                     {report.user || 'Sistema'}

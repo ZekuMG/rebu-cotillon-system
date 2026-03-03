@@ -1,7 +1,4 @@
 // src/hooks/useDashboardData.js
-// ♻️ REFACTOR: Lógica de cálculo extraída de DashboardView.jsx
-// Centraliza filteredData, kpiStats, chartData, paymentStats, rankingStats, lowStockProducts
-
 import { useMemo } from 'react';
 import { PAYMENT_METHODS } from '../data';
 import { isVentaLog, normalizeDate } from '../utils/helpers';
@@ -9,12 +6,9 @@ import { isVentaLog, normalizeDate } from '../utils/helpers';
 export default function useDashboardData({ transactions, dailyLogs, inventory, globalFilter, rankingMode, expenses = [] }) {
   const currentHour = new Date().getHours();
 
-  // Función interna segura usando el helper
   const safeParseDate = (dateStr) => {
     if (!dateStr) return null;
     if (dateStr instanceof Date) return dateStr;
-    
-    // FIX: Parseo manual robusto para dd/mm/aaaa o dd/mm/aa
     if (typeof dateStr === 'string' && dateStr.includes('/')) {
        const parts = dateStr.split('/');
        if (parts.length === 3) {
@@ -23,7 +17,6 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
          return new Date(y, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
        }
     }
-    
     return normalizeDate(dateStr);
   };
 
@@ -33,88 +26,56 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     return product ? (Number(product.purchasePrice) || 0) : 0;
   };
 
-  // =====================================================
-  // HELPER: Filtro de rango por período MATEMÁTICO (Robusto)
-  // =====================================================
   const isInRange = useMemo(() => {
     const now = new Date();
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
     const currentDay = now.getDate();
     
-    // Convertimos HOY a un valor absoluto numérico (Ej: 20260224)
     const todayNum = (currentYear * 10000) + ((currentMonth + 1) * 100) + currentDay;
-
-    // Calculamos el inicio de la semana (hace 7 días)
     const weekAgo = new Date(now);
-    weekAgo.setDate(now.getDate() - 6); // 7 días contando hoy
+    weekAgo.setDate(now.getDate() - 6); 
     const weekAgoNum = (weekAgo.getFullYear() * 10000) + ((weekAgo.getMonth() + 1) * 100) + weekAgo.getDate();
 
     return (dateObj) => {
       if (!dateObj) return false;
-      
       const compYear = dateObj.getFullYear();
       const compMonth = dateObj.getMonth();
       const compDay = dateObj.getDate();
-      
       const compNum = (compYear * 10000) + ((compMonth + 1) * 100) + compDay;
 
-      if (globalFilter === 'day') {
-        return compNum === todayNum;
-      }
-      if (globalFilter === 'week') {
-        return compNum >= weekAgoNum && compNum <= todayNum;
-      }
-      if (globalFilter === 'month') {
-        return compYear === currentYear && compMonth === currentMonth;
-      }
+      if (globalFilter === 'day') return compNum === todayNum;
+      if (globalFilter === 'week') return compNum >= weekAgoNum && compNum <= todayNum;
+      if (globalFilter === 'month') return compYear === currentYear && compMonth === currentMonth;
       return false;
     };
   }, [globalFilter]);
 
-  // =====================================================
-  // DATOS FILTRADOS POR PERÍODO (Ventas)
-  // =====================================================
   const filteredData = useMemo(() => {
     const validTransactions = [];
     const processedTxIds = new Set();
 
-    // 1. Procesar Transacciones Reales (prioridad)
     (transactions || []).forEach(tx => {
       if (tx.status === 'voided') return;
-      
       const txDate = safeParseDate(tx.date); 
-      
       if (txDate && isInRange(txDate)) {
         validTransactions.push({
-          source: 'tx', 
-          id: tx.id, 
-          date: txDate, 
-          time: tx.time,
-          total: Number(tx.total) || 0, 
-          payment: tx.payment, 
-          items: tx.items || []
+          source: 'tx', id: tx.id, date: txDate, time: tx.time, total: Number(tx.total) || 0, 
+          payment: tx.payment, items: tx.items || []
         });
         processedTxIds.add(tx.id);
       }
     });
 
-    // 2. Procesar Logs (fallback para ventas sin registro completo)
     (dailyLogs || []).forEach(log => {
       if (isVentaLog(log) && log.details) {
         const txId = log.details.transactionId;
         if (!processedTxIds.has(txId)) { 
           const logDate = safeParseDate(log.date);
-          
           if (logDate && isInRange(logDate)) {
             validTransactions.push({
-              source: 'log', 
-              id: txId || log.id, 
-              date: logDate, 
-              time: log.timestamp || '00:00',
-              total: Number(log.details.total) || 0,
-              payment: log.details.payment || 'Efectivo',
-              items: log.details.items || []
+              source: 'log', id: txId || log.id, date: logDate, time: log.timestamp || '00:00',
+              total: Number(log.details.total) || 0, payment: log.details.payment || 'Efectivo', items: log.details.items || []
             });
           }
         }
@@ -124,9 +85,6 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     return validTransactions;
   }, [globalFilter, transactions, dailyLogs, isInRange]);
 
-  // =====================================================
-  // GASTOS FILTRADOS POR PERÍODO
-  // =====================================================
   const filteredExpenses = useMemo(() => {
     return (expenses || []).filter(exp => {
       const expDate = safeParseDate(exp.date || exp.created_at);
@@ -134,14 +92,9 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     });
   }, [expenses, isInRange]);
 
-  // =====================================================
-  // EXPENSE STATS
-  // =====================================================
   const expenseStats = useMemo(() => {
     const total = filteredExpenses.reduce((acc, exp) => acc + (Number(exp.amount) || 0), 0);
     const count = filteredExpenses.length;
-
-    // Desglose por categoría
     const byCategory = {};
     filteredExpenses.forEach(exp => {
       const cat = exp.category || 'Otros';
@@ -149,34 +102,23 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
       byCategory[cat].total += (Number(exp.amount) || 0);
       byCategory[cat].count += 1;
     });
-
-    // Desglose por método de pago
     const byPayment = {};
     filteredExpenses.forEach(exp => {
       const method = exp.paymentMethod || 'Efectivo';
       if (!byPayment[method]) byPayment[method] = { name: method, total: 0 };
       byPayment[method].total += (Number(exp.amount) || 0);
     });
-
     return {
-      total,
-      count,
+      total, count,
       byCategory: Object.values(byCategory).sort((a, b) => b.total - a.total),
       byPayment: Object.values(byPayment).sort((a, b) => b.total - a.total),
     };
   }, [filteredExpenses]);
 
-  // =====================================================
-  // KPIs
-  // =====================================================
   const kpiStats = useMemo(() => {
-    let gross = 0;
-    let net = 0;
-    const count = filteredData.length;
-
+    let gross = 0; let net = 0; const count = filteredData.length;
     filteredData.forEach(tx => {
-      gross += tx.total;
-      let cost = 0;
+      gross += tx.total; let cost = 0;
       tx.items.forEach(item => {
         const qty = Number(item.qty) || Number(item.quantity) || 0;
         const pCost = getProductCost(item.id || item.productId);
@@ -184,18 +126,12 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
       });
       net += (tx.total - cost);
     });
-
-    // Descontar gastos del período para obtener la ganancia neta real
     net -= expenseStats.total;
-
     return { gross, net, count };
   }, [filteredData, inventory, expenseStats]);
 
   const averageTicket = kpiStats.count > 0 ? kpiStats.gross / kpiStats.count : 0;
 
-  // =====================================================
-  // DATOS DEL GRÁFICO
-  // =====================================================
   const chartData = useMemo(() => {
     if (globalFilter === 'day') {
       const ranges = [
@@ -205,17 +141,12 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
         { label: '17-21', start: 17, end: 21, sales: 0, count: 0 },
         { label: '21+', start: 21, end: 24, sales: 0, count: 0 },
       ];
-
       filteredData.forEach(tx => {
         if (!tx.time) return;
         const hour = parseInt(tx.time.split(':')[0], 10);
         const range = ranges.find(r => hour >= r.start && hour < r.end);
-        if (range) {
-          range.sales += tx.total;
-          range.count += 1;
-        }
+        if (range) { range.sales += tx.total; range.count += 1; }
       });
-
       return ranges.map(r => ({ ...r, isCurrent: currentHour >= r.start && currentHour < r.end }));
     }
 
@@ -224,24 +155,15 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     const daysToShow = globalFilter === 'week' ? 7 : 30;
 
     for (let i = daysToShow - 1; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(d.getDate() - i);
+      const d = new Date(now); d.setDate(d.getDate() - i);
       const key = `${d.getDate()}/${d.getMonth() + 1}`;
-      const label = key;
-      const dayName = d.toLocaleDateString('es-AR', { weekday: 'short' });
-      daysMap.set(key, { label, dayName, sales: 0, count: 0, fullDate: key, isToday: i === 0 });
+      daysMap.set(key, { label: key, dayName: d.toLocaleDateString('es-AR', { weekday: 'short' }), sales: 0, count: 0, fullDate: key, isToday: i === 0 });
     }
 
     filteredData.forEach(tx => {
       if (!tx.date) return;
-      const d = tx.date;
-      const key = `${d.getDate()}/${d.getMonth() + 1}`;
-      
-      if (daysMap.has(key)) {
-        const entry = daysMap.get(key);
-        entry.sales += tx.total;
-        entry.count += 1;
-      }
+      const key = `${tx.date.getDate()}/${tx.date.getMonth() + 1}`;
+      if (daysMap.has(key)) { const entry = daysMap.get(key); entry.sales += tx.total; entry.count += 1; }
     });
 
     const dayArray = Array.from(daysMap.values());
@@ -249,57 +171,39 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     if (globalFilter === 'month') {
       const currentDayOfMonth = new Date().getDate();
       const getCurrentWeekIndex = () => {
-        if (currentDayOfMonth <= 7) return 0;
-        if (currentDayOfMonth <= 14) return 1;
-        if (currentDayOfMonth <= 21) return 2;
-        return 3;
+        if (currentDayOfMonth <= 7) return 0; if (currentDayOfMonth <= 14) return 1; if (currentDayOfMonth <= 21) return 2; return 3;
       };
       const currentWeekIdx = getCurrentWeekIndex();
-
       const weeks = [
         { label: '1-7', sales: 0, count: 0, isCurrent: currentWeekIdx === 0 },
         { label: '8-14', sales: 0, count: 0, isCurrent: currentWeekIdx === 1 },
         { label: '15-21', sales: 0, count: 0, isCurrent: currentWeekIdx === 2 },
         { label: '22+', sales: 0, count: 0, isCurrent: currentWeekIdx === 3 },
       ];
-
       filteredData.forEach(tx => {
         if (!tx.date) return;
         const dayOfMonth = tx.date.getDate();
-        let weekIdx;
-        if (dayOfMonth <= 7) weekIdx = 0;
-        else if (dayOfMonth <= 14) weekIdx = 1;
-        else if (dayOfMonth <= 21) weekIdx = 2;
-        else weekIdx = 3;
-        
-        weeks[weekIdx].sales += tx.total;
-        weeks[weekIdx].count += 1;
+        let weekIdx = dayOfMonth <= 7 ? 0 : dayOfMonth <= 14 ? 1 : dayOfMonth <= 21 ? 2 : 3;
+        weeks[weekIdx].sales += tx.total; weeks[weekIdx].count += 1;
       });
-
       return weeks;
     }
     return dayArray;
   }, [globalFilter, filteredData, currentHour]);
 
   const maxSales = useMemo(() => {
-    const max = Math.max(...chartData.map(d => d.sales));
-    return max > 0 ? max : 1;
+    const max = Math.max(...chartData.map(d => d.sales)); return max > 0 ? max : 1;
   }, [chartData]);
 
-  // =====================================================
-  // MÉTODOS DE PAGO
-  // =====================================================
   const paymentStats = useMemo(() => {
     return PAYMENT_METHODS.map(method => {
-      const total = filteredData
-        .filter(tx => tx.payment === method.id)
-        .reduce((sum, tx) => sum + tx.total, 0);
+      const total = filteredData.filter(tx => tx.payment === method.id).reduce((sum, tx) => sum + tx.total, 0);
       return { ...method, total };
     });
   }, [filteredData]);
 
   // =====================================================
-  // RANKING PRODUCTOS / CATEGORÍAS
+  // RANKING PRODUCTOS / PESO / CATEGORÍAS
   // =====================================================
   const rankingStats = useMemo(() => {
     const statsMap = {};
@@ -308,56 +212,59 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
       tx.items.forEach(item => {
         const qty = Number(item.qty) || Number(item.quantity) || 0;
         const revenue = (Number(item.price) || 0) * qty;
+        
+        const liveProduct = inventory ? inventory.find(p => p.id === (item.id || item.productId)) : null;
+        const isWeightItem = liveProduct ? liveProduct.product_type === 'weight' : item.product_type === 'weight';
 
         let keys = [];
+
         if (rankingMode === 'products') {
+          if (isWeightItem) return; 
           keys = [item.title || 'Desconocido'];
+          
+        } else if (rankingMode === 'weight') {
+          if (!isWeightItem) return;
+          keys = [item.title || 'Desconocido'];
+
         } else {
           let cats = [];
-          const liveProduct = inventory ? inventory.find(p => p.id === item.id) : null;
-
           if (liveProduct) {
-            if (Array.isArray(liveProduct.categories) && liveProduct.categories.length > 0) {
-              cats = liveProduct.categories;
-            } else if (liveProduct.category) {
-              cats = [liveProduct.category];
-            }
+            if (Array.isArray(liveProduct.categories) && liveProduct.categories.length > 0) { cats = liveProduct.categories; } 
+            else if (liveProduct.category) { cats = [liveProduct.category]; }
           }
-
           if (cats.length === 0) {
-            if (Array.isArray(item.categories) && item.categories.length > 0) {
-              cats = item.categories;
-            } else if (item.category) {
-              cats = [item.category];
-            }
+            if (Array.isArray(item.categories) && item.categories.length > 0) { cats = item.categories; } 
+            else if (item.category) { cats = [item.category]; }
           }
-
           if (cats.length === 0) cats = ['Sin Categoría'];
           keys = cats;
         }
 
         keys.forEach(k => {
-          if (!statsMap[k]) statsMap[k] = { name: k, qty: 0, revenue: 0 };
+          // Inicializamos los nuevos contadores unitQty y weightQty
+          if (!statsMap[k]) statsMap[k] = { name: k, qty: 0, revenue: 0, unitQty: 0, weightQty: 0 };
+          
           statsMap[k].qty += qty;
           statsMap[k].revenue += revenue;
+          
+          // Separamos la cuenta
+          if (isWeightItem) {
+            statsMap[k].weightQty += qty;
+          } else {
+            statsMap[k].unitQty += qty;
+          }
         });
       });
     });
 
-    return Object.values(statsMap).sort((a, b) => b.qty - a.qty).slice(0, 5);
+    return Object.values(statsMap).sort((a, b) => b.revenue - a.revenue).slice(0, 5); // Ordenamos por ganancias para que sea más parejo
   }, [filteredData, rankingMode, inventory]);
 
-  // =====================================================
-  // STOCK BAJO
-  // =====================================================
   const lowStockProducts = useMemo(() => {
     if (!inventory) return [];
     return inventory.filter((p) => p.stock < 10).sort((a, b) => a.stock - b.stock).slice(0, 5);
   }, [inventory]);
 
-  // =====================================================
-  // HELPER: Mensaje estado vacío
-  // =====================================================
   const getEmptyStateMessage = () => {
     switch (globalFilter) {
       case 'day': return 'Sin ventas hoy';
@@ -368,16 +275,6 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
   };
 
   return {
-    kpiStats,
-    averageTicket,
-    chartData,
-    maxSales,
-    paymentStats,
-    rankingStats,
-    lowStockProducts,
-    getEmptyStateMessage,
-    expenseStats,
-    filteredData,       
-    filteredExpenses,  
+    kpiStats, averageTicket, chartData, maxSales, paymentStats, rankingStats, lowStockProducts, getEmptyStateMessage, expenseStats, filteredData, filteredExpenses,  
   };
 }

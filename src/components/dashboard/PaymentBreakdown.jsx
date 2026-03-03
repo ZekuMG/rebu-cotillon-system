@@ -3,6 +3,8 @@
 
 import React from 'react';
 import { DollarSign } from 'lucide-react';
+// ♻️ FIX: Importamos el formateador de moneda
+import { formatCurrency } from '../../utils/helpers';
 
 export const PaymentBreakdown = ({ paymentStats, totalGross, globalFilter }) => {
   return (
@@ -22,8 +24,9 @@ export const PaymentBreakdown = ({ paymentStats, totalGross, globalFilter }) => 
                   {m.label}
                   {m.total > 0 && <span className="text-[9px] text-slate-400">({Math.round(percent)}%)</span>}
                 </span>
+                {/* ♻️ FIX: Aplicamos formatCurrency */}
                 <span className={`font-bold ${m.total > 0 ? 'text-slate-800' : 'text-slate-300'}`}>
-                  ${m.total.toLocaleString()}
+                  {formatCurrency(m.total)}
                 </span>
               </div>
               <div className="w-full bg-slate-100 rounded-full h-2">
