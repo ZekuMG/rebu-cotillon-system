@@ -17,8 +17,9 @@ import {
   Filter
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../data';
-// ♻️ FIX: Importamos formatCurrency para el dinero
-import { normalizeDate, isVentaLog, getVentaTotal, formatCurrency } from '../utils/helpers';
+// ♻️ FIX: Importamos FancyPrice (reemplaza formatCurrency en UI)
+import { normalizeDate, isVentaLog, getVentaTotal } from '../utils/helpers';
+import { FancyPrice } from '../components/FancyPrice';
 import { TransactionDetailModal } from '../components/modals/HistoryModals';
 
 // --- HELPER LOCAL PARA FORMATO VISUAL ---
@@ -260,9 +261,9 @@ export default function HistoryView({
               <History size={18} />
             </div>
             <h3 className="font-bold text-slate-800 text-sm">Registro de Ventas</h3>
-            <span className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1 rounded-lg font-bold shadow-sm ml-2">
-              {/* ♻️ FIX: Formateamos el total global */}
-              {stats.count} ventas válidas • <span className="text-blue-600">{formatCurrency(stats.total)}</span>
+            <span className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1 rounded-lg font-bold shadow-sm ml-2 flex items-center gap-1">
+              {stats.count} ventas válidas • 
+              <span className="text-blue-600"><FancyPrice amount={stats.total} /></span>
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -471,8 +472,7 @@ export default function HistoryView({
 
                   <td className="px-4 py-3 text-right align-middle">
                     <span className={`font-black text-sm ${isVoided ? 'text-red-400 line-through' : 'text-slate-800'}`}>
-                      {/* ♻️ FIX: Formateamos el Total de la venta */}
-                      {formatCurrency(Number(tx.total) || 0)}
+                      <FancyPrice amount={Number(tx.total) || 0} />
                     </span>
                   </td>
 

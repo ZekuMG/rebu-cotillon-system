@@ -12,8 +12,9 @@ import {
   User,
   Filter
 } from 'lucide-react';
-// ♻️ FIX: Importamos formatCurrency y quitamos formatPrice
-import { formatCurrency, normalizeDate } from '../utils/helpers';
+// ♻️ FIX: Importamos normalizeDate de helpers y FancyPrice para la UI
+import { normalizeDate } from '../utils/helpers';
+import { FancyPrice } from '../components/FancyPrice';
 import { DailyReportModal } from '../components/modals/DailyReportModal';
 
 export default function ReportsHistoryView({ pastClosures, members }) {
@@ -112,7 +113,7 @@ export default function ReportsHistoryView({ pastClosures, members }) {
               >
                 {/* Tipo de Cierre Badge */}
                 <div className={`absolute top-0 right-0 px-2 py-1 rounded-bl-lg text-[10px] font-bold text-white shadow-sm
-                    ${report.type === 'Automático' ? 'bg-amber-500' : 'bg-slate-700'}`}>
+                  ${report.type === 'Automático' ? 'bg-amber-500' : 'bg-slate-700'}`}>
                     {report.type === 'Automático' ? 'AUTO' : 'MANUAL'}
                 </div>
 
@@ -137,8 +138,10 @@ export default function ReportsHistoryView({ pastClosures, members }) {
                 <div className="p-4 space-y-4 flex-1 w-full text-left">
                   <div className="flex justify-between items-end">
                     <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Ventas</span>
-                    {/* ♻️ FIX: formatCurrency a Total Ventas */}
-                    <span className="text-2xl font-black text-slate-800 leading-none">{formatCurrency(report.totalSales)}</span>
+                    {/* ♻️ FIX: Aplicamos FancyPrice al Total Ventas */}
+                    <span className="text-2xl font-black text-slate-800 leading-none">
+                      <FancyPrice amount={report.totalSales} />
+                    </span>
                   </div>
                   
                   <div className="grid grid-cols-2 gap-2 pt-3 border-t border-dashed border-slate-100">
@@ -151,8 +154,9 @@ export default function ReportsHistoryView({ pastClosures, members }) {
                     <div>
                       <p className="text-[10px] text-slate-400 font-bold uppercase mb-1">Ganancia Neta</p>
                       <div className={`flex items-center gap-1 text-sm font-bold ${report.netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                        {/* ♻️ FIX: formatCurrency a Ganancia Neta */}
-                        <DollarSign size={14} /> {formatCurrency(report.netProfit)}
+                        {/* ♻️ FIX: Aplicamos FancyPrice a la Ganancia Neta */}
+                        <DollarSign size={14} className="shrink-0" />
+                        <FancyPrice amount={report.netProfit} />
                       </div>
                     </div>
                   </div>

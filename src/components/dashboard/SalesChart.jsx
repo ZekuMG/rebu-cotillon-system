@@ -3,7 +3,8 @@
 
 import React, { useState } from 'react';
 import { BarChart3, CalendarDays, X, ShoppingCart } from 'lucide-react';
-import { formatCurrency } from '../../utils/helpers';
+// ♻️ FIX: Importamos FancyPrice (reemplazando formatCurrency)
+import { FancyPrice } from '../FancyPrice';
 
 export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMessage }) => {
   const [hoveredIndex, setHoveredIndex] = useState(null);
@@ -70,7 +71,8 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                     className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-2 transition-all duration-200 bg-slate-800 text-white text-[10px] px-2 py-1.5 rounded whitespace-nowrap z-30 shadow-lg pointer-events-none ${isHovered ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}
                   >
                     <p className="text-emerald-300 font-medium mb-0.5 capitalize">{item.dayName} {item.dayNum} de {item.monthName}</p>
-                    <p className="font-bold text-sm leading-none mb-1">{formatCurrency(item.sales)}</p>
+                    {/* ♻️ FIX: Aplicamos FancyPrice al tooltip */}
+                    <p className="font-bold text-sm leading-none mb-1"><FancyPrice amount={item.sales} /></p>
                     <p className="text-slate-400 leading-none">{item.count} {item.count === 1 ? 'Venta' : 'Ventas'}</p>
                     <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800" />
                   </div>
@@ -115,7 +117,8 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                 <div className="grid grid-cols-2 gap-3 mb-5">
                   <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-center">
                     <p className="text-[10px] font-bold text-slate-400 uppercase">Facturación</p>
-                    <p className="text-lg font-black text-emerald-500">{formatCurrency(selectedDay.sales)}</p>
+                    {/* ♻️ FIX: Aplicamos FancyPrice a la facturación del día */}
+                    <p className="text-lg font-black text-emerald-500"><FancyPrice amount={selectedDay.sales} /></p>
                   </div>
                   <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-center">
                     <p className="text-[10px] font-bold text-slate-400 uppercase">Operaciones</p>
@@ -138,7 +141,8 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                             <p className="text-[10px] text-slate-400 font-medium">{tx.time} • {tx.payment}</p>
                           </div>
                         </div>
-                        <p className="font-bold text-emerald-600 text-sm">{formatCurrency(tx.total)}</p>
+                        {/* ♻️ FIX: Aplicamos FancyPrice al ticket individual */}
+                        <p className="font-bold text-emerald-600 text-sm"><FancyPrice amount={tx.total} /></p>
                       </div>
                     ))
                   ) : (
@@ -173,10 +177,11 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
       </div>
 
       <div className="flex">
+        {/* Eje Y */}
         <div className="flex flex-col justify-between pr-2 py-1 text-right" style={{ height: '180px', minWidth: '50px' }}>
-          <span className="text-[9px] text-slate-400">{formatCurrency(maxSales)}</span>
-          <span className="text-[9px] text-slate-400">{formatCurrency(Math.round(maxSales / 2))}</span>
-          <span className="text-[9px] text-slate-400">{formatCurrency(0)}</span>
+          <span className="text-[9px] text-slate-400"><FancyPrice amount={maxSales} /></span>
+          <span className="text-[9px] text-slate-400"><FancyPrice amount={Math.round(maxSales / 2)} /></span>
+          <span className="text-[9px] text-slate-400"><FancyPrice amount={0} /></span>
         </div>
 
         <div className="flex-1 relative">
@@ -206,10 +211,12 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                   onMouseEnter={() => setHoveredIndex(idx)}
                   onMouseLeave={() => setHoveredIndex(null)}
                 >
+                  {/* Tooltip Hover del Gráfico de Barras */}
                   <div
                     className={`absolute -top-10 left-1/2 -translate-x-1/2 transition-all duration-200 bg-slate-800 text-white text-[10px] px-2 py-1 rounded whitespace-nowrap z-30 shadow-lg pointer-events-none ${isHovered ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}
                   >
-                    <p className="font-bold">{formatCurrency(item.sales)}</p>
+                    {/* ♻️ FIX: FancyPrice en el tooltip de las barras */}
+                    <p className="font-bold"><FancyPrice amount={item.sales} /></p>
                     <p className="text-slate-300">{item.count} Ventas</p>
                   </div>
 

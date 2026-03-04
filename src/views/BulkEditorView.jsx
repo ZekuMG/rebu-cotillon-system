@@ -3,8 +3,8 @@ import {
   Search, Save, Percent, CheckSquare, Square, 
   Scale, Package, ArrowRight, Loader2, RotateCcw
 } from 'lucide-react';
-// ♻️ FIX: Importamos el nuevo formateador de moneda
-import { formatCurrency } from '../utils/helpers';
+// ♻️ FIX: Importamos el componente FancyPrice
+import { FancyPrice } from '../components/FancyPrice';
 
 export default function BulkEditorView({ inventory: realInventory, categories }) {
   // --- SANDBOX (Inventario Clonado) ---
@@ -288,8 +288,8 @@ export default function BulkEditorView({ inventory: realInventory, categories })
                       <div className="flex flex-col gap-0.5">
                         {costDiff ? (
                           <div className="flex items-center justify-between text-[9px] text-slate-400 font-medium px-1">
-                            {/* ♻️ FIX: Usamos formatCurrency y quitamos el $ fijo */}
-                            <span className="line-through">{formatCurrency(origCost)}</span>
+                            {/* ♻️ FIX: Usamos FancyPrice en el tachado */}
+                            <span className="line-through"><FancyPrice amount={origCost} /></span>
                             <span className={`font-black ${costDiff.includes('+') ? 'text-red-500' : 'text-emerald-500'}`}>
                               ({costDiff})
                             </span>
@@ -313,8 +313,8 @@ export default function BulkEditorView({ inventory: realInventory, categories })
                       <div className="flex flex-col gap-0.5">
                         {priceDiff ? (
                           <div className="flex items-center justify-between text-[9px] text-slate-400 font-medium px-1">
-                            {/* ♻️ FIX: Usamos formatCurrency y quitamos el $ fijo */}
-                            <span className="line-through">{formatCurrency(origPrice)}</span>
+                            {/* ♻️ FIX: Usamos FancyPrice en el tachado */}
+                            <span className="line-through"><FancyPrice amount={origPrice} /></span>
                             <span className={`font-black ${priceDiff.includes('+') ? 'text-emerald-500' : 'text-red-500'}`}>
                               ({priceDiff})
                             </span>

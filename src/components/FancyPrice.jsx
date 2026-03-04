@@ -5,7 +5,8 @@ import { formatCurrency } from '../utils/helpers';
 /**
  * Componente visual para renderizar precios con los centavos más pequeños.
  * Ideal para Dashboards y Punto de Venta.
- * * @param {number|string} amount - El monto a formatear
+ *
+ * @param {number|string} amount - El monto a formatear
  * @param {string} className - Clases de Tailwind extra (color, tamaño, font-weight)
  */
 export const FancyPrice = ({ amount, className = "" }) => {
@@ -19,7 +20,7 @@ export const FancyPrice = ({ amount, className = "" }) => {
     return <span className={className}>{formatted}</span>;
   }
   
-  // parts[0] es la parte entera (ej: "$1.500")
+  // parts[0] es la parte entera (ej: "$ 1.500")
   // parts[1] son los centavos (ej: "00")
   return (
     <span className={className}>

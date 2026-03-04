@@ -19,8 +19,9 @@ import {
   Printer,
   ClipboardCheck 
 } from 'lucide-react';
-// ♻️ FIX: Importamos los formateadores oficiales
-import { formatCurrency, formatNumber } from '../utils/helpers';
+// ♻️ FIX: Importamos formatNumber y el componente FancyPrice
+import { formatNumber } from '../utils/helpers';
+import { FancyPrice } from '../components/FancyPrice';
 
 export default function ClientsView({ 
   members, 
@@ -480,8 +481,8 @@ export default function ClientsView({
                               {mov.totalSale > 0 ? (
                                 <div className="flex items-center gap-1.5 text-gray-600">
                                   <CreditCard size={14} className="text-gray-400" />
-                                  {/* ♻️ FIX: Formateamos el monto */}
-                                  <span>Monto: <span className="font-bold text-gray-900">{formatCurrency(mov.totalSale)}</span></span>
+                                  {/* ♻️ FIX: Aplicamos FancyPrice al monto */}
+                                  <span className="flex items-center gap-1">Monto: <span className="font-bold text-gray-900"><FancyPrice amount={mov.totalSale} /></span></span>
                                 </div>
                               ) : (
                                 <div className="text-xs italic text-gray-400">
@@ -557,8 +558,8 @@ export default function ClientsView({
                 <div>
                   <p className="text-slate-400 text-xs">Total</p>
                   <p className="font-bold text-fuchsia-600">
-                    {/* ♻️ FIX: Formateamos moneda */}
-                    {formatCurrency(selectedTx.total)}
+                    {/* ♻️ FIX: Aplicamos FancyPrice al total de la tx */}
+                    <FancyPrice amount={selectedTx.total} />
                   </p>
                 </div>
               </div>
@@ -573,14 +574,14 @@ export default function ClientsView({
                     >
                       <div>
                         <p className="font-medium text-sm">{item.title}</p>
-                        <p className="text-xs text-slate-400">
-                          {/* ♻️ FIX: Formateamos cantidad y precio */}
-                          {formatNumber(item.qty || item.quantity, item.qty % 1 !== 0 ? 2 : 0)} x {formatCurrency(item.price)}
+                        <p className="text-xs text-slate-400 flex items-center gap-1">
+                          {/* ♻️ FIX: Aplicamos FancyPrice al precio unitario */}
+                          {formatNumber(item.qty || item.quantity, item.qty % 1 !== 0 ? 2 : 0)} x <FancyPrice amount={item.price} />
                         </p>
                       </div>
                       <p className="font-bold text-sm">
-                        {/* ♻️ FIX: Formateamos el subtotal del item */}
-                        {formatCurrency((item.qty || item.quantity) * item.price)}
+                        {/* ♻️ FIX: Aplicamos FancyPrice al subtotal del item */}
+                        <FancyPrice amount={(item.qty || item.quantity) * item.price} />
                       </p>
                     </div>
                   ))}

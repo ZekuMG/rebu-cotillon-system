@@ -6,8 +6,9 @@ import {
   Edit2, XCircle, X, FileText, Calendar, User,
   CreditCard, ShoppingCart, Trash2, UserCheck, ArrowRight 
 } from 'lucide-react';
-// ♻️ FIX: Importamos los formateadores oficiales
-import { formatCurrency, formatNumber } from '../../utils/helpers';
+// ♻️ FIX: Importamos formatNumber y FancyPrice
+import { formatNumber } from '../../utils/helpers';
+import { FancyPrice } from '../FancyPrice'; // Ajustá la ruta según corresponda
 
 // ==========================================
 // MODAL: DETALLE DE TRANSACCIÓN
@@ -143,7 +144,6 @@ export const TransactionDetailModal = ({
                   <div className={`flex items-center bg-slate-50 border border-slate-100 rounded-lg p-2 ${isVoided ? 'opacity-50 grayscale' : ''}`}>
                     <div className="flex flex-col items-end pr-2 border-r border-slate-200">
                       <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">En esta venta</span>
-                      {/* ♻️ FIX: formatNumber para los puntos */}
                       {ptsEarned > 0 && <span className="text-[11px] font-black text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded">+{formatNumber(ptsEarned)} pts</span>}
                       {ptsSpent > 0 && <span className="text-[11px] font-black text-rose-600 bg-rose-100 px-1.5 py-0.5 rounded">-{formatNumber(ptsSpent)} pts</span>}
                       {ptsEarned === 0 && ptsSpent === 0 && <span className="text-[11px] font-bold text-slate-400">0 pts</span>}
@@ -154,7 +154,6 @@ export const TransactionDetailModal = ({
                     <div className="flex flex-col items-start pl-1 min-w-[50px]">
                       <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Total Actual</span>
                       <span className="text-[12px] font-black text-indigo-600">
-                        {/* ♻️ FIX: formatNumber para el total de puntos */}
                         {currentTotal !== null ? `${formatNumber(currentTotal)} pts` : '--'}
                       </span>
                     </div>
@@ -195,16 +194,15 @@ export const TransactionDetailModal = ({
                       </p>
                       <p className="text-[10px] text-slate-400 font-medium flex items-center gap-1.5">
                         <span className="font-bold text-slate-600 bg-white border border-slate-200 shadow-sm px-1.5 py-0.5 rounded">
-                          {/* ♻️ FIX: formatNumber para las cantidades */}
                           {formatNumber(qty)}{isWeight ? 'g' : ' u.'}
                         </span>
-                        {/* ♻️ FIX: formatCurrency para el precio unitario */}
-                        x {formatCurrency(item.price)} c/u
+                        {/* ♻️ FIX: FancyPrice en el precio unitario */}
+                        x <FancyPrice amount={item.price} /> c/u
                       </p>
                     </div>
-                    {/* ♻️ FIX: formatCurrency para el subtotal del ítem */}
+                    {/* ♻️ FIX: FancyPrice en el subtotal del ítem */}
                     <p className={`font-black text-sm ${isVoided ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
-                      {formatCurrency(qty * item.price)}
+                      <FancyPrice amount={qty * item.price} />
                     </p>
                   </div>
                 );
@@ -215,9 +213,9 @@ export const TransactionDetailModal = ({
               <span className={`text-xs font-black uppercase tracking-widest ${isVoided ? 'text-red-700' : 'text-blue-800'}`}>
                 Total Final
               </span>
-              {/* ♻️ FIX: formatCurrency para el total global */}
-              <span className={`text-2xl font-black tracking-tight ${isVoided ? 'text-red-700 line-through' : 'text-blue-600'}`}>
-                {formatCurrency(transaction.total || 0)}
+              {/* ♻️ FIX: FancyPrice en el total global */}
+              <span className={`text-2xl font-black tracking-tight flex items-center gap-1 ${isVoided ? 'text-red-700 line-through' : 'text-blue-600'}`}>
+                <FancyPrice amount={transaction.total || 0} />
               </span>
             </div>
           </div>

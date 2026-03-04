@@ -11,8 +11,9 @@ import {
   Save,
   AlertCircle
 } from 'lucide-react';
-// ♻️ FIX: Importamos los formateadores oficiales
-import { formatCurrency, formatNumber } from '../utils/helpers';
+// ♻️ FIX: Importamos formatNumber y FancyPrice
+import { formatNumber } from '../utils/helpers';
+import { FancyPrice } from '../components/FancyPrice'; // Ajustá la ruta si FancyPrice está en otra carpeta
 
 export default function RewardsView({
   rewards,
@@ -171,7 +172,6 @@ export default function RewardsView({
                   <div className="space-y-2 mt-auto">
                     <div className="flex justify-between items-center text-sm">
                       <span className="text-gray-400 font-medium">Costo:</span>
-                      {/* ♻️ FIX: formetNumber a los puntos */}
                       <span className="font-bold text-fuchsia-600">{formatNumber(reward.pointsCost)} pts</span>
                     </div>
                     
@@ -179,14 +179,15 @@ export default function RewardsView({
                       {reward.type === 'product' ? (
                         <>
                           <span className="text-gray-400 font-medium">Stock:</span>
-                          {/* ♻️ FIX: formetNumber al stock */}
                           <span className="font-bold text-gray-700">{formatNumber(reward.stock)} u.</span>
                         </>
                       ) : (
                         <>
                           <span className="text-gray-400 font-medium">Valor:</span>
-                          {/* ♻️ FIX: formatCurrency al descuento */}
-                          <span className="font-bold text-emerald-600">{formatCurrency(reward.discountAmount)}</span>
+                          {/* ♻️ FIX: FancyPrice al descuento */}
+                          <span className="font-bold text-emerald-600">
+                            <FancyPrice amount={reward.discountAmount} />
+                          </span>
                         </>
                       )}
                     </div>

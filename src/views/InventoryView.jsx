@@ -18,7 +18,9 @@ import {
   Scale,
   PackageX
 } from 'lucide-react';
-import { formatStock, formatCurrency, formatNumber } from '../utils/helpers';
+// ♻️ FIX: Importamos FancyPrice junto con helpers
+import { formatStock, formatNumber } from '../utils/helpers';
+import { FancyPrice } from '../components/FancyPrice';
 
 export default function InventoryView({
   inventory, categories, inventorySearch, setInventorySearch,
@@ -233,7 +235,7 @@ export default function InventoryView({
                             <div>
                               {gridColumns <= 6 && <p className="text-[10px] text-slate-400">Precio</p>}
                               <p className={`font-bold text-slate-900 ${gridColumns > 7 ? 'text-xs' : 'text-lg'}`}>
-                                {formatCurrency(isWeight ? product.price * 1000 : product.price)}
+                                <FancyPrice amount={isWeight ? product.price * 1000 : product.price} />
                                 {isWeight && <span className="text-[9px] font-medium text-slate-400">/kg</span>}
                               </p>
                             </div>
@@ -296,7 +298,7 @@ export default function InventoryView({
                             <div className="text-right w-24">
                                 <p className="text-[10px] text-slate-400 uppercase font-bold">Precio</p>
                                 <p className="font-bold text-lg text-fuchsia-600">
-                                  {formatCurrency(isWeight ? product.price * 1000 : product.price)}
+                                  <FancyPrice amount={isWeight ? product.price * 1000 : product.price} />
                                   {isWeight && <span className="text-[10px] font-medium">/kg</span>}
                                 </p>
                             </div>
@@ -368,7 +370,7 @@ export default function InventoryView({
                   <span className="text-xs font-bold uppercase">Precio</span>
                 </div>
                 <p className="text-2xl font-bold text-green-900">
-                  {formatCurrency(isWeight ? selectedProduct.price * 1000 : selectedProduct.price)}
+                  <FancyPrice amount={isWeight ? selectedProduct.price * 1000 : selectedProduct.price} />
                   {isWeight && <span className="text-sm font-medium">/kg</span>}
                 </p>
               </div>
@@ -381,7 +383,7 @@ export default function InventoryView({
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div className="bg-white rounded-lg p-2 text-center border">
                     <p className="text-[10px] text-slate-400">Precio/g</p>
-                    <p className="font-bold text-amber-700">{formatCurrency(selectedProduct.price)}</p>
+                    <p className="font-bold text-amber-700"><FancyPrice amount={selectedProduct.price} /></p>
                   </div>
                   <div className="bg-white rounded-lg p-2 text-center border">
                     <p className="text-[10px] text-slate-400">Stock en kg</p>
@@ -402,7 +404,7 @@ export default function InventoryView({
                   <div className="flex justify-between items-center text-sm border-b border-slate-200 pb-2">
                     <span className="text-slate-500 flex items-center gap-2"><DollarSign size={14} /> Costo</span>
                     <span className="font-bold text-slate-700">
-                      {formatCurrency(isWeight ? (selectedProduct.purchasePrice * 1000) : (selectedProduct.purchasePrice || 0))}
+                      <FancyPrice amount={isWeight ? (selectedProduct.purchasePrice * 1000) : (selectedProduct.purchasePrice || 0)} />
                       {isWeight && <span className="text-xs text-slate-400">/kg</span>}
                     </span>
                   </div>

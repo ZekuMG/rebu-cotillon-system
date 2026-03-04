@@ -105,14 +105,15 @@ const fetchCloudData = async (showSpinner = true) => {
         rewardsResult,
         registerResult
       ] = await Promise.allSettled([
-        supabase.from('products').select('*').eq('is_active', true).order('title'),
-        supabase.from('clients').select('*').eq('is_active', true).order('name'),
-        supabase.from('sales').select(`*, sale_items(*), clients(name, member_number)`).order('created_at', { ascending: false }).limit(1000),        
-        supabase.from('logs').select('*').order('created_at', { ascending: false }),
-        supabase.from('expenses').select('*').order('created_at', { ascending: false }),
-        supabase.from('cash_closures').select('*').order('created_at', { ascending: false }),
-        supabase.from('categories').select('*').order('name'),
-        supabase.from('rewards').select('*').order('points_cost', { ascending: true }),
+        // 🚀 LÍMITES EXTENDIDOS A 10.000 EN TODAS LAS TABLAS
+        supabase.from('products').select('*').eq('is_active', true).order('title').limit(10000),
+        supabase.from('clients').select('*').eq('is_active', true).order('name').limit(10000),
+        supabase.from('sales').select(`*, sale_items(*), clients(name, member_number)`).order('created_at', { ascending: false }).limit(10000),        
+        supabase.from('logs').select('*').order('created_at', { ascending: false }).limit(10000),
+        supabase.from('expenses').select('*').order('created_at', { ascending: false }).limit(10000),
+        supabase.from('cash_closures').select('*').order('created_at', { ascending: false }).limit(10000),
+        supabase.from('categories').select('*').order('name').limit(5000), // Categorías no suelen ser tantas
+        supabase.from('rewards').select('*').order('points_cost', { ascending: true }).limit(5000),
         supabase.from('register_state').select('*').eq('id', 1).maybeSingle() 
       ]);
 

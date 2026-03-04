@@ -19,8 +19,9 @@ import {
   GlobalTimeSwitch,
   LayoutManagerControls,
 } from '../components/dashboard';
-// ♻️ FIX: Importamos el formateador oficial
+// ♻️ FIX: Importamos FancyPrice (dejamos formatCurrency para usos crudos si hubiera)
 import { formatCurrency } from '../utils/helpers';
+import { FancyPrice } from '../components/FancyPrice';
 
 const DEFAULT_BOTTOM_ORDER = ['chart', 'payments', 'topProducts', 'lowStock', 'financialActivity', 'systemLogs'];
 const DEFAULT_TOP_ORDER = ['sales', 'revenue', 'net', 'opening', 'average', 'expenses'];
@@ -182,9 +183,10 @@ export default function DashboardView({
                         </div>
                       </div>
                       <div className="text-right">
-                        {/* ♻️ FIX: Formateamos el dinero correctamente */}
-                        <p className={`text-sm font-bold ${item.type === 'sale' ? 'text-emerald-600' : 'text-red-600'}`}>
-                          {item.type === 'sale' ? '+' : '-'}{formatCurrency(item.type === 'sale' ? item.total : item.amount)}
+                        {/* ♻️ FIX: Formateamos el dinero correctamente con FancyPrice */}
+                        <p className={`text-sm font-bold flex items-center justify-end gap-1 ${item.type === 'sale' ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <span>{item.type === 'sale' ? '+' : '-'}</span>
+                          <FancyPrice amount={item.type === 'sale' ? item.total : item.amount} />
                         </p>
                         <p className="text-[10px] text-slate-400">
                           {item.time || new Date(item.sortTime).toLocaleTimeString('es-AR', {hour: '2-digit', minute:'2-digit'})}

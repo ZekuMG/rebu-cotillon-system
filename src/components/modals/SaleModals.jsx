@@ -8,8 +8,8 @@ import {
   Printer,
   FileOutput,
 } from 'lucide-react';
-// ♻️ FIX: Importamos formatCurrency
-import { formatCurrency } from '../../utils/helpers';
+// ♻️ FIX: Importamos FancyPrice
+import { FancyPrice } from '../FancyPrice';
 // [MODIFICADO] Importamos el layout real para unificar diseño de impresión y vista previa
 import { TicketPrintLayout } from '../TicketPrintLayout';
 
@@ -43,8 +43,13 @@ export const SaleSuccessModal = ({ transaction, onClose, onViewTicket }) => {
             <div className="bg-blue-50 p-3 rounded-lg"><p className="text-[10px] font-bold text-blue-400 uppercase">Vendedor</p><p className="font-bold text-blue-700">{transaction.user}</p></div>
             <div className="bg-fuchsia-50 p-3 rounded-lg"><p className="text-[10px] font-bold text-fuchsia-400 uppercase">Método de Pago</p><p className="font-bold text-fuchsia-700">{transaction.payment}{transaction.installments > 1 && ` (${transaction.installments} cuotas)`}</p></div>
           </div>
-          {/* ♻️ FIX: formatCurrency al total (ya trae el $) */}
-          <div className="border-t pt-3 flex justify-between items-end"><span className="font-bold text-slate-600">TOTAL</span><span className="text-2xl font-bold text-green-600">{formatCurrency(transaction.total)}</span></div>
+          {/* ♻️ FIX: FancyPrice al total */}
+          <div className="border-t pt-3 flex justify-between items-end">
+            <span className="font-bold text-slate-600">TOTAL</span>
+            <span className="text-2xl font-bold text-green-600">
+              <FancyPrice amount={transaction.total} />
+            </span>
+          </div>
         </div>
 
         <div className="p-4 bg-slate-50 border-t flex gap-3">

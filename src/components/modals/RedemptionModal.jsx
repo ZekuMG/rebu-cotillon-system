@@ -7,7 +7,9 @@ import {
   Search,
   AlertCircle
 } from 'lucide-react';
-import { formatCurrency, formatNumber } from '../../utils/helpers';
+// ♻️ FIX: Importamos formatNumber y FancyPrice
+import { formatNumber } from '../../utils/helpers';
+import { FancyPrice } from '../FancyPrice';
 
 export const RedemptionModal = ({ 
   isOpen, 
@@ -56,7 +58,7 @@ export const RedemptionModal = ({
             </div>
             <div className="text-right">
               <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Puntos Disponibles</p>
-            <p className="text-3xl font-black text-fuchsia-400">{formatNumber(client?.points || 0)}</p>           
+            <p className="text-3xl font-black text-fuchsia-400">{formatNumber(client?.points || 0)}</p>          
             </div>
           </div>
         </div>
@@ -137,7 +139,8 @@ export const RedemptionModal = ({
                       ) : (
                         <div className="flex items-center gap-1.5 text-xs text-emerald-600 font-bold">
                           <Tag size={14} />
-                          <span>Valor: {formatCurrency(reward.discountAmount)}</span>
+                          {/* ♻️ FIX: Aplicamos FancyPrice al valor del descuento */}
+                          <span>Valor: <FancyPrice amount={reward.discountAmount} /></span>
                         </div>
                       )}
 
