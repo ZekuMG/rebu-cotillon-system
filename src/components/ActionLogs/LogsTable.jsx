@@ -7,8 +7,9 @@ import {
   Eye,
   Search
 } from 'lucide-react';
-// ♻️ FIX: Importamos formatCurrency y formatNumber
+// ♻️ FIX: Importamos formatCurrency para el texto puro y FancyPrice para la visual
 import { formatCurrency, formatNumber } from '../../utils/helpers';
+import { FancyPrice } from '../FancyPrice';
 
 const getTransactionId = (details) => {
   if (!details || typeof details === 'string') return null;
@@ -139,7 +140,9 @@ export default function LogsTable({
           <div className={s.sr}>
             <span className={`${s.b} ${c.bg}`}>🛒 #{txId}</span>
             <div className={s.ss}></div>
-            <span className={`${s.b} ${c.bg}`}>{formatCurrency(d.total || 0)}</span>
+            <span className={`${s.b} ${c.bg}`}>
+              <FancyPrice amount={d.total || 0} />
+            </span>
             <div className={s.ss}></div>
             <span className={s.se}>{parts.join(' + ')} ({items.length} items)</span>
             <div className={s.ss}></div>
@@ -154,7 +157,9 @@ export default function LogsTable({
           <div className={s.sr}>
             <span className={`${s.b} ${c.bg}`}>$ Apertura</span>
             <div className={s.ss}></div>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#15803d' }}>{formatCurrency(d.amount || 0)}</span>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#15803d' }}>
+              <FancyPrice amount={d.amount || 0} />
+            </span>
           </div>
         );
 
@@ -165,7 +170,9 @@ export default function LogsTable({
           <div className={s.sr}>
             <span className={`${s.b} ${c.br}`}>❌ #{txId}</span>
             <div className={s.ss}></div>
-            <span style={{ fontSize: '10px', color: '#dc2626', textDecoration: 'line-through' }}>{formatCurrency(d.originalTotal || d.total || 0)}</span>
+            <span style={{ fontSize: '10px', color: '#dc2626', textDecoration: 'line-through' }}>
+              <FancyPrice amount={d.originalTotal || d.total || 0} />
+            </span>
             {reason && <><div className={s.ss}></div><span className={s.se} style={{ color: '#b45309', fontStyle: 'italic', maxWidth: '150px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>"{reason}"</span></>}
           </div>
         );
@@ -175,7 +182,9 @@ export default function LogsTable({
       case 'Gasto':
         return (
           <div className={s.sr}>
-            <span className={`${s.b} ${c.br}`}>📉 -{formatCurrency(d.amount || 0)}</span>
+            <span className={`${s.b} ${c.br}`}>
+              📉 -<FancyPrice amount={d.amount || 0} />
+            </span>
             <div className={s.ss}></div>
             <span className={`${s.b} ${c.bs}`}>{d.category || 'Varios'}</span>
             <div className={s.ss}></div>
@@ -205,7 +214,14 @@ export default function LogsTable({
               </>
             )}
             <span className={`${s.b} ${c.bb}`}>⊕ {title}</span>
-            {d.price !== undefined && <><div className={s.ss}></div><span className={s.se}>{formatCurrency(d.price)} · {formatNumber(d.stock)} {d.product_type === 'weight' ? 'g' : 'uds'}</span></>}
+            {d.price !== undefined && (
+              <>
+                <div className={s.ss}></div>
+                <span className={s.se}>
+                  <FancyPrice amount={d.price} /> · {formatNumber(d.stock)} {d.product_type === 'weight' ? 'g' : 'uds'}
+                </span>
+              </>
+            )}
             {d.category && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{d.category}</span></>}
           </div>
         );
@@ -221,7 +237,14 @@ export default function LogsTable({
               </>
             )}
             <span className={`${s.b} ${c.bb}`}>📦 {d.product || d.title || d.name || 'Producto'}</span>
-            {d.price !== undefined && <><div className={s.ss}></div><span className={s.se}>{formatCurrency(d.price)}</span></>}
+            {d.price !== undefined && (
+              <>
+                <div className={s.ss}></div>
+                <span className={s.se}>
+                  <FancyPrice amount={d.price} />
+                </span>
+              </>
+            )}
           </div>
         );
       }
@@ -351,11 +374,11 @@ export default function LogsTable({
         let newDesc = '';
 
         if (isTotalChanged && isPaymentChanged) {
-          oldDesc = `${oldTotalText} | ${oldPayText}`;
-          newDesc = `${newTotalText} | ${newPayText}`;
+          oldDesc = <><FancyPrice amount={changes.total.old || d.total || 0} /> | {oldPayText}</>;
+          newDesc = <><FancyPrice amount={changes.total.new || d.total || 0} /> | {newPayText}</>;
         } else if (isTotalChanged) {
-          oldDesc = oldTotalText;
-          newDesc = newTotalText;
+          oldDesc = <FancyPrice amount={changes.total.old || d.total || 0} />;
+          newDesc = <FancyPrice amount={changes.total.new || d.total || 0} />;
         } else if (isPaymentChanged) {
           oldDesc = oldPayText;
           newDesc = newPayText;
@@ -440,7 +463,9 @@ export default function LogsTable({
           <div className={s.sr}>
             <span className={`${s.b} ${c.bk}`}>{action === 'Cierre Automático' ? '⏰ Auto' : '🔒 Cierre'}</span>
             <div className={s.ss}></div>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#1e293b' }}>{formatCurrency(d.finalBalance || d.netProfit || d.totalSales || 0)}</span>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#1e293b' }}>
+              <FancyPrice amount={d.finalBalance || d.netProfit || d.totalSales || 0} />
+            </span>
             {d.salesCount !== undefined && <><div className={s.ss}></div><span className={s.se}>{formatNumber(d.salesCount)} ventas</span></>}
           </div>
         );

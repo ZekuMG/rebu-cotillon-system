@@ -1,8 +1,9 @@
 // src/components/ActionLogs/LogDetailRenderer.jsx
 import React from 'react';
 import { ArrowRight, CheckCircle } from 'lucide-react';
-// ♻️ FIX: Importamos formatCurrency (sacamos formatPrice viejo)
+// ♻️ FIX: Importamos formatCurrency para textos crudos, y FancyPrice para la interfaz visual
 import { formatCurrency } from '../../utils/helpers';
+import { FancyPrice } from '../FancyPrice';
 
 // ════════════════════════════════════════════
 //  HELPERS EXPORTABLES
@@ -118,7 +119,7 @@ const Item = ({ label, value, children, className = '' }) => (
   </div>
 );
 
-const ProductItem = ({ qty, name, total, isWeight }) => (
+const ProductItem = ({ qty, name, totalAmount, isWeight }) => (
   <div className="flex justify-between items-center px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1]">
     <span className="text-slate-500 font-medium flex items-center truncate flex-1 mr-2">
       <span className="font-mono text-[9px] font-bold bg-[#e0e4eb] text-slate-600 px-1.5 py-0.5 rounded mr-2 whitespace-nowrap">
@@ -126,17 +127,23 @@ const ProductItem = ({ qty, name, total, isWeight }) => (
       </span>
       <span className="truncate">{name}</span>
     </span>
-    <span className="font-bold text-slate-800 whitespace-nowrap">{total}</span>
+    <span className="font-bold text-slate-800 whitespace-nowrap">
+      {totalAmount === 'GRATIS' ? 'GRATIS' : <FancyPrice amount={totalAmount} />}
+    </span>
   </div>
 );
 
-const ChangeRow = ({ field, oldVal, newVal }) => (
+const ChangeRow = ({ field, oldVal, newVal, isPrice = false }) => (
   <div className="flex items-center justify-between px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1]">
     <span className="font-bold text-slate-800 flex-1 truncate">{field}</span>
     <div className="flex items-center gap-2 justify-end shrink-0">
-      <span className="text-red-500 line-through text-[10px] font-medium">{oldVal}</span>
+      <span className="text-red-500 line-through text-[10px] font-medium">
+        {isPrice ? <FancyPrice amount={oldVal} /> : oldVal}
+      </span>
       <span className="text-slate-400 text-[10px] mx-0.5">→</span>
-      <span className="text-green-600 font-bold">{newVal}</span>
+      <span className="text-green-600 font-bold">
+        {isPrice ? <FancyPrice amount={newVal} /> : newVal}
+      </span>
     </div>
   </div>
 );
@@ -173,10 +180,12 @@ const WarnCard = ({ children }) => (
   </div>
 );
 
-const HighlightCard = ({ label, value, sub }) => (
+const HighlightCard = ({ label, amount, sub }) => (
   <div className="bg-slate-800 rounded-[14px] p-4 text-white">
     <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{label}</div>
-    <div className="text-[28px] font-extrabold font-mono mt-1 leading-none">{value}</div>
+    <div className="text-[28px] font-extrabold font-mono mt-1 leading-none">
+      <FancyPrice amount={amount} />
+    </div>
     {sub && <div className="text-[11px] text-slate-500 mt-1.5">{sub}</div>}
   </div>
 );
@@ -230,8 +239,9 @@ export default function LogDetailRenderer({ log }) {
         <div className="space-y-4">
           <Card icon="💰" title="Información de Apertura">
             <Item label="Monto Inicial">
-              {/* ♻️ FIX: formatCurrency */}
-              <span className="text-[#059669] text-[14px] font-bold">{formatCurrency(details.amount)}</span>
+              <span className="text-[#059669] text-[14px] font-bold">
+                <FancyPrice amount={details.amount} />
+              </span>
             </Item>
             {details.scheduledClosingTime && (
               <Item label="Cierre Programado" value={details.scheduledClosingTime} />
@@ -251,23 +261,21 @@ export default function LogDetailRenderer({ log }) {
             </div>
           )}
           <Card icon="💰" title="Balance del Día">
-            {/* ♻️ FIX: formatCurrency */}
-            <Item label="Caja Inicial" value={formatCurrency(details.openingBalance || 0)} />
+            <Item label="Caja Inicial">
+              <span className="font-bold"><FancyPrice amount={details.openingBalance || 0} /></span>
+            </Item>
             <Item label="Ventas del Día">
-              {/* ♻️ FIX: formatCurrency */}
-              <span className="text-[#059669] font-bold">+{formatCurrency(details.totalSales || 0)}</span>
+              <span className="text-[#059669] font-bold">+<FancyPrice amount={details.totalSales || 0} /></span>
             </Item>
             {details.totalExpenses !== undefined && (
               <Item label="Gastos">
-                {/* ♻️ FIX: formatCurrency */}
-                <span className="text-[#dc2626] font-bold">-{formatCurrency(details.totalExpenses || 0)}</span>
+                <span className="text-[#dc2626] font-bold">-<FancyPrice amount={details.totalExpenses || 0} /></span>
               </Item>
             )}
           </Card>
           <HighlightCard
             label="Total al Cierre (Neto)"
-            /* ♻️ FIX: formatCurrency */
-            value={formatCurrency(details.finalBalance || details.netProfit || details.totalSales || 0)}
+            amount={details.finalBalance || details.netProfit || details.totalSales || 0}
             sub={`${details.closingTime || log.timestamp} · ${details.salesCount || 0} operaciones`}
           />
           <Card icon="📊" title="Estadísticas de Operación">
@@ -309,14 +317,14 @@ export default function LogDetailRenderer({ log }) {
             {items.map((item, idx) => {
               const q = item.quantity || item.qty || 0;
               const isWeight = item.product_type === 'weight' || item.isWeight || (q >= 20 && item.price < 50);
+              const totalMonto = item.isReward ? 'GRATIS' : (item.price || 0) * q;
               
               return (
                 <ProductItem
                   key={idx}
                   qty={q}
                   name={item.title || item.name || 'Producto'}
-                  /* ♻️ FIX: formatCurrency */
-                  total={formatCurrency((item.price || 0) * q)}
+                  totalAmount={totalMonto}
                   isWeight={isWeight}
                 />
               );
@@ -410,13 +418,13 @@ export default function LogDetailRenderer({ log }) {
               {itemsSnapshot.map((item, idx) => {
                  const q = item.qty || item.quantity || 0;
                  const isWeight = item.product_type === 'weight' || item.isWeight || (q >= 20 && item.price < 50);
+                 const totalMonto = item.isReward ? 'GRATIS' : (item.price || 0) * q;
                  return (
                   <ProductItem
                     key={idx}
                     qty={q}
                     name={item.title || item.name}
-                    /* ♻️ FIX: formatCurrency */
-                    total={formatCurrency((Number(item.price) || 0) * q)}
+                    totalAmount={totalMonto}
                     isWeight={isWeight}
                   />
                 );
@@ -450,9 +458,9 @@ export default function LogDetailRenderer({ log }) {
              {isTotalActuallyChanged && (
                 <ChangeRow
                   field="Monto Total"
-                  /* ♻️ FIX: formatCurrency */
-                  oldVal={formatCurrency(changes.total.old)}
-                  newVal={formatCurrency(changes.total.new)}
+                  oldVal={changes.total.old}
+                  newVal={changes.total.new}
+                  isPrice={true}
                 />
              )}
              
@@ -497,8 +505,9 @@ export default function LogDetailRenderer({ log }) {
         <div className="space-y-4">
           <Card icon="💸" title="Detalle del Gasto">
             <Item label="Monto">
-              {/* ♻️ FIX: formatCurrency */}
-              <span className="text-[#dc2626] text-[14px] font-bold">-{formatCurrency(details.amount)}</span>
+              <span className="text-[#dc2626] text-[14px] font-bold">
+                -<FancyPrice amount={details.amount} />
+              </span>
             </Item>
             {details.description && <Item label="Descripción" value={details.description} />}
           </Card>
@@ -524,12 +533,12 @@ export default function LogDetailRenderer({ log }) {
               <Badge color="fuchsia">{details.category || 'Sin categoría'}</Badge>
             </Item>
             {details.purchasePrice !== undefined && details.purchasePrice !== null && (
-              /* ♻️ FIX: formatCurrency */
-              <Item label="Precio Costo" value={formatCurrency(details.purchasePrice)} />
+              <Item label="Precio Costo">
+                <FancyPrice amount={details.purchasePrice} />
+              </Item>
             )}
             <Item label="Precio Venta">
-              {/* ♻️ FIX: formatCurrency */}
-              <span className="text-[#059669] font-bold">{formatCurrency(details.price)}</span>
+              <span className="text-[#059669] font-bold"><FancyPrice amount={details.price} /></span>
             </Item>
             <Item label="Stock Inicial">
               <Badge color="blue">{details.stock || 0} {details.product_type === 'weight' ? 'g' : 'uds'}</Badge>
@@ -563,9 +572,9 @@ export default function LogDetailRenderer({ log }) {
                 <ChangeRow
                   key={key}
                   field={fieldNames[key] || key}
-                  /* ♻️ FIX: formatCurrency */
-                  oldVal={key.toLowerCase().includes('price') ? formatCurrency(val.old) : String(val.old)}
-                  newVal={key.toLowerCase().includes('price') ? formatCurrency(val.new) : String(val.new)}
+                  oldVal={val.old}
+                  newVal={val.new}
+                  isPrice={key.toLowerCase().includes('price')}
                 />
               ))}
             </Card>
@@ -582,8 +591,7 @@ export default function LogDetailRenderer({ log }) {
               <Badge color="fuchsia">{details.category || '-'}</Badge>
             </Item>
             <Item label="Precio">
-              {/* ♻️ FIX: formatCurrency */}
-              <span className="text-[#059669] font-bold">{formatCurrency(details.price)}</span>
+              <span className="text-[#059669] font-bold"><FancyPrice amount={details.price} /></span>
             </Item>
             <Item label="Stock">
               <Badge color="blue">{details.stock} {details.product_type === 'weight' ? 'g' : 'uds'}</Badge>
@@ -607,8 +615,9 @@ export default function LogDetailRenderer({ log }) {
             )}
             <Item label="Categoría" value={details.category || '-'} />
             {details.price !== undefined && (
-              /* ♻️ FIX: formatCurrency */
-              <Item label="Precio al momento de baja" value={formatCurrency(details.price)} />
+              <Item label="Precio al momento de baja">
+                <FancyPrice amount={details.price} />
+              </Item>
             )}
             <Item label="Stock descartado" className="!bg-[#fef2f2] !border-[#fecaca]">
               <span className="text-[#dc2626] font-bold">{details.stock || 0} {details.product_type === 'weight' ? 'g' : 'unidades'}</span>
@@ -633,13 +642,13 @@ export default function LogDetailRenderer({ log }) {
               </Item>
             )}
             {details.purchasePrice !== undefined && (
-              /* ♻️ FIX: formatCurrency */
-              <Item label="Precio Costo" value={formatCurrency(details.purchasePrice)} />
+              <Item label="Precio Costo">
+                <FancyPrice amount={details.purchasePrice} />
+              </Item>
             )}
             {details.price !== undefined && (
               <Item label="Precio Venta">
-                {/* ♻️ FIX: formatCurrency */}
-                <span className="text-[#059669] font-bold">{formatCurrency(details.price)}</span>
+                <span className="text-[#059669] font-bold"><FancyPrice amount={details.price} /></span>
               </Item>
             )}
             <Item label="Stock Inicial">

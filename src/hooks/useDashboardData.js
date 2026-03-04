@@ -33,9 +33,15 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     const currentDay = now.getDate();
     
     const todayNum = (currentYear * 10000) + ((currentMonth + 1) * 100) + currentDay;
+    
     const weekAgo = new Date(now);
     weekAgo.setDate(now.getDate() - 6); 
     const weekAgoNum = (weekAgo.getFullYear() * 10000) + ((weekAgo.getMonth() + 1) * 100) + weekAgo.getDate();
+
+    // ✨ NUEVO: Ahora calculamos exactamente 29 días atrás para hacer la ventana de 30 días
+    const monthAgo = new Date(now);
+    monthAgo.setDate(now.getDate() - 29);
+    const monthAgoNum = (monthAgo.getFullYear() * 10000) + ((monthAgo.getMonth() + 1) * 100) + monthAgo.getDate();
 
     return (dateObj) => {
       if (!dateObj) return false;
@@ -46,7 +52,8 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
 
       if (globalFilter === 'day') return compNum === todayNum;
       if (globalFilter === 'week') return compNum >= weekAgoNum && compNum <= todayNum;
-      if (globalFilter === 'month') return compYear === currentYear && compMonth === currentMonth;
+      // ✨ NUEVO: "Mes" ahora significa los últimos 30 días
+      if (globalFilter === 'month') return compNum >= monthAgoNum && compNum <= todayNum;
       return false;
     };
   }, [globalFilter]);
@@ -135,60 +142,57 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
   const chartData = useMemo(() => {
     if (globalFilter === 'day') {
       const ranges = [
-        { label: '9-12', start: 9, end: 12, sales: 0, count: 0 },
-        { label: '12-14', start: 12, end: 14, sales: 0, count: 0 },
-        { label: '14-17', start: 14, end: 17, sales: 0, count: 0 },
-        { label: '17-21', start: 17, end: 21, sales: 0, count: 0 },
-        { label: '21+', start: 21, end: 24, sales: 0, count: 0 },
+        { label: '9-12', start: 9, end: 12, sales: 0, count: 0, transactions: [] },
+        { label: '12-14', start: 12, end: 14, sales: 0, count: 0, transactions: [] },
+        { label: '14-17', start: 14, end: 17, sales: 0, count: 0, transactions: [] },
+        { label: '17-21', start: 17, end: 21, sales: 0, count: 0, transactions: [] },
+        { label: '21+', start: 21, end: 24, sales: 0, count: 0, transactions: [] },
       ];
       filteredData.forEach(tx => {
         if (!tx.time) return;
         const hour = parseInt(tx.time.split(':')[0], 10);
         const range = ranges.find(r => hour >= r.start && hour < r.end);
-        if (range) { range.sales += tx.total; range.count += 1; }
+        if (range) { range.sales += tx.total; range.count += 1; range.transactions.push(tx); }
       });
       return ranges.map(r => ({ ...r, isCurrent: currentHour >= r.start && currentHour < r.end }));
     }
 
     const daysMap = new Map();
     const now = new Date();
+    // ✨ NUEVO: Ahora `daysToShow` siempre es 7 para semana, y 30 para mes
     const daysToShow = globalFilter === 'week' ? 7 : 30;
 
     for (let i = daysToShow - 1; i >= 0; i--) {
       const d = new Date(now); d.setDate(d.getDate() - i);
       const key = `${d.getDate()}/${d.getMonth() + 1}`;
-      daysMap.set(key, { label: key, dayName: d.toLocaleDateString('es-AR', { weekday: 'short' }), sales: 0, count: 0, fullDate: key, isToday: i === 0 });
+      const dateStr = d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+      daysMap.set(key, { 
+        label: key, 
+        dayName: d.toLocaleDateString('es-AR', { weekday: 'short' }), 
+        dayNum: d.getDate(),
+        monthName: d.toLocaleDateString('es-AR', { month: 'short' }),
+        sales: 0, 
+        count: 0, 
+        dateStr: dateStr, 
+        isToday: i === 0,
+        isCurrent: i === 0,
+        transactions: [] // ✨ Guardamos el detalle de operaciones acá
+      });
     }
 
     filteredData.forEach(tx => {
       if (!tx.date) return;
       const key = `${tx.date.getDate()}/${tx.date.getMonth() + 1}`;
-      if (daysMap.has(key)) { const entry = daysMap.get(key); entry.sales += tx.total; entry.count += 1; }
+      if (daysMap.has(key)) { 
+        const entry = daysMap.get(key); 
+        entry.sales += tx.total; 
+        entry.count += 1; 
+        entry.transactions.push(tx); // ✨ Rellenamos las transacciones del día
+      }
     });
 
-    const dayArray = Array.from(daysMap.values());
-
-    if (globalFilter === 'month') {
-      const currentDayOfMonth = new Date().getDate();
-      const getCurrentWeekIndex = () => {
-        if (currentDayOfMonth <= 7) return 0; if (currentDayOfMonth <= 14) return 1; if (currentDayOfMonth <= 21) return 2; return 3;
-      };
-      const currentWeekIdx = getCurrentWeekIndex();
-      const weeks = [
-        { label: '1-7', sales: 0, count: 0, isCurrent: currentWeekIdx === 0 },
-        { label: '8-14', sales: 0, count: 0, isCurrent: currentWeekIdx === 1 },
-        { label: '15-21', sales: 0, count: 0, isCurrent: currentWeekIdx === 2 },
-        { label: '22+', sales: 0, count: 0, isCurrent: currentWeekIdx === 3 },
-      ];
-      filteredData.forEach(tx => {
-        if (!tx.date) return;
-        const dayOfMonth = tx.date.getDate();
-        let weekIdx = dayOfMonth <= 7 ? 0 : dayOfMonth <= 14 ? 1 : dayOfMonth <= 21 ? 2 : 3;
-        weeks[weekIdx].sales += tx.total; weeks[weekIdx].count += 1;
-      });
-      return weeks;
-    }
-    return dayArray;
+    return Array.from(daysMap.values());
   }, [globalFilter, filteredData, currentHour]);
 
   const maxSales = useMemo(() => {
@@ -241,13 +245,11 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
         }
 
         keys.forEach(k => {
-          // Inicializamos los nuevos contadores unitQty y weightQty
           if (!statsMap[k]) statsMap[k] = { name: k, qty: 0, revenue: 0, unitQty: 0, weightQty: 0 };
           
           statsMap[k].qty += qty;
           statsMap[k].revenue += revenue;
           
-          // Separamos la cuenta
           if (isWeightItem) {
             statsMap[k].weightQty += qty;
           } else {
@@ -257,7 +259,7 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
       });
     });
 
-    return Object.values(statsMap).sort((a, b) => b.revenue - a.revenue).slice(0, 5); // Ordenamos por ganancias para que sea más parejo
+    return Object.values(statsMap).sort((a, b) => b.revenue - a.revenue).slice(0, 5); 
   }, [filteredData, rankingMode, inventory]);
 
   const lowStockProducts = useMemo(() => {
@@ -269,7 +271,7 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     switch (globalFilter) {
       case 'day': return 'Sin ventas hoy';
       case 'week': return 'Sin ventas esta semana';
-      case 'month': return 'Sin ventas este mes';
+      case 'month': return 'Sin ventas en los últimos 30 días'; // ✨ Mensaje actualizado
       default: return 'Sin datos';
     }
   };

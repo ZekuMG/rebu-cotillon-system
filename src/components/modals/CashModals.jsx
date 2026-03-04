@@ -1,5 +1,5 @@
 // src/components/modals/CashModals.jsx
-// ♻️ REFACTOR: Extraído de AppModals.jsx — Modales de gestión de caja
+// ♻️ REFACTOR: Modales de gestión de caja con diseño premium para montos altos
 
 import React from 'react';
 import {
@@ -8,8 +8,9 @@ import {
   AlertTriangle,
   Lock,
 } from 'lucide-react';
-// ♻️ FIX: Importamos el nuevo formateador
 import { formatCurrency } from '../../utils/helpers';
+// ✨ NUEVO: Importamos el componente global
+import { FancyPrice } from '../FancyPrice';
 
 export const OpeningBalanceModal = ({ isOpen, onClose, tempOpeningBalance, setTempOpeningBalance, tempClosingTime, setTempClosingTime, onSave }) => {
   if (!isOpen) return null;
@@ -25,7 +26,6 @@ export const OpeningBalanceModal = ({ isOpen, onClose, tempOpeningBalance, setTe
             <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Monto Inicial en Caja</label>
             <div className="relative">
               <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-              {/* ⚠️ El input queda en bruto para no romper la edición */}
               <input type="number" placeholder="0" className="w-full pl-10 pr-4 py-3 text-xl font-bold border-2 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none" value={tempOpeningBalance} onChange={(e) => setTempOpeningBalance(e.target.value)} autoFocus />
             </div>
           </div>
@@ -39,8 +39,7 @@ export const OpeningBalanceModal = ({ isOpen, onClose, tempOpeningBalance, setTe
           </div>
           <div className="bg-slate-50 p-3 rounded-lg border">
             <p className="text-xs text-slate-500 mb-2">Resumen de apertura:</p>
-            {/* ♻️ FIX: formatCurrency en el resumen visual */}
-            <div className="flex justify-between text-sm"><span className="text-slate-600">Monto inicial:</span><span className="font-bold text-slate-800">{formatCurrency(tempOpeningBalance)}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-slate-600">Monto inicial:</span><span className="font-bold text-slate-800"><FancyPrice amount={Number(tempOpeningBalance) || 0} /></span></div>
             <div className="flex justify-between text-sm mt-1"><span className="text-slate-600">Cierre programado:</span><span className="font-bold text-slate-800">{tempClosingTime || '--:--'}</span></div>
           </div>
           <div className="flex gap-3">
@@ -67,7 +66,6 @@ export const ClosingTimeModal = ({ isOpen, onClose, closingTime, setClosingTime,
 };
 
 
-
 export const CloseCashModal = ({ isOpen, onClose, salesCount, totalSales, totalExpenses = 0, cashExpenses = 0, cashSales = 0, openingBalance, onConfirm }) => {
   if (!isOpen) return null;
   
@@ -75,64 +73,79 @@ export const CloseCashModal = ({ isOpen, onClose, salesCount, totalSales, totalE
   
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
-        <div className="p-4 bg-gradient-to-r from-slate-800 to-slate-700 text-white">
-          <h3 className="font-bold text-lg flex items-center gap-2"><Lock size={20} /> Cerrar Caja</h3>
-          <p className="text-slate-300 text-sm">Resumen del ciclo actual</p>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        <div className="p-5 bg-gradient-to-r from-slate-800 to-slate-700 text-white flex items-center gap-3">
+          <div className="p-2 bg-white/10 rounded-lg">
+            <Lock size={22} className="text-white" />
+          </div>
+          <div>
+            <h3 className="font-bold text-lg leading-tight">Cerrar Caja</h3>
+            <p className="text-slate-300 text-xs">Resumen del ciclo actual</p>
+          </div>
         </div>
-        <div className="p-5 space-y-4">
-          {/* KPIs del ciclo */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 text-center">
-              <p className="text-[10px] font-bold text-blue-500 uppercase">Ventas</p>
-              <p className="text-2xl font-bold text-blue-700">{salesCount}</p>
+        
+        <div className="p-6 space-y-5">
+          
+          <div className="space-y-3">
+            
+            {/* Facturado: Fila completa */}
+            <div className="bg-fuchsia-50 p-5 rounded-xl border border-fuchsia-100 flex flex-col items-center text-center shadow-inner">
+              <p className="text-[11px] font-bold text-fuchsia-500 uppercase tracking-widest mb-1">Total Facturado</p>
+              <p className="text-4xl font-black text-fuchsia-700 tracking-tight">
+                <FancyPrice amount={totalSales} />
+              </p>
             </div>
-            <div className="bg-fuchsia-50 p-3 rounded-lg border border-fuchsia-100 text-center">
-              <p className="text-[10px] font-bold text-fuchsia-500 uppercase">Facturado</p>
-              {/* ♻️ FIX: formatCurrency */}
-              <p className="text-2xl font-bold text-fuchsia-700">{formatCurrency(totalSales)}</p>
+            
+            {/* Ventas y Gastos: 2 Columnas */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 text-center shadow-sm">
+                <p className="text-[10px] font-bold text-blue-500 uppercase tracking-wider mb-1">Operaciones</p>
+                <p className="text-3xl font-bold text-blue-700">{salesCount}</p>
+              </div>
+              <div className="bg-red-50 p-4 rounded-xl border border-red-100 text-center shadow-sm min-w-0">
+                <p className="text-[10px] font-bold text-red-500 uppercase tracking-wider mb-1">Total Gastos</p>
+                <p className="text-2xl font-bold text-red-600 truncate w-full">
+                  <FancyPrice amount={totalExpenses} />
+                </p>
+              </div>
             </div>
-            <div className="bg-red-50 p-3 rounded-lg border border-red-100 text-center">
-              <p className="text-[10px] font-bold text-red-500 uppercase">Gastos</p>
-              {/* ♻️ FIX: formatCurrency */}
-              <p className="text-2xl font-bold text-red-600">{formatCurrency(totalExpenses)}</p>
-            </div>
+            
           </div>
 
-          {/* Desglose de caja */}
-          <div className="bg-slate-50 p-4 rounded-lg border space-y-2">
+          {/* Desglose de caja física */}
+          <div className="bg-slate-50 p-5 rounded-xl border border-slate-200 space-y-3">
             <div className="flex justify-between items-center text-sm">
-              <span className="text-slate-500">Caja Inicial</span>
-              {/* ♻️ FIX: formatCurrency */}
-              <span className="font-bold text-slate-700">{formatCurrency(openingBalance)}</span>
+              <span className="text-slate-500 font-medium">Caja Inicial</span>
+              <span className="font-bold text-slate-700 text-base"><FancyPrice amount={openingBalance} /></span>
             </div>
             <div className="flex justify-between items-center text-sm">
-              <span className="text-slate-500">+ Ventas en efectivo</span>
-              {/* ♻️ FIX: formatCurrency */}
-              <span className="font-bold text-emerald-600">+{formatCurrency(cashSales)}</span>
+              <span className="text-slate-500 font-medium">+ Ventas en efectivo</span>
+              <span className="font-bold text-emerald-600 text-base">+<FancyPrice amount={cashSales} /></span>
             </div>
             {cashExpenses > 0 && (
               <div className="flex justify-between items-center text-sm">
-                <span className="text-slate-500">− Gastos en efectivo</span>
-                {/* ♻️ FIX: formatCurrency */}
-                <span className="font-bold text-red-500">-{formatCurrency(cashExpenses)}</span>
+                <span className="text-slate-500 font-medium">− Gastos en efectivo</span>
+                <span className="font-bold text-red-500 text-base">-<FancyPrice amount={cashExpenses} /></span>
               </div>
             )}
-            <div className="border-t pt-2 flex justify-between items-center">
-              <span className="font-bold text-slate-700">Efectivo en Caja</span>
-              {/* ♻️ FIX: formatCurrency */}
-              <span className="text-xl font-bold text-green-600">{formatCurrency(finalCashBalance)}</span>
+            <div className="border-t border-slate-200 pt-3 mt-1 flex justify-between items-center">
+              <span className="font-bold text-slate-800 text-lg">Efectivo en Caja</span>
+              <span className="text-2xl font-black text-green-600"><FancyPrice amount={finalCashBalance} /></span>
             </div>
           </div>
 
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700">
-            <p className="font-bold flex items-center gap-2"><AlertTriangle size={16} /> Atención</p>
-            <p className="text-xs mt-1">Esta acción generará el reporte de cierre y reiniciará las transacciones. Asegurate de haber revisado el resumen.</p>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 flex gap-3 items-start shadow-sm">
+            <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold mb-0.5">Atención</p>
+              <p className="text-xs leading-relaxed opacity-90">Esta acción vaciará la caja y preparará el sistema para el próximo turno. Asegurate de haber contado el efectivo.</p>
+            </div>
           </div>
         </div>
-        <div className="p-4 bg-slate-50 border-t flex gap-3 justify-end">
-          <button onClick={onClose} className="px-4 py-2 text-sm font-bold text-slate-500 hover:bg-slate-200 rounded-lg transition">Cancelar</button>
-          <button onClick={onConfirm} className="px-6 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg transition flex items-center gap-2"><Lock size={14} /> Confirmar Cierre</button>
+        
+        <div className="p-5 bg-slate-50 border-t border-slate-200 flex gap-3 justify-end">
+          <button onClick={onClose} className="px-5 py-2.5 text-sm font-bold text-slate-500 hover:bg-slate-200 hover:text-slate-700 rounded-xl transition-colors">Cancelar</button>
+          <button onClick={onConfirm} className="px-6 py-2.5 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-xl transition-all shadow-md hover:shadow-lg flex items-center gap-2 transform active:scale-[0.98]"><Lock size={16} /> Procesar Cierre</button>
         </div>
       </div>
     </div>

@@ -2,8 +2,9 @@
 import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import LogDetailRenderer, { getDetailTitle, getDetailIcon, getDetailColor } from './LogDetailRenderer';
-// ♻️ FIX: Importamos formatCurrency y formatNumber
-import { formatCurrency, formatNumber } from '../../utils/helpers';
+// ♻️ FIX: Importamos formatNumber y nuestro nuevo FancyPrice (ya no usamos formatCurrency directo acá)
+import { formatNumber } from '../../utils/helpers';
+import { FancyPrice } from '../FancyPrice';
 
 // Helper local para extraer ID
 const getTransactionId = (details) => {
@@ -45,45 +46,44 @@ export default function LogDetailModal({ selectedLog, onClose }) {
   };
 
   // ── Monto principal según tipo de acción (Header Gigante) ──
+  // ✨ FIX: Devolvemos el componente <FancyPrice /> en lugar de un string
   const getDisplayAmount = () => {
     if (typeof d === 'string') return '';
 
     switch (action) {
       // CAJA
-      case 'Apertura de Caja': return d.amount != null ? formatCurrency(d.amount) : '';
+      case 'Apertura de Caja': return d.amount != null ? <FancyPrice amount={d.amount} /> : '';
       case 'Cierre de Caja':
-      case 'Cierre Automático': return d.finalBalance != null ? formatCurrency(d.finalBalance) : (d.totalSales != null ? formatCurrency(d.totalSales) : '');
+      case 'Cierre Automático': return d.finalBalance != null ? <FancyPrice amount={d.finalBalance} /> : (d.totalSales != null ? <FancyPrice amount={d.totalSales} /> : '');
       // VENTAS
-      case 'Venta Realizada': return d.total != null ? formatCurrency(d.total) : '';
-      case 'Venta Anulada': return (d.originalTotal || d.total) != null ? formatCurrency(d.originalTotal || d.total) : '';
+      case 'Venta Realizada': return d.total != null ? <FancyPrice amount={d.total} /> : '';
+      case 'Venta Anulada': return (d.originalTotal || d.total) != null ? <FancyPrice amount={d.originalTotal || d.total} /> : '';
       // GASTOS
       case 'Nuevo Gasto':
-      case 'Gasto': return d.amount != null ? `-${formatCurrency(d.amount)}` : '';
+      case 'Gasto': return d.amount != null ? <><span className="text-red-500 mr-1">-</span><FancyPrice amount={d.amount} /></> : '';
       // PRODUCTOS 
       case 'Alta de Producto':
       case 'Baja Producto':
       case 'Producto Duplicado':
-      case 'Edición Producto': return d.price != null ? formatCurrency(d.price) : '';
+      case 'Edición Producto': return d.price != null ? <FancyPrice amount={d.price} /> : '';
       // SOCIOS 
       case 'Nuevo Socio': return d.number ? `#${String(d.number).padStart(4, '0')}` : '';
       case 'Baja de Socio': return d.number ? `#${String(d.number).padStart(4, '0')}` : (d.id ? `ID: ${d.id}` : '');
       case 'Edición de Socio': return d.number ? `#${String(d.number).padStart(4, '0')}` : '';
       case 'Edición de Puntos': {
         const pts = d.pointsChange || d;
-        // ♻️ FIX: formatNumber a los puntos del Header
         return pts.diff !== undefined ? `${pts.diff > 0 ? '+' : ''}${formatNumber(pts.diff)} pts` : '';
       }
       // PREMIOS
       case 'Nuevo Premio':
       case 'Editar Premio':
-      // ♻️ FIX: formatNumber a los puntos
       case 'Eliminar Premio': return d.pointsCost ? `${formatNumber(d.pointsCost)} pts` : '';
       // CATEGORÍAS 
       case 'Categoría': return d.type === 'create' ? 'Creada' : d.type === 'delete' ? 'Eliminada' : 'Renombrada';
       case 'Edición Masiva Categorías':
       case 'Actualización Masiva': return (d.count || (d.details && d.details.length) || (d.changes && d.changes.length) || 0) + ' cambios';
       case 'Modificación Pedido': 
-      case 'Venta Modificada': return d.changes?.total ? formatCurrency(d.changes.total.new) : 'Editado';
+      case 'Venta Modificada': return d.changes?.total ? <FancyPrice amount={d.changes.total.new} /> : 'Editado';
       default: return '';
     }
   };
@@ -162,7 +162,7 @@ export default function LogDetailModal({ selectedLog, onClose }) {
             <span className={`inline-flex px-[16px] py-[5px] rounded-[20px] text-[10px] font-extrabold tracking-[0.5px] ${colorMap[color] || colorMap.slate}`}>
               {action === 'Modificación Pedido' ? 'Venta Modificada' : action}
             </span>          
-            <div className="text-[34px] font-extrabold text-[#1e293b] mt-2.5 tracking-[-1px] leading-none" style={{ fontFamily: "'Outfit', sans-serif" }}>
+            <div className="text-[34px] flex justify-center items-center font-extrabold text-[#1e293b] mt-2.5 tracking-[-1px] leading-none" style={{ fontFamily: "'Outfit', sans-serif" }}>
             {getDisplayAmount()}
           </div>
           <div className="text-[13px] font-semibold text-[#64748b] mt-[3px] px-4 truncate">

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Search,
   ShoppingCart,
@@ -21,10 +21,10 @@ import {
   UserCheck,
   Scale,
   Edit2,
+  Wand2
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../data';
-// ♻️ FIX: Importamos formatCurrency y quitamos formatPrice viejo
-import { formatCurrency, formatStock, formatWeight, getPricePerKg } from '../utils/helpers';
+import { formatCurrency, formatNumber, formatWeight, getPricePerKg } from '../utils/helpers';
 
 // ==========================================
 // MINI-MODAL: Ingreso de gramos para peso
@@ -58,7 +58,6 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
             <div className="flex-1 min-w-0">
               <h4 className="font-bold text-slate-800 text-sm truncate">{product.title}</h4>
               <div className="flex items-center gap-2 mt-1">
-                {/* ♻️ FIX: formatCurrency para precio/kg */}
                 <span className="text-xs text-amber-600 font-bold">{formatCurrency(product.price * 1000)}/kg</span>
                 <span className="text-[10px] text-slate-400">•</span>
                 <span className="text-[10px] text-slate-500">Disponible: {formatWeight(effectiveStock)}</span>
@@ -82,7 +81,6 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
           {gramsNum > 0 && (
             <div className="bg-slate-50 rounded-xl p-3 border text-center">
               <p className="text-[10px] text-slate-400 uppercase font-bold">Total estimado</p>
-              {/* ♻️ FIX: formatCurrency para total calculado */}
               <p className="text-2xl font-black text-slate-900">{formatCurrency(totalPrice)}</p>
               <p className="text-[10px] text-slate-500">{formatWeight(gramsNum)} × {formatCurrency(product.price * 1000)}/kg</p>
             </div>
@@ -94,6 +92,147 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+};
+
+// ==========================================
+// MINI-MODAL: Producto Personalizado (Rápido)
+// ==========================================
+const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
+  const [title, setTitle] = useState('');
+  const [type, setType] = useState('quantity'); // 'quantity' | 'weight'
+  const [price, setPrice] = useState(''); // Precio unitario o por Kg
+  const [amount, setAmount] = useState(''); // Cantidad o Gramos
+
+  if (!isOpen) return null;
+
+  const p = Number(price) || 0;
+  const a = Number(amount) || 0;
+  const isValid = title.trim().length > 0 && p > 0 && a > 0;
+  
+  // Cálculo del subtotal estimado
+  const totalEstimado = type === 'quantity' ? (p * a) : ((p / 1000) * a);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!isValid) return;
+
+    // Generamos un ID único para que cada producto personalizado sea independiente en el carrito
+    const customId = `custom_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    
+    const customProduct = {
+      id: customId,
+      title: `* ${title.trim()}`, // El asterisco ayuda a identificarlo como personalizado en reportes
+      price: type === 'weight' ? p / 1000 : p,
+      product_type: type,
+      stock: 999999, // Stock infinito para que el carrito no bloquee
+      isCustom: true
+    };
+
+    onConfirm(customProduct, a);
+    
+    // Limpieza
+    setTitle('');
+    setType('quantity');
+    setPrice('');
+    setAmount('');
+    onClose();
+  };
+
+  return (
+    <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden border border-slate-200">
+        <div className="p-4 bg-fuchsia-50 border-b border-fuchsia-100 flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <Wand2 size={18} className="text-fuchsia-600" />
+            <h3 className="font-bold text-fuchsia-800">Artículo Personalizado</h3>
+          </div>
+          <button onClick={onClose}><X size={18} className="text-fuchsia-400 hover:text-fuchsia-600" /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Nombre del Artículo *</label>
+            <input 
+              type="text" 
+              autoFocus 
+              required
+              placeholder="Ej: Globo suelto" 
+              className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:ring-2 focus:ring-fuchsia-500 focus:border-fuchsia-500 outline-none font-bold text-slate-800" 
+              value={title} 
+              onChange={(e) => setTitle(e.target.value)} 
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Tipo de Venta</label>
+            <div className="flex bg-slate-100 p-1 rounded-lg border h-[42px] items-center">
+              <button
+                type="button"
+                onClick={() => { setType('quantity'); setAmount(''); setPrice(''); }}
+                className={`flex-1 h-full rounded-md text-sm font-bold transition-all flex items-center justify-center gap-1 ${type === 'quantity' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+              >
+                <Package size={14}/> Unidad
+              </button>
+              <button
+                type="button"
+                onClick={() => { setType('weight'); setAmount(''); setPrice(''); }}
+                className={`flex-1 h-full rounded-md text-sm font-bold transition-all flex items-center justify-center gap-1 ${type === 'weight' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+              >
+                <Scale size={14}/> Peso
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
+                {type === 'quantity' ? 'Precio Unit. ($)' : 'Precio x Kg ($)'} *
+              </label>
+              <input 
+                type="number" 
+                min="1" 
+                step="1" 
+                required
+                placeholder="0" 
+                className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-bold text-slate-800" 
+                value={price} 
+                onChange={(e) => setPrice(e.target.value)} 
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
+                {type === 'quantity' ? 'Cantidad (u)' : 'Peso (gramos)'} *
+              </label>
+              <input 
+                type="number" 
+                min="1" 
+                step="1" 
+                required
+                placeholder="0" 
+                className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-bold text-slate-800" 
+                value={amount} 
+                onChange={(e) => setAmount(e.target.value)} 
+              />
+            </div>
+          </div>
+
+          {totalEstimado > 0 && (
+            <div className="bg-slate-50 rounded-xl p-3 border text-center mt-2">
+              <p className="text-[10px] text-slate-400 uppercase font-bold">Total del artículo</p>
+              <p className="text-2xl font-black text-slate-900">{formatCurrency(totalEstimado)}</p>
+            </div>
+          )}
+
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose} className="flex-1 py-3 rounded-xl font-bold border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors">Cancelar</button>
+            <button type="submit" disabled={!isValid} className={`flex-1 py-3 rounded-xl font-bold transition-colors ${isValid ? 'bg-fuchsia-600 text-white hover:bg-fuchsia-700 shadow-md' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
+              Agregar al Carrito
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
@@ -115,9 +254,19 @@ export default function POSView({
   const [weightModalProduct, setWeightModalProduct] = useState(null);
   const [editingWeightItemId, setEditingWeightItemId] = useState(null);
   const [editingWeightValue, setEditingWeightValue] = useState('');
+  
+  const [isCustomModalOpen, setIsCustomModalOpen] = useState(false);
+
+  // ✨ LAZY RENDERING (Igual que en Inventario)
+  const [visibleCount, setVisibleCount] = useState(40);
+
+  // Reseteamos el conteo si el usuario busca o filtra
+  useEffect(() => {
+    setVisibleCount(40);
+  }, [posSearch, selectedCategory]);
 
   const getEffectiveStock = (productId, originalStock) => {
-    const itemInCart = cart.find(item => item.id === productId && !item.isReward);
+    const itemInCart = cart.find(item => item.id === productId && !item.isReward && !item.isCustom);
     const qtyInCart = itemInCart ? itemInCart.quantity : 0;
     return originalStock - qtyInCart;
   };
@@ -137,6 +286,10 @@ export default function POSView({
       addToCart(weightModalProduct, grams);
       setWeightModalProduct(null);
     }
+  };
+
+  const handleCustomConfirm = (customProduct, amount) => {
+    addToCart(customProduct, amount);
   };
 
   const handleSaveWeightEdit = (itemId) => {
@@ -185,6 +338,19 @@ export default function POSView({
     return matchesSearch && matchesCategory;
   });
 
+  // ✨ Detectar scroll infinito para ir agregando más productos a la vista
+  const handleScroll = (e) => {
+    const { scrollTop, clientHeight, scrollHeight } = e.target;
+    if (scrollHeight - scrollTop <= clientHeight + 400) {
+      if (visibleCount < filteredProducts.length) {
+        setVisibleCount((prev) => prev + 40);
+      }
+    }
+  };
+
+  // ✨ Cortar la lista de productos real a renderizar
+  const displayedProducts = filteredProducts.slice(0, visibleCount);
+
   const subtotal = cart.reduce((t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
   const total = calculateTotal();
   const pointsToEarn = Math.floor(Math.max(0, total) / 500);
@@ -230,89 +396,124 @@ export default function POSView({
           </div>
         </div>
 
-        {/* Grid Productos */}
-        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-slate-100/50">
-          {filteredProducts.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-slate-400 mt-10"><Package size={48} className="mb-3 opacity-50" /><p>No se encontraron productos</p></div>
+        {/* Grid / Lista de Productos con onScroll */}
+        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-slate-100/50" onScroll={handleScroll}>
+          
+          {posViewMode === 'grid' ? (
+            <div className="grid gap-3 transition-all duration-300" style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}>
+              
+              {/* ✨ TARJETA: ARTÍCULO PERSONALIZADO (GRILLA) - SIEMPRE PRIMERA */}
+              <button
+                onClick={() => setIsCustomModalOpen(true)}
+                className="group bg-fuchsia-50 border-2 border-dashed border-fuchsia-300 rounded-xl overflow-hidden shadow-sm hover:shadow-md hover:bg-fuchsia-100 hover:border-fuchsia-400 transition-all text-center flex flex-col items-center justify-center min-h-[140px] active:scale-[0.98]"
+              >
+                <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm mb-2 text-fuchsia-500 group-hover:scale-110 transition-transform">
+                  <Wand2 size={24} />
+                </div>
+                <span className={`font-bold text-fuchsia-700 leading-snug px-2 ${gridColumns > 6 ? 'text-[11px]' : 'text-sm'}`}>Artículo Libre</span>
+                <span className={`text-fuchsia-500 mt-1 ${gridColumns > 6 ? 'text-[9px]' : 'text-[10px]'}`}>Precio manual</span>
+              </button>
+
+              {/* ✨ Cambiamos filteredProducts por displayedProducts */}
+              {displayedProducts.map((product) => {
+                const effectiveStock = getEffectiveStock(product.id, product.stock);
+                const isOutOfStock = effectiveStock <= 0;
+                const isWeight = product.product_type === 'weight';
+                let stockBadgeClass = effectiveStock > (isWeight ? 500 : 10) ? 'bg-green-100 text-green-700' : effectiveStock > (isWeight ? 100 : 5) ? 'bg-amber-100 text-amber-700' : effectiveStock > 0 ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-500';
+                
+                return (
+                  <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`group bg-white border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all text-left flex flex-col relative ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed' : 'hover:border-fuchsia-300 active:scale-[0.98]'}`}>
+                    <div className="aspect-[4/3] bg-slate-50 relative overflow-hidden w-full">
+                      {product.image ? (<img src={product.image} alt={product.title} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-500" />) : (<div className="w-full h-full flex flex-col items-center justify-center bg-slate-200/50 p-2 text-center group-hover:bg-slate-200 transition-colors"><span className={`font-bold text-slate-500 uppercase leading-tight ${gridColumns > 6 ? 'text-[10px]' : 'text-xs'}`}>{product.title}</span></div>)}
+                      <div className={`absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold shadow-sm backdrop-blur-sm ${stockBadgeClass}`}>
+                        {isOutOfStock ? 'SIN STOCK' : (isWeight ? formatWeight(effectiveStock) : `${effectiveStock} u.`)}
+                      </div>
+                      {isWeight && !isOutOfStock && (
+                        <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-500 text-white text-[9px] font-bold shadow-sm flex items-center gap-0.5">
+                          <Scale size={8} /> PESO
+                        </div>
+                      )}
+                    </div>
+                    <div className={`flex flex-col flex-1 w-full ${gridColumns > 6 ? 'p-2' : 'p-3'}`}>
+                      <h3 className={`font-bold text-slate-800 leading-snug mb-1 line-clamp-2 ${gridColumns > 6 ? 'text-[11px]' : 'text-sm'}`}>{product.title}</h3>
+                      <div className="mt-auto pt-2 flex items-end justify-between">
+                        <span className={`font-bold text-fuchsia-600 ${gridColumns > 6 ? 'text-sm' : 'text-lg'}`}>
+                          {isWeight ? (
+                            <>{formatCurrency(product.price * 1000)}<span className="text-[10px] font-medium text-fuchsia-400">/kg</span></>
+                          ) : (
+                            <>{formatCurrency(product.price)}</>
+                          )}
+                        </span>
+                        <div className={`w-6 h-6 rounded-full ${isWeight ? 'bg-amber-500' : 'bg-slate-900'} text-white flex items-center justify-center shadow-lg transition-colors ${gridColumns > 8 || isOutOfStock ? 'hidden' : 'flex'}`}>
+                          {isWeight ? <Scale size={10} /> : <Plus size={12} />}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           ) : (
-            <>
-              {posViewMode === 'grid' ? (
-                <div className="grid gap-3 transition-all duration-300" style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}>
-                  {filteredProducts.map((product) => {
-                    const effectiveStock = getEffectiveStock(product.id, product.stock);
-                    const isOutOfStock = effectiveStock <= 0;
-                    const isWeight = product.product_type === 'weight';
-                    let stockBadgeClass = effectiveStock > (isWeight ? 500 : 10) ? 'bg-green-100 text-green-700' : effectiveStock > (isWeight ? 100 : 5) ? 'bg-amber-100 text-amber-700' : effectiveStock > 0 ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-500';
-                    
-                    return (
-                      <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`group bg-white border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all text-left flex flex-col relative ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed' : 'hover:border-fuchsia-300 active:scale-[0.98]'}`}>
-                        <div className="aspect-[4/3] bg-slate-50 relative overflow-hidden w-full">
-                          {product.image ? (<img src={product.image} alt={product.title} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-500" />) : (<div className="w-full h-full flex flex-col items-center justify-center bg-slate-200/50 p-2 text-center group-hover:bg-slate-200 transition-colors"><span className={`font-bold text-slate-500 uppercase leading-tight ${gridColumns > 6 ? 'text-[10px]' : 'text-xs'}`}>{product.title}</span></div>)}
-                          <div className={`absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold shadow-sm backdrop-blur-sm ${stockBadgeClass}`}>
-                            {isOutOfStock ? 'SIN STOCK' : (isWeight ? formatWeight(effectiveStock) : `${effectiveStock} u.`)}
-                          </div>
-                          {isWeight && !isOutOfStock && (
-                            <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-500 text-white text-[9px] font-bold shadow-sm flex items-center gap-0.5">
-                              <Scale size={8} /> PESO
-                            </div>
-                          )}
-                        </div>
-                        <div className={`flex flex-col flex-1 w-full ${gridColumns > 6 ? 'p-2' : 'p-3'}`}>
-                          <h3 className={`font-bold text-slate-800 leading-snug mb-1 line-clamp-2 ${gridColumns > 6 ? 'text-[11px]' : 'text-sm'}`}>{product.title}</h3>
-                          <div className="mt-auto pt-2 flex items-end justify-between">
-                            <span className={`font-bold text-fuchsia-600 ${gridColumns > 6 ? 'text-sm' : 'text-lg'}`}>
-                              {isWeight ? (
-                                /* ♻️ FIX: formatCurrency a los precios en grilla */
-                                <>{formatCurrency(product.price * 1000)}<span className="text-[10px] font-medium text-fuchsia-400">/kg</span></>
-                              ) : (
-                                <>{formatCurrency(product.price)}</>
-                              )}
-                            </span>
-                            <div className={`w-6 h-6 rounded-full ${isWeight ? 'bg-amber-500' : 'bg-slate-900'} text-white flex items-center justify-center shadow-lg transition-colors ${gridColumns > 8 || isOutOfStock ? 'hidden' : 'flex'}`}>
-                              {isWeight ? <Scale size={10} /> : <Plus size={12} />}
-                            </div>
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
+            <div className="flex flex-col gap-2">
+              
+              {/* ✨ TARJETA: ARTÍCULO PERSONALIZADO (LISTA) - SIEMPRE PRIMERA */}
+              <button
+                onClick={() => setIsCustomModalOpen(true)}
+                className="flex items-center gap-3 p-3 bg-fuchsia-50 border-2 border-dashed border-fuchsia-300 rounded-xl shadow-sm hover:shadow-md hover:bg-fuchsia-100 transition-all text-left group active:scale-[0.99]"
+              >
+                <div className="w-12 h-12 rounded-lg bg-white flex items-center justify-center shrink-0 border border-fuchsia-200 text-fuchsia-500 group-hover:scale-110 transition-transform">
+                   <Wand2 size={24} />
                 </div>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {filteredProducts.map((product) => {
-                    const effectiveStock = getEffectiveStock(product.id, product.stock);
-                    const isOutOfStock = effectiveStock <= 0;
-                    const isWeight = product.product_type === 'weight';
-                    return (
-                      <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`flex items-center gap-3 p-3 bg-white border rounded-xl shadow-sm hover:shadow-md transition-all text-left group ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed bg-slate-50' : 'hover:border-fuchsia-300 active:scale-[0.99]'}`}>
-                        <div className="w-12 h-12 rounded-lg bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border relative">
-                          {product.image ? (<img src={product.image} alt="" className="w-full h-full object-cover" />) : (<div className="w-full h-full flex items-center justify-center bg-slate-200 text-[8px] font-bold text-slate-500 p-1 text-center leading-none">{product.title.slice(0, 8)}..</div>)}
-                          {isWeight && <div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-1 py-0.5"><Scale size={8} className="text-white" /></div>}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h4 className="font-bold text-slate-800 text-sm truncate">{product.title}</h4>
-                          {isWeight && <span className="text-[10px] text-amber-600 font-bold">Producto por peso</span>}
-                        </div>
-                        <div className="text-right flex items-center gap-4">
-                          <div className="w-20 text-right">
-                            <p className="font-bold text-lg text-fuchsia-600">
-                              {/* ♻️ FIX: formatCurrency a los precios en lista */}
-                              {isWeight ? formatCurrency(product.price * 1000) : formatCurrency(product.price)}
-                              {isWeight && <span className="text-[10px] font-medium">/kg</span>}
-                            </p>
-                          </div>
-                          {!isOutOfStock && (
-                            <div className={`w-8 h-8 rounded-full ${isWeight ? 'bg-amber-100 text-amber-600 group-hover:bg-amber-500' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-900'} group-hover:text-white flex items-center justify-center transition-colors`}>
-                              {isWeight ? <Scale size={14} /> : <Plus size={16} />}
-                            </div>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
+                <div className="flex-1 min-w-0">
+                  <h4 className="font-bold text-fuchsia-800 text-sm">Artículo Personalizado Libre</h4>
+                  <span className="text-[10px] text-fuchsia-600 font-medium">Ingresar nombre y precio de forma manual</span>
                 </div>
-              )}
-            </>
+                <div className="text-right flex items-center gap-4">
+                   <div className="w-8 h-8 rounded-full bg-fuchsia-200 text-fuchsia-700 flex items-center justify-center">
+                     <Plus size={16} />
+                   </div>
+                </div>
+              </button>
+
+              {/* ✨ Cambiamos filteredProducts por displayedProducts */}
+              {displayedProducts.map((product) => {
+                const effectiveStock = getEffectiveStock(product.id, product.stock);
+                const isOutOfStock = effectiveStock <= 0;
+                const isWeight = product.product_type === 'weight';
+                return (
+                  <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`flex items-center gap-3 p-3 bg-white border rounded-xl shadow-sm hover:shadow-md transition-all text-left group ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed bg-slate-50' : 'hover:border-fuchsia-300 active:scale-[0.99]'}`}>
+                    <div className="w-12 h-12 rounded-lg bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border relative">
+                      {product.image ? (<img src={product.image} alt="" className="w-full h-full object-cover" />) : (<div className="w-full h-full flex items-center justify-center bg-slate-200 text-[8px] font-bold text-slate-500 p-1 text-center leading-none">{product.title.slice(0, 8)}..</div>)}
+                      {isWeight && <div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-1 py-0.5"><Scale size={8} className="text-white" /></div>}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-bold text-slate-800 text-sm truncate">{product.title}</h4>
+                      {isWeight && <span className="text-[10px] text-amber-600 font-bold">Producto por peso</span>}
+                    </div>
+                    <div className="text-right flex items-center gap-4">
+                      <div className="w-20 text-right">
+                        <p className="font-bold text-lg text-fuchsia-600">
+                          {isWeight ? formatCurrency(product.price * 1000) : formatCurrency(product.price)}
+                          {isWeight && <span className="text-[10px] font-medium">/kg</span>}
+                        </p>
+                      </div>
+                      {!isOutOfStock && (
+                        <div className={`w-8 h-8 rounded-full ${isWeight ? 'bg-amber-100 text-amber-600 group-hover:bg-amber-500' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-900'} group-hover:text-white flex items-center justify-center transition-colors`}>
+                          {isWeight ? <Scale size={14} /> : <Plus size={16} />}
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {filteredProducts.length === 0 && (
+             <div className="mt-10 flex flex-col items-center justify-center text-slate-400">
+                <Package size={48} className="mb-3 opacity-50" />
+                <p>No se encontraron productos en el inventario</p>
+             </div>
           )}
         </div>
       </div>
@@ -339,17 +540,26 @@ export default function POSView({
             cart.map((item) => {
               const isWeight = item.product_type === 'weight';
               const isEditingWeight = editingWeightItemId === item.id;
+              const isCustom = item.isCustom;
 
               return (
-                <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`flex gap-3 p-3 rounded-xl border shadow-sm transition-colors group ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : 'bg-white hover:border-fuchsia-200'}`}>
-                  <div className="w-14 h-14 bg-slate-50 rounded-lg overflow-hidden shrink-0 border relative">
-                    {item.image ? (<img src={item.image} alt="" className="w-full h-full object-cover" />) : (<div className="w-full h-full flex items-center justify-center bg-slate-100 text-[9px] font-bold text-slate-400 text-center p-1 leading-none">{item.title.slice(0,12)}..</div>)}
+                <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`flex gap-3 p-3 rounded-xl border shadow-sm transition-colors group ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : isCustom ? 'bg-indigo-50/40 border-indigo-100' : 'bg-white hover:border-fuchsia-200'}`}>
+                  <div className="w-14 h-14 bg-slate-50 rounded-lg overflow-hidden shrink-0 border relative flex items-center justify-center">
+                    {item.image ? (
+                      <img src={item.image} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      isCustom ? (
+                         <Wand2 size={20} className="text-indigo-400" />
+                      ) : (
+                         <div className="w-full h-full flex items-center justify-center bg-slate-100 text-[9px] font-bold text-slate-400 text-center p-1 leading-none">{item.title.slice(0,12)}..</div>
+                      )
+                    )}
                     {isWeight && <div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-0.5 py-0.5"><Scale size={7} className="text-white" /></div>}
                   </div>
                   
                   <div className="flex-1 min-w-0 flex flex-col justify-between">
                     <div className="flex justify-between items-start gap-2">
-                      <h4 className={`font-bold text-sm line-clamp-1 leading-tight ${item.isReward ? 'text-fuchsia-700' : 'text-slate-800'}`}>
+                      <h4 className={`font-bold text-sm line-clamp-1 leading-tight ${item.isReward ? 'text-fuchsia-700' : isCustom ? 'text-indigo-800' : 'text-slate-800'}`}>
                         {item.isReward && <Gift size={12} className="inline mr-1 text-fuchsia-500" />}
                         {item.title}
                       </h4>
@@ -380,7 +590,6 @@ export default function POSView({
                         </div>
                       )}
                       <p className={`font-bold ${item.isReward ? 'text-fuchsia-600' : 'text-slate-800'}`}>
-                        {/* ♻️ FIX: formatCurrency en el subtotal del item del carrito */}
                         {item.isReward ? 'GRATIS' : formatCurrency(item.price * item.quantity)}
                       </p>
                     </div>
@@ -451,7 +660,6 @@ export default function POSView({
           )}
 
           <div className="space-y-1 pt-2 border-t border-slate-200">
-            {/* ♻️ FIX: formatCurrency en subtotales y totales */}
             <div className="flex justify-between text-xs text-slate-500"><span>Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
             {selectedPayment === 'Credito' && (<div className="flex justify-between text-xs text-amber-600 font-bold"><span>Recargo (10%)</span><span>+{formatCurrency(subtotal * 0.1)}</span></div>)}
             <div className="flex justify-between items-end pt-2">
@@ -467,7 +675,7 @@ export default function POSView({
         </div>
       </div>
 
-      {/* Modal peso */}
+      {/* Modales */}
       {weightModalProduct && (
         <WeightInputModal
           product={weightModalProduct}
@@ -477,7 +685,14 @@ export default function POSView({
         />
       )}
 
-      {/* Modal Check Socio */}
+      {isCustomModalOpen && (
+        <CustomProductModal 
+          isOpen={isCustomModalOpen} 
+          onClose={() => setIsCustomModalOpen(false)} 
+          onConfirm={handleCustomConfirm} 
+        />
+      )}
+
       {showClientCheckModal && (
         <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 text-center border border-slate-200">

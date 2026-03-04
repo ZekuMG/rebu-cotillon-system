@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+// src/views/InventoryView.jsx
+import React, { useState, useEffect } from 'react';
 import {
   Search,
   Plus,
@@ -15,8 +16,8 @@ import {
   LayoutGrid,
   List,
   Scale,
+  PackageX
 } from 'lucide-react';
-// ♻️ FIX: Importamos los formateadores oficiales
 import { formatStock, formatCurrency, formatNumber } from '../utils/helpers';
 
 export default function InventoryView({
@@ -28,6 +29,15 @@ export default function InventoryView({
 }) {
   const [selectedProduct, setSelectedProduct] = useState(null); 
   const [showGridMenu, setShowGridMenu] = useState(false);
+  const [showOnlyOutOfStock, setShowOnlyOutOfStock] = useState(false);
+
+  // ✨ NUEVO ESTADO: Cantidad de productos visibles (para el renderizado diferido)
+  const [visibleCount, setVisibleCount] = useState(40);
+
+  // ✨ NUEVO EFECTO: Si el usuario busca o filtra, volvemos a mostrar solo los primeros 40
+  useEffect(() => {
+    setVisibleCount(40);
+  }, [inventorySearch, inventoryCategoryFilter, showOnlyOutOfStock]);
 
   const filteredInventory = (inventory || []).filter((item) => {
     const searchString = (inventorySearch || '').toLowerCase().trim();
@@ -44,9 +54,25 @@ export default function InventoryView({
       (Array.isArray(item.categories)
         ? item.categories.includes(inventoryCategoryFilter)
         : item.category === inventoryCategoryFilter);
+    
+    const matchesStock = showOnlyOutOfStock ? (Number(item.stock) === 0) : true;
         
-    return matchesSearch && matchesCategory;
+    return matchesSearch && matchesCategory && matchesStock;
   });
+
+  // ✨ NUEVA FUNCIÓN: Detecta cuando el usuario scrollea cerca del fondo
+  const handleScroll = (e) => {
+    const { scrollTop, clientHeight, scrollHeight } = e.target;
+    // Si estamos a menos de 400px del fondo de la lista, cargamos 40 más
+    if (scrollHeight - scrollTop <= clientHeight + 400) {
+      if (visibleCount < filteredInventory.length) {
+        setVisibleCount((prev) => prev + 40);
+      }
+    }
+  };
+
+  // ✨ Cortamos la lista para mostrar solo los que el scroll permite
+  const displayedInventory = filteredInventory.slice(0, visibleCount);
 
   const handleCardClick = (product) => {
     if (selectedProduct && selectedProduct.id === product.id) {
@@ -85,6 +111,7 @@ export default function InventoryView({
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
               <input type="text" placeholder="Buscar producto..." className="w-full pl-10 pr-4 py-2 border rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-fuchsia-500 outline-none transition-all" value={inventorySearch} onChange={(e) => setInventorySearch(e.target.value)} />
             </div>
+            
             <div className="relative">
               <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
               <select className="pl-9 pr-8 py-2 border rounded-lg bg-slate-50 text-sm focus:ring-2 focus:ring-fuchsia-500 outline-none appearance-none cursor-pointer" value={inventoryCategoryFilter} onChange={(e) => setInventoryCategoryFilter(e.target.value)}>
@@ -92,7 +119,22 @@ export default function InventoryView({
                 {categories.map((cat) => (<option key={cat} value={cat}>{cat}</option>))}
               </select>
             </div>
+
+            <button
+              onClick={() => setShowOnlyOutOfStock(!showOnlyOutOfStock)}
+              title="Mostrar solo productos agotados"
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-bold transition-all ${
+                showOnlyOutOfStock 
+                  ? 'bg-red-50 border-red-200 text-red-600 shadow-inner' 
+                  : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700'
+              }`}
+            >
+              <PackageX size={16} className={showOnlyOutOfStock ? 'text-red-500' : 'text-slate-400'} />
+              <span className="hidden sm:inline">Sin Stock</span>
+            </button>
+
           </div>
+
           <div className="flex items-center gap-3">
             {inventoryViewMode === 'grid' && (
               <div className="relative">
@@ -119,16 +161,31 @@ export default function InventoryView({
           </div>
         </div>
 
-        {/* Grid */}
-        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+        {/* ✨ Contenedor con onScroll */}
+        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar" onScroll={handleScroll}>
           {filteredInventory.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-slate-400"><Package size={64} className="mb-4 text-slate-300" /><p className="text-lg font-medium">No se encontraron productos</p><p className="text-sm">Intenta con otra búsqueda o categoría</p></div>
+            <div className="h-full flex flex-col items-center justify-center text-slate-400">
+              {showOnlyOutOfStock ? (
+                <>
+                  <CheckCircle size={64} className="mb-4 text-green-400 opacity-80" />
+                  <p className="text-lg font-bold text-slate-600">¡Todo en orden!</p>
+                  <p className="text-sm">No tienes ningún producto agotado en esta vista.</p>
+                </>
+              ) : (
+                <>
+                  <Package size={64} className="mb-4 text-slate-300" />
+                  <p className="text-lg font-medium">No se encontraron productos</p>
+                  <p className="text-sm">Intenta con otra búsqueda o categoría</p>
+                </>
+              )}
+            </div>
           ) : (
             <>
               {/* VISTA GRID */}
               {inventoryViewMode === 'grid' ? (
                 <div className="grid gap-3 transition-all duration-300" style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}>
-                  {filteredInventory.map((product) => {
+                  {/* ✨ Usamos displayedInventory en lugar de filteredInventory */}
+                  {displayedInventory.map((product) => {
                     const isSelected = selectedProduct?.id === product.id;
                     const stockColor = getStockColorClass(product);
                     const outOfStock = isOutOfStock(product);
@@ -175,7 +232,6 @@ export default function InventoryView({
                           <div className={`flex justify-between items-end mt-auto ${gridColumns > 7 ? 'pt-1' : 'pt-2 border-t border-slate-100'}`}>
                             <div>
                               {gridColumns <= 6 && <p className="text-[10px] text-slate-400">Precio</p>}
-                              {/* ♻️ FIX: Aplicamos formatCurrency y calculamos precio/kg si es necesario */}
                               <p className={`font-bold text-slate-900 ${gridColumns > 7 ? 'text-xs' : 'text-lg'}`}>
                                 {formatCurrency(isWeight ? product.price * 1000 : product.price)}
                                 {isWeight && <span className="text-[9px] font-medium text-slate-400">/kg</span>}
@@ -198,7 +254,8 @@ export default function InventoryView({
               ) : (
                 /* VISTA LISTA */
                 <div className="flex flex-col gap-2">
-                  {filteredInventory.map((product) => {
+                  {/* ✨ Usamos displayedInventory en lugar de filteredInventory */}
+                  {displayedInventory.map((product) => {
                     const isSelected = selectedProduct?.id === product.id;
                     const stockColor = getStockColorClass(product);
                     const outOfStock = isOutOfStock(product);
@@ -238,7 +295,6 @@ export default function InventoryView({
                             </div>
                             <div className="text-right w-24">
                                 <p className="text-[10px] text-slate-400 uppercase font-bold">Precio</p>
-                                {/* ♻️ FIX: Aplicamos formatCurrency en modo lista */}
                                 <p className="font-bold text-lg text-fuchsia-600">
                                   {formatCurrency(isWeight ? product.price * 1000 : product.price)}
                                   {isWeight && <span className="text-[10px] font-medium">/kg</span>}
@@ -311,7 +367,6 @@ export default function InventoryView({
                   <DollarSign size={16} />
                   <span className="text-xs font-bold uppercase">Precio</span>
                 </div>
-                {/* ♻️ FIX: Aplicamos formatCurrency en el Panel Lateral */}
                 <p className="text-2xl font-bold text-green-900">
                   {formatCurrency(isWeight ? selectedProduct.price * 1000 : selectedProduct.price)}
                   {isWeight && <span className="text-sm font-medium">/kg</span>}
@@ -326,12 +381,10 @@ export default function InventoryView({
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div className="bg-white rounded-lg p-2 text-center border">
                     <p className="text-[10px] text-slate-400">Precio/g</p>
-                    {/* ♻️ FIX: formatCurrency al precio por gramo */}
                     <p className="font-bold text-amber-700">{formatCurrency(selectedProduct.price)}</p>
                   </div>
                   <div className="bg-white rounded-lg p-2 text-center border">
                     <p className="text-[10px] text-slate-400">Stock en kg</p>
-                    {/* ♻️ FIX: formatNumber a los kilogramos */}
                     <p className="font-bold text-amber-700">{formatNumber(Number(selectedProduct.stock) / 1000, 2)} kg</p>
                   </div>
                 </div>
@@ -348,7 +401,6 @@ export default function InventoryView({
                 <>
                   <div className="flex justify-between items-center text-sm border-b border-slate-200 pb-2">
                     <span className="text-slate-500 flex items-center gap-2"><DollarSign size={14} /> Costo</span>
-                    {/* ♻️ FIX: formatCurrency al Costo (multiplicado si es por kg) */}
                     <span className="font-bold text-slate-700">
                       {formatCurrency(isWeight ? (selectedProduct.purchasePrice * 1000) : (selectedProduct.purchasePrice || 0))}
                       {isWeight && <span className="text-xs text-slate-400">/kg</span>}

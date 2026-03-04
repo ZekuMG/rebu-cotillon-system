@@ -1058,6 +1058,43 @@ const handleEditTransactionRequest = (tx) => {
           return dailyLogs.filter(l => l.date === todayStr && l.action === 'Nuevo Socio').map(l => ({ name: l.details?.name, number: l.details?.number, time: l.timestamp || l.time }));
         })();
 
+
+    // ✨ NUEVO: Pregunta de validación antes de hacer nada en la base de datos
+    let shouldSaveReport = true;
+    
+    if (!isAuto) {
+        // Ocultamos el modal de resumen para que se vea bien la alerta
+        setIsClosingCashModalOpen(false);
+
+        const result = await Swal.fire({
+            title: '¿Generar informe de caja?',
+            text: 'Si estás haciendo pruebas, podés elegir "Solo cerrar caja" para vaciarla sin guardar el reporte en tu historial.',
+            icon: 'question',
+            showCancelButton: true,
+            showDenyButton: true,
+            confirmButtonColor: '#10b981', // Verde
+            denyButtonColor: '#64748b',    // Gris
+            cancelButtonColor: '#ef4444',  // Rojo
+            confirmButtonText: 'Sí, generar reporte',
+            denyButtonText: 'No, solo cerrar caja',
+            cancelButtonText: 'Cancelar cierre'
+        });
+
+        if (result.isDismissed) {
+            // El usuario canceló la operación, no hacemos nada.
+            return;
+        }
+        
+        if (result.isDenied) {
+            // El usuario quiere cerrar la caja pero SIN generar reporte
+            shouldSaveReport = false;
+        }
+
+        // Reactivamos el loading para el proceso de base de datos
+        Swal.fire({ title: 'Procesando cierre...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    }
+
+
     try {
         const { data: lockData, error: lockError } = await supabase
             .from('register_state')
@@ -1084,78 +1121,91 @@ const handleEditTransactionRequest = (tx) => {
             return;
         }
 
-        const openTime = registerOpenedAt 
-          ? formatTimeFullAR(new Date(registerOpenedAt))
-          : (dailyLogs.find(l => l.action === 'Apertura de Caja')?.timestamp || '--:--');
-        const closeTime = formatTimeFullAR(closeDate);
-        const user = currentUser?.name || 'Automático';
-        const type = isAuto ? 'Automático' : 'Manual';
+        // ✨ NUEVO: Solo guardamos en "cash_closures" si el usuario eligió generar el reporte
+        if (shouldSaveReport) {
+            const openTime = registerOpenedAt 
+              ? formatTimeFullAR(new Date(registerOpenedAt))
+              : (dailyLogs.find(l => l.action === 'Apertura de Caja')?.timestamp || '--:--');
+            const closeTime = formatTimeFullAR(closeDate);
+            const user = currentUser?.name || 'Automático';
+            const type = isAuto ? 'Automático' : 'Manual';
 
-        const payload = {
-            date: formatDateAR(closeDate),
-            open_time: openTime,
-            close_time: closeTime,
-            user_name: user,
-            type: type,
-            opening_balance: openingBalance,
-            total_sales: cycleTotalSales,
-            final_balance: finalPhysicalBalance,
-            total_cost: totalCost,
-            total_expenses: totalExpenses,
-            net_profit: netProfit,
-            sales_count: cycleSalesCount,
-            average_ticket: averageTicket,
-            payment_methods_summary: paymentMethodsSummary,
-            items_sold_list: itemsSoldList,
-            new_clients_list: cycleNewClients,
-            expenses_snapshot: cycleExpenses,
-            transactions_snapshot: cycleTransactions
-        };
+            const payload = {
+                date: formatDateAR(closeDate),
+                open_time: openTime,
+                close_time: closeTime,
+                user_name: user,
+                type: type,
+                opening_balance: openingBalance,
+                total_sales: cycleTotalSales,
+                final_balance: finalPhysicalBalance,
+                total_cost: totalCost,
+                total_expenses: totalExpenses,
+                net_profit: netProfit,
+                sales_count: cycleSalesCount,
+                average_ticket: averageTicket,
+                payment_methods_summary: paymentMethodsSummary,
+                items_sold_list: itemsSoldList,
+                new_clients_list: cycleNewClients,
+                expenses_snapshot: cycleExpenses,
+                transactions_snapshot: cycleTransactions
+            };
 
-        const { data: savedReport, error } = await supabase.from('cash_closures').insert([payload]).select().single();
-        if (error) throw error;
+            const { data: savedReport, error } = await supabase.from('cash_closures').insert([payload]).select().single();
+            if (error) throw error;
 
-        const adaptedReport = {
-            id: savedReport.id,
-            date: savedReport.date,
-            openTime: savedReport.open_time,
-            closeTime: savedReport.close_time,
-            user: savedReport.user_name,
-            type: savedReport.type,
-            openingBalance: Number(savedReport.opening_balance),
-            totalSales: Number(savedReport.total_sales),
-            finalBalance: Number(savedReport.final_balance),
-            totalCost: Number(savedReport.total_cost),
-            totalExpenses: Number(savedReport.total_expenses),
-            netProfit: Number(savedReport.net_profit),
-            salesCount: savedReport.sales_count,
-            averageTicket: Number(savedReport.average_ticket),
-            paymentMethods: savedReport.payment_methods_summary,
-            itemsSold: savedReport.items_sold_list,
-            newClients: savedReport.new_clients_list,
-            expensesSnapshot: savedReport.expenses_snapshot,
-            transactionsSnapshot: savedReport.transactions_snapshot
-        };
+            const adaptedReport = {
+                id: savedReport.id,
+                date: savedReport.date,
+                openTime: savedReport.open_time,
+                closeTime: savedReport.close_time,
+                user: savedReport.user_name,
+                type: savedReport.type,
+                openingBalance: Number(savedReport.opening_balance),
+                totalSales: Number(savedReport.total_sales),
+                finalBalance: Number(savedReport.final_balance),
+                totalCost: Number(savedReport.total_cost),
+                totalExpenses: Number(savedReport.total_expenses),
+                netProfit: Number(savedReport.net_profit),
+                salesCount: savedReport.sales_count,
+                averageTicket: Number(savedReport.average_ticket),
+                paymentMethods: savedReport.payment_methods_summary,
+                itemsSold: savedReport.items_sold_list,
+                newClients: savedReport.new_clients_list,
+                expensesSnapshot: savedReport.expenses_snapshot,
+                transactionsSnapshot: savedReport.transactions_snapshot
+            };
 
-        setPastClosures([adaptedReport, ...pastClosures]);
+            setPastClosures([adaptedReport, ...pastClosures]);
+        }
         
+        // Limpiamos el estado local (haya querido guardar reporte o no)
         setIsRegisterClosed(true);
         setRegisterOpenedAt(null);
-        addLog('Cierre de Caja', { totalSales: cycleTotalSales, salesCount: cycleSalesCount, reportId: savedReport.id }, isAuto ? 'Automático' : 'Manual');
+        
+        // Registramos el log indicando si fue un cierre real o de prueba
+        const logMsg = shouldSaveReport ? 'Cierre de Caja' : 'Cierre de Caja (Modo Prueba)';
+        addLog(logMsg, { totalSales: cycleTotalSales, salesCount: cycleSalesCount }, isAuto ? 'Automático' : 'Manual');
+        
         setTransactions([]);
         setExpenses([]); 
-        setIsClosingCashModalOpen(false);
-        if (isAuto) setIsAutoCloseAlertOpen(true);
         
-        showNotification('success', 'Reporte Generado', 'Se ha guardado el reporte del día en la nube.');
+        if (isAuto) setIsAutoCloseAlertOpen(true);
+        Swal.close();
+        
+        if (shouldSaveReport) {
+            showNotification('success', 'Reporte Generado', 'Se ha guardado el reporte del día en la nube.');
+        } else {
+            showNotification('info', 'Caja Vaciada', 'Se cerró la caja sin dejar reportes (Modo prueba).');
+        }
 
     } catch (e) {
         console.error("Error guardando cierre:", e);
-        showNotification('error', 'Error al Cerrar', 'No se pudo guardar el reporte en la nube.');
+        showNotification('error', 'Error al Cerrar', 'Ocurrió un problema en la nube.');
         setIsClosingCashModalOpen(false);
     }
   };
-  
+
   const handleConfirmCloseCash = () => executeRegisterClose(false);
 
   const handleSaveOpeningBalance = async () => {
@@ -1577,9 +1627,11 @@ const handleDuplicateProduct = async (originalProduct) => {
     showNotification('success', 'Premio Aplicado', 'El descuento se ha agregado al carrito.');
   };
 
-const handleCheckout = async () => {
+  const handleCheckout = async () => {
     const total = calculateTotal();
-    const stockIssues = cart.filter(c => !c.isReward).filter(c => {
+    
+    // ✅ 1. Filtramos los productos que NO son premios y NO son personalizados para revisar el stock
+    const stockIssues = cart.filter(c => !c.isReward && !c.isCustom).filter(c => {
       const i = inventory.find(x => x.id === c.id);
       return !i || i.stock < c.quantity;
     });
@@ -1601,12 +1653,19 @@ const handleCheckout = async () => {
         if (saleErr) throw saleErr;
 
       const itemsPayload = cart.map(i => ({
-          sale_id: sale.id, product_id: i.id, product_title: i.title, quantity: i.quantity, price: i.price, is_reward: !!i.isReward
+          sale_id: sale.id, 
+          // ✅ 2. Si es personalizado, mandamos null para no romper las relaciones de Supabase
+          product_id: i.isCustom ? null : i.id, 
+          product_title: i.title, 
+          quantity: i.quantity, 
+          price: i.price, 
+          is_reward: !!i.isReward
         }));
         await supabase.from('sale_items').insert(itemsPayload);
 
       for (const item of cart) {
-          if (!item.isReward) {
+          // ✅ 3. Solo descontamos stock de productos reales
+          if (!item.isReward && !item.isCustom) {
              const prod = inventory.find(p => p.id === item.id);
              if (prod) await supabase.from('products').update({ stock: prod.stock - item.quantity }).eq('id', item.id);
           }
@@ -1622,7 +1681,7 @@ const handleCheckout = async () => {
       }
 
       setInventory(inventory.map(p => {
-        const c = cart.find(x => x.id === p.id && !x.isReward);
+        const c = cart.find(x => x.id === p.id && !x.isReward && !x.isCustom);
         return c ? { ...p, stock: p.stock - c.quantity } : p;
       }));
 
@@ -1645,7 +1704,8 @@ const handleCheckout = async () => {
 
       const logItems = cart.map(item => ({
         id: item.id, title: item.title, quantity: item.quantity, price: item.price,
-        isReward: item.isReward || false, product_type: item.product_type || 'quantity'
+        isReward: item.isReward || false, product_type: item.product_type || 'quantity',
+        isCustom: item.isCustom || false
       }));
 
       const isGuest = !posSelectedClient || posSelectedClient.id === 'guest';
@@ -1665,7 +1725,7 @@ const handleCheckout = async () => {
       Swal.fire('Error', 'Fallo al guardar la venta', 'error');
     }
   };
-
+  
   const handleDeleteTransaction = (tx) => {
     setTransactionToRefund(tx);
     setRefundReason('');

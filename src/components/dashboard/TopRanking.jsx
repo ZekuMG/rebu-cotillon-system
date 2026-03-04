@@ -1,8 +1,9 @@
 // src/components/dashboard/TopRanking.jsx
 import React from 'react';
 import { TrendingUp, Package, Layers, Scale } from 'lucide-react';
-// ♻️ FIX: Importamos formatCurrency y formatNumber
-import { formatCurrency, formatNumber } from '../../utils/helpers'; 
+// ♻️ FIX: Importamos formatNumber para las cantidades y FancyPrice para el dinero
+import { formatNumber } from '../../utils/helpers'; 
+import { FancyPrice } from '../FancyPrice';
 
 export const TopRanking = ({ rankingStats, rankingMode, setRankingMode, getEmptyStateMessage }) => {
   return (
@@ -69,8 +70,10 @@ export const TopRanking = ({ rankingStats, rankingMode, setRankingMode, getEmpty
                         : `${formatNumber(item.qty)} un.`
                     }
                   </p>
-                  {/* ♻️ FIX: formatCurrency al Total Facturado */}
-                  <p className="text-[9px] font-bold text-slate-400">{formatCurrency(item.revenue)}</p>
+                  {/* ♻️ FIX: Aplicamos FancyPrice al Total Facturado */}
+                  <p className="text-[9px] font-bold text-slate-400">
+                    <FancyPrice amount={item.revenue} />
+                  </p>
                 </div>
               </div>
             ))}

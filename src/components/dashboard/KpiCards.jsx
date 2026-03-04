@@ -11,8 +11,9 @@ import {
   Info,
   Percent,
 } from 'lucide-react';
-// ♻️ FIX: Importamos formatCurrency y formatNumber
-import { formatCurrency, formatNumber } from '../../utils/helpers';
+// ♻️ FIX: Importamos formatNumber y FancyPrice
+import { formatNumber } from '../../utils/helpers';
+import { FancyPrice } from '../FancyPrice';
 
 export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, currentUser, setTempOpeningBalance, setIsOpeningBalanceModalOpen, globalFilter, expenses = [], onOpenExpenseModal }) => {
   const getPeriodText = (prefix) => {
@@ -32,7 +33,7 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
             <span className="text-[15px] font-bold text-blue-400 uppercase">{getPeriodText('Ventas')}</span>
             <Package size={14} className="text-blue-500" />
           </div>
-          {/* ♻️ FIX: formatNumber */}
+          {/* Este es cantidad de ventas (número entero), usamos formatNumber */}
           <span className="text-2xl font-bold text-blue-600 z-10">{formatNumber(kpiStats.count)}</span>
           <div className="absolute bottom-0 left-0 w-full h-1 bg-blue-400"></div>
         </div>
@@ -44,8 +45,10 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
             <span className="text-[15px] font-bold text-fuchsia-400 uppercase">{getPeriodText('Ingreso')}</span>
             <TrendingUp size={14} className="text-fuchsia-500" />
           </div>
-          {/* ♻️ FIX: formatCurrency */}
-          <span className="text-2xl font-bold text-fuchsia-600 z-10">{formatCurrency(kpiStats.gross)}</span>
+          {/* ♻️ FIX: FancyPrice */}
+          <span className="text-2xl font-bold text-fuchsia-600 z-10">
+            <FancyPrice amount={kpiStats.gross} />
+          </span>
           <div className="absolute bottom-0 left-0 w-full h-1 bg-gradient-to-r from-fuchsia-400 to-fuchsia-600"></div>
         </div>
       );
@@ -56,8 +59,10 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
             <span className="text-[15px] font-bold text-emerald-500 uppercase">Ganancia Neta</span>
             <DollarSign size={14} className="text-emerald-500" />
           </div>
-          {/* ♻️ FIX: formatCurrency */}
-          <span className="text-2xl font-bold text-emerald-600 z-10">{formatCurrency(kpiStats.net)}</span>
+          {/* ♻️ FIX: FancyPrice */}
+          <span className="text-2xl font-bold text-emerald-600 z-10">
+            <FancyPrice amount={kpiStats.net} />
+          </span>
           <div className="absolute bottom-0 left-0 w-full h-1 bg-emerald-400"></div>
         </div>
       );
@@ -78,8 +83,10 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
               </button>
             )}
           </div>
-          {/* ♻️ FIX: formatCurrency */}
-          <span className="text-2xl font-bold text-slate-800 z-10">{formatCurrency(openingBalance)}</span>
+          {/* ♻️ FIX: FancyPrice */}
+          <span className="text-2xl font-bold text-slate-800 z-10">
+            <FancyPrice amount={openingBalance} />
+          </span>
           <div className="absolute bottom-0 left-0 w-full h-1 bg-slate-300"></div>
         </div>
       );
@@ -90,8 +97,10 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
             <span className="text-[15px] font-bold text-indigo-400 uppercase">Ticket Promedio</span>
             <Percent size={14} className="text-indigo-500" />
           </div>
-          {/* ♻️ FIX: formatCurrency */}
-          <span className="text-2xl font-bold text-indigo-600 z-10">{formatCurrency(Math.round(averageTicket))}</span>
+          {/* ♻️ FIX: FancyPrice */}
+          <span className="text-2xl font-bold text-indigo-600 z-10">
+            <FancyPrice amount={Math.round(averageTicket)} />
+          </span>
           <div className="absolute bottom-0 left-0 w-full h-1 bg-indigo-400"></div>
         </div>
       );
@@ -110,8 +119,10 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
               </button>
             )}
           </div>
-          {/* ♻️ FIX: formatCurrency */}
-          <span className="text-2xl font-bold text-red-600 z-10">{formatCurrency(totalExpenses)}</span>
+          {/* ♻️ FIX: FancyPrice */}
+          <span className="text-2xl font-bold text-red-600 z-10">
+            <FancyPrice amount={totalExpenses} />
+          </span>
           <div className="absolute bottom-0 left-0 w-full h-1 bg-gradient-to-r from-red-400 to-red-600"></div>
         </div>
       );

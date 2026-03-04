@@ -3,7 +3,7 @@ import { useEffect, useCallback, useRef } from 'react';
 export const useBarcodeScanner = ({ 
   isEnabled = true,
   onScan,
-  onInputScan,  // Nuevo: callback cuando se escanea en un input (para limpiar)
+  onInputScan,  // callback cuando se escanea en un input (para limpiar)
 }) => {
   const bufferRef = useRef('');
   const lastKeyTimeRef = useRef(0);
@@ -37,13 +37,14 @@ export const useBarcodeScanner = ({
         const buffer = bufferRef.current;
         
         if (buffer.length >= MIN_LENGTH) {
-          // Es un código escaneado
-          handleScan(buffer, isInInput);
+          // Es un código escaneado por máquina (fue muy rápido)
           
-          // Si estamos en un input, prevenir el submit del form
-          if (isInInput) {
-            e.preventDefault();
-          }
+          // ✨ AQUÍ ESTÁ LA MAGIA: Secuestramos el evento Enter
+          // Para evitar que la barra de búsqueda reaccione a este Enter
+          e.preventDefault();
+          e.stopPropagation(); 
+          
+          handleScan(buffer, isInInput);
         }
         
         bufferRef.current = '';
@@ -53,10 +54,10 @@ export const useBarcodeScanner = ({
       // Acumular solo caracteres imprimibles
       if (e.key.length === 1) {
         if (timeDiff > TIMEOUT_LIMIT) {
-          // Mucho tiempo desde la última tecla = nueva secuencia
+          // Mucho tiempo desde la última tecla = escritura humana manual (o nueva secuencia)
           bufferRef.current = e.key;
         } else {
-          // Tecla rápida = continuar acumulando
+          // Tecla rápida (< 50ms) = escritura de máquina (escáner), continuar acumulando
           bufferRef.current += e.key;
         }
       }
@@ -64,7 +65,8 @@ export const useBarcodeScanner = ({
       lastKeyTimeRef.current = currentTime;
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    // ✨ { capture: true } hace que el escáner intercepte la tecla ANTES que cualquier input de React
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
   }, [isEnabled, handleScan]);
 };
