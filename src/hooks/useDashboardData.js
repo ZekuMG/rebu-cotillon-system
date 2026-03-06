@@ -3,7 +3,15 @@ import { useMemo } from 'react';
 import { PAYMENT_METHODS } from '../data';
 import { isVentaLog, normalizeDate } from '../utils/helpers';
 
-export default function useDashboardData({ transactions, dailyLogs, inventory, globalFilter, rankingMode, expenses = [] }) {
+export default function useDashboardData({ 
+  transactions, 
+  dailyLogs, 
+  inventory, 
+  globalFilter, 
+  rankingMode, 
+  rankingCriteria, 
+  expenses = [] 
+}) {
   const currentHour = new Date().getHours();
 
   const safeParseDate = (dateStr) => {
@@ -38,7 +46,6 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     weekAgo.setDate(now.getDate() - 6); 
     const weekAgoNum = (weekAgo.getFullYear() * 10000) + ((weekAgo.getMonth() + 1) * 100) + weekAgo.getDate();
 
-    // ✨ NUEVO: Ahora calculamos exactamente 29 días atrás para hacer la ventana de 30 días
     const monthAgo = new Date(now);
     monthAgo.setDate(now.getDate() - 29);
     const monthAgoNum = (monthAgo.getFullYear() * 10000) + ((monthAgo.getMonth() + 1) * 100) + monthAgo.getDate();
@@ -52,7 +59,6 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
 
       if (globalFilter === 'day') return compNum === todayNum;
       if (globalFilter === 'week') return compNum >= weekAgoNum && compNum <= todayNum;
-      // ✨ NUEVO: "Mes" ahora significa los últimos 30 días
       if (globalFilter === 'month') return compNum >= monthAgoNum && compNum <= todayNum;
       return false;
     };
@@ -68,7 +74,8 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
       if (txDate && isInRange(txDate)) {
         validTransactions.push({
           source: 'tx', id: tx.id, date: txDate, time: tx.time, total: Number(tx.total) || 0, 
-          payment: tx.payment, items: tx.items || []
+          payment: tx.payment, items: tx.items || [], 
+          client: tx.client // ✨ NUEVO: Pasamos el cliente
         });
         processedTxIds.add(tx.id);
       }
@@ -82,7 +89,8 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
           if (logDate && isInRange(logDate)) {
             validTransactions.push({
               source: 'log', id: txId || log.id, date: logDate, time: log.timestamp || '00:00',
-              total: Number(log.details.total) || 0, payment: log.details.payment || 'Efectivo', items: log.details.items || []
+              total: Number(log.details.total) || 0, payment: log.details.payment || 'Efectivo', items: log.details.items || [],
+              client: log.details.client // ✨ NUEVO: Pasamos el cliente
             });
           }
         }
@@ -159,7 +167,6 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
 
     const daysMap = new Map();
     const now = new Date();
-    // ✨ NUEVO: Ahora `daysToShow` siempre es 7 para semana, y 30 para mes
     const daysToShow = globalFilter === 'week' ? 7 : 30;
 
     for (let i = daysToShow - 1; i >= 0; i--) {
@@ -177,7 +184,7 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
         dateStr: dateStr, 
         isToday: i === 0,
         isCurrent: i === 0,
-        transactions: [] // ✨ Guardamos el detalle de operaciones acá
+        transactions: [] 
       });
     }
 
@@ -188,7 +195,7 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
         const entry = daysMap.get(key); 
         entry.sales += tx.total; 
         entry.count += 1; 
-        entry.transactions.push(tx); // ✨ Rellenamos las transacciones del día
+        entry.transactions.push(tx); 
       }
     });
 
@@ -206,9 +213,6 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
     });
   }, [filteredData]);
 
-  // =====================================================
-  // RANKING PRODUCTOS / PESO / CATEGORÍAS
-  // =====================================================
   const rankingStats = useMemo(() => {
     const statsMap = {};
 
@@ -225,11 +229,9 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
         if (rankingMode === 'products') {
           if (isWeightItem) return; 
           keys = [item.title || 'Desconocido'];
-          
         } else if (rankingMode === 'weight') {
           if (!isWeightItem) return;
           keys = [item.title || 'Desconocido'];
-
         } else {
           let cats = [];
           if (liveProduct) {
@@ -246,37 +248,68 @@ export default function useDashboardData({ transactions, dailyLogs, inventory, g
 
         keys.forEach(k => {
           if (!statsMap[k]) statsMap[k] = { name: k, qty: 0, revenue: 0, unitQty: 0, weightQty: 0 };
-          
           statsMap[k].qty += qty;
           statsMap[k].revenue += revenue;
-          
-          if (isWeightItem) {
-            statsMap[k].weightQty += qty;
-          } else {
-            statsMap[k].unitQty += qty;
-          }
+          if (isWeightItem) { statsMap[k].weightQty += qty; } else { statsMap[k].unitQty += qty; }
         });
       });
     });
 
-    return Object.values(statsMap).sort((a, b) => b.revenue - a.revenue).slice(0, 5); 
-  }, [filteredData, rankingMode, inventory]);
+    return Object.values(statsMap)
+      .sort((a, b) => b[rankingCriteria || 'revenue'] - a[rankingCriteria || 'revenue'])
+      .slice(0, 10); 
+  }, [filteredData, rankingMode, rankingCriteria, inventory]);
 
   const lowStockProducts = useMemo(() => {
     if (!inventory) return [];
-    return inventory.filter((p) => p.stock < 10).sort((a, b) => a.stock - b.stock).slice(0, 5);
+    return inventory.filter((p) => p.stock < 10).sort((a, b) => a.stock - b.stock);
+  }, [inventory]);
+
+  const expiringProducts = useMemo(() => {
+    if (!inventory) return [];
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); 
+
+    const alerts = inventory
+      .filter(p => p.expiration_date) 
+      .map(p => {
+        const [year, month, day] = p.expiration_date.split('-');
+        const expDate = new Date(year, month - 1, day);
+        expDate.setHours(0, 0, 0, 0);
+        
+        const diffTime = expDate.getTime() - today.getTime();
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        
+        return { ...p, daysUntil: diffDays };
+      })
+      .filter(p => p.daysUntil <= 14) 
+      .sort((a, b) => a.daysUntil - b.daysUntil); 
+
+    return alerts;
   }, [inventory]);
 
   const getEmptyStateMessage = () => {
     switch (globalFilter) {
       case 'day': return 'Sin ventas hoy';
       case 'week': return 'Sin ventas esta semana';
-      case 'month': return 'Sin ventas en los últimos 30 días'; // ✨ Mensaje actualizado
+      case 'month': return 'Sin ventas en los últimos 30 días';
       default: return 'Sin datos';
     }
   };
 
   return {
-    kpiStats, averageTicket, chartData, maxSales, paymentStats, rankingStats, lowStockProducts, getEmptyStateMessage, expenseStats, filteredData, filteredExpenses,  
+    kpiStats, 
+    averageTicket, 
+    chartData, 
+    maxSales, 
+    paymentStats, 
+    rankingStats, 
+    lowStockProducts, 
+    expiringProducts, 
+    getEmptyStateMessage, 
+    expenseStats, 
+    filteredData, 
+    filteredExpenses,  
   };
 }

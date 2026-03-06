@@ -1,5 +1,5 @@
 // src/components/modals/ProductModals.jsx
-// ✅ v6: Duplicar producto desde modal de edición
+// ✅ v6: Duplicar producto desde modal de edición y Vencimiento
 
 import React, { useState } from 'react';
 import {
@@ -14,6 +14,7 @@ import {
   Scale,
   Package,
   Copy,
+  CalendarX // Icono para vencimiento
 } from 'lucide-react';
 
 // ♻️ FIX: Importamos formatNumber
@@ -314,6 +315,19 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
             </div>
           )}
 
+          {/* ✨ VENCIMIENTO OPCIONAL */}
+          <div>
+            <label className="text-xs font-bold text-orange-600 uppercase block mb-1 flex items-center gap-1">
+              <CalendarX size={12} /> Vencimiento (Opcional)
+            </label>
+            <input 
+              type="date" 
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 outline-none text-sm text-slate-700 bg-orange-50 border-orange-200" 
+              value={newItem.expiration_date || ''} 
+              onChange={(e) => setNewItem({ ...newItem, expiration_date: e.target.value || null })} 
+            />
+          </div>
+
           {/* Imagen */}
           <ImageSection image={newItem.image} isUploading={isUploadingImage} onFileChange={(e) => onImageUpload(e, false)} onUrlChange={(e) => setNewItem({ ...newItem, image: e.target.value })} onDelete={() => setNewItem({ ...newItem, image: '' })} />
 
@@ -454,6 +468,19 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
               </div>
             </div>
           )}
+
+          {/* ✨ VENCIMIENTO OPCIONAL */}
+          <div>
+            <label className="text-xs font-bold text-orange-600 uppercase block mb-1 flex items-center gap-1">
+              <CalendarX size={12} /> Vencimiento (Opcional)
+            </label>
+            <input 
+              type="date" 
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 outline-none text-sm text-slate-700 bg-orange-50 border-orange-200" 
+              value={product.expiration_date || ''} 
+              onChange={(e) => setEditingProduct({ ...product, expiration_date: e.target.value || null })} 
+            />
+          </div>
 
           {/* Imagen */}
           <ImageSection image={product.image} isUploading={isUploadingImage} onFileChange={(e) => onImageUpload(e, true)} onUrlChange={(e) => setEditingProduct({ ...product, image: e.target.value })} onDelete={() => setEditingProduct({ ...product, image: '' })} />

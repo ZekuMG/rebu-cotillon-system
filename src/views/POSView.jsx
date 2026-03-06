@@ -21,12 +21,23 @@ import {
   UserCheck,
   Scale,
   Edit2,
-  Wand2
+  Wand2,
+  AlertTriangle // ✨ Usado para el icono de vencido
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../data';
-// ♻️ FIX: Importamos FancyPrice junto con los helpers de texto/peso
+// ♻️ FIX: Importamos FancyPrice junto con los helpers
 import { formatNumber, formatWeight, getPricePerKg } from '../utils/helpers';
 import { FancyPrice } from '../components/FancyPrice';
+
+// ✨ HELPER: Verifica si la fecha ya pasó (sin problemas de zona horaria)
+const isProductExpired = (dateString) => {
+  if (!dateString) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const [year, month, day] = dateString.split('-');
+  const expDate = new Date(year, month - 1, day);
+  return expDate.getTime() < today.getTime();
+};
 
 // ==========================================
 // MINI-MODAL: Ingreso de gramos para peso
@@ -37,6 +48,8 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
   const totalPrice = gramsNum * (Number(product.price) || 0);
   const isValid = gramsNum > 0 && gramsNum <= effectiveStock;
   const quickAmounts = [50, 100, 250, 500, 1000];
+  
+  const expired = isProductExpired(product.expiration_date);
 
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
@@ -50,7 +63,7 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
         </div>
         <div className="p-5 space-y-4">
           <div className="flex items-center gap-3">
-            <div className="w-14 h-14 rounded-lg bg-slate-100 overflow-hidden border shrink-0">
+            <div className="w-14 h-14 rounded-lg bg-slate-100 overflow-hidden border shrink-0 relative">
               {product.image ? (
                 <img src={product.image} alt="" className="w-full h-full object-cover" />
               ) : (
@@ -58,7 +71,10 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
               )}
             </div>
             <div className="flex-1 min-w-0">
-              <h4 className="font-bold text-slate-800 text-sm truncate">{product.title}</h4>
+              <h4 className="font-bold text-slate-800 text-sm truncate">
+                {product.title}
+                {expired && <span className="ml-2 text-[8px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded uppercase font-bold border border-red-200 align-middle">Vencido</span>}
+              </h4>
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-xs text-amber-600 font-bold"><FancyPrice amount={product.price * 1000} />/kg</span>
                 <span className="text-[10px] text-slate-400">•</span>
@@ -104,9 +120,9 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
 // ==========================================
 const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
   const [title, setTitle] = useState('');
-  const [type, setType] = useState('quantity'); // 'quantity' | 'weight'
-  const [price, setPrice] = useState(''); // Precio unitario o por Kg
-  const [amount, setAmount] = useState(''); // Cantidad o Gramos
+  const [type, setType] = useState('quantity'); 
+  const [price, setPrice] = useState(''); 
+  const [amount, setAmount] = useState(''); 
 
   if (!isOpen) return null;
 
@@ -114,28 +130,25 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
   const a = Number(amount) || 0;
   const isValid = title.trim().length > 0 && p > 0 && a > 0;
   
-  // Cálculo del subtotal estimado
   const totalEstimado = type === 'quantity' ? (p * a) : ((p / 1000) * a);
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!isValid) return;
 
-    // Generamos un ID único para que cada producto personalizado sea independiente en el carrito
     const customId = `custom_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     
     const customProduct = {
       id: customId,
-      title: `* ${title.trim()}`, // El asterisco ayuda a identificarlo como personalizado en reportes
+      title: `* ${title.trim()}`, 
       price: type === 'weight' ? p / 1000 : p,
       product_type: type,
-      stock: 999999, // Stock infinito para que el carrito no bloquee
+      stock: 999999, 
       isCustom: true
     };
 
     onConfirm(customProduct, a);
     
-    // Limpieza
     setTitle('');
     setType('quantity');
     setPrice('');
@@ -259,10 +272,8 @@ export default function POSView({
   
   const [isCustomModalOpen, setIsCustomModalOpen] = useState(false);
 
-  // ✨ LAZY RENDERING (Igual que en Inventario)
   const [visibleCount, setVisibleCount] = useState(40);
 
-  // Reseteamos el conteo si el usuario busca o filtra
   useEffect(() => {
     setVisibleCount(40);
   }, [posSearch, selectedCategory]);
@@ -340,7 +351,6 @@ export default function POSView({
     return matchesSearch && matchesCategory;
   });
 
-  // ✨ Detectar scroll infinito para ir agregando más productos a la vista
   const handleScroll = (e) => {
     const { scrollTop, clientHeight, scrollHeight } = e.target;
     if (scrollHeight - scrollTop <= clientHeight + 400) {
@@ -350,7 +360,6 @@ export default function POSView({
     }
   };
 
-  // ✨ Cortar la lista de productos real a renderizar
   const displayedProducts = filteredProducts.slice(0, visibleCount);
 
   const subtotal = cart.reduce((t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
@@ -404,7 +413,7 @@ export default function POSView({
           {posViewMode === 'grid' ? (
             <div className="grid gap-3 transition-all duration-300" style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}>
               
-              {/* ✨ TARJETA: ARTÍCULO PERSONALIZADO (GRILLA) - SIEMPRE PRIMERA */}
+              {/* TARJETA: ARTÍCULO PERSONALIZADO (GRILLA) */}
               <button
                 onClick={() => setIsCustomModalOpen(true)}
                 className="group bg-fuchsia-50 border-2 border-dashed border-fuchsia-300 rounded-xl overflow-hidden shadow-sm hover:shadow-md hover:bg-fuchsia-100 hover:border-fuchsia-400 transition-all text-center flex flex-col items-center justify-center min-h-[140px] active:scale-[0.98]"
@@ -416,28 +425,43 @@ export default function POSView({
                 <span className={`text-fuchsia-500 mt-1 ${gridColumns > 6 ? 'text-[9px]' : 'text-[10px]'}`}>Precio manual</span>
               </button>
 
-              {/* ✨ Cambiamos filteredProducts por displayedProducts */}
               {displayedProducts.map((product) => {
                 const effectiveStock = getEffectiveStock(product.id, product.stock);
                 const isOutOfStock = effectiveStock <= 0;
                 const isWeight = product.product_type === 'weight';
                 let stockBadgeClass = effectiveStock > (isWeight ? 500 : 10) ? 'bg-green-100 text-green-700' : effectiveStock > (isWeight ? 100 : 5) ? 'bg-amber-100 text-amber-700' : effectiveStock > 0 ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-500';
                 
+                // ✨ CHEQUEO DE VENCIMIENTO
+                const expired = isProductExpired(product.expiration_date);
+
                 return (
                   <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`group bg-white border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all text-left flex flex-col relative ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed' : 'hover:border-fuchsia-300 active:scale-[0.98]'}`}>
                     <div className="aspect-[4/3] bg-slate-50 relative overflow-hidden w-full">
                       {product.image ? (<img src={product.image} alt={product.title} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-500" />) : (<div className="w-full h-full flex flex-col items-center justify-center bg-slate-200/50 p-2 text-center group-hover:bg-slate-200 transition-colors"><span className={`font-bold text-slate-500 uppercase leading-tight ${gridColumns > 6 ? 'text-[10px]' : 'text-xs'}`}>{product.title}</span></div>)}
-                      <div className={`absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold shadow-sm backdrop-blur-sm ${stockBadgeClass}`}>
+                      
+                      {/* ✨ OVERLAY DE VENCIDO (Superpone al stock si está vencido pero no agotado) */}
+                      {expired && !isOutOfStock && (
+                        <div className="absolute inset-0 bg-red-500/10 flex items-center justify-center z-10 pointer-events-none backdrop-blur-[0.5px]">
+                           <span className="bg-red-600 text-white text-[10px] font-black px-2 py-1 rounded shadow-md border border-red-800 flex items-center gap-1">
+                             <AlertTriangle size={10} /> VENCIDO
+                           </span>
+                        </div>
+                      )}
+
+                      <div className={`absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold shadow-sm backdrop-blur-sm z-20 ${stockBadgeClass}`}>
                         {isOutOfStock ? 'SIN STOCK' : (isWeight ? formatWeight(effectiveStock) : `${effectiveStock} u.`)}
                       </div>
+                      
                       {isWeight && !isOutOfStock && (
-                        <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-500 text-white text-[9px] font-bold shadow-sm flex items-center gap-0.5">
+                        <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-500 text-white text-[9px] font-bold shadow-sm flex items-center gap-0.5 z-20">
                           <Scale size={8} /> PESO
                         </div>
                       )}
                     </div>
-                    <div className={`flex flex-col flex-1 w-full ${gridColumns > 6 ? 'p-2' : 'p-3'}`}>
-                      <h3 className={`font-bold text-slate-800 leading-snug mb-1 line-clamp-2 ${gridColumns > 6 ? 'text-[11px]' : 'text-sm'}`}>{product.title}</h3>
+                    <div className={`flex flex-col flex-1 w-full z-20 bg-white ${gridColumns > 6 ? 'p-2' : 'p-3'}`}>
+                      <h3 className={`font-bold leading-snug mb-1 line-clamp-2 ${gridColumns > 6 ? 'text-[11px]' : 'text-sm'} ${expired ? 'text-red-700' : 'text-slate-800'}`}>
+                        {product.title}
+                      </h3>
                       <div className="mt-auto pt-2 flex items-end justify-between">
                         <span className={`font-bold text-fuchsia-600 ${gridColumns > 6 ? 'text-sm' : 'text-lg'}`}>
                           {isWeight ? (
@@ -458,7 +482,7 @@ export default function POSView({
           ) : (
             <div className="flex flex-col gap-2">
               
-              {/* ✨ TARJETA: ARTÍCULO PERSONALIZADO (LISTA) - SIEMPRE PRIMERA */}
+              {/* TARJETA: ARTÍCULO PERSONALIZADO (LISTA) */}
               <button
                 onClick={() => setIsCustomModalOpen(true)}
                 className="flex items-center gap-3 p-3 bg-fuchsia-50 border-2 border-dashed border-fuchsia-300 rounded-xl shadow-sm hover:shadow-md hover:bg-fuchsia-100 transition-all text-left group active:scale-[0.99]"
@@ -477,19 +501,33 @@ export default function POSView({
                 </div>
               </button>
 
-              {/* ✨ Cambiamos filteredProducts por displayedProducts */}
               {displayedProducts.map((product) => {
                 const effectiveStock = getEffectiveStock(product.id, product.stock);
                 const isOutOfStock = effectiveStock <= 0;
                 const isWeight = product.product_type === 'weight';
+                
+                // ✨ CHEQUEO DE VENCIMIENTO
+                const expired = isProductExpired(product.expiration_date);
+
                 return (
                   <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`flex items-center gap-3 p-3 bg-white border rounded-xl shadow-sm hover:shadow-md transition-all text-left group ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed bg-slate-50' : 'hover:border-fuchsia-300 active:scale-[0.99]'}`}>
                     <div className="w-12 h-12 rounded-lg bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border relative">
                       {product.image ? (<img src={product.image} alt="" className="w-full h-full object-cover" />) : (<div className="w-full h-full flex items-center justify-center bg-slate-200 text-[8px] font-bold text-slate-500 p-1 text-center leading-none">{product.title.slice(0, 8)}..</div>)}
-                      {isWeight && <div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-1 py-0.5"><Scale size={8} className="text-white" /></div>}
+                      {isWeight && <div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-1 py-0.5 z-20"><Scale size={8} className="text-white" /></div>}
+                      
+                      {/* ✨ OVERLAY LISTA */}
+                      {expired && !isOutOfStock && (
+                        <div className="absolute inset-0 bg-red-600/20 flex items-center justify-center backdrop-blur-[1px] z-10 pointer-events-none">
+                          <AlertTriangle size={16} className="text-red-600 drop-shadow-md" />
+                        </div>
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h4 className="font-bold text-slate-800 text-sm truncate">{product.title}</h4>
+                      <h4 className={`font-bold text-sm truncate ${expired ? 'text-red-700' : 'text-slate-800'}`}>
+                        {product.title}
+                        {/* ✨ BADGE LISTA */}
+                        {expired && <span className="ml-2 text-[8px] bg-red-100 text-red-700 border border-red-200 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider align-middle">Vencido</span>}
+                      </h4>
                       {isWeight && <span className="text-[10px] text-amber-600 font-bold">Producto por peso</span>}
                     </div>
                     <div className="text-right flex items-center gap-4">
@@ -543,6 +581,9 @@ export default function POSView({
               const isWeight = item.product_type === 'weight';
               const isEditingWeight = editingWeightItemId === item.id;
               const isCustom = item.isCustom;
+              
+              // ✨ CHEQUEO VENCIMIENTO EN CARRITO
+              const expired = isProductExpired(item.expiration_date);
 
               return (
                 <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`flex gap-3 p-3 rounded-xl border shadow-sm transition-colors group ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : isCustom ? 'bg-indigo-50/40 border-indigo-100' : 'bg-white hover:border-fuchsia-200'}`}>
@@ -561,9 +602,11 @@ export default function POSView({
                   
                   <div className="flex-1 min-w-0 flex flex-col justify-between">
                     <div className="flex justify-between items-start gap-2">
-                      <h4 className={`font-bold text-sm line-clamp-1 leading-tight ${item.isReward ? 'text-fuchsia-700' : isCustom ? 'text-indigo-800' : 'text-slate-800'}`}>
+                      <h4 className={`font-bold text-sm line-clamp-1 leading-tight ${item.isReward ? 'text-fuchsia-700' : isCustom ? 'text-indigo-800' : expired ? 'text-red-700' : 'text-slate-800'}`}>
                         {item.isReward && <Gift size={12} className="inline mr-1 text-fuchsia-500" />}
                         {item.title}
+                        {/* ✨ ICONO ALERTA EN CARRITO */}
+                        {expired && <AlertTriangle size={12} className="inline ml-1 text-red-500" title="¡Producto Vencido!" />}
                       </h4>
                       <button onClick={() => removeFromCart(item.id)} className="text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
                     </div>

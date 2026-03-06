@@ -57,6 +57,8 @@ import { ExpenseModal } from './components/modals/ExpenseModal';
 import { RedemptionModal } from './components/modals/RedemptionModal';
 import { TicketPrintLayout } from './components/TicketPrintLayout';
 import { ClientSelectionModal } from './components/modals/ClientSelectionModal';
+// ✨ NUEVO: Importamos el modal de detalles para usarlo globalmente
+import { TransactionDetailModal } from './components/modals/HistoryModals'; 
 
 // Hooks
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
@@ -131,7 +133,9 @@ const fetchCloudData = async (showSpinner = true) => {
           ...p,
           // FIX MULTI-CATEGORÍA: Convertimos el string separado por comas en un Array real
           categories: p.category ? p.category.split(',').map(c => c.trim()).filter(Boolean) : [],
-          purchasePrice: p.purchasePrice || 0
+          purchasePrice: p.purchasePrice || 0,
+          // ✨ FIX VENCIMIENTOS: Aseguramos leer la nueva columna de la BD
+          expiration_date: p.expiration_date || null
         })));
       }
 
@@ -415,10 +419,14 @@ let lastFetchTime = Date.now();
   const [isRedemptionModalOpen, setIsRedemptionModalOpen] = useState(false);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
 
+  // ✨ NUEVO ESTADO: Controla el modal global de detalles de transacción
+  const [detailsModalTx, setDetailsModalTx] = useState(null);
+
 const [newItem, setNewItem] = useState({
   title: '', brand: '', price: '', purchasePrice: '', stock: '',
   categories: [], image: '', barcode: '',
-  product_type: 'quantity'  
+  product_type: 'quantity',
+  expiration_date: '' // ✨ Inicializado
 });
 
   const [tempOpeningBalance, setTempOpeningBalance] = useState('');
@@ -717,6 +725,18 @@ const handleDeleteMemberWithLog = async (id) => {
   // 7. LÓGICA DE NEGOCIO
   // ==========================================
 
+  // ✨ NUEVO: Función "Puente" para navegar desde el Dashboard al Inventario
+  const handleDashboardAlertClick = (alertType) => {
+    setActiveTab('inventory'); // Cambiamos la pestaña
+    
+    // Y le inyectamos una palabra secreta en el buscador para que filtre rápido
+    if (alertType === 'out_of_stock') {
+      setInventorySearch('AGOTADOS'); // Podés programar esta palabra en InventoryView.jsx
+    } else if (alertType === 'expirations') {
+      setInventorySearch('VENCIMIENTOS'); // Lo mismo acá
+    }
+  };
+
 const handleAddExpense = async (expenseData) => {
     try {
       const safeDescription = expenseData.description || expenseData.concept || expenseData.notes || 'Gasto General';
@@ -850,7 +870,8 @@ const handleAddProductFromBarcode = (barcode) => {
   setNewItem({
     title: '', brand: '', price: '', purchasePrice: '', stock: '',
     categories: [], image: '', barcode: barcode,
-    product_type: 'quantity'  
+    product_type: 'quantity',
+    expiration_date: ''
   });
   setIsModalOpen(true);
 };
@@ -1361,6 +1382,7 @@ const handleEditTransactionRequest = (tx) => {
     }
   };
 
+// ✨ FIX: Agregamos expiration_date al Guardar (Alta)
 const handleAddItem = async (e, overrideData = null) => {
   e.preventDefault();
   const itemData = overrideData || newItem;
@@ -1380,7 +1402,8 @@ const handleAddItem = async (e, overrideData = null) => {
       category: itemData.categories.join(', '), 
       barcode: itemData.barcode || null,
       image: itemData.image || '',
-      product_type: itemData.product_type || 'quantity'
+      product_type: itemData.product_type || 'quantity',
+      expiration_date: itemData.expiration_date || null // ✨ NUEVO
     };
     
     const { data, error } = await supabase.from('products').insert([payload]).select().single();
@@ -1403,7 +1426,7 @@ const handleAddItem = async (e, overrideData = null) => {
     setNewItem({
       title: '', brand: '', price: '', purchasePrice: '', stock: '',
       categories: [], image: '', barcode: '',
-      product_type: 'quantity'  
+      product_type: 'quantity', expiration_date: '' 
     });
     setIsModalOpen(false);
     setPendingBarcodeForNewProduct('');
@@ -1415,6 +1438,7 @@ const handleAddItem = async (e, overrideData = null) => {
 };
 
 
+// ✨ FIX: Agregamos expiration_date a la Edición
 const saveEditProduct = async (e, overrideData = null) => {
   e.preventDefault();
   const productData = overrideData || editingProduct;
@@ -1434,7 +1458,8 @@ const saveEditProduct = async (e, overrideData = null) => {
       category: Array.isArray(productData.categories) ? productData.categories.join(', ') : productData.category,
       barcode: productData.barcode || null,
       image: productData.image || '',
-      product_type: productData.product_type || 'quantity' 
+      product_type: productData.product_type || 'quantity',
+      expiration_date: productData.expiration_date || null // ✨ NUEVO
     };
 
     const { error } = await supabase.from('products').update(payload).eq('id', productData.id);
@@ -2219,7 +2244,7 @@ const handleSaveEditedTransaction = async (e) => {
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
                 <span>Supabase ON</span>
                 <span className="text-slate-300">|</span>
-                <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>              </div>
+                <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>             </div>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -2244,8 +2269,13 @@ const handleSaveEditedTransaction = async (e) => {
               inventory={inventory}
               expenses={expenses}
               onOpenExpenseModal={() => setIsExpenseModalOpen(true)}
-            />
+              onAlertClick={handleDashboardAlertClick} 
+              onNavigate={(tab) => setActiveTab(tab)}
+              onViewTransaction={(tx) => setDetailsModalTx(tx)} // ✨ CONECTADO AL ESTADO GLOBAL
+              />
           )}
+
+          {/* ... el resto de tus vistas (InventoryView, POSView, etc) siguen igual ... */}
           {activeTab === 'inventory' && (<InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} />)}
           {activeTab === 'pos' && (isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{currentUser.role === 'admin' ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">El Dueño debe abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} />))}
           
@@ -2309,6 +2339,23 @@ const handleSaveEditedTransaction = async (e) => {
       <ClientSelectionModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} clients={members} addClient={handleAddMemberWithLog} onSelectClient={(client) => setPosSelectedClient(client)} onCancelFlow={() => { setPosSelectedClient({ id: 'guest', name: 'No asociado', memberNumber: '---', points: 0 }); setIsClientModalOpen(false); }} />
       <RedemptionModal isOpen={isRedemptionModalOpen} onClose={() => setIsRedemptionModalOpen(false)} client={posSelectedClient} rewards={rewards} onRedeem={handleRedeemReward} />
       <ExpenseModal isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} onSave={handleAddExpense} />
+      
+      {/* ✨ NUEVO: Modal Global de Detalles de Transacción */}
+      <TransactionDetailModal
+        transaction={detailsModalTx}
+        onClose={() => setDetailsModalTx(null)}
+        currentUser={currentUser}
+        members={members}
+        onEditTransaction={(tx) => {
+          setDetailsModalTx(null); // Cerramos este modal...
+          handleEditTransactionRequest(tx); // Y abrimos el de edición
+        }}
+        onDeleteTransaction={(tx) => {
+          setDetailsModalTx(null);
+          handleDeleteTransaction(tx);
+        }}
+        onViewTicket={handleViewTicket}
+      />
     </div>
   );
 }

@@ -1,12 +1,10 @@
-// src/views/DashboardView.jsx
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  GripVertical, 
-  Lock, 
   ShoppingCart, 
   TrendingDown, 
   FileText, 
-  Clock 
+  Clock,
+  ChevronRight
 } from 'lucide-react';
 
 import useDashboardData from '../hooks/useDashboardData';
@@ -19,8 +17,6 @@ import {
   GlobalTimeSwitch,
   LayoutManagerControls,
 } from '../components/dashboard';
-// ♻️ FIX: Importamos FancyPrice (dejamos formatCurrency para usos crudos si hubiera)
-import { formatCurrency } from '../utils/helpers';
 import { FancyPrice } from '../components/FancyPrice';
 
 const DEFAULT_BOTTOM_ORDER = ['chart', 'payments', 'topProducts', 'lowStock', 'financialActivity', 'systemLogs'];
@@ -37,12 +33,16 @@ export default function DashboardView({
   dailyLogs,
   inventory,
   expenses = [],
-  onOpenExpenseModal
+  onOpenExpenseModal,
+  onAlertClick,
+  onNavigate,
+  onViewTransaction
 }) {
   const isAdmin = currentUser?.role === 'admin';
 
   const [globalFilter, setGlobalFilter] = useState('day');
   const [rankingMode, setRankingMode] = useState('products');
+  const [rankingCriteria, setRankingCriteria] = useState('revenue');
 
   const [widgetOrder, setWidgetOrder] = useState(() => {
     const saved = localStorage.getItem('party_dashboard_order_bottom');
@@ -55,7 +55,7 @@ export default function DashboardView({
         if (!parsed.includes('financialActivity')) parsed.push('financialActivity');
         if (!parsed.includes('systemLogs')) parsed.push('systemLogs');
       }
-      return parsed;
+      return parsed.filter(w => w !== 'expirations'); 
     }
     return DEFAULT_BOTTOM_ORDER;
   });
@@ -114,10 +114,19 @@ export default function DashboardView({
     paymentStats,
     rankingStats,
     lowStockProducts,
+    expiringProducts,
     getEmptyStateMessage,
     filteredData,       
     filteredExpenses,  
-  } = useDashboardData({ transactions, dailyLogs, inventory, globalFilter, rankingMode, expenses });
+  } = useDashboardData({ 
+    transactions, 
+    dailyLogs, 
+    inventory, 
+    globalFilter, 
+    rankingMode, 
+    rankingCriteria,
+    expenses 
+  });
 
   const combinedActivity = useMemo(() => {
     const sales = (filteredData || []).map(t => ({
@@ -148,96 +157,198 @@ export default function DashboardView({
       case 'payments':
         return <PaymentBreakdown paymentStats={paymentStats} totalGross={kpiStats.gross} globalFilter={globalFilter} />;
       case 'topProducts':
-        return <TopRanking rankingStats={rankingStats} rankingMode={rankingMode} setRankingMode={setRankingMode} getEmptyStateMessage={getEmptyStateMessage} />;
+        return (
+          <TopRanking 
+            rankingStats={rankingStats} 
+            rankingMode={rankingMode} 
+            setRankingMode={setRankingMode}
+            rankingCriteria={rankingCriteria}
+            setRankingCriteria={setRankingCriteria}
+            getEmptyStateMessage={getEmptyStateMessage} 
+          />
+        );
       case 'lowStock':
-        return <LowStockAlert lowStockProducts={lowStockProducts} />;
+        return (
+          <LowStockAlert 
+            lowStockProducts={lowStockProducts} 
+            expiringProducts={expiringProducts} 
+            onAlertClick={onAlertClick} 
+          />
+        );
       case 'financialActivity':
         return (
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden h-[380px]">
-              <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center shrink-0">
-                <h3 className="font-bold text-slate-700 flex items-center gap-2">
-                  <Clock size={18} className="text-blue-600"/> Actividad Financiera
-                </h3>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold text-blue-500 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 h-full flex flex-col">
+              <div className="flex justify-between items-center mb-4 gap-2 shrink-0">
+                <div className="flex items-center gap-3">
+                  <h3 className="font-bold text-slate-800 flex items-center gap-1.5 whitespace-nowrap text-sm">
+                    <Clock size={16} className="text-blue-500"/> Actividad Financiera
+                  </h3>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[9px] font-bold text-blue-600 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded uppercase tracking-wider">
                     {{ day: 'Hoy', week: 'Semana', month: 'Mes' }[globalFilter]}
                   </span>
-                  <span className="text-[10px] font-bold text-slate-400 bg-white border px-2 py-0.5 rounded">En vivo</span>
+                  <button 
+                    onClick={() => onNavigate && onNavigate('history')}
+                    className="text-[9px] font-bold text-slate-500 bg-white border border-slate-200 px-1.5 py-0.5 rounded uppercase tracking-wider hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-0.5"
+                  >
+                    Ver todo <ChevronRight size={10} />
+                  </button>
                 </div>
               </div>
-              <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
-                {combinedActivity.length > 0 ? (
-                  combinedActivity.slice(0, 50).map((item, idx) => ( 
-                    <div key={idx} className="flex items-center justify-between p-3 mb-1 hover:bg-slate-50 rounded-lg transition-colors border-b border-dashed border-slate-100 last:border-0">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 shadow-sm ${item.type === 'sale' ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>
-                          {item.type === 'sale' ? <ShoppingCart size={16} /> : <TrendingDown size={16} />}
-                        </div>
-                        <div className="flex flex-col">
-                          <span className="text-xs font-bold text-slate-700 leading-tight">
-                              {item.type === 'sale' ? `Venta #${item.id}` : item.category}
-                          </span>
-                          <span className="text-[10px] text-slate-400 leading-tight">
-                              {item.type === 'sale' ? `${item.payment} • ${item.items?.length || 0} items` : `${item.paymentMethod} • ${item.note || '-'}`}
-                          </span>
-                        </div>
+
+              <div className="relative flex-1 min-h-[280px]">
+                <div className="absolute inset-0 overflow-y-auto custom-scrollbar pr-1">
+                  <div className="space-y-2">
+                    {combinedActivity.length > 0 ? (
+                      (() => {
+                        let lastDateStr = null;
+                        const elements = [];
+
+                        combinedActivity.slice(0, 50).forEach((item, idx) => {
+                          const itemDate = new Date(item.sortTime);
+                          const dateStr = itemDate.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+                          if (globalFilter !== 'day' && dateStr !== lastDateStr) {
+                            elements.push(
+                              <div key={`sep-${dateStr}`} className="sticky top-0 z-10 bg-slate-100/95 backdrop-blur-sm px-2 py-1 rounded text-[9px] font-bold text-slate-500 uppercase tracking-widest flex items-center border border-slate-200 shadow-[0_2px_4px_rgba(0,0,0,0.02)]">
+                                {dateStr === new Date().toLocaleDateString('es-AR') ? 'HOY - ' : ''}{dateStr}
+                              </div>
+                            );
+                            lastDateStr = dateStr;
+                          }
+
+                          let clientName = 'Consumidor Final';
+                          let memberNum = '';
+                          if (item.client) {
+                             if (typeof item.client === 'object') {
+                               clientName = item.client.name || 'Consumidor Final';
+                               memberNum = item.client.memberNumber && item.client.memberNumber !== '---' ? ` (#${item.client.memberNumber})` : '';
+                             } else {
+                               clientName = item.client;
+                             }
+                          }
+                          if (clientName === 'No asociado') clientName = 'Consumidor Final';
+                          if (item.type === 'expense') clientName = item.category;
+
+                          const isSale = item.type === 'sale';
+                          const handleItemClick = () => {
+                            if (isSale && onViewTransaction) {
+                              const originalTx = transactions.find(t => String(t.id) === String(item.id));
+                              if (originalTx) {
+                                onViewTransaction(originalTx);
+                              }
+                            }
+                          };
+
+                          elements.push(
+                            <div 
+                              key={idx} 
+                              onClick={handleItemClick}
+                              className={`flex justify-between items-center p-2.5 rounded-lg border bg-slate-50 transition-colors ${
+                                isSale ? 'hover:border-blue-300 hover:bg-white cursor-pointer border-slate-200' : 'border-slate-200'
+                              }`}
+                            >
+                              <div className="flex-1 min-w-0 pr-3 flex items-center gap-2">
+                                <div className={`shrink-0 w-6 h-6 rounded-full flex items-center justify-center shadow-sm border ${isSale ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-red-50 text-red-600 border-red-200'}`}>
+                                  {isSale ? <ShoppingCart size={12} /> : <TrendingDown size={12} />}
+                                </div>
+                                <div className="flex flex-col min-w-0">
+                                  {isSale ? (
+                                    <p className="font-bold text-xs text-slate-700 truncate" title={`${clientName}${memberNum} | Ticket #${item.id}`}>
+                                      {clientName} <span className="text-slate-400 font-medium">{memberNum}</span> <span className="text-slate-300 mx-1">|</span> <span className="text-blue-500 font-mono">#{item.id}</span>
+                                    </p>
+                                  ) : (
+                                    <p className="font-bold text-xs text-slate-700 truncate">{clientName}</p>
+                                  )}
+                                  <p className="text-[9px] font-medium text-slate-400 truncate">
+                                    {isSale ? `${item.payment} • ${item.items?.length || 0} ítems` : `${item.paymentMethod} • ${item.description || item.note || '-'}`}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="text-right shrink-0 flex flex-col items-end">
+                                <p className={`font-bold text-xs flex items-center gap-0.5 ${isSale ? 'text-emerald-600' : 'text-red-600'}`}>
+                                  <span>{isSale ? '+' : '-'}</span>
+                                  <FancyPrice amount={isSale ? item.total : item.amount} />
+                                </p>
+                                <p className="text-[9px] font-bold text-slate-400 mt-0.5">
+                                  {item.time || new Date(item.sortTime).toLocaleTimeString('es-AR', {hour: '2-digit', minute:'2-digit'})}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        });
+
+                        return elements;
+                      })()
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-8 opacity-50 h-full">
+                        <Clock size={32} className="mb-2 text-slate-300" />
+                        <p className="text-xs font-bold text-slate-400 text-center">{{ day: 'Sin movimientos hoy', week: 'Sin movimientos esta semana', month: 'Sin movimientos este mes' }[globalFilter]}</p>
                       </div>
-                      <div className="text-right">
-                        {/* ♻️ FIX: Formateamos el dinero correctamente con FancyPrice */}
-                        <p className={`text-sm font-bold flex items-center justify-end gap-1 ${item.type === 'sale' ? 'text-emerald-600' : 'text-red-600'}`}>
-                          <span>{item.type === 'sale' ? '+' : '-'}</span>
-                          <FancyPrice amount={item.type === 'sale' ? item.total : item.amount} />
-                        </p>
-                        <p className="text-[10px] text-slate-400">
-                          {item.time || new Date(item.sortTime).toLocaleTimeString('es-AR', {hour: '2-digit', minute:'2-digit'})}
-                        </p>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="h-full flex flex-col items-center justify-center text-slate-400 opacity-60">
-                    <Clock size={32} className="mb-2" />
-                    <p className="text-xs italic">{{ day: 'Sin movimientos hoy', week: 'Sin movimientos esta semana', month: 'Sin movimientos este mes' }[globalFilter]}</p>
+                    )}
                   </div>
-                )}
+                </div>
               </div>
             </div>
         );
       case 'systemLogs':
         return (
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden h-[380px]">
-              <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center shrink-0">
-                <h3 className="font-bold text-slate-700 flex items-center gap-2">
-                  <FileText size={18} className="text-fuchsia-600"/> Bitácora del Sistema
-                </h3>
-                <span className="text-[10px] font-bold text-slate-400 bg-white border px-2 py-0.5 rounded">Auditoría</span>
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 h-full flex flex-col">
+              <div className="flex justify-between items-center mb-4 gap-2 shrink-0">
+                <div className="flex items-center gap-3">
+                  <h3 className="font-bold text-slate-800 flex items-center gap-1.5 whitespace-nowrap text-sm">
+                    <FileText size={16} className="text-fuchsia-500"/> Bitácora del Sistema
+                  </h3>
+                </div>
+                <button 
+                  onClick={() => onNavigate && onNavigate('logs')}
+                  className="text-[9px] font-bold text-slate-500 bg-white border border-slate-200 px-1.5 py-0.5 rounded uppercase tracking-wider hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-0.5"
+                >
+                  Ver todo <ChevronRight size={10} />
+                </button>
               </div>
-              <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-                <div className="space-y-0">
-                  {dailyLogs && dailyLogs.length > 0 ? (
-                    dailyLogs.slice(0, 50).map((log) => (
-                      <div key={log.id} className="flex gap-3 relative pb-5 border-l border-slate-200 ml-1.5 last:border-0 last:pb-0 group">
-                        <div className="absolute -left-[5px] top-1.5 w-2.5 h-2.5 rounded-full bg-slate-300 ring-4 ring-white group-hover:bg-fuchsia-400 transition-colors" />
-                        <div className="pl-3 -mt-1 w-full">
-                          <div className="flex justify-between items-start">
-                            <span className="text-xs font-bold text-slate-700">{log.action}</span>
-                            <span className="text-[9px] font-mono text-slate-400 bg-slate-50 px-1 rounded">{log.timestamp}</span>
+              
+              <div className="relative flex-1 min-h-[280px]">
+                <div className="absolute inset-0 overflow-y-auto custom-scrollbar pr-1">
+                  <div className="ml-2.5 mt-2 space-y-0 border-l border-slate-200">
+                    {dailyLogs && dailyLogs.length > 0 ? (
+                      dailyLogs.slice(0, 50).map((log) => (
+                        <div key={log.id} className="group/log relative pb-5 pl-5 transition-all">
+                          <div className="absolute -left-[5.5px] top-1.5 w-2.5 h-2.5 rounded-full bg-slate-200 ring-4 ring-white group-hover/log:bg-fuchsia-500 group-hover/log:scale-125 transition-all duration-200" />
+                          
+                          <div className="flex flex-col bg-transparent group-hover/log:bg-slate-50/80 p-2 -my-2 -ml-2 rounded-lg transition-colors border border-transparent group-hover/log:border-slate-100">
+                            <div className="flex justify-between items-start">
+                              <span className="text-xs font-bold text-slate-700 group-hover/log:text-fuchsia-700 transition-colors">
+                                {log.action}
+                              </span>
+                              <span className="text-[9px] font-mono text-slate-400 bg-slate-50 px-1 rounded border border-slate-100 group-hover/log:bg-white group-hover/log:border-slate-200 transition-colors">
+                                {log.timestamp}
+                              </span>
+                            </div>
+                            
+                            <p className="text-[11px] text-slate-500 leading-snug mt-0.5 break-words">
+                              {typeof log.details === 'string' ? log.details : 'Detalle registrado en sistema'}
+                            </p>
+                            
+                            <div className="flex items-center gap-1 mt-1.5 opacity-60 group-hover/log:opacity-100 transition-opacity">
+                               <div className="w-4 h-4 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center text-[8px] font-bold uppercase">
+                                 {log.user ? log.user.substring(0,2) : 'SY'}
+                               </div>
+                               <span className="text-[9px] text-slate-500 font-bold uppercase tracking-tighter">
+                                 {log.user || 'Sistema'}
+                               </span>
+                            </div>
                           </div>
-                          <p className="text-[11px] text-slate-500 leading-snug mt-0.5 break-words">
-                            {typeof log.details === 'string' ? log.details : 'Detalle registrado en sistema'}
-                          </p>
-                          <p className="text-[9px] text-slate-400 mt-1 flex items-center gap-1">
-                             <span className="w-1 h-1 rounded-full bg-slate-300"></span> {log.user}
-                          </p>
                         </div>
+                      ))
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-8 opacity-50 h-full border-l-0 -ml-2.5">
+                        <FileText size={32} className="mb-2 text-slate-300" />
+                        <p className="text-xs font-bold text-slate-400 text-center">Registro limpio</p>
                       </div>
-                    ))
-                  ) : (
-                    <div className="h-full flex flex-col items-center justify-center text-slate-400 opacity-60 mt-10">
-                      <FileText size={32} className="mb-2" />
-                      <p className="text-xs italic">Registro limpio</p>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -270,7 +381,7 @@ export default function DashboardView({
               setDraggedTopItem(widgetKey);
               e.dataTransfer.effectAllowed = 'move';
             }}
-            onDragEnd={() => setDraggedTopItem(null)} // ✨ EVENTO SALVAVIDAS AGREGADO
+            onDragEnd={() => setDraggedTopItem(null)} 
             onDragOver={(e) => {
               e.preventDefault();
               if (!isAdmin || draggedTopItem === widgetKey) return;
@@ -289,11 +400,6 @@ export default function DashboardView({
             className={`transition-all duration-200 ${draggedTopItem === widgetKey ? 'opacity-40 scale-95' : 'opacity-100'}`}
           >
             <div className="group relative h-full">
-              {isAdmin && (
-                <div className="absolute top-1 right-1 z-20 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 bg-white/80 p-1 rounded backdrop-blur-sm">
-                  <GripVertical size={14} />
-                </div>
-              )}
               <KpiCard
                 widgetKey={widgetKey}
                 kpiStats={kpiStats}
@@ -321,7 +427,7 @@ export default function DashboardView({
               setDraggedItem(widgetKey);
               e.dataTransfer.effectAllowed = 'move';
             }}
-            onDragEnd={() => setDraggedItem(null)} // ✨ EVENTO SALVAVIDAS AGREGADO
+            onDragEnd={() => setDraggedItem(null)} 
             onDragOver={(e) => {
               e.preventDefault();
               if (!isAdmin || draggedItem === widgetKey) return;
@@ -340,15 +446,6 @@ export default function DashboardView({
             className={`transition-all duration-200 h-full ${draggedItem === widgetKey ? 'opacity-40 scale-95 border-dashed border-2 border-slate-300 rounded-xl' : ''}`}
           >
             <div className="group relative h-full">
-              {isAdmin ? (
-                <div className="absolute top-4 right-4 z-20 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 bg-white/80 p-1 rounded backdrop-blur-sm">
-                  <GripVertical size={16} />
-                </div>
-              ) : (
-                <div className="absolute top-4 right-4 z-20 opacity-0 group-hover:opacity-50 transition-opacity text-slate-200 pointer-events-none">
-                  <Lock size={16} />
-                </div>
-              )}
               {renderWidget(widgetKey)}
             </div>
           </div>

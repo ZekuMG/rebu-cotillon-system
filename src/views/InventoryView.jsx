@@ -16,11 +16,25 @@ import {
   LayoutGrid,
   List,
   Scale,
-  PackageX
+  PackageX,
+  CalendarX // ✨ NUEVO ICONO
 } from 'lucide-react';
 // ♻️ FIX: Importamos FancyPrice junto con helpers
 import { formatStock, formatNumber } from '../utils/helpers';
 import { FancyPrice } from '../components/FancyPrice';
+
+// ✨ HELPER: Verifica si la fecha es menor a 14 días o ya pasó
+const isExpiringSoon = (dateString) => {
+  if (!dateString) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const [year, month, day] = dateString.split('-');
+  const expDate = new Date(year, month - 1, day);
+  expDate.setHours(0, 0, 0, 0);
+  const diffTime = expDate.getTime() - today.getTime();
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  return diffDays <= 14;
+};
 
 export default function InventoryView({
   inventory, categories, inventorySearch, setInventorySearch,
@@ -31,15 +45,28 @@ export default function InventoryView({
 }) {
   const [selectedProduct, setSelectedProduct] = useState(null); 
   const [showGridMenu, setShowGridMenu] = useState(false);
+  
+  // ✨ ESTADOS DE FILTROS RÁPIDOS
   const [showOnlyOutOfStock, setShowOnlyOutOfStock] = useState(false);
+  const [showOnlyExpirations, setShowOnlyExpirations] = useState(false);
 
-  // ✨ NUEVO ESTADO: Cantidad de productos visibles (para el renderizado diferido)
   const [visibleCount, setVisibleCount] = useState(40);
 
-  // ✨ NUEVO EFECTO: Si el usuario busca o filtra, volvemos a mostrar solo los primeros 40
+  // ✨ EFECTO "PUENTE": Atrapa la orden del Dashboard y activa los botones
   useEffect(() => {
-    setVisibleCount(40);
-  }, [inventorySearch, inventoryCategoryFilter, showOnlyOutOfStock]);
+    if (inventorySearch === 'AGOTADOS') {
+      setShowOnlyOutOfStock(true);
+      setShowOnlyExpirations(false);
+      setInventorySearch(''); // Borramos la palabra del buscador
+    } else if (inventorySearch === 'VENCIMIENTOS') {
+      setShowOnlyExpirations(true);
+      setShowOnlyOutOfStock(false);
+      setInventorySearch(''); // Borramos la palabra del buscador
+    } else {
+      // Si el usuario busca algo normal, reseteamos la cantidad visible a 40
+      setVisibleCount(40);
+    }
+  }, [inventorySearch, setInventorySearch]);
 
   const filteredInventory = (inventory || []).filter((item) => {
     const searchString = (inventorySearch || '').toLowerCase().trim();
@@ -57,15 +84,15 @@ export default function InventoryView({
         ? item.categories.includes(inventoryCategoryFilter)
         : item.category === inventoryCategoryFilter);
     
-    const matchesStock = showOnlyOutOfStock ? (Number(item.stock) === 0) : true;
+    // ✨ APLICAMOS LOS FILTROS DE BOTONES
+    const matchesStock = showOnlyOutOfStock ? (Number(item.stock) <= 0) : true;
+    const matchesExpiration = showOnlyExpirations ? isExpiringSoon(item.expiration_date) : true;
         
-    return matchesSearch && matchesCategory && matchesStock;
+    return matchesSearch && matchesCategory && matchesStock && matchesExpiration;
   });
 
-  // ✨ NUEVA FUNCIÓN: Detecta cuando el usuario scrollea cerca del fondo
   const handleScroll = (e) => {
     const { scrollTop, clientHeight, scrollHeight } = e.target;
-    // Si estamos a menos de 400px del fondo de la lista, cargamos 40 más
     if (scrollHeight - scrollTop <= clientHeight + 400) {
       if (visibleCount < filteredInventory.length) {
         setVisibleCount((prev) => prev + 40);
@@ -73,7 +100,6 @@ export default function InventoryView({
     }
   };
 
-  // ✨ Cortamos la lista para mostrar solo los que el scroll permite
   const displayedInventory = filteredInventory.slice(0, visibleCount);
 
   const handleCardClick = (product) => {
@@ -87,7 +113,7 @@ export default function InventoryView({
   const getStockColorClass = (product) => {
     const stock = Number(product.stock) || 0;
     const isWeight = product.product_type === 'weight';
-    if (stock === 0) return 'text-slate-400';
+    if (stock <= 0) return 'text-slate-400';
     if (isWeight) {
       if (stock <= 100) return 'text-red-600';
       if (stock <= 500) return 'text-amber-600';
@@ -98,7 +124,7 @@ export default function InventoryView({
     return 'text-green-600';
   };
 
-  const isOutOfStock = (product) => Number(product.stock) === 0;
+  const isOutOfStock = (product) => Number(product.stock) <= 0;
 
   return (
     <div className="flex h-full overflow-hidden bg-slate-100">
@@ -122,8 +148,9 @@ export default function InventoryView({
               </select>
             </div>
 
+            {/* ✨ BOTÓN: SIN STOCK */}
             <button
-              onClick={() => setShowOnlyOutOfStock(!showOnlyOutOfStock)}
+              onClick={() => { setShowOnlyOutOfStock(!showOnlyOutOfStock); setShowOnlyExpirations(false); }}
               title="Mostrar solo productos agotados"
               className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-bold transition-all ${
                 showOnlyOutOfStock 
@@ -133,6 +160,20 @@ export default function InventoryView({
             >
               <PackageX size={16} className={showOnlyOutOfStock ? 'text-red-500' : 'text-slate-400'} />
               <span className="hidden sm:inline">Sin Stock</span>
+            </button>
+
+            {/* ✨ BOTÓN: VENCIMIENTOS */}
+            <button
+              onClick={() => { setShowOnlyExpirations(!showOnlyExpirations); setShowOnlyOutOfStock(false); }}
+              title="Mostrar próximos a vencer y vencidos"
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-bold transition-all ${
+                showOnlyExpirations 
+                  ? 'bg-orange-50 border-orange-200 text-orange-600 shadow-inner' 
+                  : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700'
+              }`}
+            >
+              <CalendarX size={16} className={showOnlyExpirations ? 'text-orange-500' : 'text-slate-400'} />
+              <span className="hidden sm:inline">Vencimientos</span>
             </button>
 
           </div>
@@ -163,15 +204,17 @@ export default function InventoryView({
           </div>
         </div>
 
-        {/* ✨ Contenedor con onScroll */}
+        {/* Contenedor con onScroll */}
         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar" onScroll={handleScroll}>
           {filteredInventory.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-400">
-              {showOnlyOutOfStock ? (
+              {showOnlyOutOfStock || showOnlyExpirations ? (
                 <>
-                  <CheckCircle size={64} className="mb-4 text-green-400 opacity-80" />
+                  <div className="w-16 h-16 rounded-full bg-green-50 flex items-center justify-center mb-4">
+                    <CalendarX size={32} className="text-green-500" />
+                  </div>
                   <p className="text-lg font-bold text-slate-600">¡Todo en orden!</p>
-                  <p className="text-sm">No tienes ningún producto agotado en esta vista.</p>
+                  <p className="text-sm">No tienes productos en esta categoría de alerta.</p>
                 </>
               ) : (
                 <>
@@ -186,15 +229,15 @@ export default function InventoryView({
               {/* VISTA GRID */}
               {inventoryViewMode === 'grid' ? (
                 <div className="grid gap-3 transition-all duration-300" style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}>
-                  {/* ✨ Usamos displayedInventory en lugar de filteredInventory */}
                   {displayedInventory.map((product) => {
                     const isSelected = selectedProduct?.id === product.id;
                     const stockColor = getStockColorClass(product);
                     const outOfStock = isOutOfStock(product);
                     const isWeight = product.product_type === 'weight';
+                    const expired = isExpiringSoon(product.expiration_date);
 
                     return (
-                      <div key={product.id} onClick={() => handleCardClick(product)} className={`bg-white rounded-xl border overflow-hidden flex flex-col cursor-pointer transition-all hover:shadow-lg group ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 transform scale-[0.98]' : 'hover:border-fuchsia-200'} ${outOfStock ? 'grayscale opacity-75' : ''}`}>
+                      <div key={product.id} onClick={() => handleCardClick(product)} className={`bg-white rounded-xl border overflow-hidden flex flex-col cursor-pointer transition-all hover:shadow-lg group ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 transform scale-[0.98]' : 'hover:border-fuchsia-200'} ${outOfStock ? 'grayscale opacity-75' : ''} ${expired && !outOfStock ? 'border-orange-300 bg-orange-50/30' : ''}`}>
                         <div className="aspect-square bg-slate-50 relative overflow-hidden">
                           {product.image ? (
                             <img src={product.image} alt={product.title} className="w-full h-full object-cover transition-transform group-hover:scale-110 duration-500" />
@@ -203,26 +246,37 @@ export default function InventoryView({
                               <span className={`font-bold text-slate-500 uppercase leading-tight ${gridColumns > 6 ? 'text-[10px]' : 'text-xs'}`}>{product.title}</span>
                             </div>
                           )}
+                          
+                          {expired && !outOfStock && (
+                             <div className="absolute inset-0 bg-red-500/10 flex items-center justify-center z-10 pointer-events-none backdrop-blur-[0.5px]">
+                               <span className="bg-red-600 text-white text-[10px] font-black px-2 py-1 rounded shadow-md border border-red-800 flex items-center gap-1">
+                                 <AlertTriangle size={10} /> VENCIDO
+                               </span>
+                             </div>
+                          )}
+
                           {outOfStock && (
                             <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] flex items-center justify-center z-10">
                                 <span className="bg-slate-800 text-white text-[10px] font-bold px-2 py-1 rounded shadow-sm border border-slate-600">AGOTADO</span>
                             </div>
                           )}
-                          {!outOfStock && ((isWeight && product.stock <= 200) || (!isWeight && product.stock <= 5)) && (
-                            <div className={`absolute top-1 right-1 bg-red-500 text-white font-bold rounded-full shadow-sm flex items-center justify-center ${gridColumns > 6 ? 'w-3 h-3 p-0' : 'px-2 py-0.5 text-[10px] gap-1'}`}>
+                          
+                          {!outOfStock && !expired && ((isWeight && product.stock <= 200) || (!isWeight && product.stock <= 5)) && (
+                            <div className={`absolute top-1 right-1 bg-red-500 text-white font-bold rounded-full shadow-sm flex items-center justify-center z-20 ${gridColumns > 6 ? 'w-3 h-3 p-0' : 'px-2 py-0.5 text-[10px] gap-1'}`}>
                               {gridColumns > 6 ? '' : <AlertTriangle size={10} />}
                               {gridColumns > 6 ? '' : 'BAJO'}
                             </div>
                           )}
+                          
                           {isWeight && (
-                            <div className={`absolute top-1 left-1 bg-amber-500 text-white font-bold rounded shadow-sm flex items-center gap-0.5 ${gridColumns > 7 ? 'px-1 py-0.5' : 'px-1.5 py-0.5 text-[9px]'}`}>
+                            <div className={`absolute top-1 left-1 bg-amber-500 text-white font-bold rounded shadow-sm flex items-center gap-0.5 z-20 ${gridColumns > 7 ? 'px-1 py-0.5' : 'px-1.5 py-0.5 text-[9px]'}`}>
                               <Scale size={gridColumns > 7 ? 7 : 9} />
                               {gridColumns <= 7 && 'PESO'}
                             </div>
                           )}
                         </div>
                         
-                        <div className={`flex-1 flex flex-col ${gridColumns > 7 ? 'p-1.5' : 'p-3'}`}>
+                        <div className={`flex-1 flex flex-col z-20 bg-white ${gridColumns > 7 ? 'p-1.5' : 'p-3'}`}>
                           {gridColumns <= 7 && (
                             <div className="mb-1">
                               <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider truncate block">
@@ -230,7 +284,7 @@ export default function InventoryView({
                               </span>
                             </div>
                           )}
-                          <h3 className={`font-bold text-slate-800 leading-tight mb-1 flex-1 ${gridColumns > 7 ? 'text-[10px] line-clamp-1' : 'text-sm line-clamp-2'}`}>{product.title}</h3>
+                          <h3 className={`font-bold leading-tight mb-1 flex-1 ${gridColumns > 7 ? 'text-[10px] line-clamp-1' : 'text-sm line-clamp-2'} ${expired ? 'text-red-700' : 'text-slate-800'}`}>{product.title}</h3>
                           <div className={`flex justify-between items-end mt-auto ${gridColumns > 7 ? 'pt-1' : 'pt-2 border-t border-slate-100'}`}>
                             <div>
                               {gridColumns <= 6 && <p className="text-[10px] text-slate-400">Precio</p>}
@@ -256,26 +310,34 @@ export default function InventoryView({
               ) : (
                 /* VISTA LISTA */
                 <div className="flex flex-col gap-2">
-                  {/* ✨ Usamos displayedInventory en lugar de filteredInventory */}
                   {displayedInventory.map((product) => {
                     const isSelected = selectedProduct?.id === product.id;
                     const stockColor = getStockColorClass(product);
                     const outOfStock = isOutOfStock(product);
                     const isWeight = product.product_type === 'weight';
+                    const expired = isExpiringSoon(product.expiration_date);
 
                     return (
-                      <div key={product.id} onClick={() => handleCardClick(product)} className={`bg-white rounded-lg border p-3 flex items-center gap-4 cursor-pointer transition-all hover:shadow-md ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 bg-fuchsia-50' : 'hover:border-fuchsia-200'} ${outOfStock ? 'grayscale opacity-75' : ''}`}>
+                      <div key={product.id} onClick={() => handleCardClick(product)} className={`bg-white rounded-lg border p-3 flex items-center gap-4 cursor-pointer transition-all hover:shadow-md ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 bg-fuchsia-50' : 'hover:border-fuchsia-200'} ${outOfStock ? 'grayscale opacity-75' : ''} ${expired && !outOfStock ? 'bg-orange-50/50 border-orange-200' : ''}`}>
                         <div className="w-12 h-12 rounded-md bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border relative">
                           {product.image ? (
                             <img src={product.image} alt="" className="w-full h-full object-cover" />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center bg-slate-200 text-[8px] font-bold text-center text-slate-500 leading-none p-1">{product.title.slice(0,10)}...</div>
                           )}
-                          {outOfStock && (<div className="absolute inset-0 bg-white/60 flex items-center justify-center"><X size={16} className="text-red-500"/></div>)}
-                          {isWeight && !outOfStock && (<div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-0.5 py-0.5"><Scale size={7} className="text-white" /></div>)}
+                          {outOfStock && (<div className="absolute inset-0 bg-white/60 flex items-center justify-center z-10"><X size={16} className="text-red-500"/></div>)}
+                          {expired && !outOfStock && (
+                            <div className="absolute inset-0 bg-red-600/20 flex items-center justify-center backdrop-blur-[1px] z-10 pointer-events-none">
+                               <AlertTriangle size={16} className="text-red-600 drop-shadow-md" />
+                            </div>
+                          )}
+                          {isWeight && !outOfStock && (<div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-0.5 py-0.5 z-20"><Scale size={7} className="text-white" /></div>)}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <h4 className="font-bold text-slate-800 truncate">{product.title}</h4>
+                          <h4 className={`font-bold truncate ${expired ? 'text-red-700' : 'text-slate-800'}`}>
+                             {product.title}
+                             {expired && <span className="ml-2 text-[8px] bg-red-100 text-red-700 border border-red-200 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider align-middle">Vencido</span>}
+                          </h4>
                           <div className="flex items-center gap-2 mt-1">
                             <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded text-slate-500 font-bold border border-slate-200">
                                 {Array.isArray(product.categories) ? product.categories[0] : product.category}
@@ -316,6 +378,8 @@ export default function InventoryView({
       {/* PANEL LATERAL */}
       {selectedProduct && (() => {
         const isWeight = selectedProduct.product_type === 'weight';
+        const expired = isExpiringSoon(selectedProduct.expiration_date);
+
         return (
         <div className="w-[320px] bg-white border-l shadow-2xl flex flex-col shrink-0 animate-in slide-in-from-right duration-300 relative z-20">
           <div className="p-4 border-b flex justify-between items-start bg-slate-50">
@@ -330,7 +394,7 @@ export default function InventoryView({
             
             {/* Preview */}
             <div className="text-center">
-              <div className="w-32 h-32 bg-slate-100 rounded-xl mx-auto mb-3 overflow-hidden border shadow-sm relative group">
+              <div className={`w-32 h-32 bg-slate-100 rounded-xl mx-auto mb-3 overflow-hidden border shadow-sm relative group ${expired ? 'ring-2 ring-red-500' : ''}`}>
                 {selectedProduct.image ? (
                   <img src={selectedProduct.image} alt="" className="w-full h-full object-cover" />
                 ) : (
@@ -348,6 +412,11 @@ export default function InventoryView({
                 {isWeight && (
                   <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold rounded-full border border-amber-200 flex items-center gap-1">
                     <Scale size={10} /> Peso
+                  </span>
+                )}
+                {expired && (
+                  <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[10px] font-bold rounded-full border border-red-200 flex items-center gap-1">
+                    <CalendarX size={10} /> Vencido
                   </span>
                 )}
               </div>
@@ -399,6 +468,14 @@ export default function InventoryView({
                 <span className="text-slate-500 flex items-center gap-2"><ScanBarcode size={14} /> Código</span>
                 <span className="font-mono font-bold text-slate-700">{selectedProduct.barcode || '-'}</span>
               </div>
+              {selectedProduct.expiration_date && (
+                <div className="flex justify-between items-center text-sm border-b border-slate-200 pb-2">
+                  <span className="text-slate-500 flex items-center gap-2"><CalendarX size={14} /> Vencimiento</span>
+                  <span className={`font-bold ${expired ? 'text-red-600' : 'text-slate-700'}`}>
+                    {new Date(selectedProduct.expiration_date).toLocaleDateString('es-AR')}
+                  </span>
+                </div>
+              )}
               {currentUser?.role === 'admin' && (
                 <>
                   <div className="flex justify-between items-center text-sm border-b border-slate-200 pb-2">
