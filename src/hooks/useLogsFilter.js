@@ -112,22 +112,35 @@ export function useLogsFilter(dailyLogs = []) {
     }));
   }, [safeLogs]);
 
-  // 2. Obtener acciones únicas para el select
+  // 2. Obtener acciones únicas para el select (IGNORAMOS TESTS PARA QUE NO SALGAN EN EL SELECT)
   const uniqueActions = useMemo(() => {
-    return [...new Set(normalizedLogs.map((log) => log.action || 'Desconocido'))].sort();
+    const validLogsForSelect = normalizedLogs.filter(log => !log.isTest);
+    return [...new Set(validLogsForSelect.map((log) => log.action || 'Desconocido'))].sort();
   }, [normalizedLogs]);
 
   const hasActiveFilters = filterDateStart || filterDateEnd || filterUser || filterAction || filterSearch;
 
   // 3. Filtrar
   const filteredLogs = useMemo(() => {
+    const isSearchingTest = filterSearch.toLowerCase().trim() === 'test';
+
     return normalizedLogs.filter((log) => {
       if (!log) return false;
+
+      // ✨ LÓGICA DEL "MODO PRUEBA":
+      // Si el log es de prueba, lo ocultamos SIEMPRE, a menos que el usuario busque exactamente "test"
+      if (log.isTest) {
+        if (!isSearchingTest) return false;
+      } else {
+        // Si el log NO es de prueba, pero el usuario está buscando "test", lo ocultamos para que solo se vean las pruebas
+        if (isSearchingTest) return false;
+      }
+
       const logDate = log.date || '';
       const logUser = log.user || 'Sistema';
       const logAction = log.action || 'Acción';
 
-      // COMPARACIÓN MATEMÁTICA DE FECHAS (A prueba de fallos)
+      // COMPARACIÓN MATEMÁTICA DE FECHAS
       if (filterDateStart || filterDateEnd) {
         const logNum = getLogDateNumber(logDate);
         if (logNum === 0) return false;
@@ -146,11 +159,13 @@ export function useLogsFilter(dailyLogs = []) {
 
       if (filterAction && logAction !== filterAction && !(filterAction === 'Venta Modificada' && logAction === 'Modificación Pedido')) return false;
 
-      if (filterSearch) { 
+      // Si no estamos buscando "test" estrictamente, aplicamos la búsqueda normal
+      if (filterSearch && !isSearchingTest) { 
         const search = filterSearch.toLowerCase(); 
         const rawString = JSON.stringify(log).toLowerCase(); 
         if (!rawString.includes(search)) return false; 
       }
+      
       return true;
     });
   }, [normalizedLogs, filterDateStart, filterDateEnd, filterUser, filterAction, filterSearch]);
