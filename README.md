@@ -3,7 +3,7 @@
 ## README Técnico para IAs
 
 > **Este documento describe la arquitectura completa del sistema para que una IA pueda entender y modificar el código sin necesidad de leer cada archivo.**
-> Última actualización: Febrero 2026
+> Última actualización: Marzo 2026 — **Versión 0.6.2**
 
 ---
 
@@ -19,7 +19,6 @@ Sistema de Punto de Venta (POS) para una tienda de cotillón (artículos de fies
 
 ## 2. ESTRUCTURA DE ARCHIVOS
 
-```
 Punto de Venta Rebu - Release/
 ├── public/
 │   ├── favicon.svg
@@ -32,9 +31,9 @@ Punto de Venta Rebu - Release/
 │   │   ├── ActionLogs/
 │   │   │   ├── LogAuxModals.jsx
 │   │   │   ├── LogDetailModal.jsx
-│   │   │   ├── LogDetailRenderer.jsx
+│   │   │   ├── LogDetailRenderer.jsx   ← Renderizado de detalles con Sabueso de Notas
 │   │   │   ├── LogsControls.jsx
-│   │   │   └── LogsTable.jsx
+│   │   │   └── LogsTable.jsx           ← Tabla principal y export de extractRealNote()
 │   │   ├── dashboard/
 │   │   │   ├── DashboardControls.jsx
 │   │   │   ├── KpiCards.jsx
@@ -48,7 +47,7 @@ Punto de Venta Rebu - Release/
 │   │   │   ├── CashModals.jsx
 │   │   │   ├── ClientSelectionModal.jsx
 │   │   │   ├── DailyReportModal.jsx
-│   │   │   ├── ExpenseModal.jsx
+│   │   │   ├── ExpenseModal.jsx        ← Envía 'note' explícito
 │   │   │   ├── HistoryModals.jsx
 │   │   │   ├── NotificationModal.jsx
 │   │   │   ├── ProductModals.jsx        ← Modales crear/editar/eliminar producto
@@ -76,16 +75,16 @@ Punto de Venta Rebu - Release/
 │   │   └── storage.js                  ← Upload/delete de imágenes en Supabase Storage
 │   ├── views/                          ← Vistas principales (una por sección)
 │   │   ├── CategoryManagerView.jsx     ← ABM categorías
-│   │   ├── ClientsView.jsx             ← Gestión de socios
+│   │   ├── ClientsView.jsx             ← Gestión de socios (Buscador + Select de Ordenamiento integrados)
 │   │   ├── DashboardView.jsx           ← Panel de métricas
 │   │   ├── HistoryView.jsx             ← Historial de ventas
 │   │   ├── InventoryView.jsx           ← Catálogo con grid/lista + panel lateral
-│   │   ├── LogsView.jsx               ← Registro de actividad
-│   │   ├── POSView.jsx                ← ⭐ PUNTO DE VENTA PRINCIPAL
+│   │   ├── LogsView.jsx                ← Registro de actividad
+│   │   ├── POSView.jsx                 ← ⭐ PUNTO DE VENTA PRINCIPAL
 │   │   ├── ReportsHistoryView.jsx      ← Reportes de cierres de caja
 │   │   └── RewardsView.jsx            ← Gestión de recompensas canjeables
 │   ├── App.css
-│   ├── App.jsx                         ← ⚠️ LÓGICA PRINCIPAL (estados globales, handlers)
+│   ├── App.jsx                         ← ⚠️ LÓGICA PRINCIPAL (estados globales, handlers, addLog)
 │   ├── data.js                         ← Constantes (PAYMENT_METHODS, etc.)
 │   ├── index.css                       ← Estilos Tailwind + estilos de impresión
 │   └── main.jsx                        ← Entry point React
@@ -93,7 +92,6 @@ Punto de Venta Rebu - Release/
 ├── index.html
 ├── package.json
 └── vite.config.js
-```
 
 ---
 
@@ -106,7 +104,7 @@ Punto de Venta Rebu - Release/
 - **Todos los estados globales** (inventory, cart, clients, logs, rewards, etc.)
 - **Todos los handlers** (addToCart, handleCheckout, saveEditProduct, etc.)
 - **fetchCloudData()** — Carga inicial de TODOS los datos desde Supabase
-- **addLog()** — Registra cada acción en la tabla `logs`
+- **addLog()** — Registra cada acción en la tabla `logs` (con inteligencia de notas).
 
 Las **views** (`POSView`, `InventoryView`, etc.) son componentes de presentación que reciben datos y callbacks por props desde `App.jsx`.
 
@@ -114,11 +112,9 @@ Los **modales** están en `components/modals/` y se orquestan desde `AppModals.j
 
 ### Flujo de datos simplificado
 
-```
 Supabase DB ──fetchCloudData()──→ App.jsx (estados) ──props──→ Views/Modales
                                       ↑                              │
                                       └──── handlers ←──── eventos ──┘
-```
 
 ### Sincronización en tiempo real
 
@@ -149,9 +145,7 @@ Supabase DB ──fetchCloudData()──→ App.jsx (estados) ──props──�
 
 ### Campo `product_type`
 
-```sql
 ALTER TABLE products ADD COLUMN IF NOT EXISTS product_type TEXT DEFAULT 'quantity';
-```
 
 Valores posibles: `'quantity'` (unidades) o `'weight'` (gramos).
 
@@ -213,27 +207,12 @@ El sistema soporta **2 tipos** de productos que coexisten:
 4. En carrito: click en badge de gramos → input inline editable
 5. Checkout: `price × quantity` funciona igual (price es $/g, quantity es gramos)
 
-### Medios de pago
-
-Definidos en `data.js` como `PAYMENT_METHODS`:
-- Efectivo
-- Débito
-- Crédito (con cuotas: 1 con 10% recargo, 3, 6, 12)
-- MercadoPago
-
-### Cálculo de total
-
-```javascript
-subtotal = cart.reduce((t, i) => t + price * quantity, 0)
-total = selectedPayment === 'Credito' && installments === 1 ? subtotal * 1.1 : subtotal
-```
-
 ---
 
 ## 7. SISTEMA DE PUNTOS Y RECOMPENSAS
 
-- Los socios (`clients`) acumulan puntos: **1 punto por cada $150 de compra**
-- `pointsToEarn = Math.floor(total / 150)`
+- Los socios (`clients`) acumulan puntos: **1 punto por cada $500 de compra** (Actualizado v0.6)
+- `pointsToEarn = Math.floor(total / 500)`
 - Las recompensas (`rewards`) tienen un costo en puntos y stock propio
 - Al canjear: se descuentan puntos del socio, se agrega al carrito como `isReward: true` con `price: 0`
 - Items de recompensa no se pueden modificar en el carrito (botones +/- deshabilitados)
@@ -272,62 +251,20 @@ El campo `currentUser.role` controla los permisos en UI (botones ocultos/deshabi
 ### `App.jsx` (~1200+ líneas)
 El componente más importante. Contiene:
 - **~40 estados** con `useState` (inventory, cart, clients, logs, etc.)
-- **fetchCloudData()** — Promise.allSettled de 9 queries a Supabase
-- **useEffect principal** — Carga inicial + Realtime + re-sync con cooldown
-- **handleAddItem(e, overrideData)** — Crear producto (acepta overrideData para peso kg→g)
-- **saveEditProduct(e, overrideData)** — Editar producto
-- **confirmDeleteProduct()** — Eliminar producto + limpiar Storage
-- **handleImageUpload(e, isEditing)** — Async, sube a Supabase Storage
-- **addToCart(item, grams)** — Agrega al carrito (grams solo para peso)
-- **updateCartItemQty(id, newQty)** — Modifica cantidad en carrito
-- **handleCheckout()** — Procesa venta completa
-- **addLog(action, details, reason)** — Registra actividad en Supabase
+- **fetchCloudData()** — Promise.allSettled de 9 queries a Supabase. Posee Auto-Sanación de items vacíos en ventas históricas.
+- **addLog(action, details, defaultReason)** — Registra actividad en Supabase. *Posee inteligencia de notas*: detecta si en los `details` viaja alguna nota (`description`, `note`, `extraInfo`) y pisa automáticamente los textos aburridos (ej. "Salida de dinero") guardando la nota real del usuario en la BD.
 
-### `ProductModals.jsx`
-3 modales + componentes auxiliares:
-- `AddProductModal` — Con `ProductTypeSelector` (cantidad/peso), `WeightStockInput` (toggle g/kg estilizado), `ImageSection`, `CategoryMultiSelect`
-- `EditProductModal` — Similar pero tipo es solo lectura, precio se muestra en $/kg convertido
-- `DeleteProductModal` — Confirmación con motivo opcional
+### `LogsTable.jsx` & `LogDetailRenderer.jsx`
+- **`extractRealNote(log)`**: Funciona como un **"Sabueso de Notas"**. Rastrea en la base de datos (tanto en la columna `reason` como dentro del JSON `details`) intentando rescatar la nota real ingresada por el usuario (ignorando los strings genéricos generados por el sistema, dándole retroactividad a registros viejos).
 
-### `POSView.jsx`
-Vista del punto de venta con:
-- Catálogo filtrable (search + categoría) en grid o lista
-- Slider de densidad de columnas (4-10)
-- `WeightInputModal` — Mini-modal para ingresar gramos con botones rápidos
-- Carrito lateral con items editables (peso: click en badge → input inline)
-- Sección de socio (asignar, quitar, canjear puntos)
-- Selector de pago y cuotas
-- Modal pre-checkout "¿Asignar Socio?"
+### `ClientsView.jsx`
+- Lista de Socios. Integra un **buscador en tiempo real fusionado con un select de ordenamiento reactivo** (por id, alfabético, saldo de puntos, fecha de ingreso y última compra). Muestra de forma calculada el último movimiento de cada socio procesando las transacciones al vuelo.
 
-### `InventoryView.jsx`
-Vista de inventario con:
-- Grid/lista con densidad ajustable
-- Panel lateral desplegable al hacer click en producto
-- Badges de stock (verde/ámbar/rojo), badges "PESO", "AGOTADO"
-- Panel lateral: preview, stats, equivalencias peso, código, costo, margen
-- Botones Editar/Eliminar (solo admin)
-
-### `helpers.js`
-Funciones compartidas:
-- `formatPrice(amount)` — Formato argentino con puntos de miles (de-DE)
-- `formatTime24(timeStr)` — Convierte 12h a 24h
-- `getGradientForItem(id, title)` — Gradiente para placeholders
-- `isVentaLog(log)` — Identifica logs de venta
-- `getVentaTotal(details)` — Calcula total de un log de venta
-- `normalizeDate(dateStr)` — Parsea DD/MM/YYYY argentino
-- `formatStock(product)` — "5 u." o "500g"/"1.5kg"
-- `formatWeight(grams)` — "105g" o "1kg"
-- `getPricePerKg(pricePerGram)` — Multiplica ×1000 y formatea
-
-### `storage.js`
-Utilidades de Supabase Storage:
-- `uploadProductImage(file)` → URL pública
-- `deleteProductImage(imageUrl)` → Limpia del bucket
-- `isStorageUrl(url)` / `isBase64Image(str)` — Detectores
+### `POSView.jsx` y `InventoryView.jsx`
+- Vistas Core de negocio (Catálogo con grid/lista, Carrito, Pagos, Modales Pre-Checkout).
 
 ### `TicketPrintLayout.jsx`
 > ⚠️ **NO MODIFICAR** sin leer la guía de impresión en el README del repo.
-
 Layout para impresoras térmicas 58mm. Usa estilos inline críticos, fuente Arial bold 11px, color #000000 absoluto. Configuración `@page { margin: 0; size: 58mm auto; }`.
 
 ---
@@ -336,10 +273,8 @@ Layout para impresoras térmicas 58mm. Usa estilos inline críticos, fuente Aria
 
 - **Lenguaje UI:** Español argentino (vos, tu)
 - **Formato precio:** Puntos de miles, sin decimales → $1.500
-- **Iconos:** lucide-react en todo el proyecto
-- **Colores principales:** fuchsia (acentos), slate (neutros), amber (peso/alertas)
+- **Manejo de Notas en Logs:** Para evitar que el sistema pise notas personalizadas con textos genéricos (ej: "Salida de dinero"), `App.jsx` detecta la nota real, y `extractRealNote()` en `LogsTable.jsx` prioriza visualizar lo que el usuario verdaderamente escribió.
 - **Notificaciones:** `showNotification(type, title, message)` — type: success/error/warning
-- **Logs:** Toda acción significativa se registra con `addLog(action, details, reason)`
 - **Supabase client:** Credenciales hardcoded en `supabase/client.js` (no .env)
 - **Electron:** Custom fetch header `Origin: http://localhost` para evitar bloqueos CORS
 
@@ -347,10 +282,8 @@ Layout para impresoras térmicas 58mm. Usa estilos inline críticos, fuente Aria
 
 ## 12. SUPABASE CONFIG
 
-```
 URL: https://rwqqjthrvweubksrlqzy.supabase.co
 Key: eyJhbGciOiJIUzI1NiIs... (anon key, hardcoded en client.js)
-```
 
 El cliente tiene configuración especial para Electron:
 - `detectSessionInUrl: false`
@@ -368,7 +301,8 @@ El cliente tiene configuración especial para Electron:
 | File picker cerraba modales | Listeners `focus` + `visibilitychange` disparaban fetchCloudData | Quitado listener `focus`, cooldown 15s en `visibilitychange` |
 | Spinner tapaba modales al re-sync | `setIsCloudLoading(true)` siempre | `fetchCloudData(showSpinner=false)` para re-syncs |
 | Crear categoría daba 409 Conflict | Secuencia de `categories.id` desincronizada | `SELECT setval(pg_get_serial_sequence(...))` |
-| Filter crash en InventoryView | `inventorySearch` o `title` undefined | Null safety con `\|\| ''` y `\|\| []` |
+| Notas de gastos o socios ocultas por textos genéricos | Supabase recibía "Salida de dinero" en vez de la nota real | Lógica de detección en `addLog` + "Sabueso" (`extractRealNote`) en `LogsTable.jsx` |
+| Edición de Venta fallaba con IDs no UUID | Supabase rechazaba IDs que no fueran tipo UUID válidos | Filtro RegEx UUID en `handleSaveEditedTransaction` para evitar crash |
 
 ---
 
@@ -385,7 +319,6 @@ El cliente tiene configuración especial para Electron:
 
 ## 15. COMANDOS
 
-```bash
 # Desarrollo web
 npm run dev
 
@@ -397,20 +330,3 @@ npm run electron:dev
 
 # Electron (build)
 npm run electron:build
-```
-
----
-
-## 16. DEPENDENCIAS PRINCIPALES
-
-- `react` + `react-dom` — UI
-- `vite` — Bundler
-- `tailwindcss` — Estilos utility-first
-- `@supabase/supabase-js` — Backend as a Service
-- `lucide-react` — Iconos
-- `recharts` — Gráficos del dashboard
-- `electron` + `electron-builder` — App de escritorio
-
----
-
-*Documento generado para asistir a IAs en la comprensión del codebase. Si modificás algo, actualizá este README.*
