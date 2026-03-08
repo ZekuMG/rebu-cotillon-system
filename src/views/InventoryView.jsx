@@ -181,12 +181,12 @@ export default function InventoryView({
           <div className="flex items-center gap-3">
             {inventoryViewMode === 'grid' && (
               <div className="relative">
-                <button onClick={() => setShowGridMenu(!showGridMenu)} className={`p-2 rounded-lg border transition-all ${showGridMenu ? 'bg-slate-100 ring-2 ring-slate-200' : 'bg-white hover:bg-slate-50'}`} title="Ajustar densidad"><SlidersHorizontal size={20} className="text-slate-600" /></button>
+                <button onClick={() => setShowGridMenu(!showGridMenu)} className={`p-2 rounded-lg border transition-all ${showGridMenu ? 'bg-slate-100 ring-2 ring-slate-200' : 'bg-white hover:bg-slate-50'}`} title="Ajustar tamaño"><SlidersHorizontal size={20} className="text-slate-600" /></button>
                 {showGridMenu && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowGridMenu(false)}></div>
                     <div className="absolute top-full right-0 mt-2 w-64 bg-white rounded-xl shadow-xl border border-slate-200 p-4 z-50 animate-in fade-in zoom-in-95">
-                      <div className="flex justify-between items-center mb-3"><span className="text-xs font-bold text-slate-500 uppercase">Densidad</span><span className="text-xs font-bold text-fuchsia-600 bg-fuchsia-50 px-2 py-0.5 rounded-full border border-fuchsia-100">{gridColumns} columnas</span></div>
+                      <div className="flex justify-between items-center mb-3"><span className="text-xs font-bold text-slate-500 uppercase">Tamaño</span><span className="text-xs font-bold text-fuchsia-600 bg-fuchsia-50 px-2 py-0.5 rounded-full border border-fuchsia-100">{gridColumns} columnas</span></div>
                       <div className="relative h-6 flex items-center"><input type="range" min="4" max="10" step="1" value={gridColumns} onChange={(e) => setGridColumns(Number(e.target.value))} className="custom-range w-full" /></div>
                       <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-mono"><span>Grande (4x)</span><span>Pequeño (10x)</span></div>
                     </div>
