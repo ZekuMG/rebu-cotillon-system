@@ -1,5 +1,5 @@
 // src/views/ClientsView.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Search, 
   History, 
@@ -17,9 +17,11 @@ import {
   Trophy,
   XCircle,
   Printer,
-  ClipboardCheck 
+  ClipboardCheck,
+  CalendarDays, // ✨ Nuevo icono para fechas
+  Clock, // ✨ Nuevo icono para fechas
+  ArrowUpDown // ✨ Nuevo icono para ordenamiento
 } from 'lucide-react';
-// ♻️ FIX: Importamos formatNumber y el componente FancyPrice
 import { formatNumber } from '../utils/helpers';
 import { FancyPrice } from '../components/FancyPrice';
 
@@ -37,6 +39,8 @@ export default function ClientsView({
 }) {
   
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortBy, setSortBy] = useState('date_added_desc'); // ✨ Estado para el filtro/orden
+
   const [selectedMember, setSelectedMember] = useState(null);
   const [selectedTx, setSelectedTx] = useState(null);
   
@@ -49,6 +53,46 @@ export default function ClientsView({
 
   const [isDrawerEditMode, setIsDrawerEditMode] = useState(false);
   const [drawerFormData, setDrawerFormData] = useState({});
+
+  const formatShortDate = (isoString) => {
+    if (!isoString) return '--/--/----';
+    try {
+      const d = new Date(isoString);
+      // Lo cambiamos a '2-digit' 👇
+      return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+    } catch {
+      return '--/--/----';
+    }
+  };
+
+  // ✨ NUEVO: Función para buscar la última compra de un socio
+  const getLastPurchaseDate = (member) => {
+    if (!member || !transactions || transactions.length === 0) return null;
+    
+    // Filtramos las transacciones válidas de este socio
+    const memberTx = transactions.filter(tx => 
+      tx.status !== 'voided' && 
+      tx.client && 
+      (String(tx.client.id) === String(member.id) || String(tx.client.memberNumber) === String(member.memberNumber))
+    );
+
+    if (memberTx.length === 0) return null;
+
+    // Ordenamos por fecha (la más reciente primero) y devolvemos la primera
+    memberTx.sort((a, b) => {
+       const parseDate = (dStr) => {
+         if (!dStr) return 0;
+         if (dStr.includes('/')) {
+           const [day, month, year] = dStr.split('/');
+           return new Date(`${year}-${month}-${day}`).getTime();
+         }
+         return new Date(dStr).getTime();
+       };
+       return parseDate(b.date) - parseDate(a.date);
+    });
+
+    return memberTx[0].date;
+  };
 
   const getMemberHistory = (member) => {
     if (!member) return [];
@@ -66,7 +110,8 @@ export default function ClientsView({
       return {
         id: tx.id,
         orderId: tx.id,
-        date: tx.date || new Date().toISOString(),
+        date: tx.date || '--/--/--', // ✨ Ya viene como DD/MM/AA
+        time: tx.time || tx.timestamp || '--:--', // ✨ Rescatamos la hora real
         type: isRedemption ? 'redeemed' : 'earned',
         concept: isRedemption ? 'Canje en Compra' : 'Compra Regular',
         totalSale: tx.total,
@@ -75,15 +120,18 @@ export default function ClientsView({
         prevPoints: isRedemption ? member.points + pointsDiff : member.points - pointsDiff
       };
     }).sort((a, b) => {
-      const parseDate = (dStr) => {
-        if (!dStr) return 0;
+      // Ordenamiento seguro combinando Fecha y Hora
+      const parseDateTime = (dStr, tStr) => {
+        if (!dStr || dStr === '--/--/--') return 0;
         if (dStr.includes('/')) {
           const [day, month, year] = dStr.split('/');
-          return new Date(`${year}-${month}-${day}`).getTime();
+          const fullYear = year.length === 2 ? `20${year}` : year;
+          const timePart = tStr ? tStr.split(' ')[0] : '00:00:00';
+          return new Date(`${fullYear}-${month}-${day}T${timePart}`).getTime();
         }
         return new Date(dStr).getTime();
       };
-      return parseDate(b.date) - parseDate(a.date);
+      return parseDateTime(b.date, b.time) - parseDateTime(a.date, a.time);
     });
   };
 
@@ -94,24 +142,50 @@ export default function ClientsView({
     }
   }, [selectedMember]);
 
-  const filteredMembers = (Array.isArray(members) ? members : []).filter((m) => {
-    if (!m) return false;
-    const term = searchTerm.toLowerCase();
-    
-    const name = m.name ? String(m.name).toLowerCase() : '';
-    const number = m.memberNumber ? String(m.memberNumber) : '';
-    const dni = m.dni ? String(m.dni) : '';
-    const phone = m.phone ? String(m.phone) : '';
-    const email = m.email ? String(m.email).toLowerCase() : '';
+  // ✨ NUEVO: Lógica combinada de Filtrado (Buscador) y Ordenamiento (Select)
+  const sortedMembers = useMemo(() => {
+    // 1. Filtrar por buscador
+    let result = (Array.isArray(members) ? members : []).filter((m) => {
+      if (!m) return false;
+      const term = searchTerm.toLowerCase();
+      const name = m.name ? String(m.name).toLowerCase() : '';
+      const number = m.memberNumber ? String(m.memberNumber) : '';
+      const dni = m.dni ? String(m.dni) : '';
+      const phone = m.phone ? String(m.phone) : '';
+      const email = m.email ? String(m.email).toLowerCase() : '';
 
-    return (
-      name.includes(term) ||
-      number.includes(term) ||
-      dni.includes(term) ||
-      phone.includes(term) ||
-      email.includes(term)
-    );
-  });
+      return name.includes(term) || number.includes(term) || dni.includes(term) || phone.includes(term) || email.includes(term);
+    });
+
+    // Helper interno para convertir cualquier fecha a milisegundos y poder ordenarlas matemáticamente
+    const getMs = (dateStr) => {
+      if (!dateStr || dateStr === '--/--/----' || dateStr === '--/--/--') return 0;
+      if (dateStr.includes('T')) return new Date(dateStr).getTime();
+      if (dateStr.includes('/')) {
+          const [day, month, year] = dateStr.split('/');
+          const fullYear = year.length === 2 ? `20${year}` : year;
+          return new Date(`${fullYear}-${month}-${day}`).getTime();
+      }
+      return new Date(dateStr).getTime() || 0;
+    };
+
+    // 2. Aplicar el orden seleccionado
+    result.sort((a, b) => {
+      switch (sortBy) {
+        case 'name_asc': return (a.name || '').localeCompare(b.name || '');
+        case 'id_desc': return Number(b.memberNumber || 0) - Number(a.memberNumber || 0);
+        case 'id_asc': return Number(a.memberNumber || 0) - Number(b.memberNumber || 0);
+        case 'points_desc': return Number(b.points || 0) - Number(a.points || 0);
+        case 'points_asc': return Number(a.points || 0) - Number(b.points || 0);
+        case 'date_added_desc': return getMs(b.created_at || b.createdAt) - getMs(a.created_at || a.createdAt);
+        case 'date_added_asc': return getMs(a.created_at || a.createdAt) - getMs(b.created_at || b.createdAt);
+        case 'last_purchase_desc': return getMs(getLastPurchaseDate(b)) - getMs(getLastPurchaseDate(a));
+        default: return 0;
+      }
+    });
+
+    return result;
+  }, [members, searchTerm, sortBy, transactions]);
 
   const openCreateModal = () => {
     setModalMode('create');
@@ -215,25 +289,13 @@ export default function ClientsView({
     }
   };
 
-  const formatTime24 = (isoDate) => {
-    if (!isoDate) return '--:--';
-    return new Date(isoDate).toLocaleTimeString('es-AR', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }) + ' hs';
-  };
-
   return (
     <div className="h-full flex flex-col relative bg-slate-50 p-6">
       
       {/* HEADER COMPACTO */}
       <div className="bg-white p-2.5 rounded-xl shadow-sm border border-slate-200 mb-4 flex flex-wrap items-center justify-between gap-3 shrink-0 z-10">
         
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          <h2 className="text-sm font-black text-slate-800 flex items-center gap-1.5 uppercase tracking-wide hidden sm:flex shrink-0 pl-2">
-            <User className="text-blue-600" size={16} /> Socios
-          </h2>
+        <div className="flex items-center flex-1 min-w-0">
           
           <div className="relative flex-1 max-w-2xl">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
@@ -248,6 +310,32 @@ export default function ClientsView({
         </div>
         
         <div className="flex items-center gap-2 shrink-0">
+          
+          {/* ✨ SELECTOR DE ORDENAMIENTO */}
+          <div className="relative">
+            <ArrowUpDown className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={14} />
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-white text-xs font-bold text-slate-600 outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 cursor-pointer appearance-none shadow-sm transition-all"
+            >
+              <optgroup label="Fechas">
+                <option value="date_added_desc">Más Nuevos</option>
+                <option value="date_added_asc">Más Antiguos</option>
+                <option value="last_purchase_desc">Última Compra</option>
+              </optgroup>
+              <optgroup label="Puntos">
+                <option value="points_desc">Mayor Saldo Puntos</option>
+                <option value="points_asc">Menor Saldo Puntos</option>
+              </optgroup>
+              <optgroup label="Identificación">
+                <option value="name_asc">Nombre (A-Z)</option>
+                <option value="id_asc">N° Socio (Ascendente)</option>
+                <option value="id_desc">N° Socio (Descendente)</option>
+              </optgroup>
+            </select>
+          </div>
+
           {checkExpirations && currentUser?.role === 'admin' && (
             <button
               onClick={handleRunAudit}
@@ -264,7 +352,7 @@ export default function ClientsView({
             className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shadow-md transition-all active:scale-95 text-xs uppercase tracking-wide"
           >
             <Plus size={14} />
-            <span>Nuevo Socio</span>
+            <span className="hidden sm:inline">Nuevo Socio</span>
           </button>
         </div>
       </div>
@@ -278,74 +366,100 @@ export default function ClientsView({
               <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider text-center">N° Socio</th>
               <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider">Nombre</th>
               <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider">Contacto</th>
+              {/* ✨ NUEVAS COLUMNAS */}
+              <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider hidden lg:table-cell">Actividad</th>
               <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider text-center">Puntos</th>
               <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider text-center">Acciones</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {filteredMembers.length > 0 ? (
-              filteredMembers.map((member) => (
-                <tr key={member.id} className="hover:bg-blue-50/30 transition-colors group">
-                  <td className="p-4 text-center">
-                    <span className="font-mono text-sm font-bold text-slate-600 bg-slate-100 px-2 py-1 rounded-md border border-slate-200">
-                      #{String(member.memberNumber || '0').padStart(4, '0')}
-                    </span>
-                  </td>
-                  <td className="p-4">
-                    <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-100 to-blue-200 text-blue-700 flex items-center justify-center font-bold shadow-sm text-sm border border-white shrink-0">
-                        {(member.name || '?').charAt(0).toUpperCase()}
+            {/* ✨ Usamos sortedMembers en vez de filteredMembers */}
+            {sortedMembers.length > 0 ? (
+              sortedMembers.map((member) => {
+                // ✨ Calculamos la última compra al vuelo
+                const lastPurchase = getLastPurchaseDate(member);
+
+                return (
+                  <tr key={member.id} className="hover:bg-blue-50/30 transition-colors group">
+                    <td className="p-4 text-center">
+                      <span className="font-mono text-sm font-bold text-slate-600 bg-slate-100 px-2 py-1 rounded-md border border-slate-200">
+                        #{String(member.memberNumber || '0').padStart(4, '0')}
+                      </span>
+                    </td>
+                    <td className="p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-100 to-blue-200 text-blue-700 flex items-center justify-center font-bold shadow-sm text-sm border border-white shrink-0">
+                          {(member.name || '?').charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-bold text-gray-900 truncate">{member.name || 'Sin Nombre'}</p>
+                          {member.extraInfo && <p className="text-xs text-gray-400 truncate max-w-[200px]">{member.extraInfo}</p>}
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <p className="font-bold text-gray-900 truncate">{member.name || 'Sin Nombre'}</p>
-                        {member.extraInfo && <p className="text-xs text-gray-400 truncate max-w-[200px]">{member.extraInfo}</p>}
+                    </td>
+                    <td className="p-4">
+                      <div className="space-y-1">
+                        {member.dni && (
+                          <div className="flex items-center gap-1.5 text-xs text-gray-600" title="DNI">
+                            <CreditCard size={12} className="text-gray-400" />
+                            <span>{member.dni}</span>
+                          </div>
+                        )}
+                        {member.phone && (
+                          <div className="flex items-center gap-1.5 text-xs text-gray-600" title="Teléfono">
+                            <Phone size={12} className="text-gray-400" />
+                            <span>{member.phone}</span>
+                          </div>
+                        )}
+                        {member.email && (
+                          <div className="flex items-center gap-1.5 text-xs text-gray-600" title="Email">
+                            <Mail size={12} className="text-gray-400" />
+                            <span className="truncate max-w-[150px]">{member.email}</span>
+                          </div>
+                        )}
+                        {!member.dni && !member.phone && !member.email && (
+                          <span className="text-xs text-gray-300 italic">Sin datos</span>
+                        )}
                       </div>
-                    </div>
-                  </td>
-                  <td className="p-4">
-                    <div className="space-y-1">
-                      {member.dni && (
-                        <div className="flex items-center gap-1.5 text-xs text-gray-600" title="DNI">
-                          <CreditCard size={12} className="text-gray-400" />
-                          <span>{member.dni}</span>
+                    </td>
+                    
+                    {/* ✨ CELDA DE ACTIVIDAD (Adición y Última Compra) */}
+                    <td className="p-4 hidden lg:table-cell">
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex items-center gap-1.5 text-xs text-slate-500" title="Fecha de Adición">
+                          <CalendarDays size={13} className="text-slate-400" />
+                          <span>Socio desde: <span className="font-medium text-slate-700">{formatShortDate(member.created_at || member.createdAt)}</span></span>
                         </div>
-                      )}
-                      {member.phone && (
-                        <div className="flex items-center gap-1.5 text-xs text-gray-600" title="Teléfono">
-                          <Phone size={12} className="text-gray-400" />
-                          <span>{member.phone}</span>
+                        <div className="flex items-center gap-1.5 text-xs text-slate-500" title="Última Compra">
+                          <Clock size={13} className="text-slate-400" />
+                          {lastPurchase ? (
+                            <span>Últ. Compra: <span className="font-medium text-slate-700">{lastPurchase}</span></span>
+                          ) : (
+                            <span className="font-medium text-slate-400 italic">No registra compras</span>
+                          )}
                         </div>
-                      )}
-                      {member.email && (
-                        <div className="flex items-center gap-1.5 text-xs text-gray-600" title="Email">
-                          <Mail size={12} className="text-gray-400" />
-                          <span className="truncate max-w-[150px]">{member.email}</span>
-                        </div>
-                      )}
-                      {!member.dni && !member.phone && !member.email && (
-                        <span className="text-xs text-gray-300 italic">Sin datos</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="p-4 text-center">
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700 border border-blue-200">
-                      <Trophy size={12} />
-                      {/* ♻️ FIX: Formateamos los puntos enteros */}
-                      {formatNumber(member.points || 0)} pts
-                    </span>
-                  </td>
-                  <td className="p-4 text-center">
-                    <div className="flex items-center justify-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => setSelectedMember(member)} className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Ver Detalles e Historial"><History size={18} /></button>
-                      <button onClick={() => openEditModal(member)} className="p-2 text-gray-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Editar Socio"><Edit2 size={18} /></button>
-                      <button onClick={() => handleDeleteRequest(member)} className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Eliminar Socio"><Trash2 size={18} /></button>
-                    </div>
-                  </td>
-                </tr>
-              ))
+                      </div>
+                    </td>
+
+                    <td className="p-4 text-center">
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700 border border-blue-200">
+                        <Trophy size={12} />
+                        {formatNumber(member.points || 0)} pts
+                      </span>
+                    </td>
+                    <td className="p-4 text-center">
+                      <div className="flex items-center justify-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => setSelectedMember(member)} className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Ver Detalles e Historial"><History size={18} /></button>
+                        <button onClick={() => openEditModal(member)} className="p-2 text-gray-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Editar Socio"><Edit2 size={18} /></button>
+                        <button onClick={() => handleDeleteRequest(member)} className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Eliminar Socio"><Trash2 size={18} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
             ) : (
               <tr>
-                <td colSpan="5" className="p-16 text-center text-gray-400">
+                <td colSpan="6" className="p-16 text-center text-gray-400">
                   <div className="flex flex-col items-center gap-3">
                     <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center"><Search size={32} className="text-slate-300" /></div>
                     <p className="font-medium">No se encontraron socios</p>
@@ -380,6 +494,8 @@ export default function ClientsView({
                       {selectedMember.dni && <p>DNI: {selectedMember.dni}</p>}
                       {selectedMember.phone && <p>Tel: {selectedMember.phone}</p>}
                       {selectedMember.email && <p>{selectedMember.email}</p>}
+                      {/* ✨ Mostramos fecha de ingreso también en el perfil */}
+                      {(selectedMember.created_at || selectedMember.createdAt) && <p className="text-xs mt-1 text-slate-400">Socio desde: {formatShortDate(selectedMember.created_at || selectedMember.createdAt)}</p>}
                     </div>
                   </>
                 ) : (
@@ -434,7 +550,6 @@ export default function ClientsView({
                     <div className="relative z-10">
                       <p className="text-blue-100 text-sm font-medium mb-1 uppercase tracking-wide">Saldo de Puntos</p>
                       <div className="flex items-baseline gap-2">
-                        {/* ♻️ FIX: Formateamos saldo de puntos */}
                         <span className="text-5xl font-black tracking-tight">{formatNumber(selectedMember.points || 0)}</span>
                         <span className="text-lg font-medium opacity-80">Puntos.</span>
                       </div>
@@ -465,8 +580,9 @@ export default function ClientsView({
                               <p className={`text-sm font-bold ${mov.type === 'earned' ? 'text-green-600' : mov.type === 'redeemed' ? 'text-orange-600' : 'text-red-600'}`}>
                                 {mov.type === 'earned' ? (mov.concept || 'Compra Realizada') : mov.type === 'redeemed' ? (mov.concept || 'Canje de Puntos') : (mov.concept || 'Vencimiento')}
                               </p>
-                              <p className="text-xs text-gray-400 font-medium">
-                                {new Date(mov.date).toLocaleDateString()} • {formatTime24(mov.date)}
+                              {/* ✨ FIX: Formato de hora limpio en el Drawer */}
+                              <p className="text-xs text-gray-400 font-medium mt-0.5">
+                                {mov.date} • {mov.time.replace(/hs/ig, '').trim().slice(0, 5)} hs
                               </p>
                             </div>
                             {mov.orderId && mov.orderId !== '---' && (
@@ -481,7 +597,6 @@ export default function ClientsView({
                               {mov.totalSale > 0 ? (
                                 <div className="flex items-center gap-1.5 text-gray-600">
                                   <CreditCard size={14} className="text-gray-400" />
-                                  {/* ♻️ FIX: Aplicamos FancyPrice al monto */}
                                   <span className="flex items-center gap-1">Monto: <span className="font-bold text-gray-900"><FancyPrice amount={mov.totalSale} /></span></span>
                                 </div>
                               ) : (
@@ -491,7 +606,6 @@ export default function ClientsView({
                               )}
                             </div>
                             <div className="flex items-center gap-2 text-xs bg-slate-50 px-2 py-1.5 rounded-lg border border-slate-100">
-                              {/* ♻️ FIX: Formateamos los puntos históricos */}
                               <span className="text-gray-400 font-mono">{formatNumber(mov.prevPoints || 0)}</span>
                               <span className="text-gray-300">→</span>
                               <span className={`font-bold ${mov.type === 'earned' ? 'text-green-600' : 'text-red-600'}`}>
@@ -558,7 +672,6 @@ export default function ClientsView({
                 <div>
                   <p className="text-slate-400 text-xs">Total</p>
                   <p className="font-bold text-fuchsia-600">
-                    {/* ♻️ FIX: Aplicamos FancyPrice al total de la tx */}
                     <FancyPrice amount={selectedTx.total} />
                   </p>
                 </div>
@@ -575,12 +688,10 @@ export default function ClientsView({
                       <div>
                         <p className="font-medium text-sm">{item.title}</p>
                         <p className="text-xs text-slate-400 flex items-center gap-1">
-                          {/* ♻️ FIX: Aplicamos FancyPrice al precio unitario */}
                           {formatNumber(item.qty || item.quantity, item.qty % 1 !== 0 ? 2 : 0)} x <FancyPrice amount={item.price} />
                         </p>
                       </div>
                       <p className="font-bold text-sm">
-                        {/* ♻️ FIX: Aplicamos FancyPrice al subtotal del item */}
                         <FancyPrice amount={(item.qty || item.quantity) * item.price} />
                       </p>
                     </div>
@@ -656,7 +767,6 @@ export default function ClientsView({
                 </div>
               </div>    
                         
-              {/* CAMPO PUNTOS (SOLO EDITAR O CREAR) */}
               <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Puntos (Ajuste Manual)</label><input type="number" className="w-full rounded-lg border border-gray-300 p-2.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 font-bold text-blue-600" placeholder="0" value={formData.points} onChange={(e) => setFormData({...formData, points: e.target.value})} /></div>
 
               <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Correo Electrónico</label><input type="email" className="w-full rounded-lg border border-gray-300 p-2.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-sm" placeholder="ejemplo@email.com" value={formData.email} onChange={(e) => setFormData({...formData, email: e.target.value})} /></div>
@@ -672,7 +782,7 @@ export default function ClientsView({
 
       {/* --- MODAL CONFIRMAR ELIMINACIÓN --- */}
       {isDeleteModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="p-6 text-center">
               <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4"><AlertTriangle size={32} className="text-red-600" /></div>
