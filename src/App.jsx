@@ -5,14 +5,14 @@ import {
   Clock,
   ChevronRight,
   ArrowLeft,
-  RefreshCw, // Icono de carga
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
-import Swal from 'sweetalert2'; // Alertas bonitas
+import Swal from 'sweetalert2';
 
 // --- CONEXIÓN A LA NUBE ---
 import { supabase } from './supabase/client';
 import { uploadProductImage, deleteProductImage } from './utils/storage';
-// ♻️ FIX: Importamos los nuevos formateadores
 import { formatDateAR, formatTimeAR, formatTimeFullAR, formatCurrency, formatNumber } from './utils/helpers';
 
 import {
@@ -57,19 +57,27 @@ import { ExpenseModal } from './components/modals/ExpenseModal';
 import { RedemptionModal } from './components/modals/RedemptionModal';
 import { TicketPrintLayout } from './components/TicketPrintLayout';
 import { ClientSelectionModal } from './components/modals/ClientSelectionModal';
-// ✨ NUEVO: Importamos el modal de detalles para usarlo globalmente
 import { TransactionDetailModal } from './components/modals/HistoryModals'; 
 
 // Hooks
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 
+// ✨ DETECTOR GLOBAL DE MODO PRUEBA
+export const isTestRecord = (obj) => {
+  if (!obj) return false;
+  if (typeof obj === 'string') return /\btest\b/i.test(obj);
+  if (typeof obj === 'number' || typeof obj === 'boolean') return false;
+  if (Array.isArray(obj)) return obj.some(isTestRecord);
+  if (typeof obj === 'object') return Object.values(obj).some(isTestRecord);
+  return false;
+};
+
 export default function PartySupplyApp() {
   
-  // Estado de carga inicial de la Nube
   const [isCloudLoading, setIsCloudLoading] = useState(true);
 
   // ==========================================
-  // 1. ESTADOS DE DATOS (Persistentes en Nube)
+  // 1. ESTADOS DE DATOS
   // ==========================================
   const [inventory, setInventory] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -80,19 +88,17 @@ export default function PartySupplyApp() {
   const [pastClosures, setPastClosures] = useState([]);
   const [expenses, setExpenses] = useState([]);
 
-  // Estados de CAJA (Sincronizados)
   const [openingBalance, setOpeningBalance] = useState(0);
   const [isRegisterClosed, setIsRegisterClosed] = useState(true); 
   const [closingTime, setClosingTime] = useState('21:00');
   const [registerOpenedAt, setRegisterOpenedAt] = useState(null);
 
-  // ✅ FIX: Candado para evitar múltiples ejecuciones del Cierre Automático
   const isAutoClosing = useRef(false);
 
   // ==========================================
-  // 1.5 CONEXIÓN SUPABASE (Fetch Inicial + Auto-Healing)
+  // 1.5 CONEXIÓN SUPABASE
   // ==========================================
-const fetchCloudData = async (showSpinner = true) => {
+  const fetchCloudData = async (showSpinner = true) => {
     try {
       if (showSpinner) setIsCloudLoading(true);
       
@@ -107,14 +113,13 @@ const fetchCloudData = async (showSpinner = true) => {
         rewardsResult,
         registerResult
       ] = await Promise.allSettled([
-        // 🚀 LÍMITES EXTENDIDOS A 10.000 EN TODAS LAS TABLAS
         supabase.from('products').select('*').eq('is_active', true).order('title').limit(10000),
         supabase.from('clients').select('*').eq('is_active', true).order('name').limit(10000),
         supabase.from('sales').select(`*, sale_items(*), clients(name, member_number)`).order('created_at', { ascending: false }).limit(10000),        
         supabase.from('logs').select('*').order('created_at', { ascending: false }).limit(10000),
         supabase.from('expenses').select('*').order('created_at', { ascending: false }).limit(10000),
         supabase.from('cash_closures').select('*').order('created_at', { ascending: false }).limit(10000),
-        supabase.from('categories').select('*').order('name').limit(5000), // Categorías no suelen ser tantas
+        supabase.from('categories').select('*').order('name').limit(5000),
         supabase.from('rewards').select('*').order('points_cost', { ascending: true }).limit(5000),
         supabase.from('register_state').select('*').eq('id', 1).maybeSingle() 
       ]);
@@ -131,10 +136,8 @@ const fetchCloudData = async (showSpinner = true) => {
       if (prodData) {
         setInventory(prodData.map(p => ({
           ...p,
-          // FIX MULTI-CATEGORÍA: Convertimos el string separado por comas en un Array real
           categories: p.category ? p.category.split(',').map(c => c.trim()).filter(Boolean) : [],
           purchasePrice: p.purchasePrice || 0,
-          // ✨ FIX VENCIMIENTOS: Aseguramos leer la nueva columna de la BD
           expiration_date: p.expiration_date || null
         })));
       }
@@ -143,44 +146,19 @@ const fetchCloudData = async (showSpinner = true) => {
       if (clientData) {
         setMembers(clientData.map(c => ({
           ...c,
-          memberNumber: c.member_number
+          memberNumber: c.member_number,
+          createdAt: c.created_at
         })));
       }
 
-      const salesData = safeData(salesResult, 'ventas');
-      if (salesData) {
-        setTransactions(salesData.map(sale => ({
-          id: sale.id,
-          date: formatDateAR(new Date(sale.created_at)),
-          time: formatTimeFullAR(new Date(sale.created_at)),
-          total: sale.total,
-          payment: sale.payment_method,
-          installments: sale.installments,
-          items: (sale.sale_items || []).map(i => ({
-            id: i.product_id,
-            title: i.product_title,
-            qty: i.quantity,
-            price: i.price,
-            isReward: i.is_reward,
-            productId: i.product_id
-          })),
-          client: sale.clients ? { name: sale.clients.name, memberNumber: sale.clients.member_number } : null,
-          pointsEarned: sale.points_earned,
-          pointsSpent: sale.points_spent,
-          user: sale.user_name || 'Desconocido',
-          status: 'completed'
-        })));
-      }
-
-    const logsData = safeData(logsResult, 'logs');
+      const logsData = safeData(logsResult, 'logs');
+      let parsedLogs = [];
       if (logsData) {
-        setDailyLogs(logsData.map(log => {
-          
-          // 🚀 NORMALIZADOR: Unifica todos los nombres de prueba o viejos en uno solo
+        parsedLogs = logsData.map(log => {
           const isMod = ['Venta Modificada', 'Modificacion Pedido', 'Modificación de Pedido'].includes(log.action);
           const finalAction = isMod ? 'Modificación Pedido' : log.action;
 
-          return {
+          const logObj = {
             id: log.id,
             action: finalAction,
             details: log.details,
@@ -189,21 +167,84 @@ const fetchCloudData = async (showSpinner = true) => {
             date: formatDateAR(new Date(log.created_at)),
             timestamp: formatTimeFullAR(new Date(log.created_at))
           };
-        }));
+          logObj.isTest = isTestRecord({ action: logObj.action, details: logObj.details, reason: logObj.reason });
+          return logObj;
+        });
+        setDailyLogs(parsedLogs);
+      }
+
+      const salesData = safeData(salesResult, 'ventas');
+      if (salesData) {
+        const parsedSales = salesData.map(sale => {
+          let items = (sale.sale_items || []).map(i => ({
+            id: i.product_id,
+            title: i.product_title,
+            qty: i.quantity,
+            price: i.price,
+            isReward: i.is_reward,
+            productId: i.product_id
+          }));
+
+          if (items.length === 0 && Number(sale.total) > 0) {
+              const recoveryLog = parsedLogs.find(l => 
+                  (l.action === 'Venta Realizada' || l.action === 'Modificación Pedido') && 
+                  String(l.details?.transactionId) === String(sale.id)
+              );
+              
+              if (recoveryLog) {
+                  const recoveredItems = recoveryLog.details?.items || recoveryLog.details?.itemsSnapshot || [];
+                  items = recoveredItems.map(ri => ({
+                      id: ri.id || ri.productId,
+                      title: ri.title || ri.name || 'Producto Recuperado',
+                      qty: Number(ri.quantity || ri.qty || 1),
+                      price: Number(ri.price || 0),
+                      isReward: ri.isReward || false,
+                      productId: ri.productId || ri.id
+                  }));
+              }
+          }
+
+          // ✨ NUEVO: Determinamos si fue restaurada leyendo los logs históricos
+          const isRestored = parsedLogs.some(l => l.action === 'Venta Restaurada' && String(l.details?.transactionId) === String(sale.id));
+
+          const saleObj = {
+            id: sale.id,
+            date: formatDateAR(new Date(sale.created_at)),
+            time: formatTimeFullAR(new Date(sale.created_at)),
+            total: sale.total,
+            payment: sale.payment_method,
+            installments: sale.installments,
+            items: items, 
+            client: sale.clients ? { name: sale.clients.name, memberNumber: sale.clients.member_number } : null,
+            pointsEarned: sale.points_earned,
+            pointsSpent: sale.points_spent,
+            user: sale.user_name || 'Desconocido',
+            status: 'completed',
+            isRestored: isRestored 
+          };
+          saleObj.isTest = isTestRecord(saleObj);
+          return saleObj;
+        });
+        
+        setTransactions(parsedSales);
       }
 
       const expData = safeData(expResult, 'gastos');
       if (expData) {
-        setExpenses(expData.map(e => ({
-          id: e.id,
-          description: e.description,
-          amount: e.amount,
-          category: e.category,
-          paymentMethod: e.payment_method,
-          date: formatDateAR(new Date(e.created_at)),
-          time: formatTimeFullAR(new Date(e.created_at)),
-          user: e.user_name || 'Sistema'
-        })));
+        setExpenses(expData.map(e => {
+          const expObj = {
+            id: e.id,
+            description: e.description,
+            amount: e.amount,
+            category: e.category,
+            paymentMethod: e.payment_method,
+            date: formatDateAR(new Date(e.created_at)),
+            time: formatTimeFullAR(new Date(e.created_at)),
+            user: e.user_name || 'Sistema'
+          };
+          expObj.isTest = isTestRecord({ description: expObj.description, category: expObj.category });
+          return expObj;
+        }));
       }
 
       const closureData = safeData(closureResult, 'reportes');
@@ -247,14 +288,12 @@ const fetchCloudData = async (showSpinner = true) => {
         })));
       }
 
-      // I. ESTADO DE CAJA 
       let registerState = null;
       if (registerResult.status === 'fulfilled' && !registerResult.value.error) {
         registerState = registerResult.value.data;
       }
 
       if (!registerState) {
-        console.warn("⚠️ Estado de caja no encontrado o inaccesible, intentando upsert...");
         const { data: newState, error: upsertErr } = await supabase
           .from('register_state')
           .upsert([{ id: 1, is_open: false, opening_balance: 0, closing_time: '21:00' }], { onConflict: 'id' })
@@ -262,7 +301,6 @@ const fetchCloudData = async (showSpinner = true) => {
           .maybeSingle();
         
         if (!upsertErr && newState) registerState = newState;
-        else if (upsertErr) console.error("Error crítico en register_state:", upsertErr);
       }
 
       if (registerState) {
@@ -270,16 +308,6 @@ const fetchCloudData = async (showSpinner = true) => {
         setOpeningBalance(Number(registerState.opening_balance));
         setClosingTime(registerState.closing_time || '21:00');
         setRegisterOpenedAt(registerState.opened_at || null);
-      }
-
-      const failed = [
-        !prodData && 'Productos', !clientData && 'Clientes', !salesData && 'Ventas',
-        !logsData && 'Logs', !expData && 'Gastos', !closureData && 'Reportes',
-        !catData && 'Categorías', !rewardsData && 'Premios'
-      ].filter(Boolean);
-
-      if (failed.length > 0) {
-        Swal.fire('Carga Parcial', `Revisa los permisos de Supabase (RLS). Fallaron: ${failed.join(', ')}`, 'warning');
       }
 
     } catch (error) {
@@ -290,100 +318,88 @@ const fetchCloudData = async (showSpinner = true) => {
     }
   };
 
-  
-useEffect(() => {
-  fetchCloudData(true);
+  useEffect(() => {
+    fetchCloudData(true);
 
-  const channel = supabase
-    .channel('app_realtime_updates')
-    .on(
-      'postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: 'register_state', filter: 'id=eq.1' },
-      (payload) => {
-        const newState = payload.new;
-        if (newState) {
-          setIsRegisterClosed(!newState.is_open);
-          setOpeningBalance(Number(newState.opening_balance));
-          setClosingTime(newState.closing_time);
-          setRegisterOpenedAt(newState.opened_at || null);
+    const channel = supabase
+      .channel('app_realtime_updates')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'register_state', filter: 'id=eq.1' },
+        (payload) => {
+          const newState = payload.new;
+          if (newState) {
+            setIsRegisterClosed(!newState.is_open);
+            setOpeningBalance(Number(newState.opening_balance));
+            setClosingTime(newState.closing_time);
+            setRegisterOpenedAt(newState.opened_at || null);
+          }
         }
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'cash_closures' },
-      (payload) => {
-        const c = payload.new;
-        if (c) {
-           const newReport = {
-               id: c.id, 
-               date: c.date,
-               openTime: c.open_time,
-               closeTime: c.close_time,
-               user: c.user_name,
-               type: c.type,
-               openingBalance: Number(c.opening_balance || 0),
-               totalSales: Number(c.total_sales || 0),
-               finalBalance: Number(c.final_balance || 0),
-               totalCost: Number(c.total_cost || 0),
-               totalExpenses: Number(c.total_expenses || 0),
-               netProfit: Number(c.net_profit || 0),
-               salesCount: c.sales_count || 0,
-               averageTicket: Number(c.average_ticket || 0),
-               paymentMethods: c.payment_methods_summary || {}, 
-               itemsSold: c.items_sold_list || [],             
-               newClients: c.new_clients_list || [],            
-               expensesSnapshot: c.expenses_snapshot || [],    
-               transactionsSnapshot: c.transactions_snapshot || []
-           };
-           setPastClosures((prev) => [newReport, ...prev]);
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'cash_closures' },
+        (payload) => {
+          const c = payload.new;
+          if (c) {
+             const newReport = {
+                 id: c.id, 
+                 date: c.date,
+                 openTime: c.open_time,
+                 closeTime: c.close_time,
+                 user: c.user_name,
+                 type: c.type,
+                 openingBalance: Number(c.opening_balance || 0),
+                 totalSales: Number(c.total_sales || 0),
+                 finalBalance: Number(c.final_balance || 0),
+                 totalCost: Number(c.total_cost || 0),
+                 totalExpenses: Number(c.total_expenses || 0),
+                 netProfit: Number(c.net_profit || 0),
+                 salesCount: c.sales_count || 0,
+                 averageTicket: Number(c.average_ticket || 0),
+                 paymentMethods: c.payment_methods_summary || {}, 
+                 itemsSold: c.items_sold_list || [],             
+                 newClients: c.new_clients_list || [],            
+                 expensesSnapshot: c.expenses_snapshot || [],    
+                 transactionsSnapshot: c.transactions_snapshot || []
+             };
+             setPastClosures((prev) => [newReport, ...prev]);
+          }
         }
-      }
-    )
-    .subscribe();
+      )
+      .subscribe();
 
+    let lastFetchTime = Date.now();
+    const MIN_RESYNC_INTERVAL = 15000; 
 
-let lastFetchTime = Date.now();
-  const MIN_RESYNC_INTERVAL = 15000; 
+    const handleReSync = () => {
+      if (document.visibilityState !== 'visible') return;
 
-  const handleReSync = () => {
-    if (document.visibilityState !== 'visible') return;
+      const elapsed = Date.now() - lastFetchTime;
+      if (elapsed < MIN_RESYNC_INTERVAL) return;
 
-    const elapsed = Date.now() - lastFetchTime;
-    if (elapsed < MIN_RESYNC_INTERVAL) {
-      return;
-    }
+      lastFetchTime = Date.now();
+      fetchCloudData(false); 
+    };
 
-    lastFetchTime = Date.now();
-    fetchCloudData(false); 
-  };
+    window.addEventListener('visibilitychange', handleReSync);
 
-  window.addEventListener('visibilitychange', handleReSync);
+    return () => {
+      supabase.removeChannel(channel);
+      window.removeEventListener('visibilitychange', handleReSync);
+    };
+  }, []);
 
-  return () => {
-    supabase.removeChannel(channel);
-    window.removeEventListener('visibilitychange', handleReSync);
-  };
-}, []);
-
-
-  // ==========================================
-  // 2. ESTADOS DE SESIÓN Y UI
-  // ==========================================
   const [currentTime, setCurrentTime] = useState(new Date());
   const [currentUser, setCurrentUser] = useState(null);
   const [activeTab, setActiveTab] = useState('pos');
   const [cart, setCart] = useState([]);
 
-  // Login
   const [loginStep, setLoginStep] = useState('select');
   const [selectedRoleForLogin, setSelectedRoleForLogin] = useState(null);
   const [passwordInput, setPasswordInput] = useState('');
   const [loginError, setLoginError] = useState('');
 
-  // ==========================================
-  // 3. ESTADOS PARA MODALES
-  // ==========================================
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isOpeningBalanceModalOpen, setIsOpeningBalanceModalOpen] = useState(false);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
@@ -403,7 +419,6 @@ let lastFetchTime = Date.now();
   const [editReason, setEditReason] = useState('');
   const [isUploadingImage, setIsUploadingImage] = useState(false);
 
-
   const [editingTransaction, setEditingTransaction] = useState(null);
   const [transactionSearch, setTransactionSearch] = useState('');
   const [isRefundModalOpen, setIsRefundModalOpen] = useState(false);
@@ -419,20 +434,18 @@ let lastFetchTime = Date.now();
   const [isRedemptionModalOpen, setIsRedemptionModalOpen] = useState(false);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
 
-  // ✨ NUEVO ESTADO: Controla el modal global de detalles de transacción
   const [detailsModalTx, setDetailsModalTx] = useState(null);
 
-const [newItem, setNewItem] = useState({
-  title: '', brand: '', price: '', purchasePrice: '', stock: '',
-  categories: [], image: '', barcode: '',
-  product_type: 'quantity',
-  expiration_date: '' // ✨ Inicializado
-});
+  const [newItem, setNewItem] = useState({
+    title: '', brand: '', price: '', purchasePrice: '', stock: '',
+    categories: [], image: '', barcode: '',
+    product_type: 'quantity',
+    expiration_date: '' 
+  });
 
   const [tempOpeningBalance, setTempOpeningBalance] = useState('');
   const [tempClosingTime, setTempClosingTime] = useState('21:00');
 
-  // Filtros POS e Inventario
   const [selectedPayment, setSelectedPayment] = useState('Efectivo');
   const [installments, setInstallments] = useState(1);
   const [inventoryViewMode, setInventoryViewMode] = useState('grid');
@@ -445,15 +458,7 @@ const [newItem, setNewItem] = useState({
   const [posGridColumns, setPosGridColumns] = useState(4);
   const [inventoryGridColumns, setInventoryGridColumns] = useState(5);
 
-  // ==========================================
-  // 4. SISTEMA DE NOTIFICACIONES
-  // ==========================================
-  const [notification, setNotification] = useState({
-    isOpen: false,
-    type: 'info',
-    title: '',
-    message: ''
-  });
+  const [notification, setNotification] = useState({ isOpen: false, type: 'info', title: '', message: '' });
 
   const showNotification = (type, title, message) => {
     setNotification({ isOpen: true, type, title, message });
@@ -463,9 +468,27 @@ const [newItem, setNewItem] = useState({
     setNotification(prev => ({ ...prev, isOpen: false }));
   };
 
-  // --- LOGGING CENTRALIZADO ---
-  const addLog = async (action, details, reason = '') => {
+  const isTestActive = useMemo(() => {
+    return isTestRecord(cart) || 
+           isTestRecord(posSelectedClient) || 
+           isTestRecord(posSearch) ||
+           isTestRecord(newItem) ||
+           isTestRecord(editingProduct) ||
+           isTestRecord(editingTransaction) ||
+           isTestRecord(transactionSearch);
+  }, [cart, posSelectedClient, posSearch, newItem, editingProduct, editingTransaction, transactionSearch]);
+
+  const addLog = async (action, details, defaultReason = '') => {
     const now = new Date();
+    
+    let finalReason = defaultReason;
+    if (details && typeof details === 'object') {
+        const userNote = details.description || details.note || details.extraInfo;
+        if (userNote && userNote.trim() !== '' && userNote !== details.category) {
+            finalReason = userNote.trim();
+        }
+    }
+
     const newLog = {
       id: Date.now(),
       timestamp: formatTimeFullAR(now),
@@ -473,9 +496,11 @@ const [newItem, setNewItem] = useState({
       action,
       user: currentUser?.name || 'Sistema',
       details,
-      reason,
+      reason: finalReason, 
       created_at: new Date().toISOString()
     };
+    
+    newLog.isTest = isTestRecord({ action, details, reason: finalReason });
     setDailyLogs((prev) => [newLog, ...prev]);
 
     try {
@@ -483,7 +508,7 @@ const [newItem, setNewItem] = useState({
          action,
          details,
          user: currentUser?.name || 'Sistema',
-         reason,
+         reason: finalReason, 
          created_at: new Date().toISOString()
       }]);
     } catch (e) {
@@ -491,9 +516,71 @@ const [newItem, setNewItem] = useState({
     }
   };
 
-  // ==========================================
-  // CLIENTES
-  // ==========================================
+  const handleUpdateLogNote = async (logId, newNote) => {
+    try {
+      const { error } = await supabase.from('logs').update({ reason: newNote }).eq('id', logId);
+      if (error) throw error;
+      
+      setDailyLogs(prev => prev.map(log => {
+        if (log.id === logId) {
+            const updatedLog = { ...log, reason: newNote };
+            updatedLog.isTest = isTestRecord({ action: updatedLog.action, details: updatedLog.details, reason: updatedLog.reason });
+            return updatedLog;
+        }
+        return log;
+      }));
+      
+      showNotification('success', 'Nota Actualizada', 'La nota ha sido guardada correctamente.');
+    } catch (err) {
+      console.error("Error actualizando nota del log:", err);
+      showNotification('error', 'Error', 'No se pudo actualizar la nota en la nube.');
+    }
+  };
+
+  const handleAddExpense = async (expenseData) => {
+    try {
+      const userTypedNote = expenseData.note || ''; 
+      const safeDescription = userTypedNote || expenseData.description || 'Gasto General';
+      const safeAmount = Number(expenseData.amount) || 0;
+
+      const payload = {
+        description: safeDescription,
+        amount: safeAmount,
+        category: expenseData.category || 'Varios',
+        payment_method: expenseData.paymentMethod || 'Efectivo',
+        user_name: currentUser?.name || 'Sistema'
+      };
+
+      const { data, error } = await supabase.from('expenses').insert([payload]).select().single();
+      if (error) throw error;
+
+      const newExpense = {
+        id: data.id,
+        description: data.description,
+        amount: data.amount,
+        category: data.category,
+        paymentMethod: data.payment_method,
+        date: formatDateAR(new Date(data.created_at)),
+        time: formatTimeFullAR(new Date(data.created_at)),
+        user: data.user_name
+      };
+
+      newExpense.isTest = isTestRecord(newExpense);
+      setExpenses([newExpense, ...expenses]);
+      
+      addLog(
+        'Nuevo Gasto', 
+        { description: newExpense.description, amount: newExpense.amount, category: newExpense.category, paymentMethod: newExpense.paymentMethod }, 
+        userTypedNote || 'Salida de dinero'
+      );
+      
+      showNotification('success', 'Gasto Registrado', 'Se guardó correctamente en la nube.');
+    } catch (e) {
+      console.error(e);
+      showNotification('error', 'Error', 'No se pudo guardar el gasto. Verifique los datos.');
+    }
+  };
+
   const handleAddMemberWithLog = async (data) => {
     try {
        const memberNum = Math.floor(10000 + Math.random() * 90000);
@@ -512,7 +599,9 @@ const [newItem, setNewItem] = useState({
        
        const clientFormatted = { ...newClient, memberNumber: newClient.member_number };
        setMembers([...members, clientFormatted]);
-       addLog('Nuevo Socio', { name: clientFormatted.name, number: clientFormatted.memberNumber }, 'Registro manual');
+       
+       addLog('Nuevo Socio', { name: clientFormatted.name, number: clientFormatted.memberNumber }, data.extraInfo || 'Registro manual');
+       
        showNotification('success', 'Socio Creado', `#${memberNum}`);
        return clientFormatted;
     } catch (e) { 
@@ -541,7 +630,9 @@ const [newItem, setNewItem] = useState({
       if (error) throw error;
       
       setMembers(members.map(m => m.id === id ? { ...m, ...updates } : m));
-      addLog('Edición de Socio', { id, updates });
+      
+      addLog('Edición de Socio', { id, updates }, updates.extraInfo || 'Actualización de datos');
+      
       showNotification('success', 'Socio Actualizado', 'Cambios guardados.');
     } catch (e) { 
       console.error(e);
@@ -553,38 +644,35 @@ const [newItem, setNewItem] = useState({
     }
   };
 
-const handleDeleteMemberWithLog = async (id) => {
-  try {
-    const memberToDelete = members.find(m => m.id === id);
+  const handleDeleteMemberWithLog = async (id) => {
+    try {
+      const memberToDelete = members.find(m => m.id === id);
 
-    const { error } = await supabase.from('clients').delete().eq('id', id);
+      const { error } = await supabase.from('clients').delete().eq('id', id);
 
-    if (error) {
-      if (error.message?.includes('foreign key') || error.code === '23503') {
-        const { error: softErr } = await supabase
-          .from('clients')
-          .update({ is_active: false })
-          .eq('id', id);
-        if (softErr) throw softErr;
-      } else {
-        throw error;
+      if (error) {
+        if (error.message?.includes('foreign key') || error.code === '23503') {
+          const { error: softErr } = await supabase
+            .from('clients')
+            .update({ is_active: false })
+            .eq('id', id);
+          if (softErr) throw softErr;
+        } else {
+          throw error;
+        }
       }
+
+      setMembers(members.filter(m => m.id !== id));
+      addLog('Baja de Socio', { id, name: memberToDelete?.name || 'Desconocido' });
+      showNotification('success', 'Socio Eliminado', 'Se quitó correctamente.');
+    } catch (e) {
+      console.error('Error eliminando socio:', e);
+      showNotification('error', 'Error al Eliminar', `No se pudo borrar: ${e.message}`);
     }
-
-    setMembers(members.filter(m => m.id !== id));
-    addLog('Baja de Socio', { id, name: memberToDelete?.name || 'Desconocido' });
-    showNotification('success', 'Socio Eliminado', 'Se quitó correctamente.');
-  } catch (e) {
-    console.error('Error eliminando socio:', e);
-    showNotification('error', 'Error al Eliminar', `No se pudo borrar: ${e.message}`);
-  }
-};
+  };
   
-  const checkExpirations = () => { /* Lógica futura */ };
+  const checkExpirations = () => {};
 
-  // ==========================================
-  // 5. FUNCIÓN DE SONIDO BEEP
-  // ==========================================
   const playBeep = (success = true) => {
     try {
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -607,9 +695,6 @@ const handleDeleteMemberWithLog = async (id) => {
     }
   };
 
-  // ==========================================
-  // 6. CÁLCULOS Y EFECTOS
-  // ==========================================
   const calculateTotal = () => {
     const subtotal = cart.reduce(
       (t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0),
@@ -622,8 +707,9 @@ const handleDeleteMemberWithLog = async (id) => {
   };
 
   const safeTransactions = Array.isArray(transactions) ? transactions : [];
+  
   const validTransactions = safeTransactions.filter(
-    (t) => t && t.status !== 'voided'
+    (t) => t && t.status !== 'voided' && !t.isTest
   );
 
   const totalSales = validTransactions.reduce(
@@ -632,14 +718,13 @@ const handleDeleteMemberWithLog = async (id) => {
   );
   const salesCount = validTransactions.length;
 
-    // ✅ Helpers para parsear fechas de transacciones y gastos locales
   const parseTxDate = (tx) => {
     try {
       if (tx.date && tx.time) {
         const [day, month, year] = tx.date.split('/');
         let fullYear = parseInt(year, 10);
         if (fullYear < 100) fullYear += 2000;
-        const timeClean = tx.time.split(' ')[0]; // Limpiar posible AM/PM residual
+        const timeClean = tx.time.split(' ')[0];
         return new Date(fullYear, parseInt(month, 10) - 1, parseInt(day, 10),
           ...timeClean.split(':').map(Number));
       }
@@ -661,9 +746,6 @@ const handleDeleteMemberWithLog = async (id) => {
     } catch { return null; }
   };
 
-
-
-  // ✅ FIX: Cálculos filtrados por ciclo de caja (desde apertura)
   const cycleTransactions = useMemo(() => {
     if (!registerOpenedAt) return validTransactions;
     const cycleStart = new Date(registerOpenedAt);
@@ -674,9 +756,10 @@ const handleDeleteMemberWithLog = async (id) => {
   }, [validTransactions, registerOpenedAt]);
 
   const cycleExpenses = useMemo(() => {
-    if (!registerOpenedAt) return expenses;
+    const realExpenses = expenses.filter(e => !e.isTest);
+    if (!registerOpenedAt) return realExpenses;
     const cycleStart = new Date(registerOpenedAt);
-    return expenses.filter(exp => {
+    return realExpenses.filter(exp => {
       const expDate = parseExpDate(exp);
       return expDate && expDate >= cycleStart;
     });
@@ -696,7 +779,6 @@ const handleDeleteMemberWithLog = async (id) => {
     .filter(t => t.payment === 'Efectivo')
     .reduce((acc, t) => acc + (Number(t.total) || 0), 0);
 
-
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date());
@@ -711,7 +793,6 @@ const handleDeleteMemberWithLog = async (id) => {
         minute: '2-digit',
         hour12: false,
       });
-      // ✅ FIX AUTO-CLOSE: Evitar ejecuciones múltiples
       if (nowStr === closingTime && !isAutoClosing.current) {
         isAutoClosing.current = true;
         executeRegisterClose(true).finally(() => {
@@ -721,92 +802,61 @@ const handleDeleteMemberWithLog = async (id) => {
     }
   }, [currentTime, closingTime, isRegisterClosed]);
 
-  // ==========================================
-  // 7. LÓGICA DE NEGOCIO
-  // ==========================================
-
-  // ✨ NUEVO: Función "Puente" para navegar desde el Dashboard al Inventario
   const handleDashboardAlertClick = (alertType) => {
-    setActiveTab('inventory'); // Cambiamos la pestaña
-    
-    // Y le inyectamos una palabra secreta en el buscador para que filtre rápido
+    setActiveTab('inventory'); 
     if (alertType === 'out_of_stock') {
-      setInventorySearch('AGOTADOS'); // Podés programar esta palabra en InventoryView.jsx
+      setInventorySearch('AGOTADOS'); 
     } else if (alertType === 'expirations') {
-      setInventorySearch('VENCIMIENTOS'); // Lo mismo acá
+      setInventorySearch('VENCIMIENTOS'); 
     }
   };
 
-const handleAddExpense = async (expenseData) => {
-    try {
-      const safeDescription = expenseData.description || expenseData.concept || expenseData.notes || 'Gasto General';
-      const safeAmount = Number(expenseData.amount) || 0;
-
-      const payload = {
-        description: safeDescription,
-        amount: safeAmount,
-        category: expenseData.category || 'Varios',
-        payment_method: expenseData.paymentMethod || 'Efectivo',
-        user_name: currentUser?.name || 'Sistema'
-      };
-
-      const { data, error } = await supabase.from('expenses').insert([payload]).select().single();
-      if (error) throw error;
-
-      const newExpense = {
-        id: data.id,
-        description: data.description,
-        amount: data.amount,
-        category: data.category,
-        paymentMethod: data.payment_method,
-        date: formatDateAR(new Date(data.created_at)),
-        time: formatTimeFullAR(new Date(data.created_at)),
-        user: data.user_name
-      };
-
-      setExpenses([newExpense, ...expenses]);
-      addLog('Nuevo Gasto', { description: newExpense.description, amount: newExpense.amount, category: newExpense.category, paymentMethod: newExpense.paymentMethod }, 'Salida de dinero');
-      showNotification('success', 'Gasto Registrado', 'Se guardó correctamente en la nube.');
-    } catch (e) {
-      console.error(e);
-      showNotification('error', 'Error', 'No se pudo guardar el gasto. Verifique los datos.');
-    }
-  };
-  
-const addToCart = (item, grams = null) => {
-  if (item.stock === 0) return;
-  
-  // ✅ PRODUCTO POR PESO
-  if (item.product_type === 'weight' && grams) {
-    const existing = cart.find((c) => c.id === item.id && !c.isReward);
-    if (existing) {
-      const newTotal = existing.quantity + grams;
-      if (newTotal > item.stock) {
-        showNotification('error', 'Stock Insuficiente', `Solo quedan ${item.stock}g disponibles.`);
-        return;
+  const addToCart = (item, grams = null) => {
+    if (item.stock === 0) return;
+    
+    if (item.product_type === 'weight' && grams) {
+      const existing = cart.find((c) => c.id === item.id && !c.isReward);
+      if (existing) {
+        const newTotal = existing.quantity + grams;
+        if (newTotal > item.stock) {
+          showNotification('error', 'Stock Insuficiente', `Solo quedan ${item.stock}g disponibles.`);
+          return;
+        }
+        setCart(cart.map((c) => (c.id === item.id && !c.isReward ? { ...c, quantity: newTotal } : c)));
+      } else {
+        if (grams > item.stock) {
+          showNotification('error', 'Stock Insuficiente', `Solo quedan ${item.stock}g disponibles.`);
+          return;
+        }
+        setCart([...cart, { ...item, quantity: grams }]);
       }
-      setCart(cart.map((c) => (c.id === item.id && !c.isReward ? { ...c, quantity: newTotal } : c)));
-    } else {
-      if (grams > item.stock) {
-        showNotification('error', 'Stock Insuficiente', `Solo quedan ${item.stock}g disponibles.`);
-        return;
-      }
-      setCart([...cart, { ...item, quantity: grams }]);
-    }
-    return;
-  }
-  
-  const existing = cart.find((c) => c.id === item.id && !c.isReward);
-  if (existing) {
-    if (existing.quantity >= item.stock) {
-      showNotification('error', 'Stock Insuficiente', 'No quedan más unidades de este producto.');
       return;
     }
-    setCart(cart.map((c) => (c.id === item.id && !c.isReward ? { ...c, quantity: c.quantity + 1 } : c)));
-  } else {
-    setCart([...cart, { ...item, quantity: 1 }]);
-  }
-};
+    
+    const existing = cart.find((c) => c.id === item.id && !c.isReward);
+    if (existing) {
+      if (existing.quantity >= item.stock) {
+        showNotification('error', 'Stock Insuficiente', 'No quedan más unidades de este producto.');
+        return;
+      }
+      setCart(cart.map((c) => (c.id === item.id && !c.isReward ? { ...c, quantity: c.quantity + 1 } : c)));
+    } else {
+      setCart([...cart, { ...item, quantity: 1 }]);
+    }
+  };
+
+  const updateCartItemQty = (id, newQty) => {
+    const qty = parseInt(newQty);
+    if (isNaN(qty) || qty < 1) return;
+    const itemInStock = inventory.find((i) => i.id === id);
+    if (qty > itemInStock.stock) {
+      showNotification('error', 'Stock Insuficiente', `Máximo disponible: ${itemInStock.stock}`);
+      return;
+    }
+    setCart(cart.map((c) => (c.id === id ? { ...c, quantity: qty } : c)));
+  };
+  
+  const removeFromCart = (id) => setCart(cart.filter((c) => c.id !== id));
 
   const handleBarcodeScan = (scannedCode, wasInInput) => {
     const product = inventory.find(
@@ -864,17 +914,17 @@ const addToCart = (item, grams = null) => {
     onInputScan: handleInputScan
   });
 
-const handleAddProductFromBarcode = (barcode) => {
-  setBarcodeNotFoundModal({ isOpen: false, code: '' });
-  setPendingBarcodeForNewProduct(barcode);
-  setNewItem({
-    title: '', brand: '', price: '', purchasePrice: '', stock: '',
-    categories: [], image: '', barcode: barcode,
-    product_type: 'quantity',
-    expiration_date: ''
-  });
-  setIsModalOpen(true);
-};
+  const handleAddProductFromBarcode = (barcode) => {
+    setBarcodeNotFoundModal({ isOpen: false, code: '' });
+    setPendingBarcodeForNewProduct(barcode);
+    setNewItem({
+      title: '', brand: '', price: '', purchasePrice: '', stock: '',
+      categories: [], image: '', barcode: barcode,
+      product_type: 'quantity',
+      expiration_date: ''
+    });
+    setIsModalOpen(true);
+  };
 
   const handleDuplicateBarcodeDetected = (existingProduct, newBarcode) => {
     setBarcodeDuplicateModal({
@@ -926,45 +976,42 @@ const handleAddProductFromBarcode = (barcode) => {
     setPosSelectedClient(null);
   };
 
-const handleImageUpload = async (e, isEditing = false) => {
-  const file = e.target.files[0];
-  if (!file) return;
+  const handleImageUpload = async (e, isEditing = false) => {
+    const file = e.target.files[0];
+    if (!file) return;
 
-  if (file.size > 5 * 1024 * 1024) {
-    showNotification('error', 'Imagen muy pesada', 'El máximo permitido es 5MB.');
-    return;
-  }
-
-  const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-  if (!validTypes.includes(file.type)) {
-    showNotification('error', 'Formato no válido', 'Solo JPG, PNG, WebP o GIF.');
-    return;
-  }
-
-  e.target.value = '';
-
-  try {
-    setIsUploadingImage(true);
-
-    const publicUrl = await uploadProductImage(file);
-
-    if (isEditing) {
-      setEditingProduct((prev) => prev ? { ...prev, image: publicUrl } : prev);
-    } else {
-      setNewItem((prev) => ({ ...prev, image: publicUrl }));
+    if (file.size > 5 * 1024 * 1024) {
+      showNotification('error', 'Imagen muy pesada', 'El máximo permitido es 5MB.');
+      return;
     }
 
-    showNotification('success', 'Imagen subida', 'Se cargó correctamente a la nube.');
-  } catch (err) {
-    console.error('Error subiendo imagen:', err);
-    showNotification('error', 'Error al subir', 'No se pudo subir la imagen. Intentá de nuevo.');
-  } finally {
-    setIsUploadingImage(false);
-  }
-};
+    const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!validTypes.includes(file.type)) {
+      showNotification('error', 'Formato no válido', 'Solo JPG, PNG, WebP o GIF.');
+      return;
+    }
 
+    e.target.value = '';
 
-const handleEditTransactionRequest = (tx) => {
+    try {
+      setIsUploadingImage(true);
+      const publicUrl = await uploadProductImage(file);
+
+      if (isEditing) {
+        setEditingProduct((prev) => prev ? { ...prev, image: publicUrl } : prev);
+      } else {
+        setNewItem((prev) => ({ ...prev, image: publicUrl }));
+      }
+      showNotification('success', 'Imagen subida', 'Se cargó correctamente a la nube.');
+    } catch (err) {
+      console.error('Error subiendo imagen:', err);
+      showNotification('error', 'Error al subir', 'No se pudo subir la imagen. Intentá de nuevo.');
+    } finally {
+      setIsUploadingImage(false);
+    }
+  };
+
+  const handleEditTransactionRequest = (tx) => {
     const safeTx = JSON.parse(JSON.stringify(tx));
     safeTx.items = safeTx.items.map((i) => ({
       ...i,
@@ -989,7 +1036,6 @@ const handleEditTransactionRequest = (tx) => {
     }
   };
 
-  // --- CAJA ---
   const toggleRegisterStatus = async () => {
     if (currentUser.role !== 'admin') {
       showNotification('error', 'Acceso Denegado', 'Solo el dueño puede gestionar la caja.');
@@ -1008,7 +1054,7 @@ const handleEditTransactionRequest = (tx) => {
         didOpen: () => Swal.showLoading() 
       });
       
-      await fetchCloudData(false); // Trae los datos más frescos de Supabase
+      await fetchCloudData(false);
       Swal.close();
       
       setIsClosingCashModalOpen(true);
@@ -1017,7 +1063,6 @@ const handleEditTransactionRequest = (tx) => {
 
   const executeRegisterClose = async (isAuto = false) => {
     const closeDate = new Date();
-    
     const cycleStart = registerOpenedAt ? new Date(registerOpenedAt) : null;
     
     const cycleTransactions = cycleStart
@@ -1080,42 +1125,33 @@ const handleEditTransactionRequest = (tx) => {
           return dailyLogs.filter(l => l.date === todayStr && l.action === 'Nuevo Socio').map(l => ({ name: l.details?.name, number: l.details?.number, time: l.timestamp || l.time }));
         })();
 
-
-    // ✨ NUEVO: Pregunta de validación antes de hacer nada en la base de datos
     let shouldSaveReport = true;
     
     if (!isAuto) {
-        // Ocultamos el modal de resumen para que se vea bien la alerta
         setIsClosingCashModalOpen(false);
-
         const result = await Swal.fire({
             title: '¿Generar informe de caja?',
             text: 'Si estás haciendo pruebas, podés elegir "Solo cerrar caja" para vaciarla sin guardar el reporte en tu historial.',
             icon: 'question',
             showCancelButton: true,
             showDenyButton: true,
-            confirmButtonColor: '#10b981', // Verde
-            denyButtonColor: '#64748b',    // Gris
-            cancelButtonColor: '#ef4444',  // Rojo
+            confirmButtonColor: '#10b981', 
+            denyButtonColor: '#64748b',    
+            cancelButtonColor: '#ef4444',  
             confirmButtonText: 'Sí, generar reporte',
             denyButtonText: 'No, solo cerrar caja',
             cancelButtonText: 'Cancelar cierre'
         });
 
         if (result.isDismissed) {
-            // El usuario canceló la operación, no hacemos nada.
             return;
         }
-        
         if (result.isDenied) {
-            // El usuario quiere cerrar la caja pero SIN generar reporte
             shouldSaveReport = false;
         }
 
-        // Reactivamos el loading para el proceso de base de datos
         Swal.fire({ title: 'Procesando cierre...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
     }
-
 
     try {
         const { data: lockData, error: lockError } = await supabase
@@ -1143,7 +1179,6 @@ const handleEditTransactionRequest = (tx) => {
             return;
         }
 
-        // ✨ NUEVO: Solo guardamos en "cash_closures" si el usuario eligió generar el reporte
         if (shouldSaveReport) {
             const openTime = registerOpenedAt 
               ? formatTimeFullAR(new Date(registerOpenedAt))
@@ -1201,11 +1236,9 @@ const handleEditTransactionRequest = (tx) => {
             setPastClosures([adaptedReport, ...pastClosures]);
         }
         
-        // Limpiamos el estado local (haya querido guardar reporte o no)
         setIsRegisterClosed(true);
         setRegisterOpenedAt(null);
         
-        // Registramos el log indicando si fue un cierre real o de prueba
         const logMsg = shouldSaveReport ? 'Cierre de Caja' : 'Cierre de Caja (Modo Prueba)';
         addLog(logMsg, { totalSales: cycleTotalSales, salesCount: cycleSalesCount }, isAuto ? 'Automático' : 'Manual');
         
@@ -1382,105 +1415,102 @@ const handleEditTransactionRequest = (tx) => {
     }
   };
 
-// ✨ FIX: Agregamos expiration_date al Guardar (Alta)
-const handleAddItem = async (e, overrideData = null) => {
-  e.preventDefault();
-  const itemData = overrideData || newItem;
-  
-  if (itemData.categories.length === 0) {
-    showNotification('warning', 'Faltan datos', 'Por favor selecciona al menos una categoría.');
-    return;
-  }
-  
-  try {
-    const payload = {
-      title: itemData.title,
-      brand: itemData.brand,
-      price: Number(itemData.price) || 0,
-      purchasePrice: Number(itemData.purchasePrice) || 0,
-      stock: Number(itemData.stock) || 0,
-      category: itemData.categories.join(', '), 
-      barcode: itemData.barcode || null,
-      image: itemData.image || '',
-      product_type: itemData.product_type || 'quantity',
-      expiration_date: itemData.expiration_date || null // ✨ NUEVO
-    };
+  const handleAddItem = async (e, overrideData = null) => {
+    e.preventDefault();
+    const itemData = overrideData || newItem;
     
-    const { data, error } = await supabase.from('products').insert([payload]).select().single();
-    if (error) throw error;
-    
-    const itemFormatted = { 
-        ...data, 
-        categories: data.category ? data.category.split(',').map(c => c.trim()).filter(Boolean) : [] 
-    };
-    setInventory([...inventory, itemFormatted]);
-    
-    const logDetails = {
-      id: data.id, title: data.title, price: data.price,
-      stock: data.stock, category: data.category,
-      product_type: data.product_type,
-      hasImage: !!data.image
-    };
-    addLog('Alta de Producto', logDetails, 'Producto Nuevo');
-    
-    setNewItem({
-      title: '', brand: '', price: '', purchasePrice: '', stock: '',
-      categories: [], image: '', barcode: '',
-      product_type: 'quantity', expiration_date: '' 
-    });
-    setIsModalOpen(false);
-    setPendingBarcodeForNewProduct('');
-    showNotification('success', 'Producto Agregado', 'Guardado en la nube.');
-  } catch (err) {
-    console.error('Error agregando producto:', err);
-    showNotification('error', 'Error', 'No se pudo guardar el producto.');
-  }
-};
-
-
-// ✨ FIX: Agregamos expiration_date a la Edición
-const saveEditProduct = async (e, overrideData = null) => {
-  e.preventDefault();
-  const productData = overrideData || editingProduct;
-  if (!productData) return;
-  
-  try {
-    const originalProduct = inventory.find(p => p.id === productData.id);
-    if (originalProduct && originalProduct.image !== productData.image) {
-      await deleteProductImage(originalProduct.image).catch(() => {});
+    if (itemData.categories.length === 0) {
+      showNotification('warning', 'Faltan datos', 'Por favor selecciona al menos una categoría.');
+      return;
     }
-
-    const payload = {
-      title: productData.title,
-      price: Number(productData.price),
-      purchasePrice: Number(productData.purchasePrice) || 0,
-      stock: Number(productData.stock),
-      category: Array.isArray(productData.categories) ? productData.categories.join(', ') : productData.category,
-      barcode: productData.barcode || null,
-      image: productData.image || '',
-      product_type: productData.product_type || 'quantity',
-      expiration_date: productData.expiration_date || null // ✨ NUEVO
-    };
-
-    const { error } = await supabase.from('products').update(payload).eq('id', productData.id);
-    if (error) throw error;
-    setInventory(inventory.map(p => p.id === productData.id ? { ...productData } : p));
-    addLog('Edición Producto', {
-      id: productData.id, product: productData.title,
-      price: productData.price, stock: productData.stock,
-      category: productData.categories?.[0] || '',
-      product_type: productData.product_type,
-      imageChanged: originalProduct?.image !== productData.image ? 'Sí' : 'No'
-    }, editReason);
     
-    setEditingProduct(null);
-    setEditReason('');
-    showNotification('success', 'Producto Editado', 'Cambios guardados en la nube.');
-  } catch (err) {
-    console.error('Error editando producto:', err);
-    showNotification('error', 'Error', 'Fallo al guardar los cambios.');
-  }
-};
+    try {
+      const payload = {
+        title: itemData.title,
+        brand: itemData.brand,
+        price: Number(itemData.price) || 0,
+        purchasePrice: Number(itemData.purchasePrice) || 0,
+        stock: Number(itemData.stock) || 0,
+        category: itemData.categories.join(', '), 
+        barcode: itemData.barcode || null,
+        image: itemData.image || '',
+        product_type: itemData.product_type || 'quantity',
+        expiration_date: itemData.expiration_date || null
+      };
+      
+      const { data, error } = await supabase.from('products').insert([payload]).select().single();
+      if (error) throw error;
+      
+      const itemFormatted = { 
+          ...data, 
+          categories: data.category ? data.category.split(',').map(c => c.trim()).filter(Boolean) : [] 
+      };
+      setInventory([...inventory, itemFormatted]);
+      
+      const logDetails = {
+        id: data.id, title: data.title, price: data.price,
+        stock: data.stock, category: data.category,
+        product_type: data.product_type,
+        hasImage: !!data.image
+      };
+      addLog('Alta de Producto', logDetails, 'Producto Nuevo');
+      
+      setNewItem({
+        title: '', brand: '', price: '', purchasePrice: '', stock: '',
+        categories: [], image: '', barcode: '',
+        product_type: 'quantity', expiration_date: '' 
+      });
+      setIsModalOpen(false);
+      setPendingBarcodeForNewProduct('');
+      showNotification('success', 'Producto Agregado', 'Guardado en la nube.');
+    } catch (err) {
+      console.error('Error agregando producto:', err);
+      showNotification('error', 'Error', 'No se pudo guardar el producto.');
+    }
+  };
+
+  const saveEditProduct = async (e, overrideData = null) => {
+    e.preventDefault();
+    const productData = overrideData || editingProduct;
+    if (!productData) return;
+    
+    try {
+      const originalProduct = inventory.find(p => p.id === productData.id);
+      if (originalProduct && originalProduct.image !== productData.image) {
+        await deleteProductImage(originalProduct.image).catch(() => {});
+      }
+
+      const payload = {
+        title: productData.title,
+        price: Number(productData.price),
+        purchasePrice: Number(productData.purchasePrice) || 0,
+        stock: Number(productData.stock),
+        category: Array.isArray(productData.categories) ? productData.categories.join(', ') : productData.category,
+        barcode: productData.barcode || null,
+        image: productData.image || '',
+        product_type: productData.product_type || 'quantity',
+        expiration_date: productData.expiration_date || null
+      };
+
+      const { error } = await supabase.from('products').update(payload).eq('id', productData.id);
+      if (error) throw error;
+      setInventory(inventory.map(p => p.id === productData.id ? { ...productData } : p));
+      addLog('Edición Producto', {
+        id: productData.id, product: productData.title,
+        price: productData.price, stock: productData.stock,
+        category: productData.categories?.[0] || '',
+        product_type: productData.product_type,
+        imageChanged: originalProduct?.image !== productData.image ? 'Sí' : 'No'
+      }, editReason);
+      
+      setEditingProduct(null);
+      setEditReason('');
+      showNotification('success', 'Producto Editado', 'Cambios guardados en la nube.');
+    } catch (err) {
+      console.error('Error editando producto:', err);
+      showNotification('error', 'Error', 'Fallo al guardar los cambios.');
+    }
+  };
 
   const handleDeleteProductRequest = (id) => {
     const product = inventory.find(p => p.id === id);
@@ -1552,87 +1582,75 @@ const saveEditProduct = async (e, overrideData = null) => {
     }
   };
 
-const confirmDeleteProduct = async (e) => {
-  e.preventDefault();
-  if (productToDelete) {
+  const confirmDeleteProduct = async (e) => {
+    e.preventDefault();
+    if (productToDelete) {
+      try {
+        const { error } = await supabase
+          .from('products')
+          .update({ is_active: false })
+          .eq('id', productToDelete.id);
+        if (error) throw error;
+
+        if (productToDelete.image) {
+          await deleteProductImage(productToDelete.image).catch(() => {});
+        }
+
+        setInventory(inventory.filter((x) => x.id !== productToDelete.id));
+        addLog('Baja Producto', { id: productToDelete.id, title: productToDelete.title }, deleteProductReason || 'Sin motivo');
+        setIsDeleteProductModalOpen(false);
+        setProductToDelete(null);
+        showNotification('success', 'Producto Eliminado', 'Se quitó del inventario.');
+      } catch (err) {
+        console.error('Error eliminando producto:', err);
+        showNotification('error', 'Error al Eliminar', `No se pudo borrar: ${err.message}`);
+      }
+    }
+  };
+
+  const handleDuplicateProduct = async (originalProduct) => {
     try {
-      const { error } = await supabase
-        .from('products')
-        .update({ is_active: false })
-        .eq('id', productToDelete.id);
+      const payload = {
+        title: `${originalProduct.title} (copia)`,
+        brand: originalProduct.brand || '',
+        price: Number(originalProduct.price) || 0,
+        purchasePrice: Number(originalProduct.purchasePrice) || 0,
+        stock: Number(originalProduct.stock) || 0,
+        category: Array.isArray(originalProduct.categories) 
+          ? originalProduct.categories.join(', ') 
+          : originalProduct.category || '',
+        barcode: null,       
+        image: '',           
+        product_type: originalProduct.product_type || 'quantity'
+      };
+
+      const { data, error } = await supabase.from('products').insert([payload]).select().single();
       if (error) throw error;
 
-      if (productToDelete.image) {
-        await deleteProductImage(productToDelete.image).catch(() => {});
-      }
+      const newProduct = {
+        ...data,
+        categories: data.category ? data.category.split(',').map(c => c.trim()).filter(Boolean) : [],
+        purchasePrice: data.purchasePrice || 0
+      };
 
-      setInventory(inventory.filter((x) => x.id !== productToDelete.id));
-      addLog('Baja Producto', { id: productToDelete.id, title: productToDelete.title }, deleteProductReason || 'Sin motivo');
-      setIsDeleteProductModalOpen(false);
-      setProductToDelete(null);
-      showNotification('success', 'Producto Eliminado', 'Se quitó del inventario.');
+      setInventory(prev => [...prev, newProduct]);
+
+      addLog('Producto Duplicado', {
+        originalId: originalProduct.id,
+        originalTitle: originalProduct.title,
+        newId: data.id,
+        newTitle: data.title
+      }, 'Duplicado desde editor');
+
+      setEditingProduct(newProduct);
+      setEditReason('');
+
+      showNotification('success', 'Producto Duplicado', `Se creó "${data.title}" como copia.`);
     } catch (err) {
-      console.error('Error eliminando producto:', err);
-      showNotification('error', 'Error al Eliminar', `No se pudo borrar: ${err.message}`);
+      console.error('Error duplicando producto:', err);
+      showNotification('error', 'Error al Duplicar', 'No se pudo crear la copia del producto.');
     }
-  }
-};
-
-const handleDuplicateProduct = async (originalProduct) => {
-  try {
-    const payload = {
-      title: `${originalProduct.title} (copia)`,
-      brand: originalProduct.brand || '',
-      price: Number(originalProduct.price) || 0,
-      purchasePrice: Number(originalProduct.purchasePrice) || 0,
-      stock: Number(originalProduct.stock) || 0,
-      category: Array.isArray(originalProduct.categories) 
-        ? originalProduct.categories.join(', ') 
-        : originalProduct.category || '',
-      barcode: null,       
-      image: '',           
-      product_type: originalProduct.product_type || 'quantity'
-    };
-
-    const { data, error } = await supabase.from('products').insert([payload]).select().single();
-    if (error) throw error;
-
-    const newProduct = {
-      ...data,
-      categories: data.category ? data.category.split(',').map(c => c.trim()).filter(Boolean) : [],
-      purchasePrice: data.purchasePrice || 0
-    };
-
-    setInventory(prev => [...prev, newProduct]);
-
-    addLog('Producto Duplicado', {
-      originalId: originalProduct.id,
-      originalTitle: originalProduct.title,
-      newId: data.id,
-      newTitle: data.title
-    }, 'Duplicado desde editor');
-
-    setEditingProduct(newProduct);
-    setEditReason('');
-
-    showNotification('success', 'Producto Duplicado', `Se creó "${data.title}" como copia.`);
-  } catch (err) {
-    console.error('Error duplicando producto:', err);
-    showNotification('error', 'Error al Duplicar', 'No se pudo crear la copia del producto.');
-  }
-};
-
-  const updateCartItemQty = (id, newQty) => {
-    const qty = parseInt(newQty);
-    if (isNaN(qty) || qty < 1) return;
-    const itemInStock = inventory.find((i) => i.id === id);
-    if (qty > itemInStock.stock) {
-      showNotification('error', 'Stock Insuficiente', `Máximo disponible: ${itemInStock.stock}`);
-      return;
-    }
-    setCart(cart.map((c) => (c.id === id ? { ...c, quantity: qty } : c)));
   };
-  const removeFromCart = (id) => setCart(cart.filter((c) => c.id !== id));
 
   const handleRedeemReward = (reward) => {
     if (!posSelectedClient) {
@@ -1656,7 +1674,6 @@ const handleDuplicateProduct = async (originalProduct) => {
   const handleCheckout = async () => {
     const total = calculateTotal();
     
-    // ✅ 1. Filtramos los productos que NO son premios y NO son personalizados para revisar el stock
     const stockIssues = cart.filter(c => !c.isReward && !c.isCustom).filter(c => {
       const i = inventory.find(x => x.id === c.id);
       return !i || i.stock < c.quantity;
@@ -1680,7 +1697,6 @@ const handleDuplicateProduct = async (originalProduct) => {
 
       const itemsPayload = cart.map(i => ({
           sale_id: sale.id, 
-          // ✅ 2. Si es personalizado, mandamos null para no romper las relaciones de Supabase
           product_id: i.isCustom ? null : i.id, 
           product_title: i.title, 
           quantity: i.quantity, 
@@ -1690,7 +1706,6 @@ const handleDuplicateProduct = async (originalProduct) => {
         await supabase.from('sale_items').insert(itemsPayload);
 
       for (const item of cart) {
-          // ✅ 3. Solo descontamos stock de productos reales
           if (!item.isReward && !item.isCustom) {
              const prod = inventory.find(p => p.id === item.id);
              if (prod) await supabase.from('products').update({ stock: prod.stock - item.quantity }).eq('id', item.id);
@@ -1726,6 +1741,7 @@ const handleDuplicateProduct = async (originalProduct) => {
         pointsSpent: pointsSpent,
       };
 
+      tx.isTest = isTestRecord(tx);
       setTransactions([tx, ...transactions]);
 
       const logItems = cart.map(item => ({
@@ -1769,10 +1785,11 @@ const handleDuplicateProduct = async (originalProduct) => {
       if (tx.status === 'voided') {
         Swal.fire({ title: 'Borrando...', text: 'Eliminando registro permanentemente...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
         
+        // ✨ FIX: Ahora también borramos los logs de restauración para limpiar por completo
         const { error: logErr } = await supabase
           .from('logs')
           .delete()
-          .or(`and(action.eq.Venta Realizada,details->>transactionId.eq.${tx.id}),and(action.eq.Venta Anulada,details->>id.eq.${tx.id})`);
+          .or(`and(action.eq.Venta Realizada,details->>transactionId.eq.${tx.id}),and(action.eq.Venta Anulada,details->>id.eq.${tx.id}),and(action.eq.Venta Restaurada,details->>transactionId.eq.${tx.id})`);
         
         if (logErr) {
           console.warn("No se pudo borrar el log en la BD (o ya no existía):", logErr);
@@ -1874,6 +1891,150 @@ const handleDuplicateProduct = async (originalProduct) => {
     }
   };
 
+  // ✨ NUEVO: Función para restaurar (re-activar) una venta anulada conservando TODO
+  const handleRestoreTransaction = async (tx) => {
+    const result = await Swal.fire({
+      title: '¿Restaurar Venta?',
+      text: 'Se volverá a registrar la venta en el sistema, ocupará su fecha original, se descontará el stock nuevamente y se le devolverán los puntos al socio. ¿Estás seguro?',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#10b981',
+      cancelButtonColor: '#64748b',
+      confirmButtonText: 'Sí, restaurar venta',
+      cancelButtonText: 'Cancelar'
+    });
+
+    if (!result.isConfirmed) return;
+
+    // Verificar que todavía haya stock suficiente para restaurarla
+    const stockIssues = [];
+    for (const item of tx.items) {
+      if (!item.isReward && !item.isCustom) {
+        const prod = inventory.find(p => String(p.id) === String(item.productId || item.id));
+        const qtyNeeded = Number(item.qty || item.quantity || 0);
+        if (!prod || prod.stock < qtyNeeded) {
+            stockIssues.push(`"${item.title}" (Faltan ${qtyNeeded - (prod?.stock || 0)})`);
+        }
+      }
+    }
+    
+    if (stockIssues.length > 0) {
+      Swal.fire('Stock Insuficiente', `No hay stock suficiente actualmente para restaurar esta venta:\n\n${stockIssues.join('\n')}`, 'error');
+      return;
+    }
+
+    Swal.fire({ title: 'Restaurando...', text: 'Ajustando base de datos...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+
+    try {
+      // Buscar Cliente para asociarle los puntos
+      let clientId = null;
+      let clientDb = null;
+      if (tx.memberNumber && tx.memberNumber !== '---') {
+          clientDb = members.find(m => String(m.memberNumber) === String(tx.memberNumber));
+          if (clientDb) clientId = clientDb.id;
+      }
+
+      // Re-insertar en BD de Ventas CON LA FECHA ORIGINAL
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      
+      let origCreatedAt = undefined;
+      try {
+          const [day, month, year] = tx.date.split('/');
+          let fullYear = parseInt(year, 10);
+          if (fullYear < 100) fullYear += 2000;
+          const timeParts = (tx.time || tx.timestamp || '00:00').split(':');
+          const origDate = new Date(fullYear, parseInt(month, 10) - 1, parseInt(day, 10), parseInt(timeParts[0], 10), parseInt(timeParts[1] || 0, 10), parseInt(timeParts[2] || 0, 10));
+          origCreatedAt = origDate.toISOString();
+      } catch(e) { console.error("Error parsing date", e); }
+
+      const salePayload = {
+          total: tx.total,
+          payment_method: tx.payment,
+          installments: tx.installments || 0,
+          client_id: clientId,
+          points_earned: tx.pointsEarned || 0,
+          points_spent: tx.pointsSpent || 0,
+          user_name: tx.user || currentUser.name
+      };
+
+      if (origCreatedAt) salePayload.created_at = origCreatedAt;
+      if (uuidRegex.test(tx.id)) salePayload.id = tx.id;
+
+      const { data: newSale, error: saleErr } = await supabase.from('sales').insert(salePayload).select().single();
+      if (saleErr) throw saleErr;
+
+      // Re-insertar Items vendidos
+      const itemsPayload = tx.items.map(i => {
+          let prodId = i.productId || i.id;
+          if (!uuidRegex.test(prodId)) prodId = null; 
+          return {
+              sale_id: newSale.id, 
+              product_id: prodId, 
+              product_title: i.title, 
+              quantity: i.qty || i.quantity, 
+              price: i.price, 
+              is_reward: !!i.isReward
+          };
+      });
+      
+      if (itemsPayload.length > 0) {
+          const { error: itemsErr } = await supabase.from('sale_items').insert(itemsPayload);
+          if (itemsErr) throw itemsErr;
+      }
+
+      // Descontar el Stock nuevamente
+      const updatedInventory = [...inventory];
+      for (const item of tx.items) {
+         if (!item.isReward && !item.isCustom) {
+            const prodId = item.productId || item.id;
+            const prodIndex = updatedInventory.findIndex(p => String(p.id) === String(prodId));
+            if (prodIndex !== -1) {
+               const qtyToDeduct = Number(item.qty || item.quantity || 0);
+               const newStock = updatedInventory[prodIndex].stock - qtyToDeduct;
+               updatedInventory[prodIndex] = { ...updatedInventory[prodIndex], stock: newStock };
+               await supabase.from('products').update({ stock: newStock }).eq('id', prodId);
+            }
+         }
+      }
+      setInventory(updatedInventory);
+
+      // Restaurar Puntos del Socio
+      if (clientDb) {
+          const newPoints = clientDb.points + (tx.pointsEarned || 0) - (tx.pointsSpent || 0);
+          await supabase.from('clients').update({ points: newPoints }).eq('id', clientDb.id);
+          setMembers(members.map(m => m.id === clientDb.id ? { ...m, points: newPoints } : m));
+      }
+
+      // Crear Log de Restauración
+      const logDetails = {
+         transactionId: newSale.id, 
+         oldTransactionId: tx.id,
+         total: tx.total, 
+         itemsRestored: tx.items.map(i => ({ title: i.title, quantity: i.qty || i.quantity }))
+      };
+      
+      addLog('Venta Restaurada', logDetails, 'Restauración manual desde el historial');
+
+      // Actualizar UI Local
+      const restoredTx = {
+         ...tx,
+         id: newSale.id,
+         status: 'completed',
+         isHistoric: false,
+         isRestored: true 
+      };
+      restoredTx.isTest = isTestRecord(restoredTx);
+      
+      setTransactions([restoredTx, ...transactions.filter(t => String(t.id) !== String(tx.id))]);
+      
+      Swal.close();
+      showNotification('success', 'Venta Restaurada', 'La venta vuelve a estar activa con su fecha original.');
+
+    } catch (err) {
+      console.error(err);
+      Swal.fire('Error', 'No se pudo restaurar la venta. Verifique su conexión y la consola.', 'error');
+    }
+  };
 
   const addTxItem = (product) => {
     if (!editingTransaction) return;
@@ -1947,7 +2108,7 @@ const handleDuplicateProduct = async (originalProduct) => {
     });
   };
 
-const handleSaveEditedTransaction = async (e) => {
+  const handleSaveEditedTransaction = async (e) => {
     e.preventDefault();
     if (!editingTransaction) return;
 
@@ -1957,49 +2118,43 @@ const handleSaveEditedTransaction = async (e) => {
     try {
       Swal.fire({ title: 'Guardando cambios...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
+      // 1. Detección de cambios básicos
       const changes = {};
-      if (originalTx.total !== editingTransaction.total) {
-        changes.total = { old: originalTx.total, new: editingTransaction.total };
-      }
-      if (originalTx.payment !== editingTransaction.payment) {
-        changes.payment = { old: originalTx.payment, new: editingTransaction.payment };
-      }
-
+      if (originalTx.total !== editingTransaction.total) changes.total = { old: originalTx.total, new: editingTransaction.total };
+      if (originalTx.payment !== editingTransaction.payment) changes.payment = { old: originalTx.payment, new: editingTransaction.payment };
       if (Number(originalTx.installments || 0) !== Number(editingTransaction.installments || 0)) {
-        changes.installments = { 
-          old: Number(originalTx.installments || 0), 
-          new: Number(editingTransaction.installments || 0) 
-        };
+        changes.installments = { old: Number(originalTx.installments || 0), new: Number(editingTransaction.installments || 0) };
       }
 
+      // 2. Normalización absoluta de items
+      const finalItems = editingTransaction.items.map(i => ({
+          ...i,
+          qty: Number(i.qty || i.quantity || 0),
+          price: Number(i.price || 0),
+          title: i.title || i.product_title || i.name || 'Producto'
+      }));
+
+      // [Cálculo de diferencias para stock]
       const productChanges = [];
       const oldMap = {};
       originalTx.items.forEach(i => { oldMap[i.id || i.productId] = Number(i.qty || i.quantity || 0); });
       
       const newMap = {};
-      const newItemsDetails = {};
-      editingTransaction.items.forEach(i => { 
-         const id = i.id || i.productId;
-         newMap[id] = Number(i.qty || i.quantity || 0); 
-         newItemsDetails[id] = i;
-      });
+      finalItems.forEach(i => { if (i.id || i.productId) newMap[i.id || i.productId] = i.qty; });
 
       const allIds = new Set([...Object.keys(oldMap), ...Object.keys(newMap)]);
       allIds.forEach(id => {
-         const oldQty = oldMap[id] || 0;
-         const newQty = newMap[id] || 0;
-         if (oldQty !== newQty) {
-            const itemDef = newItemsDetails[id] || originalTx.items.find(x => (x.id || x.productId) == id);
-            productChanges.push({ 
-              id, 
-              title: itemDef.title || itemDef.name || 'Producto', 
-              oldQty, 
-              newQty, 
-              diff: newQty - oldQty
-            });
+         if (id && id !== 'null' && id !== 'undefined') {
+             const oldQty = oldMap[id] || 0;
+             const newQty = newMap[id] || 0;
+             if (oldQty !== newQty) {
+                const itemDef = finalItems.find(x => String(x.id || x.productId) === String(id)) || originalTx.items.find(x => String(x.id || x.productId) === String(id));
+                productChanges.push({ id, title: itemDef?.title || 'Producto', oldQty, newQty, diff: newQty - oldQty });
+             }
          }
       });
 
+      // [Cálculo de puntos]
       let pointsChange = null;
       let clientObj = editingTransaction.client || originalTx.client;
       let cName = null; let cNum = null;
@@ -2007,41 +2162,60 @@ const handleSaveEditedTransaction = async (e) => {
       if (clientObj && typeof clientObj === 'object' && clientObj.name !== 'No asociado') {
          cName = clientObj.name; cNum = clientObj.memberNumber;
          const oldPts = Number(originalTx.pointsEarned || 0);
-         const newPts = Math.floor(editingTransaction.total / 150);
+         const newPts = Math.floor(editingTransaction.total / 500); 
          if (oldPts !== newPts) pointsChange = { previous: oldPts, new: newPts, diff: newPts - oldPts };
       } else if (typeof clientObj === 'string' && clientObj !== 'No asociado') {
          cName = clientObj;
       }
 
-
-      await supabase.from('sales').update({
+      // ==========================================
+      // INICIO TRANSACCIÓN A LA NUBE (BLINDADA)
+      // ==========================================
+      
+      // A. Actualizar Venta
+      const { error: saleErr } = await supabase.from('sales').update({
         total: editingTransaction.total,
         payment_method: editingTransaction.payment,
         installments: editingTransaction.installments || 0,
         points_earned: pointsChange ? pointsChange.new : originalTx.pointsEarned
       }).eq('id', editingTransaction.id);
-
-      await supabase.from('sale_items').delete().eq('sale_id', editingTransaction.id);
       
-      const newItemsPayload = editingTransaction.items.map(i => ({
-        sale_id: editingTransaction.id,
-        product_id: i.id || i.productId,
-        product_title: i.title,
-        quantity: Number(i.qty),
-        price: Number(i.price),
-        is_reward: !!i.isReward
-      }));
-      await supabase.from('sale_items').insert(newItemsPayload);
+      if (saleErr) throw new Error("Fallo en totales: " + saleErr.message);
 
+      // B. Borrar items viejos
+      const { error: delErr } = await supabase.from('sale_items').delete().eq('sale_id', editingTransaction.id);
+      if (delErr) throw new Error("Fallo limpiando base: " + delErr.message);
+      
+      // C. Insertar items nuevos con UUID Validator
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const newItemsPayload = finalItems.map(i => {
+        let prodId = i.productId || i.id;
+        if (!uuidRegex.test(prodId)) prodId = null; 
+
+        return {
+          sale_id: editingTransaction.id,
+          product_id: prodId,
+          product_title: i.title,
+          quantity: i.qty,
+          price: i.price,
+          is_reward: !!i.isReward
+        };
+      });
+      
+      const { error: insertErr } = await supabase.from('sale_items').insert(newItemsPayload);
+      if (insertErr) throw new Error("Supabase rechazó los productos: " + insertErr.message); 
+
+      // D. Actualizar Stock
       for (const change of productChanges) {
         if (change.diff !== 0) {
-          const prod = inventory.find(p => p.id === change.id);
+          const prod = inventory.find(p => String(p.id) === String(change.id));
           if (prod) {
             await supabase.from('products').update({ stock: prod.stock - change.diff }).eq('id', change.id);
           }
         }
       }
 
+      // E. Actualizar Puntos Cliente
       if (pointsChange && clientObj && clientObj.id) {
          const clientDb = members.find(m => m.id === clientObj.id);
          if (clientDb) {
@@ -2051,37 +2225,46 @@ const handleSaveEditedTransaction = async (e) => {
          }
       }
 
+      // F. Sincronizar UI Inmediatamente
       const finalTx = {
          ...editingTransaction,
+         items: finalItems, 
          pointsEarned: pointsChange ? pointsChange.new : originalTx.pointsEarned
       };
+      
+      finalTx.isTest = isTestRecord(finalTx);
+      
       setTransactions(transactions.map((t) => (t.id === editingTransaction.id ? finalTx : t)));
 
       setInventory(inventory.map(p => {
-         const change = productChanges.find(c => c.id === p.id);
+         const change = productChanges.find(c => String(c.id) === String(p.id));
          if (change) return { ...p, stock: p.stock - change.diff };
          return p;
       }));
 
+      // G. Log
       const logDetails = {
          transactionId: editingTransaction.id, client: cName, memberNumber: cNum,
-         changes, productChanges, itemsSnapshot: editingTransaction.items, pointsChange
+         changes, productChanges, itemsSnapshot: finalItems, pointsChange
       };
-
       addLog('Modificación Pedido', logDetails, editReason || 'Ajuste manual');
 
       setEditingTransaction(null);
       setEditReason('');
       Swal.close();
-      showNotification('success', 'Pedido Actualizado', 'La venta, el stock y los puntos se han modificado correctamente.');
+      showNotification('success', 'Pedido Actualizado', 'Modificación exitosa.');
 
     } catch (error) {
-      console.error("Error al actualizar la transacción:", error);
-      Swal.fire('Error', 'Fallo al sincronizar los cambios con la base de datos.', 'error');
+      console.error("Error crítico al actualizar:", error);
+      Swal.fire({
+        icon: 'error',
+        title: 'Error de Sincronización',
+        text: error.message || 'Error desconocido guardando en la nube.',
+        confirmButtonText: 'Entendido'
+      });
     }
   };
-  
-  
+
   const handleAddReward = async (rewardData) => {
     try {
       const payload = {
@@ -2153,55 +2336,10 @@ const handleSaveEditedTransaction = async (e) => {
     }
   };
 
-  
-  // ==========================================
-  // 🐛 DEBUGGER DE LOGS (Solo para diagnóstico)
-  // ==========================================
-  useEffect(() => {
-    if (dailyLogs.length > 0) {
-      console.log("==== 🐛 INICIO DEBUG DE LOGS ====");
-      
-      const accionesUnicas = [...new Set(dailyLogs.map(l => l.action))];
-      console.log("1️⃣ Acciones Únicas en la BD:", accionesUnicas);
-
-      const logsSospechosos = dailyLogs.filter(l => 
-        l.action.toLowerCase().includes('modif') || 
-        l.action.toLowerCase().includes('venta')
-      );
-      
-      console.log("2️⃣ Logs sospechosos encontrados:", logsSospechosos.length);
-      console.table(logsSospechosos.map(l => ({
-        ID: l.id,
-        AccionExacta: l.action,
-        Fecha: l.date,
-        Hora: l.timestamp,
-        TieneDetalles: !!l.details?.changes
-      })));
-      
-      console.log("==== 🐛 FIN DEBUG ====");
-    }
-  }, [dailyLogs]);
-
-
   // --- RENDERIZADO LOGIN ---
   if (isCloudLoading) return <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-100"><RefreshCw className="animate-spin text-fuchsia-600 mb-4" size={48} /><h2 className="text-xl font-bold">Cargando Nube...</h2></div>;
 
   if (!currentUser) {
-    if (loginStep === 'select') {
-      return (
-        <div className="flex h-screen items-center justify-center bg-slate-100">
-          <div className="bg-white p-6 rounded-xl shadow-xl w-full max-w-xs text-center border">
-            <div className="flex justify-center mb-4"><div className="p-3 bg-fuchsia-600 rounded-xl shadow-lg"><PartyPopper className="text-white" size={32} /></div></div>
-            <h1 className="text-lg font-bold text-slate-800 mb-1">PartyManager</h1>
-            <p className="text-slate-500 text-xs mb-6">Selecciona tu usuario</p>
-            <div className="space-y-3">
-              <button onClick={() => handleSelectRole('admin')} className="w-full flex items-center gap-3 p-3 border rounded-xl hover:bg-slate-50 transition-colors group"><div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs">DU</div><div className="text-left flex-1"><p className="font-bold text-slate-800 text-sm">Dueño</p></div><ChevronRight size={16} className="text-slate-300 group-hover:text-slate-500" /></button>
-              <button onClick={() => handleSelectRole('seller')} className="w-full flex items-center gap-3 p-3 border rounded-xl hover:bg-slate-50 transition-colors group"><div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center font-bold text-xs">VE</div><div className="text-left flex-1"><p className="font-bold text-slate-800 text-sm">Vendedor</p></div><ChevronRight size={16} className="text-slate-300 group-hover:text-slate-500" /></button>
-            </div>
-          </div>
-        </div>
-      );
-    }
     if (loginStep === 'password') {
       const user = USERS[selectedRoleForLogin];
       return (
@@ -2227,13 +2365,37 @@ const handleSaveEditedTransaction = async (e) => {
         </div>
       );
     }
+    
+    // ✨ BLOQUEO ABSOLUTO: Siempre mostrar pantalla de selección si no hay usuario
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-100">
+        <div className="bg-white p-6 rounded-xl shadow-xl w-full max-w-xs text-center border">
+          <div className="flex justify-center mb-4"><div className="p-3 bg-fuchsia-600 rounded-xl shadow-lg"><PartyPopper className="text-white" size={32} /></div></div>
+          <h1 className="text-lg font-bold text-slate-800 mb-1">PartyManager</h1>
+          <p className="text-slate-500 text-xs mb-6">Selecciona tu usuario</p>
+          <div className="space-y-3">
+            <button onClick={() => handleSelectRole('admin')} className="w-full flex items-center gap-3 p-3 border rounded-xl hover:bg-slate-50 transition-colors group"><div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs">DU</div><div className="text-left flex-1"><p className="font-bold text-slate-800 text-sm">Dueño</p></div><ChevronRight size={16} className="text-slate-300 group-hover:text-slate-500" /></button>
+            <button onClick={() => handleSelectRole('seller')} className="w-full flex items-center gap-3 p-3 border rounded-xl hover:bg-slate-50 transition-colors group"><div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center font-bold text-xs">VE</div><div className="text-left flex-1"><p className="font-bold text-slate-800 text-sm">Vendedor</p></div><ChevronRight size={16} className="text-slate-300 group-hover:text-slate-500" /></button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // --- MAIN LAYOUT ---
   return (
     <div className="flex h-screen bg-slate-100 font-sans text-slate-900 text-sm overflow-hidden">
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} currentUser={currentUser} onLogout={handleLogout} />
-      <div className="flex-1 flex flex-col h-full overflow-hidden">
+      <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+        
+        {/* ✨ BANNER GLOBAL DE ADVERTENCIA DE MODO PRUEBA */}
+        {isTestActive && (
+          <div className="bg-orange-500 text-white text-xs font-bold px-4 py-2.5 flex items-center justify-center gap-2 z-50 shadow-md w-full animate-in slide-in-from-top">
+            <AlertTriangle size={16} />
+            <span>⚠️ Estás usando la palabra "test". Esta acción NO se contabilizará en el sistema y será usada como prueba únicamente.</span>
+          </div>
+        )}
+
         <header className="bg-white border-b h-14 flex items-center justify-between px-6 shadow-sm z-10 shrink-0">
       <div className="flex items-center gap-3">
         <div>
@@ -2244,18 +2406,18 @@ const handleSaveEditedTransaction = async (e) => {
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
                 <span>Supabase ON</span>
                 <span className="text-slate-300">|</span>
-                <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>             </div>
+                <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>              </div>
             </div>
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
-              <button onClick={currentUser.role === 'admin' ? toggleRegisterStatus : undefined} className={`flex items-center gap-2 px-3 py-1.5 rounded border transition-colors ${isRegisterClosed ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'} ${currentUser.role === 'admin' ? 'hover:opacity-80 cursor-pointer' : 'cursor-default'}`} title={currentUser.role !== 'admin' ? 'Solo el Dueño puede cambiar el estado de la caja' : ''}><Lock size={14} /><span className="text-xs font-bold">{isRegisterClosed ? 'CAJA CERRADA' : 'CAJA ABIERTA'}</span></button>
+              <button onClick={currentUser?.role === 'admin' ? toggleRegisterStatus : undefined} className={`flex items-center gap-2 px-3 py-1.5 rounded border transition-colors ${isRegisterClosed ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'} ${currentUser?.role === 'admin' ? 'hover:opacity-80 cursor-pointer' : 'cursor-default'}`} title={currentUser?.role !== 'admin' ? 'Solo el Dueño puede cambiar el estado de la caja' : ''}><Lock size={14} /><span className="text-xs font-bold">{isRegisterClosed ? 'CAJA CERRADA' : 'CAJA ABIERTA'}</span></button>
               {!isRegisterClosed && closingTime && (<div className="flex items-center gap-1 px-2 py-1 bg-amber-50 border border-amber-200 rounded text-amber-700"><Clock size={12} /><span className="text-[10px] font-bold">Cierre: {closingTime}</span></div>)}
             </div>
-            <div className="text-right hidden sm:block"><p className="text-xs font-bold text-slate-700">{currentUser.name}</p><span className={`text-[10px] px-2 py-0.5 rounded font-bold ${currentUser.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>{currentUser.role === 'admin' ? 'DUEÑO' : 'VENDEDOR'}</span></div>
+            <div className="text-right hidden sm:block"><p className="text-xs font-bold text-slate-700">{currentUser?.name}</p><span className={`text-[10px] px-2 py-0.5 rounded font-bold ${currentUser?.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>{currentUser?.role === 'admin' ? 'DUEÑO' : 'VENDEDOR'}</span></div>
           </div>
         </header>
-        <main className="flex-1 overflow-y-auto p-4 bg-slate-100">
+        <main className="flex-1 overflow-y-auto p-4 bg-slate-100 relative">
           {activeTab === 'dashboard' && (
             <DashboardView 
               openingBalance={openingBalance} 
@@ -2271,13 +2433,12 @@ const handleSaveEditedTransaction = async (e) => {
               onOpenExpenseModal={() => setIsExpenseModalOpen(true)}
               onAlertClick={handleDashboardAlertClick} 
               onNavigate={(tab) => setActiveTab(tab)}
-              onViewTransaction={(tx) => setDetailsModalTx(tx)} // ✨ CONECTADO AL ESTADO GLOBAL
+              onViewTransaction={(tx) => setDetailsModalTx(tx)}
               />
           )}
 
-          {/* ... el resto de tus vistas (InventoryView, POSView, etc) siguen igual ... */}
           {activeTab === 'inventory' && (<InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} />)}
-          {activeTab === 'pos' && (isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{currentUser.role === 'admin' ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">El Dueño debe abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} />))}
+          {activeTab === 'pos' && (isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{currentUser?.role === 'admin' ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">El Dueño debe abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} />))}
           
           {activeTab === 'clients' && (
             <ClientsView 
@@ -2294,13 +2455,30 @@ const handleSaveEditedTransaction = async (e) => {
             />
           )}
           
-          {activeTab === 'history' && (<HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} members={members} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} setTransactions={setTransactions} setDailyLogs={setDailyLogs} />)}
+          {activeTab === 'history' && (
+             <HistoryView 
+                transactions={transactions} 
+                dailyLogs={dailyLogs} 
+                inventory={inventory} 
+                currentUser={currentUser} 
+                members={members} 
+                showNotification={showNotification} 
+                onViewTicket={handleViewTicket} 
+                onDeleteTransaction={handleDeleteTransaction} 
+                onEditTransaction={handleEditTransactionRequest} 
+                onRestoreTransaction={handleRestoreTransaction} // ✨ FUNCIÓN DE RESTAURAR 
+                setTransactions={setTransactions} 
+                setDailyLogs={setDailyLogs} 
+             />
+          )}
           {activeTab === 'rewards' && (<RewardsView rewards={rewards} onAddReward={handleAddReward} onUpdateReward={handleUpdateReward} onDeleteReward={handleDeleteReward} />)}
-          {activeTab === 'reports' && currentUser.role === 'admin' && (<ReportsHistoryView pastClosures={pastClosures} members={members}/>)}
-          {activeTab === 'logs' && currentUser.role === 'admin' && (<LogsView dailyLogs={dailyLogs} />)}
+          {activeTab === 'reports' && currentUser?.role === 'admin' && (<ReportsHistoryView pastClosures={pastClosures} members={members}/>)}
           
-          {/* ✅ FIX: Añadidas las funciones de guardado al componente hijo */}
-          {activeTab === 'categories' && currentUser.role === 'admin' && (
+          {activeTab === 'logs' && currentUser?.role === 'admin' && (
+             <LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} />
+          )}
+          
+          {activeTab === 'categories' && currentUser?.role === 'admin' && (
             <CategoryManagerView 
               categories={categories} 
               inventory={inventory} 
@@ -2310,13 +2488,14 @@ const handleSaveEditedTransaction = async (e) => {
               onBatchUpdateProductCategory={handleBatchUpdateProductCategory}
             />
           )}
-                {activeTab === 'bulk-editor' && currentUser.role === 'admin' && (
-        <BulkEditorView 
-          inventory={inventory} 
-          categories={categories} 
-          onSaveSingle={handleBulkSaveSingle} 
-          onSaveBulk={handleBulkSaveMasive} 
-        />)}
+          {activeTab === 'bulk-editor' && currentUser?.role === 'admin' && (
+            <BulkEditorView 
+              inventory={inventory} 
+              categories={categories} 
+              onSaveSingle={handleBulkSaveSingle} 
+              onSaveBulk={handleBulkSaveMasive} 
+            />
+          )}
         </main>
       </div>
 
@@ -2329,26 +2508,26 @@ const handleSaveEditedTransaction = async (e) => {
       <EditProductModal product={editingProduct} onClose={() => setEditingProduct(null)} setEditingProduct={setEditingProduct} categories={categories} onImageUpload={handleImageUpload} editReason={editReason} setEditReason={setEditReason} onSave={saveEditProduct} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} onDuplicate={handleDuplicateProduct} currentUser={currentUser} />
       <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} />
       <ImageModal isOpen={isImageModalOpen} image={selectedImage} onClose={() => setIsImageModalOpen(false)} />
-      <RefundModal   transaction={transactionToRefund}   onClose={() => {    setIsRefundModalOpen(false);    setTransactionToRefund(null);    setRefundReason('');  }}   refundReason={refundReason}  setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />
+      <RefundModal  transaction={transactionToRefund}  onClose={() => {   setIsRefundModalOpen(false);   setTransactionToRefund(null);   setRefundReason('');  }}   refundReason={refundReason}  setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />
       <CloseCashModal isOpen={isClosingCashModalOpen} onClose={() => setIsClosingCashModalOpen(false)} salesCount={cycleSalesCount} totalSales={cycleTotalSales} totalExpenses={cycleTotalExpenses} cashExpenses={cycleCashExpenses} cashSales={cycleCashSales} openingBalance={openingBalance} onConfirm={handleConfirmCloseCash} />
       <SaleSuccessModal transaction={saleSuccessModal} onClose={() => setSaleSuccessModal(null)} onViewTicket={() => { const tx = saleSuccessModal; setSaleSuccessModal(null); setTicketToView(tx); }} />
       <TicketModal transaction={ticketToView} onClose={() => setTicketToView(null)} onPrint={handlePrintTicket} />
       <AutoCloseAlertModal isOpen={isAutoCloseAlertOpen} onClose={() => setIsAutoCloseAlertOpen(false)} closingTime={closingTime} />
-      <DeleteProductModal product={productToDelete} onClose={() => { setIsDeleteProductModalOpen(false); setProductToDelete(null); setDeleteProductReason(''); }} reason={deleteProductReason} setReason={setDeleteProductReason} onConfirm={confirmDeleteProduct} />      <BarcodeNotFoundModal isOpen={barcodeNotFoundModal.isOpen} scannedCode={barcodeNotFoundModal.code} onClose={() => setBarcodeNotFoundModal({ isOpen: false, code: '' })} onAddProduct={handleAddProductFromBarcode} />
+      <DeleteProductModal product={productToDelete} onClose={() => { setIsDeleteProductModalOpen(false); setProductToDelete(null); setDeleteProductReason(''); }} reason={deleteProductReason} setReason={setDeleteProductReason} onConfirm={confirmDeleteProduct} />
+      <BarcodeNotFoundModal isOpen={barcodeNotFoundModal.isOpen} scannedCode={barcodeNotFoundModal.code} onClose={() => setBarcodeNotFoundModal({ isOpen: false, code: '' })} onAddProduct={handleAddProductFromBarcode} />
       <BarcodeDuplicateModal isOpen={barcodeDuplicateModal.isOpen} existingProduct={barcodeDuplicateModal.existingProduct} onClose={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onKeepExisting={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onReplaceBarcode={handleReplaceDuplicateBarcode} />
       <ClientSelectionModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} clients={members} addClient={handleAddMemberWithLog} onSelectClient={(client) => setPosSelectedClient(client)} onCancelFlow={() => { setPosSelectedClient({ id: 'guest', name: 'No asociado', memberNumber: '---', points: 0 }); setIsClientModalOpen(false); }} />
       <RedemptionModal isOpen={isRedemptionModalOpen} onClose={() => setIsRedemptionModalOpen(false)} client={posSelectedClient} rewards={rewards} onRedeem={handleRedeemReward} />
       <ExpenseModal isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} onSave={handleAddExpense} />
       
-      {/* ✨ NUEVO: Modal Global de Detalles de Transacción */}
       <TransactionDetailModal
         transaction={detailsModalTx}
         onClose={() => setDetailsModalTx(null)}
         currentUser={currentUser}
         members={members}
         onEditTransaction={(tx) => {
-          setDetailsModalTx(null); // Cerramos este modal...
-          handleEditTransactionRequest(tx); // Y abrimos el de edición
+          setDetailsModalTx(null); 
+          handleEditTransactionRequest(tx); 
         }}
         onDeleteTransaction={(tx) => {
           setDetailsModalTx(null);
