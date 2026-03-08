@@ -7,8 +7,7 @@ import {
   Eye,
   Search
 } from 'lucide-react';
-// ♻️ FIX: Importamos formatCurrency para el texto puro y FancyPrice para la visual
-import { formatCurrency, formatNumber } from '../../utils/helpers';
+import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
 
 const getTransactionId = (details) => {
@@ -21,15 +20,11 @@ const getTransactionId = (details) => {
   return id;
 };
 
-// LIMPIADOR UNIVERSAL
 const getFormattedPayment = (payStr, instNum) => {
   if (typeof payStr !== 'string') return 'Efectivo';
-  
   let extractedInst = 0;
   const match = payStr.match(/\((\d+)c\)/i);
-  if (match) {
-    extractedInst = Number(match[1]);
-  }
+  if (match) extractedInst = Number(match[1]);
 
   let clean = payStr.replace(/\s*\(\d+c\)/i, '').trim();
   let i = Number(instNum) || extractedInst || 0;
@@ -40,26 +35,20 @@ const getFormattedPayment = (payStr, instNum) => {
   return clean;
 };
 
-// ✨ NUEVO: Formateador visual para asegurar que el año siempre tenga 4 dígitos (AAAA)
 const formatDisplayDate = (dateStr) => {
   if (!dateStr) return '-';
   const parts = dateStr.split('/');
   if (parts.length === 3) {
     let year = parts[2];
-    if (year.length === 2) year = '20' + year; // Convierte "26" en "2026"
+    if (year.length === 2) year = '20' + year;
     return `${parts[0]}/${parts[1]}/${year}`;
   }
   return dateStr;
 };
 
 const SortIcon = ({ column, sortColumn, sortDirection }) => {
-  if (sortColumn !== column)
-    return <ChevronsUpDown size={14} className="text-slate-300" />;
-  return sortDirection === 'asc' ? (
-    <ChevronUp size={14} className="text-amber-600" />
-  ) : (
-    <ChevronDown size={14} className="text-amber-600" />
-  );
+  if (sortColumn !== column) return <ChevronsUpDown size={14} className="text-slate-300" />;
+  return sortDirection === 'asc' ? <ChevronUp size={14} className="text-amber-600" /> : <ChevronDown size={14} className="text-amber-600" />;
 };
 
 const s = {
@@ -81,36 +70,96 @@ const s = {
   b: "inline-flex items-center gap-[3px] px-[7px] py-[2px] rounded-[4px] text-[9px] font-bold",
 };
 
-// ESQUEMA SEMÁNTICO DE COLORES
 const c = {
-  bg: "bg-[#dcfce7] text-[#15803d]", // Verde (Dinero)
-  br: "bg-[#fee2e2] text-[#dc2626]", // Rojo (Destructivo / Gastos)
-  bb: "bg-[#dbeafe] text-[#2563eb]", // Azul (Inventario)
-  bv: "bg-[#ede9fe] text-[#6d28d9]", // Violeta (Socios / Fidelización)
-  ba: "bg-[#fef3c7] text-[#b45309]", // Ámbar (Ediciones / Alertas)
-  bs: "bg-[#f1f5f9] text-[#475569] border border-[#e2e8f0]", // Pizarra claro (Sistema / Neutro)
-  bk: "bg-[#1e293b] text-white",     // Pizarra oscuro (Cierres)
+  bg: "bg-[#dcfce7] text-[#15803d]",
+  br: "bg-[#fee2e2] text-[#dc2626]",
+  bb: "bg-[#dbeafe] text-[#2563eb]",
+  bv: "bg-[#ede9fe] text-[#6d28d9]",
+  ba: "bg-[#fef3c7] text-[#b45309]",
+  bs: "bg-[#f1f5f9] text-[#475569] border border-[#e2e8f0]",
+  bk: "bg-[#1e293b] text-white",
 };
 
-export default function LogsTable({
-  sortedLogs,
-  sortColumn,
-  sortDirection,
-  onSort,
-  onViewDetails,
-  selectedLogId
-}) {
+// ✨ SABUESO MEJORADO 2.0: Prioriza siempre la edición manual, pero mantiene el rescate histórico.
+export const extractRealNote = (log) => {
+  if (!log) return null;
+  
+  let r = log.reason;
+  let d = log.details;
+  
+  if (typeof d === 'string') {
+    try { d = JSON.parse(d); } catch(e) { d = {}; }
+  } else if (!d) {
+    d = {};
+  }
+
+  const generics = [
+    'venta regular', 'salida de dinero', 'sin motivo', 'ajuste manual', 
+    'anulación manual', 'registro manual', 'producto nuevo', 'inicio de operaciones', 
+    'gasto general', 'ajuste de horario', 'duplicado desde editor', 'gestión catálogo',
+    'actualización de datos'
+  ];
+
+  // 1. PRIMERA PRIORIDAD: ¿El usuario lo editó manualmente recién?
+  // Si log.reason existe y NO es una palabra genérica, lo usamos inmediatamente.
+  // Esto soluciona el problema de que las ediciones retroactivas no se veían.
+  if (r && typeof r === 'string' && r.trim() !== '') {
+      const cleanR = r.trim();
+      const lowerR = cleanR.toLowerCase();
+      
+      // Si la nota principal NO es genérica, la devolvemos como verdad absoluta.
+      if (!generics.includes(lowerR)) {
+          // Pequeño filtro para gastos: si la nota es igual a la categoría (ej: "Varios"), no la mostramos
+          if (!((log.action === 'Nuevo Gasto' || log.action === 'Gasto') && lowerR === (d.category || '').toLowerCase())) {
+              return cleanR;
+          }
+      }
+  }
+
+  // 2. SEGUNDA PRIORIDAD: Rescate Histórico Profundo.
+  // Si llegamos acá, significa que log.reason estaba vacío o era una palabra genérica (ej: "Salida de dinero").
+  // Vamos a bucear en los detalles para ver si encontramos algo.
+  const candidates = [d.description, d.note, d.reason, d.extraInfo];
+
+  for (let c of candidates) {
+     if (typeof c === 'string' && c.trim() !== '') {
+         const clean = c.trim();
+         const lower = clean.toLowerCase();
+         if (!generics.includes(lower)) {
+             if ((log.action === 'Nuevo Gasto' || log.action === 'Gasto') && lower === (d.category || '').toLowerCase()) continue;
+             return clean;
+         }
+     }
+  }
+  
+  return null;
+};
+
+export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSort, onViewDetails, selectedLogId }) {
+
+  const getLogReasonUI = (log) => {
+    const note = extractRealNote(log);
+    if (!note) return null;
+    return (
+        <>
+          <div className={s.ss}></div>
+          <span className={s.se} style={{ fontStyle: 'italic', maxWidth: '250px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#d97706', fontWeight: 600 }}>
+            💬 "{note}"
+          </span>
+        </>
+    );
+  };
 
   const getSummary = (log) => {
     const action = log.action;
-    const d = log.details;
-    const reason = log.reason;
+    let d = log.details;
 
     if (!d) return <span className="text-slate-400 italic text-[10px]">Sin detalles</span>;
-    if (typeof d === 'string') return <span className="text-slate-600 text-[10px]">{d}</span>;
+    if (typeof d === 'string') {
+      try { d = JSON.parse(d); } catch(e) { return <span className="text-slate-600 text-[10px]">{d}</span>; }
+    }
 
     switch (action) {
-      // 🟢 VERDE (Dinero Entrante)
       case 'Venta Realizada': {
         const txId = getTransactionId(d);
         const items = d.items || [];
@@ -127,27 +176,26 @@ export default function LogsTable({
         if (totalUnits > 0) parts.push(`${formatNumber(totalUnits)} uds`);
         if (totalGrams > 0) parts.push(`${formatNumber(totalGrams)}g`);
 
-        let clientName = null; let memberNum = null;
-        if (d.client && typeof d.client === 'object') { clientName = d.client.name; memberNum = d.client.memberNumber; } 
-        else if (d.client && typeof d.client === 'string') { clientName = d.client; memberNum = d.memberNumber; } 
-        else if (d.memberName) { clientName = d.memberName; memberNum = d.memberNumber; }
+        let clientDisplay = null;
+        let memberNum = d.client?.memberNumber || d.memberNumber;
+        if (d.client && typeof d.client === 'object') { clientDisplay = d.client.name; } 
+        else if (typeof d.client === 'string') { clientDisplay = d.client; } 
+        else if (d.memberName) { clientDisplay = d.memberName; }
         
-        if (clientName === 'No asociado') { clientName = null; memberNum = null; }
-        let clientDisplay = clientName;
+        if (clientDisplay === 'No asociado') { clientDisplay = null; memberNum = null; }
         if (clientDisplay && memberNum && memberNum !== '---') clientDisplay += ` #${String(memberNum).padStart(4, '0')}`;
 
         return (
           <div className={s.sr}>
             <span className={`${s.b} ${c.bg}`}>🛒 #{txId}</span>
             <div className={s.ss}></div>
-            <span className={`${s.b} ${c.bg}`}>
-              <FancyPrice amount={d.total || 0} />
-            </span>
+            <span className={`${s.b} ${c.bg}`}><FancyPrice amount={d.total || 0} /></span>
             <div className={s.ss}></div>
             <span className={s.se}>{parts.join(' + ')} ({items.length} items)</span>
             <div className={s.ss}></div>
             <span className={`${s.b} ${c.bs}`}>{getFormattedPayment(d.payment, d.installments)}</span>
             {clientDisplay && <><div className={s.ss}></div><span className={s.se}>👤 {clientDisplay}</span></>}
+            {getLogReasonUI(log)}
           </div>
         );
       }
@@ -157,23 +205,19 @@ export default function LogsTable({
           <div className={s.sr}>
             <span className={`${s.b} ${c.bg}`}>$ Apertura</span>
             <div className={s.ss}></div>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#15803d' }}>
-              <FancyPrice amount={d.amount || 0} />
-            </span>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#15803d' }}><FancyPrice amount={d.amount || 0} /></span>
+            {getLogReasonUI(log)}
           </div>
         );
 
-      // 🔴 ROJO (Salidas / Eliminaciones)
       case 'Venta Anulada': {
         const txId = getTransactionId(d);
         return (
           <div className={s.sr}>
             <span className={`${s.b} ${c.br}`}>❌ #{txId}</span>
             <div className={s.ss}></div>
-            <span style={{ fontSize: '10px', color: '#dc2626', textDecoration: 'line-through' }}>
-              <FancyPrice amount={d.originalTotal || d.total || 0} />
-            </span>
-            {reason && <><div className={s.ss}></div><span className={s.se} style={{ color: '#b45309', fontStyle: 'italic', maxWidth: '150px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>"{reason}"</span></>}
+            <span style={{ fontSize: '10px', color: '#dc2626', textDecoration: 'line-through' }}><FancyPrice amount={d.originalTotal || d.total || 0} /></span>
+            {getLogReasonUI(log)}
           </div>
         );
       }
@@ -182,13 +226,12 @@ export default function LogsTable({
       case 'Gasto':
         return (
           <div className={s.sr}>
-            <span className={`${s.b} ${c.br}`}>
-              📉 -<FancyPrice amount={d.amount || 0} />
-            </span>
+            <span className={`${s.b} ${c.br}`}>📉 -<FancyPrice amount={d.amount || 0} /></span>
             <div className={s.ss}></div>
             <span className={`${s.b} ${c.bs}`}>{d.category || 'Varios'}</span>
             <div className={s.ss}></div>
             <span className={s.se}>{d.paymentMethod || 'Efectivo'}</span>
+            {getLogReasonUI(log)}
           </div>
         );
 
@@ -199,30 +242,21 @@ export default function LogsTable({
             <div className={s.ss}></div>
             <span style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8', textDecoration: 'line-through' }}>{d.name || 'Desconocido'}</span>
             {d.number && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>#{String(d.number).padStart(4, '0')}</span></>}
+            {getLogReasonUI(log)}
           </div>
         );
 
-      // 🔵 AZUL (Inventario)
       case 'Alta de Producto': {
         const title = d.title || d.name || 'Producto';
         return (
           <div className={s.sr}>
-            {d.id && (
-              <>
-                <span className={`${s.b} ${c.bb}`}>#{d.id}</span>
-                <div className={s.ss}></div>
-              </>
-            )}
+            {d.id && <><span className={`${s.b} ${c.bb}`}>#{d.id}</span><div className={s.ss}></div></>}
             <span className={`${s.b} ${c.bb}`}>⊕ {title}</span>
             {d.price !== undefined && (
-              <>
-                <div className={s.ss}></div>
-                <span className={s.se}>
-                  <FancyPrice amount={d.price} /> · {formatNumber(d.stock)} {d.product_type === 'weight' ? 'g' : 'uds'}
-                </span>
-              </>
+              <><div className={s.ss}></div><span className={s.se}><FancyPrice amount={d.price} /> · {formatNumber(d.stock)} {d.product_type === 'weight' ? 'g' : 'uds'}</span></>
             )}
             {d.category && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{d.category}</span></>}
+            {getLogReasonUI(log)}
           </div>
         );
       }
@@ -230,21 +264,10 @@ export default function LogsTable({
       case 'Edición Producto': {
         return (
           <div className={s.sr}>
-            {d.id && (
-              <>
-                <span className={`${s.b} ${c.bb}`}>#{d.id}</span>
-                <div className={s.ss}></div>
-              </>
-            )}
+            {d.id && <><span className={`${s.b} ${c.bb}`}>#{d.id}</span><div className={s.ss}></div></>}
             <span className={`${s.b} ${c.bb}`}>📦 {d.product || d.title || d.name || 'Producto'}</span>
-            {d.price !== undefined && (
-              <>
-                <div className={s.ss}></div>
-                <span className={s.se}>
-                  <FancyPrice amount={d.price} />
-                </span>
-              </>
-            )}
+            {d.price !== undefined && <><div className={s.ss}></div><span className={s.se}><FancyPrice amount={d.price} /></span></>}
+            {getLogReasonUI(log)}
           </div>
         );
       }
@@ -252,15 +275,11 @@ export default function LogsTable({
       case 'Baja Producto': {
         return (
           <div className={s.sr}>
-            {d.id && (
-              <>
-                <span className={`${s.b} ${c.bb}`}>#{d.id}</span>
-                <div className={s.ss}></div>
-              </>
-            )}
+            {d.id && <><span className={`${s.b} ${c.bb}`}>#{d.id}</span><div className={s.ss}></div></>}
             <span className={`${s.b} ${c.bb}`}>⊖ {d.title || d.name || 'Producto'}</span>
             <div className={s.ss}></div>
             <span className={s.se} style={{ color: '#dc2626' }}>Stock: {formatNumber(d.stock || 0)}</span>
+            {getLogReasonUI(log)}
           </div>
         );
       }
@@ -270,24 +289,18 @@ export default function LogsTable({
         const newName = d.newTitle || d.title || d.name || 'Copia';
         return (
           <div className={s.sr}>
-            {d.originalId && (
-              <>
-                <span className={`${s.b} ${c.bb}`}>#{d.originalId}</span>
-                <div className={s.ss}></div>
-              </>
-            )}
+            {d.originalId && <><span className={`${s.b} ${c.bb}`}>#{d.originalId}</span><div className={s.ss}></div></>}
             <span className={`${s.b} ${c.bb}`}>📋 Duplicado</span>
             <div className={s.ss}></div>
             <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>
               <span style={{ color: '#94a3b8', fontWeight: 600 }}>({originalName})</span>
-              <span style={{ color: '#cbd5e1', margin: '0 4px' }}>→</span>
-              ({newName})
+              <span style={{ color: '#cbd5e1', margin: '0 4px' }}>→</span>({newName})
             </span>
+            {getLogReasonUI(log)}
           </div>
         );
       }
 
-      // 🟣 VIOLETA (Socios y Premios)
       case 'Nuevo Socio':
         return (
           <div className={s.sr}>
@@ -295,6 +308,7 @@ export default function LogsTable({
             <div className={s.ss}></div>
             <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name}</span>
             {d.number && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>#{String(d.number).padStart(4, '0')}</span></>}
+            {getLogReasonUI(log)}
           </div>
         );
 
@@ -306,6 +320,7 @@ export default function LogsTable({
             <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name || d.member}</span>
             <div className={s.ss}></div>
             <span className={s.se}>{(d.changes ? d.changes.length : 0)} cambios</span>
+            {getLogReasonUI(log)}
           </div>
         );
 
@@ -313,10 +328,11 @@ export default function LogsTable({
         const pts = d.pointsChange || d;
         return (
           <div className={s.sr}>
-            <span className={`${s.b} ${c.bp}`}>🏆 Puntos</span>
+            <span className={`${s.b} ${c.bv}`}>🏆 Puntos</span>
             <div className={s.ss}></div>
             <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name || d.member}</span>
             {pts.diff !== undefined && <><div className={s.ss}></div><span className={`${s.b} ${pts.diff > 0 ? c.bg : c.br}`} style={{ fontFamily: 'monospace' }}>{pts.diff > 0 ? '+' : ''}{formatNumber(pts.diff)} pts</span></>}
+            {getLogReasonUI(log)}
           </div>
         );
       }
@@ -331,11 +347,11 @@ export default function LogsTable({
             <div className={s.ss}></div>
             <span style={{ fontSize: '10px', fontWeight: 700, color: isDelete ? '#94a3b8' : '#334155', textDecoration: isDelete ? 'line-through' : 'none' }}>{d.title || d.name}</span>
             {d.pointsCost && <><div className={s.ss}></div><span className={`${s.b} ${c.bv}`} style={{ fontFamily: 'monospace' }}>{formatNumber(d.pointsCost)} pts</span></>}
+            {getLogReasonUI(log)}
           </div>
         );
       }
 
-      // 🟠 ÁMBAR (Ajustes y Modificaciones)
       case 'Modificación Pedido':
       case 'Venta Modificada': {
         const txId = getTransactionId(d);
@@ -347,72 +363,31 @@ export default function LogsTable({
               <span className={`${s.b} ${c.ba}`}>📝 #{txId || 'S/N'}</span>
               <div className={s.ss}></div>
               <span className={s.se} style={{ fontStyle: 'italic' }}>Ajuste de pedido antiguo</span>
+              {getLogReasonUI(log)}
             </div>
           );
         }
 
         const changes = d.changes || {};
-
-        const oldTotalText = changes.total ? formatCurrency(changes.total.old) : formatCurrency(d.total || 0);
-        const newTotalText = changes.total ? formatCurrency(changes.total.new) : formatCurrency(d.total || 0);
-        
-        const basePayment = typeof d.payment === 'string' ? d.payment : 'Efectivo';
-        
-        const oldPayText = getFormattedPayment(
-          changes.payment ? changes.payment.old : basePayment,
-          changes.installments ? changes.installments.old : (d.installments || 0)
-        );
-        const newPayText = getFormattedPayment(
-          changes.payment ? changes.payment.new : basePayment,
-          changes.installments ? changes.installments.new : (d.installments || 0)
-        );
-
-        const isTotalChanged = oldTotalText !== newTotalText;
-        const isPaymentChanged = oldPayText !== newPayText;
-
-        let oldDesc = '';
-        let newDesc = '';
-
-        if (isTotalChanged && isPaymentChanged) {
-          oldDesc = <><FancyPrice amount={changes.total.old || d.total || 0} /> | {oldPayText}</>;
-          newDesc = <><FancyPrice amount={changes.total.new || d.total || 0} /> | {newPayText}</>;
-        } else if (isTotalChanged) {
-          oldDesc = <FancyPrice amount={changes.total.old || d.total || 0} />;
-          newDesc = <FancyPrice amount={changes.total.new || d.total || 0} />;
-        } else if (isPaymentChanged) {
-          oldDesc = oldPayText;
-          newDesc = newPayText;
-        }
-
-        const hasFinancialChanges = isTotalChanged || isPaymentChanged;
+        const isTotalChanged = changes.total && (changes.total.old !== changes.total.new);
+        const isPaymentChanged = changes.payment && (changes.payment.old !== changes.payment.new);
+        const hasProductChanges = d.productChanges && d.productChanges.length > 0;
 
         return (
           <div className={s.sr}>
             <span className={`${s.b} ${c.ba}`}>📝 #{txId}</span>
-            
-            {hasFinancialChanges ? (
-              <>
-                <div className={s.ss}></div>
-                <span className={`${s.b} ${c.bg}`}>
-                  <span style={{ textDecoration: 'line-through', opacity: 0.65, marginRight: '5px' }}>
-                    {oldDesc}
-                  </span>
-                  → {newDesc}
-                </span>
-              </>
-            ) : (
-              <>
-                <div className={s.ss}></div>
-                <span className={s.se} style={{ fontStyle: 'italic' }}>Ajuste de stock</span>
-              </>
-            )}
-
-            {d.productChanges && d.productChanges.length > 0 && (
-               <>
-                 <div className={s.ss}></div>
-                 <span className={s.se}>{d.productChanges.length} prod. modif.</span>
+            {hasProductChanges && <><div className={s.ss}></div><span className={s.se} style={{ color: '#0ea5e9', fontWeight: 600 }}>Ajuste Stock ({d.productChanges.length} items)</span></>}
+            {(isTotalChanged || isPaymentChanged) && <><div className={s.ss}></div><span className={s.se} style={{ color: '#b45309', fontWeight: 600 }}>Ajuste Financiero</span></>}
+            {isTotalChanged && (
+               <><div className={s.ss}></div>
+                 <span className={`${s.b} ${c.bg}`}>
+                   <span style={{ textDecoration: 'line-through', opacity: 0.65, marginRight: '3px' }}><FancyPrice amount={changes.total.old} /></span>
+                   → <FancyPrice amount={changes.total.new} />
+                 </span>
                </>
             )}
+            {isPaymentChanged && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{changes.payment.old} → {changes.payment.new}</span></>}
+            {getLogReasonUI(log)}
           </div>
         );
       }
@@ -423,15 +398,11 @@ export default function LogsTable({
         const isEdit = d.type === 'edit';
         return (
           <div className={s.sr}>
-            {d.id && (
-              <>
-                <span className={`${s.b} ${c.ba}`}>#{d.id}</span>
-                <div className={s.ss}></div>
-              </>
-            )}
+            {d.id && <><span className={`${s.b} ${c.ba}`}>#{d.id}</span><div className={s.ss}></div></>}
             <span className={`${s.b} ${c.ba}`}>🏷️ {isCreate ? 'Creada' : isDelete ? 'Eliminada' : 'Editada'}</span>
             <div className={s.ss}></div>
             <span style={{ fontSize: '10px', fontWeight: 700, color: isDelete ? '#94a3b8' : '#334155', textDecoration: isDelete ? 'line-through' : 'none' }}>{d.name}</span>
+            {getLogReasonUI(log)}
           </div>
         );
       }
@@ -444,6 +415,7 @@ export default function LogsTable({
             <span className={`${s.b} ${c.ba}`}>🏷️ Edición Masiva</span>
             <div className={s.ss}></div>
             <span className={s.se}>{affectedCount} productos actualizados</span>
+            {getLogReasonUI(log)}
           </div>
         );
 
@@ -453,20 +425,19 @@ export default function LogsTable({
             <span className={`${s.b} ${c.ba}`}>🕐 Horario</span>
             <div className={s.ss}></div>
             <span className={s.se}>{typeof d === 'string' ? d : 'Modificado'}</span>
+            {getLogReasonUI(log)}
           </div>
         );
 
-      // ⚫ PIZARRA (Sistema y Cierres)
       case 'Cierre de Caja':
       case 'Cierre Automático':
         return (
           <div className={s.sr}>
             <span className={`${s.b} ${c.bk}`}>{action === 'Cierre Automático' ? '⏰ Auto' : '🔒 Cierre'}</span>
             <div className={s.ss}></div>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#1e293b' }}>
-              <FancyPrice amount={d.finalBalance || d.netProfit || d.totalSales || 0} />
-            </span>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#1e293b' }}><FancyPrice amount={d.finalBalance || d.netProfit || d.totalSales || 0} /></span>
             {d.salesCount !== undefined && <><div className={s.ss}></div><span className={s.se}>{formatNumber(d.salesCount)} ventas</span></>}
+            {getLogReasonUI(log)}
           </div>
         );
 
@@ -476,15 +447,16 @@ export default function LogsTable({
             <span className={`${s.b} ${c.bs}`}>🔑 Ingreso</span>
             <div className={s.ss}></div>
             <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name || d.role}</span>
+            {getLogReasonUI(log)}
           </div>
         );
 
       default: {
         const txIdDefault = getTransactionId(d);
-        if (txIdDefault) return <span className="text-slate-500 text-[10px]">Transacción #{txIdDefault}</span>;
+        if (txIdDefault) return <div className={s.sr}><span className="text-slate-500 text-[10px]">Transacción #{txIdDefault}</span>{getLogReasonUI(log)}</div>;
         const defaultName = d.title || d.name || d.product;
-        if (defaultName) return <span className="text-slate-500 text-[10px]">{defaultName}</span>;
-        return <span className="text-slate-400 text-[10px]">Ver detalles...</span>;
+        if (defaultName) return <div className={s.sr}><span className="text-slate-500 text-[10px]">{defaultName}</span>{getLogReasonUI(log)}</div>;
+        return <div className={s.sr}><span className="text-slate-400 text-[10px]">Ver detalles...</span>{getLogReasonUI(log)}</div>;
       }
     }
   };
@@ -503,30 +475,18 @@ export default function LogsTable({
             <th className={s.th} style={{ width: '150px' }} onClick={() => onSort('action')}>
               <div className="flex items-center gap-1">Acción <SortIcon column="action" sortColumn={sortColumn} sortDirection={sortDirection} /></div>
             </th>
-            <th className={s.th}>
-              Resumen
-            </th>
-            <th className={s.th} style={{ width: '44px', textAlign: 'center' }}>
-              Info
-            </th>
+            <th className={s.th}>Resumen</th>
+            <th className={s.th} style={{ width: '44px', textAlign: 'center' }}>Info</th>
           </tr>
         </thead>
         <tbody>
           {(sortedLogs || []).map((log) => {
             const userClass = log.user === 'Dueño' || log.user === 'admin' ? s.ubAdm : log.user === 'Vendedor' || log.user === 'seller' ? s.ubSel : s.ubSys;
-            
-            const displayAction = (log.action === 'Modificación Pedido' || log.action === 'Venta Modificada')
-              ? 'Venta Modificada' 
-              : log.action;
+            const displayAction = (log.action === 'Modificación Pedido' || log.action === 'Venta Modificada') ? 'Venta Modificada' : log.action;
 
             return (
-              <tr
-                key={log.id}
-                className={`${s.tr} ${selectedLogId === log.id ? s.trSelected : ''}`}
-                onClick={() => onViewDetails(log)}
-              >
+              <tr key={log.id} className={`${s.tr} ${selectedLogId === log.id ? s.trSelected : ''}`} onClick={() => onViewDetails(log)}>
                 <td className={s.td}>
-                  {/* AQUÍ SE APLICA EL FORMATEADOR VISUAL */}
                   <div className={s.date}>{formatDisplayDate(log.date)}</div>
                   <div className={s.time}>{log.timestamp || '--:--'}</div>
                 </td>

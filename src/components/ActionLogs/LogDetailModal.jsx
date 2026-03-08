@@ -2,7 +2,6 @@
 import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import LogDetailRenderer, { getDetailTitle, getDetailIcon, getDetailColor } from './LogDetailRenderer';
-// ♻️ FIX: Importamos formatNumber y nuestro nuevo FancyPrice (ya no usamos formatCurrency directo acá)
 import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
 
@@ -14,7 +13,8 @@ const getTransactionId = (details) => {
   return typeof id === 'string' && id.includes('TRX-') ? id.replace('TRX-', '') : id;
 };
 
-export default function LogDetailModal({ selectedLog, onClose }) {
+// ✨ Recibimos onUpdateNote desde LogsView
+export default function LogDetailModal({ selectedLog, onClose, onUpdateNote }) {
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
@@ -46,7 +46,6 @@ export default function LogDetailModal({ selectedLog, onClose }) {
   };
 
   // ── Monto principal según tipo de acción (Header Gigante) ──
-  // ✨ FIX: Devolvemos el componente <FancyPrice /> en lugar de un string
   const getDisplayAmount = () => {
     if (typeof d === 'string') return '';
 
@@ -174,7 +173,8 @@ export default function LogDetailModal({ selectedLog, onClose }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-[16px_18px] relative z-[1] custom-scrollbar">
-          <LogDetailRenderer log={selectedLog} />
+          {/* ✨ PASAMOS LA FUNCIÓN AL RENDERER */}
+          <LogDetailRenderer log={selectedLog} onUpdateNote={onUpdateNote} />
         </div>
 
         <div className="p-[14px_18px] border-t border-[#d4d9e3] flex justify-end bg-[rgba(255,255,255,0.4)] relative z-[1]">

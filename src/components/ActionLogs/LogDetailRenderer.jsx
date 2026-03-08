@@ -1,9 +1,9 @@
 // src/components/ActionLogs/LogDetailRenderer.jsx
-import React from 'react';
-import { ArrowRight, CheckCircle } from 'lucide-react';
-// ♻️ FIX: Importamos formatCurrency para textos crudos, y FancyPrice para la interfaz visual
+import React, { useState } from 'react';
+import { ArrowRight, CheckCircle, Edit3, Plus, Save } from 'lucide-react';
 import { formatCurrency } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
+import { extractRealNote } from './LogsTable';
 
 // ════════════════════════════════════════════
 //  HELPERS EXPORTABLES
@@ -66,21 +66,14 @@ export const getDetailIcon = (action) => {
   return icons[action] || '📄';
 };
 
-// 🎨 NUEVO ESQUEMA SEMÁNTICO EN EL MODAL (Coincide con la Tabla)
 export const getDetailColor = (action) => {
   const colors = {
-    // Verde (Dinero)
     'Venta Realizada': 'green', 'Apertura de Caja': 'green',
-    // Rojo (Destructivo/Salidas)
     'Venta Anulada': 'red', 'Baja Producto': 'red', 'Baja de Socio': 'red', 'Eliminar Premio': 'red', 'Borrado Permanente': 'red', 'Nuevo Gasto': 'red', 'Gasto': 'red',
-    // Azul (Inventario y Socios base)
     'Alta de Producto': 'blue', 'Edición Producto': 'blue', 'Producto Duplicado': 'blue',
     'Nuevo Socio': 'blue', 'Edición de Socio': 'blue', 
-    // Violeta (Comunidad/Fidelización)
     'Edición de Puntos': 'violet', 'Nuevo Premio': 'violet', 'Editar Premio': 'violet',
-    // Ámbar (Ajustes/Alertas)
     'Modificación Pedido': 'amber', 'Venta Modificada': 'amber', 'Categoría': 'amber', 'Actualización Masiva': 'amber', 'Edición Masiva Categorías': 'amber', 'Horario Modificado': 'amber',
-    // Pizarra (Sistema)
     'Cierre de Caja': 'slate', 'Cierre Automático': 'slate', 'Login': 'slate', 'Sistema Iniciado': 'slate'
   };
   return colors[action] || 'slate';
@@ -165,15 +158,6 @@ const Badge = ({ color, children }) => {
   );
 };
 
-const ReasonCard = ({ note }) => (
-  <div className="bg-[#fffbeb] border border-[#fde68a] rounded-[14px] p-4">
-    <div className="text-[10px] font-extrabold uppercase tracking-wider text-amber-600 mb-2 flex items-center gap-1.5">
-      💬 Motivo / Nota
-    </div>
-    <p className="text-[11px] text-amber-800 italic leading-relaxed">"{note}"</p>
-  </div>
-);
-
 const WarnCard = ({ children }) => (
   <div className="bg-[#fef2f2] border border-[#fecaca] rounded-[14px] p-3.5 text-[11px] text-red-800 text-center font-semibold">
     {children}
@@ -181,20 +165,100 @@ const WarnCard = ({ children }) => (
 );
 
 const HighlightCard = ({ label, amount, sub }) => (
-  <div className="bg-slate-800 rounded-[14px] p-4 text-white">
+  <div className="bg-slate-800 rounded-[14px] p-4 text-white shadow-md">
     <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{label}</div>
     <div className="text-[28px] font-extrabold font-mono mt-1 leading-none">
       <FancyPrice amount={amount} />
     </div>
-    {sub && <div className="text-[11px] text-slate-500 mt-1.5">{sub}</div>}
+    {sub && <div className="text-[11px] text-slate-500 mt-1.5 font-medium">{sub}</div>}
   </div>
 );
+
+// ✨ TARJETA DE NOTAS EDITABLE
+const EditableReasonCard = ({ note, logId, onUpdateNote }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState(note || '');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (editValue.trim() === (note || '')) {
+      setIsEditing(false);
+      return;
+    }
+    setIsSaving(true);
+    await onUpdateNote(logId, editValue.trim());
+    setIsSaving(false);
+    setIsEditing(false);
+  };
+
+  // Estado: No tiene nota y no estamos editando
+  if (!note && !isEditing) {
+    return (
+      <button 
+        onClick={() => { setEditValue(''); setIsEditing(true); }}
+        className="w-full flex items-center justify-center gap-2 py-3 bg-white border border-dashed border-[#cbd5e1] rounded-[14px] text-[11px] font-bold text-[#64748b] hover:bg-[#f8fafc] hover:border-[#94a3b8] hover:text-[#475569] transition-all cursor-pointer"
+      >
+        <Plus size={14} /> Añadir una nota a este registro
+      </button>
+    );
+  }
+
+  // Estado: Editando (ya sea nueva o existente)
+  if (isEditing) {
+    return (
+      <div className="bg-[#fffbeb] border border-[#fde68a] rounded-[14px] p-3 shadow-sm flex flex-col gap-2">
+        <textarea
+          autoFocus
+          className="w-full bg-white border border-[#fcd34d] rounded-lg p-2 text-[12px] text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 resize-none min-h-[60px] custom-scrollbar"
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          placeholder="Escribe el motivo o nota aclaratoria..."
+        />
+        <div className="flex justify-end gap-2 mt-1">
+          <button 
+            onClick={() => { setIsEditing(false); setEditValue(note || ''); }}
+            className="px-3 py-1.5 rounded-lg text-[10px] font-bold text-slate-500 hover:bg-slate-100"
+            disabled={isSaving}
+          >
+            Cancelar
+          </button>
+          <button 
+            onClick={handleSave}
+            disabled={isSaving}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
+          >
+            {isSaving ? 'Guardando...' : <><Save size={12} /> Guardar Nota</>}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Estado: Mostrando nota existente
+  return (
+    <div className="bg-[#fffbeb] border border-[#fde68a] rounded-[14px] p-4 shadow-sm group relative">
+      <div className="flex justify-between items-center mb-2">
+        <div className="text-[10px] font-extrabold uppercase tracking-wider text-amber-600 flex items-center gap-1.5">
+          💬 Motivo / Nota Adjunta
+        </div>
+        <button 
+          onClick={() => { setEditValue(note || ''); setIsEditing(true); }}
+          className="opacity-0 group-hover:opacity-100 transition-opacity text-amber-500 hover:text-amber-700 bg-amber-100 p-1 rounded-md"
+          title="Editar nota"
+        >
+          <Edit3 size={12} />
+        </button>
+      </div>
+      <p className="text-[12px] text-amber-900 font-medium leading-relaxed italic pr-6 whitespace-pre-wrap">"{note}"</p>
+    </div>
+  );
+};
 
 // ════════════════════════════════════════════
 //  COMPONENTE PRINCIPAL DE RENDERIZADO
 // ════════════════════════════════════════════
 
-export default function LogDetailRenderer({ log }) {
+export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBIMOS LA FUNCIÓN ACÁ
   const action = log.action;
   const details = log.details;
 
@@ -209,7 +273,8 @@ export default function LogDetailRenderer({ log }) {
     );
   }
 
-  // 👇 LIMPIADOR UNIVERSAL
+  const validNote = extractRealNote(log);
+
   const getFormattedPayment = (payStr, instNum) => {
     if (typeof payStr !== 'string') return 'Efectivo';
     
@@ -230,10 +295,6 @@ export default function LogDetailRenderer({ log }) {
 
   switch (action) {
 
-    // ══════════════════════════════════════
-    //  CAJA
-    // ══════════════════════════════════════
-
     case 'Apertura de Caja':
       return (
         <div className="space-y-4">
@@ -248,6 +309,7 @@ export default function LogDetailRenderer({ log }) {
             )}
             <Item label="Hora de Apertura" value={log.timestamp || '--:--'} />
           </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
 
@@ -289,12 +351,9 @@ export default function LogDetailRenderer({ log }) {
               <Item label="Hora Real de Cierre" value={details.closingTime} />
             )}
           </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
-
-    // ══════════════════════════════════════
-    //  VENTAS
-    // ══════════════════════════════════════
 
     case 'Venta Realizada': {
       const items = details.items || [];
@@ -340,6 +399,7 @@ export default function LogDetailRenderer({ log }) {
               </Item>
             )}
           </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
     }
@@ -364,7 +424,7 @@ export default function LogDetailRenderer({ log }) {
           <div className="bg-[#fffbeb] border border-[#fde68a] rounded-[14px] p-3.5 text-[11px] text-[#b45309] font-medium">
             ⚠ <strong>Nota:</strong> El stock fue restaurado automáticamente.
           </div>
-          {(details.reason || log.reason) && <ReasonCard note={details.reason || log.reason} />}
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
     }
@@ -383,7 +443,7 @@ export default function LogDetailRenderer({ log }) {
              <Card icon="📝" title="Detalle de Edición">
                <Item label="Transacción afectada" value={`#${getTransactionId(details) || 'Desconocida'}`} />
              </Card>
-             {(details.reason || log.reason) && <ReasonCard note={details.reason || log.reason} />}
+             <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
              <WarnCard>Este es un registro antiguo. No contiene el desglose de productos modificados.</WarnCard>
            </div>
          );
@@ -394,7 +454,6 @@ export default function LogDetailRenderer({ log }) {
         clientDisplay = `${details.client} ${details.memberNumber && details.memberNumber !== '---' ? `#${String(details.memberNumber).padStart(4, '0')}` : ''}`.trim();
       }
 
-      // 👇 CÁLCULO ESTRICTO DE PAGOS Y CUOTAS EN EL MODAL
       const basePayment = typeof details.payment === 'string' ? details.payment : 'Efectivo';
       
       const oldPayText = getFormattedPayment(
@@ -456,22 +515,11 @@ export default function LogDetailRenderer({ log }) {
 
           <Card icon="💰" title="Ajuste Financiero">
              {isTotalActuallyChanged && (
-                <ChangeRow
-                  field="Monto Total"
-                  oldVal={changes.total.old}
-                  newVal={changes.total.new}
-                  isPrice={true}
-                />
+                <ChangeRow field="Monto Total" oldVal={changes.total.old} newVal={changes.total.new} isPrice={true} />
              )}
-             
              {isPaymentActuallyChanged && (
-                <ChangeRow
-                  field="Método de Pago"
-                  oldVal={oldPayText}
-                  newVal={newPayText}
-                />
+                <ChangeRow field="Método de Pago" oldVal={oldPayText} newVal={newPayText} />
              )}
-
              {!isTotalActuallyChanged && !isPaymentActuallyChanged && (
                 <Item label="Monto y Pago" value="Sin modificaciones" />
              )}
@@ -490,14 +538,10 @@ export default function LogDetailRenderer({ log }) {
             </Card>
           )}
 
-          {(details.reason || log.reason) && <ReasonCard note={details.reason || log.reason} />}
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
     }
-
-    // ══════════════════════════════════════
-    //  GASTOS
-    // ══════════════════════════════════════
 
     case 'Nuevo Gasto':
     case 'Gasto':
@@ -509,19 +553,12 @@ export default function LogDetailRenderer({ log }) {
                 -<FancyPrice amount={details.amount} />
               </span>
             </Item>
-            {details.description && <Item label="Descripción" value={details.description} />}
-          </Card>
-          <Card icon="📋" title="Información">
             <Item label="Categoría" value={details.category || 'Sin categoría'} />
             <Item label="Método de Pago" value={details.paymentMethod || 'No especificado'} />
           </Card>
-          {(details.note || log.reason) && <ReasonCard note={details.note || log.reason} />}
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
-
-    // ══════════════════════════════════════
-    //  PRODUCTOS
-    // ══════════════════════════════════════
 
     case 'Alta de Producto':
       return (
@@ -550,6 +587,7 @@ export default function LogDetailRenderer({ log }) {
               <Item label="Tipo" value={details.product_type === 'weight' ? 'Por peso (kg/g)' : 'Por unidad'} />
             )}
           </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
 
@@ -578,7 +616,7 @@ export default function LogDetailRenderer({ log }) {
                 />
               ))}
             </Card>
-            {(details.reason || log.reason) && <ReasonCard note={details.reason || log.reason} />}
+            <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
           </div>
         );
       }
@@ -600,7 +638,7 @@ export default function LogDetailRenderer({ log }) {
               <Item label="Tipo" value={details.product_type === 'weight' ? 'Por peso (kg/g)' : 'Por unidad'} />
             )}
           </Card>
-          {(details.reason || log.reason) && <ReasonCard note={details.reason || log.reason} />}
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
     }
@@ -623,7 +661,7 @@ export default function LogDetailRenderer({ log }) {
               <span className="text-[#dc2626] font-bold">{details.stock || 0} {details.product_type === 'weight' ? 'g' : 'unidades'}</span>
             </Item>
           </Card>
-          {(details.reason || log.reason) && <ReasonCard note={details.reason || log.reason} />}
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
           <WarnCard>⚠ El producto fue eliminado permanentemente del inventario.</WarnCard>
         </div>
       );
@@ -655,12 +693,9 @@ export default function LogDetailRenderer({ log }) {
               <Badge color="blue">0 unidades</Badge>
             </Item>
           </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
-
-    // ══════════════════════════════════════
-    //  SOCIOS
-    // ══════════════════════════════════════
 
     case 'Nuevo Socio':
     case 'Edición de Puntos':
@@ -703,6 +738,14 @@ export default function LogDetailRenderer({ log }) {
                 <span className="text-[#059669] font-bold">{details.initialPoints || 0} pts</span>
               </Item>
             )}
+
+            {isNew && (
+              <Item label="Fecha de Registro">
+                 <span className="font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded text-[10px]">
+                    {log.date} · {log.timestamp} hs
+                 </span>
+              </Item>
+            )}
           </Card>
 
           {pointsData && pointsData.previous !== undefined && (
@@ -739,14 +782,11 @@ export default function LogDetailRenderer({ log }) {
             </Card>
           )}
 
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
           {isDelete && <WarnCard>⚠ El registro del socio fue eliminado permanentemente del sistema.</WarnCard>}
         </div>
       );
     }
-
-    // ══════════════════════════════════════
-    //  PREMIOS
-    // ══════════════════════════════════════
 
     case 'Nuevo Premio':
     case 'Editar Premio':
@@ -770,14 +810,11 @@ export default function LogDetailRenderer({ log }) {
               <Item label="Stock Límite" value={`${details.stock} disponibles`} />
             )}
           </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
           {isDelete && <WarnCard>⚠ El premio fue retirado permanentemente del catálogo.</WarnCard>}
         </div>
       );
     }
-
-    // ══════════════════════════════════════
-    //  CATEGORÍAS
-    // ══════════════════════════════════════
 
     case 'Actualización Masiva':
     case 'Edición Masiva Categorías': {
@@ -824,6 +861,7 @@ export default function LogDetailRenderer({ log }) {
               </div>
             </Card>
           )}
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
     }
@@ -849,13 +887,10 @@ export default function LogDetailRenderer({ log }) {
               </Item>
             )}
           </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
     }
-
-    // ══════════════════════════════════════
-    //  SISTEMA
-    // ══════════════════════════════════════
 
     case 'Login': {
       const roleName = details.name || details.role;
@@ -870,6 +905,7 @@ export default function LogDetailRenderer({ log }) {
               </Badge>
             </Item>
           </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
     }
@@ -880,6 +916,7 @@ export default function LogDetailRenderer({ log }) {
           <Card icon="🕐" title="Configuración de Sistema">
             <Item label="Nuevo Horario de Cierre" value={typeof details === 'string' ? details : (details.time || 'Actualizado')} />
           </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
 
@@ -898,13 +935,10 @@ export default function LogDetailRenderer({ log }) {
           <Card icon="🗑️" title="Registro Eliminado">
             <Item label="Elemento" value={typeof details === 'string' ? details : `ID: ${getTransactionId(details) || 'N/A'}`} />
           </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
           <WarnCard>⚠ Este registro fue eliminado permanentemente.</WarnCard>
         </div>
       );
-
-    // ══════════════════════════════════════
-    //  DEFAULT
-    // ══════════════════════════════════════
 
     default: {
       return (
@@ -916,6 +950,7 @@ export default function LogDetailRenderer({ log }) {
               </pre>
             </div>
           </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
     }

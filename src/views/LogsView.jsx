@@ -1,3 +1,4 @@
+// src/views/LogsView.jsx
 import React, { useState, useMemo, useEffect } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useLogsFilter } from '../hooks/useLogsFilter';
@@ -9,9 +10,21 @@ import LogDetailModal from '../components/ActionLogs/LogDetailModal';
 
 const LOGS_PER_PAGE = 50;
 
-export default function LogsView({ dailyLogs }) {
+// ✨ Agregamos onUpdateLogNote a las propiedades que recibe la vista
+export default function LogsView({ dailyLogs, onUpdateLogNote }) {
   
-  
+  const formatFullDate = (isoString) => {
+    if (!isoString) return '--/--/---- --:--';
+    try {
+      const d = new Date(isoString);
+      const datePart = d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+      const timePart = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
+      return `${datePart} a las ${timePart} hs`;
+    } catch {
+      return '--/--/---- --:--';
+    }
+  };
+
   // ===========================================================================
   // 1. ADAPTADOR DE DATOS
   // ===========================================================================
@@ -22,7 +35,15 @@ export default function LogsView({ dailyLogs }) {
       if (typeof finalDetails === 'string') {
         try { finalDetails = JSON.parse(finalDetails); } catch (e) {}
       }
-      return { ...log, details: finalDetails };
+      
+      const realDate = log.created_at || log.createdAt || new Date().toISOString();
+
+      return { 
+        ...log, 
+        details: finalDetails,
+        rawCreatedAt: realDate,
+        displayCreatedAt: formatFullDate(realDate)
+      };
     });
   }, [dailyLogs]);
 
@@ -49,7 +70,6 @@ export default function LogsView({ dailyLogs }) {
   // ===========================================================================
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Resetear a página 1 cuando cambian los filtros
   useEffect(() => {
     setCurrentPage(1);
   }, [filterDateStart, filterDateEnd, filterUser, filterAction, filterSearch, sortColumn, sortDirection]);
@@ -57,7 +77,6 @@ export default function LogsView({ dailyLogs }) {
   const totalLogs = sortedLogs.length;
   const totalPages = Math.max(1, Math.ceil(totalLogs / LOGS_PER_PAGE));
 
-  // Asegurar que currentPage no exceda totalPages
   const safePage = Math.min(currentPage, totalPages);
   const startIndex = (safePage - 1) * LOGS_PER_PAGE;
   const endIndex = Math.min(startIndex + LOGS_PER_PAGE, totalLogs);
@@ -68,6 +87,15 @@ export default function LogsView({ dailyLogs }) {
 
   // 4. Estado UI Local
   const [selectedLog, setSelectedLog] = useState(null);
+
+  // ✨ Función puente: Guarda en BD y actualiza el modal abierto al mismo tiempo
+  const handleSaveNote = async (logId, newNote) => {
+    if (onUpdateLogNote) {
+      await onUpdateLogNote(logId, newNote);
+      // Refrescamos el log que está actualmente abierto en el modal
+      setSelectedLog(prev => prev && prev.id === logId ? { ...prev, reason: newNote } : prev);
+    }
+  };
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden h-full flex flex-col">
@@ -96,7 +124,6 @@ export default function LogsView({ dailyLogs }) {
 
       {/* 3. BARRA DE PAGINACIÓN */}
       <div className="border-t border-slate-200 bg-slate-50 px-4 py-2.5 flex items-center justify-between shrink-0">
-        {/* Contador */}
         <span className="text-xs text-slate-500">
           Acciones registradas: <span className="font-bold text-slate-700">{totalLogs}</span>
           {totalLogs > 0 && (
@@ -106,7 +133,6 @@ export default function LogsView({ dailyLogs }) {
           )}
         </span>
 
-        {/* Controles de paginación */}
         {totalPages > 1 && (
           <div className="flex items-center gap-1">
             <button
@@ -118,16 +144,13 @@ export default function LogsView({ dailyLogs }) {
               <ChevronLeft size={14} />
             </button>
 
-            {/* Botones de página */}
             {Array.from({ length: totalPages }, (_, i) => i + 1)
               .filter(page => {
-                // Mostrar: primera, última, actual, y ±1 alrededor de actual
                 if (page === 1 || page === totalPages) return true;
                 if (Math.abs(page - safePage) <= 1) return true;
                 return false;
               })
               .reduce((acc, page, i, arr) => {
-                // Insertar "..." entre gaps
                 if (i > 0 && page - arr[i - 1] > 1) {
                   acc.push('...' + page);
                 }
@@ -136,11 +159,7 @@ export default function LogsView({ dailyLogs }) {
               }, [])
               .map((item) => {
                 if (typeof item === 'string') {
-                  return (
-                    <span key={item} className="px-1 text-xs text-slate-400">
-                      ...
-                    </span>
-                  );
+                  return <span key={item} className="px-1 text-xs text-slate-400">...</span>;
                 }
                 return (
                   <button
@@ -173,6 +192,7 @@ export default function LogsView({ dailyLogs }) {
       <LogDetailModal
         selectedLog={selectedLog}
         onClose={() => setSelectedLog(null)}
+        onUpdateNote={handleSaveNote} // ✨ PASAMOS LA FUNCIÓN AL MODAL DE DETALLES
       />
     </div>
   );
