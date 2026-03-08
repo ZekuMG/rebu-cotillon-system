@@ -14,10 +14,10 @@ import {
   FileText,
   UserX,
   Calendar,
-  Filter
+  Filter,
+  RotateCcw // ✨ IMPORTAMOS EL ÍCONO DE RESTAURAR
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../data';
-// ♻️ FIX: Importamos FancyPrice (reemplaza formatCurrency en UI)
 import { normalizeDate, isVentaLog, getVentaTotal } from '../utils/helpers';
 import { FancyPrice } from '../components/FancyPrice';
 import { TransactionDetailModal } from '../components/modals/HistoryModals';
@@ -41,6 +41,7 @@ export default function HistoryView({
   members,
   onDeleteTransaction,
   onEditTransaction,
+  onRestoreTransaction, // ✨ RECIBIMOS LA FUNCIÓN DE RESTAURAR
   setTransactions,
   setDailyLogs,
   showNotification,
@@ -97,6 +98,8 @@ export default function HistoryView({
                 status: voidedIds.has(txId) ? 'voided' : 'completed',
                 isHistoric: true,
                 sortDate: logDate, 
+                // Heredamos la marca de prueba del log original
+                isTest: log.isTest 
             });
         }
       }
@@ -133,8 +136,18 @@ export default function HistoryView({
   // =====================================================
   const filteredTransactions = useMemo(() => {
     let txList = [...activeTransactions, ...historicTransactions];
+    const isSearchingTest = searchQuery.toLowerCase().trim() === 'test';
 
-    // 1. LÓGICA DE VISTA: HOY vs HISTORIAL
+    // 1. FILTRO DE MODO PRUEBA (Soft Delete Visual)
+    txList = txList.filter(tx => {
+      if (tx.isTest) {
+        return isSearchingTest;
+      } else {
+        return !isSearchingTest;
+      }
+    });
+
+    // 2. LÓGICA DE VISTA: HOY vs HISTORIAL
     if (viewMode === 'today') {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -155,7 +168,7 @@ export default function HistoryView({
       });
     }
 
-    // 2. RANGO DE FECHAS
+    // 3. RANGO DE FECHAS
     if (filterDateStart) {
       const [year, month, day] = filterDateStart.split('-');
       const startDate = new Date(year, month - 1, day, 0, 0, 0);
@@ -167,11 +180,11 @@ export default function HistoryView({
       txList = txList.filter((tx) => tx.sortDate <= endDate);
     }
 
-    // 3. RESTO DE FILTROS BÁSICOS
+    // 4. RESTO DE FILTROS BÁSICOS
     if (filterPayment) txList = txList.filter((tx) => tx.payment === filterPayment);
     if (filterUser) txList = txList.filter((tx) => tx.user === filterUser);
     
-    // 4. FILTRO DE CATEGORÍA 
+    // 5. FILTRO DE CATEGORÍA 
     if (filterCategory) {
       txList = txList.filter((tx) =>
         (tx.items || []).some((item) => {
@@ -184,8 +197,8 @@ export default function HistoryView({
       );
     }
 
-    // 5. BÚSQUEDA GENERAL
-    if (searchQuery.trim()) {
+    // 6. BÚSQUEDA GENERAL (Si no está buscando "test")
+    if (searchQuery.trim() && !isSearchingTest) {
       const query = searchQuery.toLowerCase().trim();
       txList = txList.filter((tx) => {
         const idMatch = String(tx.id).includes(query);
@@ -202,7 +215,7 @@ export default function HistoryView({
       });
     }
 
-    // 6. ORDENAMIENTO (Recientes vs Antiguos)
+    // 7. ORDENAMIENTO (Recientes vs Antiguos)
     txList.sort((a, b) => {
       const dateA = a.sortDate?.getTime() || 0;
       const dateB = b.sortDate?.getTime() || 0;
@@ -262,7 +275,7 @@ export default function HistoryView({
             </div>
             <h3 className="font-bold text-slate-800 text-sm">Registro de Ventas</h3>
             <span className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1 rounded-lg font-bold shadow-sm ml-2 flex items-center gap-1">
-              {stats.count} ventas válidas • 
+              {stats.count} Ventas realizadas • 
               <span className="text-blue-600"><FancyPrice amount={stats.total} /></span>
             </span>
           </div>
@@ -344,7 +357,7 @@ export default function HistoryView({
               <th className="px-4 py-3.5 text-left">Detalle</th>
               <th className="px-4 py-3.5 text-left">Pago</th>
               <th className="px-4 py-3.5 text-right">Monto</th>
-              {currentUser.role === 'admin' && (
+              {currentUser?.role === 'admin' && (
                 <th className="px-4 py-3.5 text-center">Acciones</th>
               )}
             </tr>
@@ -476,7 +489,7 @@ export default function HistoryView({
                     </span>
                   </td>
 
-                  {currentUser.role === 'admin' && (
+                  {currentUser?.role === 'admin' && (
                     <td className="px-4 py-3 align-middle">
                       <div className="flex items-center justify-center gap-1.5">
                         
@@ -490,24 +503,33 @@ export default function HistoryView({
                           <FileText size={14} className="group-hover:scale-110 transition-transform" />
                         </button>
 
-                        {/* Botones Modificar/Anular (solo si no está anulada) */}
+                        {/* Botones Modificar/Anular (solo si NO está anulada) */}
                         {!isVoided && (
-                          <button onClick={() => onEditTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-amber-50 hover:text-amber-600 hover:border-amber-300 transition-all shadow-sm group" title="Modificar Pedido">
-                            <Edit2 size={13} className="group-hover:scale-110 transition-transform" />
-                          </button>
+                          <>
+                            <button onClick={() => onEditTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-amber-50 hover:text-amber-600 hover:border-amber-300 transition-all shadow-sm group" title="Modificar Pedido">
+                              <Edit2 size={13} className="group-hover:scale-110 transition-transform" />
+                            </button>
+                            
+                            <button onClick={() => onDeleteTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-red-50 hover:text-red-600 hover:border-red-300 transition-all shadow-sm group" title="Anular Venta">
+                              <XCircle size={14} className="group-hover:scale-110 transition-transform" />
+                            </button>
+                          </>
                         )}
                         
-                        <button onClick={() => onDeleteTransaction(tx)} className={`w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 transition-all shadow-sm group ${
-                            isVoided ? 'text-red-400 hover:bg-red-50 hover:text-red-600 hover:border-red-300' 
-                                     : 'text-slate-500 hover:bg-red-50 hover:text-red-600 hover:border-red-300'
-                          }`} title={isVoided ? 'Eliminar Registro' : 'Anular Venta'}
-                        >
-                          {isVoided ? (
-                            <Trash2 size={14} className="group-hover:scale-110 transition-transform" />
-                          ) : (
-                            <XCircle size={14} className="group-hover:scale-110 transition-transform" />
-                          )}
-                        </button>
+                        {/* Botones Restaurar/Eliminar (solo si SÍ está anulada) */}
+                        {isVoided && (
+                          <>
+                            {/* ✨ NUEVO BOTÓN: Restaurar Venta */}
+                            <button onClick={() => onRestoreTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-emerald-500 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-300 transition-all shadow-sm group" title="Restaurar Venta">
+                              <RotateCcw size={14} className="group-hover:-rotate-45 transition-transform" />
+                            </button>
+                            
+                            {/* Eliminar Venta Permanentemente */}
+                            <button onClick={() => onDeleteTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-red-400 hover:bg-red-50 hover:text-red-600 hover:border-red-300 transition-all shadow-sm group" title="Eliminar Registro Permanentemente">
+                              <Trash2 size={14} className="group-hover:scale-110 transition-transform" />
+                            </button>
+                          </>
+                        )}
 
                       </div>
                     </td>
@@ -517,7 +539,7 @@ export default function HistoryView({
             })}
             {filteredTransactions.length === 0 && (
               <tr>
-                <td colSpan={currentUser.role === 'admin' ? 7 : 6} className="text-center py-16">
+                <td colSpan={currentUser?.role === 'admin' ? 7 : 6} className="text-center py-16">
                   <div className="flex flex-col items-center justify-center text-slate-400">
                     <History size={32} className="mb-2 opacity-50" />
                     <p className="text-sm font-medium">{hasActiveFilters ? 'No se encontraron ventas con estos filtros.' : 'No hay historial de ventas disponible.'}</p>
