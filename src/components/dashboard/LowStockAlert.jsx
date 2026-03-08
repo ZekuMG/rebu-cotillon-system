@@ -25,15 +25,6 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
             Alertas
           </h3>
           <div className="flex items-center gap-1.5">
-            {expiringProducts.length > 0 && (
-              // ✨ NUEVO: Convertido a botón clickeable
-              <button 
-                onClick={() => onAlertClick && onAlertClick('expirations')}
-                className="bg-orange-100 text-orange-700 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider hover:bg-orange-200 transition-colors cursor-pointer"
-              >
-                {expiringProducts.length} Vencidos
-              </button>
-            )}
             {outOfStockProducts.length > 0 && (
                // ✨ NUEVO: Convertido a botón clickeable
               <button 
@@ -41,6 +32,15 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
                 className="bg-red-100 text-red-700 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider hover:bg-red-200 transition-colors cursor-pointer"
               >
                 {outOfStockProducts.length} Agotados
+              </button>
+            )}
+            {expiringProducts.length > 0 && (
+              // ✨ NUEVO: Convertido a botón clickeable
+              <button 
+                onClick={() => onAlertClick && onAlertClick('expirations')}
+                className="bg-orange-100 text-orange-700 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider hover:bg-orange-200 transition-colors cursor-pointer"
+              >
+                {expiringProducts.length} Vencidos
               </button>
             )}
           </div>
@@ -62,7 +62,7 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
               activeTab === 'expirations' ? 'bg-white shadow text-orange-600' : 'text-slate-400 hover:text-slate-600'
             }`}
           >
-            Vencim.
+            Vencidos
           </button>
         </div>
       </div>
