@@ -13,9 +13,10 @@ export const TopRanking = ({
   getEmptyStateMessage 
 }) => {
   return (
-    <div className="bg-white p-5 rounded-xl shadow-sm border h-full flex flex-col min-h-0">
+    // 1. Contenedor Principal (alineado a los otros widgets: p-5)
+    <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 h-full flex flex-col min-h-0">
       
-      {/* ✨ HEADER: UNA SOLA FILA CON TODOS LOS SELECTORES ✨ */}
+      {/* 2. Header */}
       <div className="flex justify-between items-center mb-4 gap-2 shrink-0">
         <h3 className="font-bold text-slate-800 flex items-center gap-1.5 whitespace-nowrap text-sm">
           {rankingMode === 'categories' ? <Layers size={16} className="text-indigo-500" /> :
@@ -25,10 +26,10 @@ export const TopRanking = ({
           Top Ventas
         </h3>
 
-        {/* ✨ CONTENEDOR DE SWITCHES: Subidos a la misma línea ✨ */}
+        {/* Contenedor de Switches */}
         <div className="flex items-center gap-2 shrink-0">
           
-          {/* SWITCH 1: Qué agrupamos */}
+          {/* Switch 1: Agrupación */}
           <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 overflow-hidden">
             <button
               onClick={() => setRankingMode('products')}
@@ -50,7 +51,7 @@ export const TopRanking = ({
             </button>
           </div>
 
-          {/* ✨ SWITCH 2: Botones rotados (Cantidad primero, Dinero después) ✨ */}
+          {/* Switch 2: Criterio */}
           <div className="flex bg-slate-50 p-0.5 rounded-lg border border-slate-100 overflow-hidden">
             <button
               onClick={() => setRankingCriteria('qty')}
@@ -69,27 +70,28 @@ export const TopRanking = ({
         </div>
       </div>
 
-      {/* BODY CON SCROLL */}
-      <div className="relative flex-1 min-h-[250px]">
+      {/* 3. Contenedor Relativo con min-h-[280px] */}
+      <div className="relative flex-1 min-h-[280px]">
+        {/* 4. Scroll absoluto */}
         <div className="absolute inset-0 overflow-y-auto custom-scrollbar pr-1">
           {rankingStats && rankingStats.length > 0 ? (
+            // 5. Wrapper de Lista (space-y-2)
             <div className="space-y-2">
               {rankingStats.map((item, idx) => (
-                <div key={idx} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100 hover:border-slate-200 transition-colors">
+                // 6. Tarjeta (p-2.5)
+                <div key={idx} className="flex items-center justify-between p-2.5 bg-slate-50 rounded-lg border border-slate-100 hover:border-slate-200 transition-colors">
                   <div className="flex items-center gap-2 overflow-hidden pr-2">
-                    <span className={`shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold ${
+                    <span className={`shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${
                       idx === 0 ? 'bg-amber-100 text-amber-700 border border-amber-200' :
                       idx === 1 ? 'bg-slate-200 text-slate-600 border border-slate-300' :
-                      idx === 2 ? 'bg-orange-100 text-orange-700 border border-orange-200' : 'bg-slate-100 text-slate-400 border border-slate-200'
+                      idx === 2 ? 'bg-orange-100 text-orange-700 border border-orange-200' : 'bg-white text-slate-400 border border-slate-200'
                     }`}>
                       #{idx + 1}
                     </span>
                     <span className="text-xs font-bold text-slate-700 truncate" title={item.name}>{item.name}</span>
                   </div>
                   
-                  {/* ✨ CONTENEDOR DE DATOS: Restablecido a Cantidad -> Precio ✨ */}
                   <div className="flex items-center gap-2 shrink-0">
-                    
                     <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded shadow-sm border ${rankingCriteria === 'qty' ? 'bg-blue-50 text-blue-600 border-blue-100 scale-105' : 'bg-white text-slate-500 border-slate-200'}`}>
                       {rankingMode === 'weight' 
                         ? (item.qty >= 1000 ? `${formatNumber(item.qty / 1000, 2)} kg` : `${formatNumber(item.qty)} g`) 
@@ -107,7 +109,6 @@ export const TopRanking = ({
                     <span className={`text-xs font-black w-[70px] text-right transition-all ${rankingCriteria === 'revenue' ? 'text-fuchsia-600 scale-105' : 'text-slate-400'}`}>
                       <FancyPrice amount={item.revenue} />
                     </span>
-                    
                   </div>
                 </div>
               ))}
