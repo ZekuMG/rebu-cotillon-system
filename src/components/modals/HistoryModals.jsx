@@ -6,9 +6,8 @@ import {
   Edit2, XCircle, X, FileText, Calendar, User,
   CreditCard, ShoppingCart, Trash2, UserCheck, ArrowRight 
 } from 'lucide-react';
-// ♻️ FIX: Importamos formatNumber y FancyPrice
 import { formatNumber } from '../../utils/helpers';
-import { FancyPrice } from '../FancyPrice'; // Ajustá la ruta según corresponda
+import { FancyPrice } from '../FancyPrice'; 
 
 // ==========================================
 // MODAL: DETALLE DE TRANSACCIÓN
@@ -18,7 +17,7 @@ export const TransactionDetailModal = ({
   transaction,
   onClose,
   currentUser,
-  members = [], // 👈 Recibimos la lista de socios
+  members = [], 
   onEditTransaction,
   onDeleteTransaction,
   onViewTicket,
@@ -27,7 +26,6 @@ export const TransactionDetailModal = ({
 
   const isVoided = transaction.status === 'voided';
 
-  // Lógica para parsear al Cliente/Socio
   let clientName = null;
   let memberNum = null;
 
@@ -45,7 +43,6 @@ export const TransactionDetailModal = ({
     clientName = null;
   }
 
-  // 👇 LÓGICA NUEVA: Buscar el total real actualizado en la lista de socios
   let currentTotal = null;
   if (memberNum && memberNum !== '---') {
     const socio = members.find(m => 
@@ -56,7 +53,6 @@ export const TransactionDetailModal = ({
     }
   }
 
-  // Rescatar puntos (soporte para transacciones activas e históricas)
   const ptsEarned = transaction.pointsEarned || transaction.client?.pointsEarned || 0;
   const ptsSpent = transaction.pointsSpent || transaction.client?.pointsSpent || 0;
 
@@ -89,7 +85,6 @@ export const TransactionDetailModal = ({
         {/* BODY */}
         <div className="p-5 overflow-y-auto flex-1 space-y-4">
           
-          {/* BLOQUE SUPERIOR */}
           <div className="grid grid-cols-3 gap-3">
             <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center">
               <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1.5"><Calendar size={12}/> Fecha</p>
@@ -115,7 +110,6 @@ export const TransactionDetailModal = ({
             </div>
           </div>
 
-          {/* TARJETA SOCIO */}
           <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm flex flex-col">
             <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
               <UserCheck size={12}/> Cliente / Socio
@@ -139,7 +133,6 @@ export const TransactionDetailModal = ({
                   </div>
                 </div>
 
-                {/* Flujo de Puntos */}
                 {(ptsEarned > 0 || ptsSpent > 0 || currentTotal !== null) && (
                   <div className={`flex items-center bg-slate-50 border border-slate-100 rounded-lg p-2 ${isVoided ? 'opacity-50 grayscale' : ''}`}>
                     <div className="flex flex-col items-end pr-2 border-r border-slate-200">
@@ -170,7 +163,6 @@ export const TransactionDetailModal = ({
             )}
           </div>
 
-          {/* Lista de Productos */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
             <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex justify-between items-center">
               <p className="text-slate-600 text-[10px] font-black uppercase tracking-wider flex items-center gap-2">
@@ -183,26 +175,27 @@ export const TransactionDetailModal = ({
             
             <div className="divide-y divide-slate-100 max-h-[200px] overflow-y-auto custom-scrollbar">
               {(transaction.items || []).map((item, idx) => {
-                const qty = item.qty || item.quantity || 0;
-                const isWeight = item.product_type === 'weight' || item.isWeight || (qty >= 20 && item.price < 50);
+                const rawQty = item.qty || item.quantity;
+                const qty = Number(rawQty) || 0;
+                const price = Number(item.price) || 0;
+                
+                const isWeight = item.product_type === 'weight' || item.isWeight || (qty >= 20 && price < 50);
 
                 return (
                   <div key={idx} className={`p-3.5 flex justify-between items-center transition-colors hover:bg-slate-50 ${isVoided ? 'opacity-50' : ''}`}>
                     <div className="flex-1 pr-4">
                       <p className={`font-bold text-xs mb-1 ${isVoided ? 'line-through text-slate-400' : 'text-slate-700'}`}>
-                        {item.title}
+                        {item.title || item.product_title || item.name || 'Producto Desconocido'}
                       </p>
                       <p className="text-[10px] text-slate-400 font-medium flex items-center gap-1.5">
                         <span className="font-bold text-slate-600 bg-white border border-slate-200 shadow-sm px-1.5 py-0.5 rounded">
                           {formatNumber(qty)}{isWeight ? 'g' : ' u.'}
                         </span>
-                        {/* ♻️ FIX: FancyPrice en el precio unitario */}
-                        x <FancyPrice amount={item.price} /> c/u
+                        x <FancyPrice amount={price} /> c/u
                       </p>
                     </div>
-                    {/* ♻️ FIX: FancyPrice en el subtotal del ítem */}
                     <p className={`font-black text-sm ${isVoided ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
-                      <FancyPrice amount={qty * item.price} />
+                      <FancyPrice amount={qty * price} />
                     </p>
                   </div>
                 );
@@ -213,9 +206,8 @@ export const TransactionDetailModal = ({
               <span className={`text-xs font-black uppercase tracking-widest ${isVoided ? 'text-red-700' : 'text-blue-800'}`}>
                 Total Final
               </span>
-              {/* ♻️ FIX: FancyPrice en el total global */}
               <span className={`text-2xl font-black tracking-tight flex items-center gap-1 ${isVoided ? 'text-red-700 line-through' : 'text-blue-600'}`}>
-                <FancyPrice amount={transaction.total || 0} />
+                <FancyPrice amount={Number(transaction.total) || 0} />
               </span>
             </div>
           </div>
