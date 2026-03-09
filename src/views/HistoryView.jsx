@@ -15,7 +15,7 @@ import {
   UserX,
   Calendar,
   Filter,
-  RotateCcw // ✨ IMPORTAMOS EL ÍCONO DE RESTAURAR
+  RotateCcw
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../data';
 import { normalizeDate, isVentaLog, getVentaTotal } from '../utils/helpers';
@@ -41,7 +41,7 @@ export default function HistoryView({
   members,
   onDeleteTransaction,
   onEditTransaction,
-  onRestoreTransaction, // ✨ RECIBIMOS LA FUNCIÓN DE RESTAURAR
+  onRestoreTransaction,
   setTransactions,
   setDailyLogs,
   showNotification,
@@ -67,17 +67,24 @@ export default function HistoryView({
     const txList = [];
     const activeIds = new Set((transactions || []).map(t => String(t.id)));
     const voidedIds = new Set();
+    const permanentlyDeletedIds = new Set(); // ✨ Rastreador de purgas
     
     (dailyLogs || []).forEach(log => {
       if (log.action === 'Venta Anulada' && log.details?.id) {
         voidedIds.add(String(log.details.id));
+      }
+      // ✨ FIX: Actualizamos el nombre a "Venta Eliminada"
+      if ((log.action === 'Borrado Permanente' || log.action === 'Venta Eliminada') && log.details?.transactionId) {
+        permanentlyDeletedIds.add(String(log.details.transactionId));
       }
     });
 
     (dailyLogs || []).forEach((log) => {
       if (isVentaLog(log) && log.details) {
         const txId = String(log.details.transactionId || log.id);
-        if (activeIds.has(txId)) return;
+        
+        // ✨ FIX: Si está en la lista de borrados permanentes, NO la dibujamos en el historial
+        if (activeIds.has(txId) || permanentlyDeletedIds.has(txId)) return;
 
         const logDate = normalizeDate(log.date);
         if (logDate) {
@@ -95,11 +102,16 @@ export default function HistoryView({
                 total: safeTotal,
                 client: log.details.client || log.details.memberName || null,
                 memberNumber: log.details.client?.memberNumber || log.details.memberNumber || null,
+                
+                // ✨ FIX: AHORA SÍ RESCATAMOS LOS PUNTOS DEL FANTASMA
+                pointsEarned: log.details.pointsEarned || 0,
+                pointsSpent: log.details.pointsSpent || 0,
+                
                 status: voidedIds.has(txId) ? 'voided' : 'completed',
                 isHistoric: true,
                 sortDate: logDate, 
-                // Heredamos la marca de prueba del log original
-                isTest: log.isTest 
+                isTest: log.isTest,
+                isRestored: false // Generalmente los anulados históricos no están restaurados
             });
         }
       }
@@ -138,7 +150,7 @@ export default function HistoryView({
     let txList = [...activeTransactions, ...historicTransactions];
     const isSearchingTest = searchQuery.toLowerCase().trim() === 'test';
 
-    // 1. FILTRO DE MODO PRUEBA (Soft Delete Visual)
+    // 1. FILTRO DE MODO PRUEBA
     txList = txList.filter(tx => {
       if (tx.isTest) {
         return isSearchingTest;
@@ -197,7 +209,7 @@ export default function HistoryView({
       );
     }
 
-    // 6. BÚSQUEDA GENERAL (Si no está buscando "test")
+    // 6. BÚSQUEDA GENERAL
     if (searchQuery.trim() && !isSearchingTest) {
       const query = searchQuery.toLowerCase().trim();
       txList = txList.filter((tx) => {
@@ -215,7 +227,7 @@ export default function HistoryView({
       });
     }
 
-    // 7. ORDENAMIENTO (Recientes vs Antiguos)
+    // 7. ORDENAMIENTO
     txList.sort((a, b) => {
       const dateA = a.sortDate?.getTime() || 0;
       const dateB = b.sortDate?.getTime() || 0;
@@ -275,7 +287,7 @@ export default function HistoryView({
             </div>
             <h3 className="font-bold text-slate-800 text-sm">Registro de Ventas</h3>
             <span className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1 rounded-lg font-bold shadow-sm ml-2 flex items-center gap-1">
-              {stats.count} Ventas realizadas • 
+              {stats.count} ventas válidas • 
               <span className="text-blue-600"><FancyPrice amount={stats.total} /></span>
             </span>
           </div>
@@ -366,6 +378,8 @@ export default function HistoryView({
             {filteredTransactions.map((tx, index) => {
               const isVoided = tx.status === 'voided';
               const isHistoric = tx.isHistoric;
+              const isRestored = tx.isRestored;
+              const restoredAt = tx.restoredAt;
 
               let clientName = null;
               let memberNum = null;
@@ -396,14 +410,26 @@ export default function HistoryView({
                     <p className={`font-mono font-bold text-[11px] ${isVoided ? 'text-red-800 line-through' : 'text-slate-800'}`}>
                       #{String(tx.id).padStart(6, '0')}
                     </p>
-                    <p className="text-[10px] text-slate-400 font-medium mt-0.5">
-                      {formatDisplayDate(tx.date)}
-                      {(tx.time || tx.timestamp) && ` ${tx.time || tx.timestamp}`}
+                    <p className="text-[10px] text-slate-400 font-medium mt-0.5 flex flex-wrap items-center gap-1.5">
+                      <span>{formatDisplayDate(tx.date)} {(tx.time || tx.timestamp) && ` ${tx.time || tx.timestamp}`}</span>
                     </p>
                     {isVoided && (
                       <span className="text-[8.5px] font-black tracking-widest text-red-600 uppercase bg-red-100 px-1.5 py-0.5 rounded mt-1.5 inline-block border border-red-200">
                         ANULADO
                       </span>
+                    )}
+                    {/* ✨ MEDALLA DE RESTAURADO CON HORA */}
+                    {!isVoided && isRestored && (
+                      <div className="mt-1.5 flex flex-col items-start gap-0.5">
+                        <span className="text-[8.5px] font-black tracking-widest text-emerald-600 uppercase bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">
+                          RESTAURADO
+                        </span>
+                        {restoredAt && (
+                          <span className="text-[8px] font-medium text-emerald-500">
+                            {restoredAt}
+                          </span>
+                        )}
+                      </div>
                     )}
                   </td>
                   
@@ -520,7 +546,7 @@ export default function HistoryView({
                         {isVoided && (
                           <>
                             {/* ✨ NUEVO BOTÓN: Restaurar Venta */}
-                            <button onClick={() => onRestoreTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-emerald-500 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-300 transition-all shadow-sm group" title="Restaurar Venta">
+                            <button onClick={() => onRestoreTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-emerald-500 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-300 transition-all shadow-sm group" title="Restaurar Venta (Recuperar)">
                               <RotateCcw size={14} className="group-hover:-rotate-45 transition-transform" />
                             </button>
                             

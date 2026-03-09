@@ -1,7 +1,8 @@
+/* eslint-disable react-refresh/only-export-components */
 // src/components/ActionLogs/LogDetailRenderer.jsx
 import React, { useState } from 'react';
-import { ArrowRight, CheckCircle, Edit3, Plus, Save } from 'lucide-react';
-import { formatCurrency } from '../../utils/helpers';
+import { ArrowRight, CheckCircle, Edit3, Plus, Save, AlertTriangle } from 'lucide-react';
+import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
 import { extractRealNote } from './LogsTable';
 
@@ -10,10 +11,35 @@ import { extractRealNote } from './LogsTable';
 // ════════════════════════════════════════════
 
 const getTransactionId = (details) => {
-  if (!details || typeof details === 'string') return null;
-  const id = details.transactionId || details.id;
+  if (!details || typeof details === 'string') {
+    if (typeof details === 'string') {
+      const match = details.match(/#([a-zA-Z0-9-]+)/);
+      return match ? match[1] : details;
+    }
+    return null;
+  }
+  const id = details.transactionId || details.id || details.oldTransactionId;
   if (!id) return null;
   return typeof id === 'string' && id.includes('TRX-') ? id.replace('TRX-', '') : id;
+};
+
+const getClientDisplay = (details) => {
+  let cName = null;
+  let cNum = null;
+
+  if (details.client && typeof details.client === 'object') {
+    cName = details.client.name;
+    cNum = details.client.memberNumber;
+  } else if (details.client && typeof details.client === 'string') {
+    cName = details.client;
+    cNum = details.memberNumber;
+  } else if (details.memberName) {
+    cName = details.memberName;
+    cNum = details.memberNumber;
+  }
+
+  if (!cName || cName === 'No asociado' || cName === 'Consumidor Final') return null;
+  return `${cName} ${cNum && cNum !== '---' ? '#' + String(cNum).padStart(4, '0') : ''}`.trim();
 };
 
 export const getDetailTitle = (action) => {
@@ -23,6 +49,7 @@ export const getDetailTitle = (action) => {
     'Cierre Automático': 'Reporte Automático',
     'Venta Realizada': 'Detalle de Transacción',
     'Venta Anulada': 'Anulación de Venta',
+    'Venta Restaurada': 'Restauración de Venta', 
     'Modificación Pedido': 'Ajuste de Pedido',
     'Venta Modificada': 'Ajuste de Pedido',
     'Nuevo Gasto': 'Comprobante de Gasto',
@@ -43,7 +70,7 @@ export const getDetailTitle = (action) => {
     'Edición Masiva Categorías': 'Reporte de Cambios Masivos',
     'Horario Modificado': 'Cambio de Horario',
     'Sistema Iniciado': 'Información del Sistema',
-    'Borrado Permanente': 'Registro Eliminado',
+    'Venta Eliminada': 'Registro Eliminado',
     'Login': 'Inicio de Sesión'
   };
   return titles[action] || 'Detalles del Registro';
@@ -51,7 +78,7 @@ export const getDetailTitle = (action) => {
 
 export const getDetailIcon = (action) => {
   const icons = {
-    'Venta Realizada': '🛒', 'Venta Anulada': '❌',
+    'Venta Realizada': '🛒', 'Venta Anulada': '❌', 'Venta Restaurada': '♻️',
     'Modificación Pedido': '📝', 'Venta Modificada': '📝',
     'Apertura de Caja': '💰', 'Cierre de Caja': '🔒', 'Cierre Automático': '⏰',
     'Edición Producto': '✏️', 'Alta de Producto': '📦', 'Baja Producto': '🗑️',
@@ -61,15 +88,15 @@ export const getDetailIcon = (action) => {
     'Nuevo Gasto': '📉', 'Gasto': '📉',
     'Nuevo Premio': '🎁', 'Editar Premio': '🎁', 'Eliminar Premio': '🎁',
     'Login': '🔑', 'Horario Modificado': '🕐', 'Sistema Iniciado': '⚡',
-    'Borrado Permanente': '🗑️'
+    'Venta Eliminada': '🗑️'
   };
   return icons[action] || '📄';
 };
 
 export const getDetailColor = (action) => {
   const colors = {
-    'Venta Realizada': 'green', 'Apertura de Caja': 'green',
-    'Venta Anulada': 'red', 'Baja Producto': 'red', 'Baja de Socio': 'red', 'Eliminar Premio': 'red', 'Borrado Permanente': 'red', 'Nuevo Gasto': 'red', 'Gasto': 'red',
+    'Venta Realizada': 'green', 'Apertura de Caja': 'green', 'Venta Restaurada': 'green', 
+    'Venta Anulada': 'red', 'Baja Producto': 'red', 'Baja de Socio': 'red', 'Eliminar Premio': 'red', 'Venta Eliminada': 'red', 'Nuevo Gasto': 'red', 'Gasto': 'red',
     'Alta de Producto': 'blue', 'Edición Producto': 'blue', 'Producto Duplicado': 'blue',
     'Nuevo Socio': 'blue', 'Edición de Socio': 'blue', 
     'Edición de Puntos': 'violet', 'Nuevo Premio': 'violet', 'Editar Premio': 'violet',
@@ -81,13 +108,13 @@ export const getDetailColor = (action) => {
 
 export const ACTION_GROUPS = [
   { label: '💰 Caja', actions: ['Apertura de Caja', 'Cierre de Caja', 'Cierre Automático'] },
-  { label: '🛒 Ventas', actions: ['Venta Realizada', 'Venta Anulada', 'Venta Modificada'] },
+  { label: '🛒 Ventas', actions: ['Venta Realizada', 'Venta Anulada', 'Venta Restaurada', 'Venta Modificada', 'Venta Eliminada'] }, 
   { label: '📉 Gastos', actions: ['Nuevo Gasto'] },
   { label: '📦 Productos', actions: ['Alta de Producto', 'Edición Producto', 'Baja Producto', 'Producto Duplicado'] },
   { label: '👤 Socios', actions: ['Nuevo Socio', 'Edición de Socio', 'Edición de Puntos', 'Baja de Socio'] },
   { label: '🎁 Premios', actions: ['Nuevo Premio', 'Editar Premio', 'Eliminar Premio'] },
   { label: '🏷️ Categorías', actions: ['Categoría', 'Actualización Masiva', 'Edición Masiva Categorías'] },
-  { label: '⚙️ Sistema', actions: ['Login', 'Horario Modificado', 'Sistema Iniciado', 'Borrado Permanente'] }
+  { label: '⚙️ Sistema', actions: ['Login', 'Horario Modificado', 'Sistema Iniciado'] }
 ];
 
 // ════════════════════════════════════════════
@@ -158,8 +185,8 @@ const Badge = ({ color, children }) => {
   );
 };
 
-const WarnCard = ({ children }) => (
-  <div className="bg-[#fef2f2] border border-[#fecaca] rounded-[14px] p-3.5 text-[11px] text-red-800 text-center font-semibold">
+const WarnCard = ({ children, isSuccess = false }) => (
+  <div className={`${isSuccess ? 'bg-[#ecfdf5] border-[#a7f3d0] text-[#047857]' : 'bg-[#fef2f2] border-[#fecaca] text-red-800'} border rounded-[14px] p-3.5 text-[11px] text-center font-semibold flex items-center justify-center gap-2`}>
     {children}
   </div>
 );
@@ -174,7 +201,46 @@ const HighlightCard = ({ label, amount, sub }) => (
   </div>
 );
 
-// ✨ TARJETA DE NOTAS EDITABLE
+const MemberImpactCard = ({ clientDisplay, pointsChange, pointsEarned, pointsSpent }) => {
+  if (!clientDisplay && !pointsChange && !(pointsEarned > 0) && !(pointsSpent > 0)) return null;
+
+  return (
+    <Card icon="👤" title="Impacto en el Socio">
+      {clientDisplay && <Item label="Socio vinculado" value={clientDisplay} />}
+      
+      {pointsChange ? (
+        <div className={clientDisplay ? "mt-3" : ""}>
+          <div className="text-[10px] font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Movimiento de Puntos</div>
+          <div className="flex items-center gap-[6px] px-[11px] py-[9px] bg-[#f4f6f9] rounded-[9px] border border-[#eaecf1]">
+            <div className="flex-1 text-center">
+              <div className="text-[9px] text-[#64748b] font-bold uppercase">Anterior</div>
+              <div className="text-[14px] font-mono text-[#64748b]">{formatNumber(pointsChange.previous)} pts</div>
+            </div>
+            <div className="flex flex-col items-center text-[#cbd5e1]">
+              <ArrowRight size={16} />
+              <span className={`text-[10px] font-bold mt-[2px] ${pointsChange.diff > 0 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>
+                {pointsChange.diff > 0 ? '+' : ''}{formatNumber(pointsChange.diff)}
+              </span>
+            </div>
+            <div className="flex-1 text-center">
+              <div className="text-[9px] text-[#a21caf] font-bold uppercase">Actual</div>
+              <div className="text-[14px] font-mono text-[#1e293b] font-bold">{formatNumber(pointsChange.new)} pts</div>
+            </div>
+          </div>
+        </div>
+      ) : (pointsEarned > 0 || pointsSpent > 0) ? (
+        <div className="flex items-center justify-between px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1] mt-1.5">
+          <span className="font-bold text-slate-600">Ajuste de Puntos</span>
+          <div className="flex items-center gap-2">
+            {pointsEarned > 0 && <span className="text-emerald-600 font-bold">+{formatNumber(pointsEarned)} ganados</span>}
+            {pointsSpent > 0 && <span className="text-red-600 font-bold">-{formatNumber(pointsSpent)} gastados</span>}
+          </div>
+        </div>
+      ) : null}
+    </Card>
+  );
+};
+
 const EditableReasonCard = ({ note, logId, onUpdateNote }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(note || '');
@@ -191,7 +257,6 @@ const EditableReasonCard = ({ note, logId, onUpdateNote }) => {
     setIsEditing(false);
   };
 
-  // Estado: No tiene nota y no estamos editando
   if (!note && !isEditing) {
     return (
       <button 
@@ -203,7 +268,6 @@ const EditableReasonCard = ({ note, logId, onUpdateNote }) => {
     );
   }
 
-  // Estado: Editando (ya sea nueva o existente)
   if (isEditing) {
     return (
       <div className="bg-[#fffbeb] border border-[#fde68a] rounded-[14px] p-3 shadow-sm flex flex-col gap-2">
@@ -234,7 +298,6 @@ const EditableReasonCard = ({ note, logId, onUpdateNote }) => {
     );
   }
 
-  // Estado: Mostrando nota existente
   return (
     <div className="bg-[#fffbeb] border border-[#fde68a] rounded-[14px] p-4 shadow-sm group relative">
       <div className="flex justify-between items-center mb-2">
@@ -254,26 +317,25 @@ const EditableReasonCard = ({ note, logId, onUpdateNote }) => {
   );
 };
 
-// ════════════════════════════════════════════
-//  COMPONENTE PRINCIPAL DE RENDERIZADO
-// ════════════════════════════════════════════
-
-export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBIMOS LA FUNCIÓN ACÁ
+export default function LogDetailRenderer({ log, onUpdateNote }) {
   const action = log.action;
   const details = log.details;
 
   if (!details) return <p className="text-slate-400 italic text-sm text-center py-4">Sin detalles registrados.</p>;
-  if (typeof details === 'string') {
+  
+  if (typeof details === 'string' && !['Horario Modificado', 'Sistema Iniciado', 'Venta Eliminada'].includes(action)) {
     return (
       <div className="space-y-4">
         <Card icon="📄" title="Información">
           <Item label="Detalle" value={details} />
         </Card>
+        <EditableReasonCard note={extractRealNote(log)} logId={log.id} onUpdateNote={onUpdateNote} />
       </div>
     );
   }
 
   const validNote = extractRealNote(log);
+  const clientDisplay = getClientDisplay(details);
 
   const getFormattedPayment = (payStr, instNum) => {
     if (typeof payStr !== 'string') return 'Efectivo';
@@ -357,19 +419,6 @@ export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBI
 
     case 'Venta Realizada': {
       const items = details.items || [];
-      let clientDisplay = null;
-      if (details.client && typeof details.client === 'object') {
-        clientDisplay = `${details.client.name || 'Desconocido'} ${details.client.memberNumber && details.client.memberNumber !== '---' ? `#${String(details.client.memberNumber).padStart(4, '0')}` : ''}`.trim();
-      } else if (details.client && typeof details.client === 'string') {
-        clientDisplay = details.client;
-        if (details.memberNumber && details.memberNumber !== '---') {
-          clientDisplay += ` #${String(details.memberNumber).padStart(4, '0')}`;
-        }
-      } else if (details.memberName) {
-        clientDisplay = `${details.memberName} ${details.memberNumber ? `#${String(details.memberNumber).padStart(4, '0')}` : ''}`.trim();
-      }
-      if (clientDisplay === 'No asociado') clientDisplay = null; 
-
       return (
         <div className="space-y-4">
           <Card icon="🛒" title="Productos">
@@ -392,13 +441,15 @@ export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBI
 
           <Card icon="💳" title="Pago">
             <Item label="Método de pago" value={getFormattedPayment(details.payment, details.installments)} />
-            {clientDisplay && <Item label="Cliente" value={clientDisplay} />}
-            {details.pointsEarned > 0 && (
-              <Item label="Puntos ganados">
-                <span className="text-[#059669] font-bold">+{details.pointsEarned} pts</span>
-              </Item>
-            )}
           </Card>
+
+          <MemberImpactCard 
+            clientDisplay={clientDisplay} 
+            pointsChange={details.pointsChange} 
+            pointsEarned={details.pointsEarned} 
+            pointsSpent={details.pointsSpent} 
+          />
+
           <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
@@ -406,8 +457,16 @@ export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBI
 
     case 'Venta Anulada': {
       const items = details.itemsReturned || details.items || [];
+      const paymentMethod = details.payment && details.payment !== 'N/A' ? getFormattedPayment(details.payment, details.installments) : null;
+      
       return (
         <div className="space-y-4">
+          
+          <Card icon="💰" title="Ajuste Financiero">
+             <ChangeRow field="Monto Anulado" oldVal={details.originalTotal || details.total} newVal={0} isPrice={true} />
+             {paymentMethod && <Item label="Método de Pago devuelto" value={paymentMethod} />}
+          </Card>
+
           <Card icon="📦" title="Productos Devueltos al Stock">
             {items.map((item, idx) => (
               <div key={idx} className="flex justify-between items-center px-3 py-2 bg-[#dcfce7] rounded-[9px] text-[11px] border border-[#bbf7d0]">
@@ -421,10 +480,63 @@ export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBI
               </div>
             ))}
           </Card>
-          <div className="bg-[#fffbeb] border border-[#fde68a] rounded-[14px] p-3.5 text-[11px] text-[#b45309] font-medium">
-            ⚠ <strong>Nota:</strong> El stock fue restaurado automáticamente.
-          </div>
+
+          <MemberImpactCard 
+            clientDisplay={clientDisplay} 
+            pointsChange={details.pointsChange} 
+            pointsEarned={details.pointsEarned} 
+            pointsSpent={details.pointsSpent} 
+          />
+
           <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+          <WarnCard>⚠ Se restó el dinero de caja y se devolvieron los productos al inventario.</WarnCard>
+        </div>
+      );
+    }
+
+    case 'Venta Restaurada': {
+      const items = details.itemsRestored || details.items || [];
+      const paymentMethod = details.payment && details.payment !== 'N/A' ? getFormattedPayment(details.payment, details.installments) : null;
+
+      return (
+        <div className="space-y-4">
+          <Card icon="♻️" title="Transacción Restaurada">
+            <Item label="Venta Original">
+              <Badge color="slate">#{details.oldTransactionId || 'S/N'}</Badge>
+            </Item>
+            <Item label="Nuevo ID de Ticket">
+              <Badge color="green">#{details.transactionId || 'S/N'}</Badge>
+            </Item>
+          </Card>
+
+          <Card icon="💰" title="Reingreso Financiero">
+             <ChangeRow field="Monto Recuperado" oldVal={0} newVal={details.total} isPrice={true} />
+             {paymentMethod && <Item label="Ingresado a caja como" value={paymentMethod} />}
+          </Card>
+
+          <Card icon="📦" title="Productos Vueltos a Vender">
+            {items.map((item, idx) => (
+              <div key={idx} className="flex justify-between items-center px-3 py-2 bg-[#fee2e2] rounded-[9px] text-[11px] border border-[#fecaca]">
+                <span className="text-[#dc2626] font-medium flex items-center">
+                  <span className="font-mono text-[9px] font-bold bg-[#dc2626] text-white px-1.5 py-[2px] rounded-[4px] mr-2">
+                    -{item.quantity || item.qty}
+                  </span>
+                  {item.title || item.name || 'Producto'}
+                </span>
+                <span className="text-[#dc2626] font-bold text-[10px] uppercase tracking-wider">Descontado</span>
+              </div>
+            ))}
+          </Card>
+
+          <MemberImpactCard 
+            clientDisplay={clientDisplay} 
+            pointsChange={details.pointsChange} 
+            pointsEarned={details.pointsEarned} 
+            pointsSpent={details.pointsSpent} 
+          />
+
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+          <WarnCard isSuccess={true}>✓ La venta volvió a ser activada. El dinero y el stock ya fueron ajustados.</WarnCard>
         </div>
       );
     }
@@ -447,11 +559,6 @@ export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBI
              <WarnCard>Este es un registro antiguo. No contiene el desglose de productos modificados.</WarnCard>
            </div>
          );
-      }
-
-      let clientDisplay = null;
-      if (details.client) {
-        clientDisplay = `${details.client} ${details.memberNumber && details.memberNumber !== '---' ? `#${String(details.memberNumber).padStart(4, '0')}` : ''}`.trim();
       }
 
       const basePayment = typeof details.payment === 'string' ? details.payment : 'Efectivo';
@@ -525,20 +632,94 @@ export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBI
              )}
           </Card>
 
-          {(clientDisplay || details.pointsChange) && (
-            <Card icon="👤" title="Impacto en el Socio">
-              {clientDisplay && <Item label="Socio vinculado" value={clientDisplay} />}
-              {details.pointsChange && (
-                 <ChangeRow 
-                   field="Puntos de la venta" 
-                   oldVal={`${details.pointsChange.previous} pts`} 
-                   newVal={`${details.pointsChange.new} pts`} 
-                 />
-              )}
+          <MemberImpactCard 
+            clientDisplay={clientDisplay} 
+            pointsChange={details.pointsChange} 
+          />
+
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+    }
+
+    case 'Edición de Puntos': {
+      const pointsData = details.pointsChange || details;
+      
+      return (
+        <div className="space-y-4">
+          <MemberImpactCard 
+            clientDisplay={clientDisplay} 
+            pointsChange={pointsData} 
+          />
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+    }
+
+    case 'Nuevo Socio':
+    case 'Edición de Socio':
+    case 'Baja de Socio': {
+      const isNew = action === 'Nuevo Socio';
+      const isDelete = action === 'Baja de Socio';
+      const memberName = details.name || details.member || null;
+      const memberNumber = details.number ? String(details.number).padStart(4, '0') : null;
+
+      return (
+        <div className="space-y-4">
+          <Card icon="👤" title={isNew ? 'Ficha del Nuevo Socio' : isDelete ? 'Datos del Socio Eliminado' : 'Datos del Socio'}>
+            {memberName && (
+              <Item label="Nombre">
+                <span className={isDelete ? 'line-through text-[#94a3b8]' : ''}>{memberName}</span>
+              </Item>
+            )}
+            {memberNumber && (
+              <Item label="Número">
+                <Badge color="slate">#{memberNumber}</Badge>
+              </Item>
+            )}
+            {details.dni && <Item label="DNI" value={details.dni} />}
+            {details.email && <Item label="Email" value={details.email} />}
+            {details.phone && <Item label="Teléfono" value={details.phone} />}
+            
+            {isDelete && details.points !== undefined && (
+               <Item label="Puntos Perdidos">
+                  <span className="text-[#dc2626] font-bold">{formatNumber(details.points)} pts</span>
+               </Item>
+            )}
+            {isDelete && details.salesCount !== undefined && (
+               <Item label="Compras Históricas" value={`${details.salesCount} operations`} />
+            )}
+
+            {isNew && details.initialPoints !== undefined && (
+              <Item label="Puntos Iniciales">
+                <span className="text-[#059669] font-bold">{formatNumber(details.initialPoints || 0)} pts</span>
+              </Item>
+            )}
+
+            {isNew && (
+              <Item label="Fecha de Registro">
+                 <span className="font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded text-[10px]">
+                    {log.date} · {log.timestamp} hs
+                 </span>
+              </Item>
+            )}
+          </Card>
+
+          {details.changes && Array.isArray(details.changes) && details.changes.length > 0 && (
+            <Card icon="🔄" title="Modificaciones Realizadas">
+              {details.changes.map((change, idx) => (
+                <ChangeRow
+                  key={idx}
+                  field={change.field}
+                  oldVal={change.old || '—'}
+                  newVal={change.new || '—'}
+                />
+              ))}
             </Card>
           )}
 
           <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+          {isDelete && <WarnCard>⚠ El registro del socio fue eliminado permanentemente del sistema.</WarnCard>}
         </div>
       );
     }
@@ -578,7 +759,7 @@ export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBI
               <span className="text-[#059669] font-bold"><FancyPrice amount={details.price} /></span>
             </Item>
             <Item label="Stock Inicial">
-              <Badge color="blue">{details.stock || 0} {details.product_type === 'weight' ? 'g' : 'uds'}</Badge>
+              <Badge color="blue">{formatNumber(details.stock || 0)} {details.product_type === 'weight' ? 'g' : 'uds'}</Badge>
             </Item>
             {details.barcode && details.barcode !== '' && (
               <Item label="Código de Barras" value={details.barcode} />
@@ -632,7 +813,7 @@ export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBI
               <span className="text-[#059669] font-bold"><FancyPrice amount={details.price} /></span>
             </Item>
             <Item label="Stock">
-              <Badge color="blue">{details.stock} {details.product_type === 'weight' ? 'g' : 'uds'}</Badge>
+              <Badge color="blue">{formatNumber(details.stock)} {details.product_type === 'weight' ? 'g' : 'uds'}</Badge>
             </Item>
             {details.product_type && (
               <Item label="Tipo" value={details.product_type === 'weight' ? 'Por peso (kg/g)' : 'Por unidad'} />
@@ -658,7 +839,7 @@ export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBI
               </Item>
             )}
             <Item label="Stock descartado" className="!bg-[#fef2f2] !border-[#fecaca]">
-              <span className="text-[#dc2626] font-bold">{details.stock || 0} {details.product_type === 'weight' ? 'g' : 'unidades'}</span>
+              <span className="text-[#dc2626] font-bold">{formatNumber(details.stock || 0)} {details.product_type === 'weight' ? 'g' : 'unidades'}</span>
             </Item>
           </Card>
           <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
@@ -697,97 +878,6 @@ export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBI
         </div>
       );
 
-    case 'Nuevo Socio':
-    case 'Edición de Puntos':
-    case 'Edición de Socio':
-    case 'Baja de Socio': {
-      const isNew = action === 'Nuevo Socio';
-      const isDelete = action === 'Baja de Socio';
-      const pointsData = details.pointsChange || (action === 'Edición de Puntos' ? details : null);
-      const memberName = details.name || details.member || null;
-      const memberNumber = details.number ? String(details.number).padStart(4, '0') : null;
-
-      return (
-        <div className="space-y-4">
-          <Card icon="👤" title={isNew ? 'Ficha del Nuevo Socio' : isDelete ? 'Datos del Socio Eliminado' : 'Datos del Socio'}>
-            {memberName && (
-              <Item label="Nombre">
-                <span className={isDelete ? 'line-through text-[#94a3b8]' : ''}>{memberName}</span>
-              </Item>
-            )}
-            {memberNumber && (
-              <Item label="Número">
-                <Badge color="slate">#{memberNumber}</Badge>
-              </Item>
-            )}
-            {details.dni && <Item label="DNI" value={details.dni} />}
-            {details.email && <Item label="Email" value={details.email} />}
-            {details.phone && <Item label="Teléfono" value={details.phone} />}
-            
-            {isDelete && details.points !== undefined && (
-               <Item label="Puntos Perdidos">
-                  <span className="text-[#dc2626] font-bold">{details.points} pts</span>
-               </Item>
-            )}
-            {isDelete && details.salesCount !== undefined && (
-               <Item label="Compras Históricas" value={`${details.salesCount} operaciones`} />
-            )}
-
-            {isNew && details.initialPoints !== undefined && (
-              <Item label="Puntos Iniciales">
-                <span className="text-[#059669] font-bold">{details.initialPoints || 0} pts</span>
-              </Item>
-            )}
-
-            {isNew && (
-              <Item label="Fecha de Registro">
-                 <span className="font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded text-[10px]">
-                    {log.date} · {log.timestamp} hs
-                 </span>
-              </Item>
-            )}
-          </Card>
-
-          {pointsData && pointsData.previous !== undefined && (
-            <Card icon="🏆" title="Movimiento de Puntos">
-              <div className="flex items-center gap-[6px] px-[11px] py-[9px] bg-[#f4f6f9] rounded-[9px] border border-[#eaecf1]">
-                <div className="flex-1 text-center">
-                  <div className="text-[9px] text-[#64748b] font-bold uppercase">Anterior</div>
-                  <div className="text-[14px] font-mono text-[#64748b]">{pointsData.previous} pts</div>
-                </div>
-                <div className="flex flex-col items-center text-[#cbd5e1]">
-                  <ArrowRight size={16} />
-                  <span className={`text-[10px] font-bold mt-[2px] ${pointsData.diff > 0 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>
-                    {pointsData.diff > 0 ? '+' : ''}{pointsData.diff}
-                  </span>
-                </div>
-                <div className="flex-1 text-center">
-                  <div className="text-[9px] text-[#a21caf] font-bold uppercase">Actual</div>
-                  <div className="text-[14px] font-mono text-[#1e293b] font-bold">{pointsData.new} pts</div>
-                </div>
-              </div>
-            </Card>
-          )}
-
-          {details.changes && Array.isArray(details.changes) && details.changes.length > 0 && (
-            <Card icon="🔄" title="Modificaciones Realizadas">
-              {details.changes.map((change, idx) => (
-                <ChangeRow
-                  key={idx}
-                  field={change.field}
-                  oldVal={change.old || '—'}
-                  newVal={change.new || '—'}
-                />
-              ))}
-            </Card>
-          )}
-
-          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
-          {isDelete && <WarnCard>⚠ El registro del socio fue eliminado permanentemente del sistema.</WarnCard>}
-        </div>
-      );
-    }
-
     case 'Nuevo Premio':
     case 'Editar Premio':
     case 'Eliminar Premio': {
@@ -802,12 +892,12 @@ export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBI
             {details.description && <Item label="Descripción" value={details.description} />}
             {details.pointsCost !== undefined && (
               <Item label="Costo en Puntos">
-                <Badge color="violet">{details.pointsCost} pts</Badge>
+                <Badge color="violet">{formatNumber(details.pointsCost)} pts</Badge>
               </Item>
             )}
             <Item label="Tipo" value={rewardType} />
             {details.stock !== undefined && (
-              <Item label="Stock Límite" value={`${details.stock} disponibles`} />
+              <Item label="Stock Límite" value={`${formatNumber(details.stock)} disponibles`} />
             )}
           </Card>
           <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
@@ -929,16 +1019,57 @@ export default function LogDetailRenderer({ log, onUpdateNote }) { // ✨ RECIBI
         </div>
       );
 
-    case 'Borrado Permanente':
+    case 'Venta Eliminada': {
+      const txId = typeof details === 'string' ? getTransactionId(details) : details.transactionId;
+      const isTestDel = typeof details === 'object' ? details.isTest : false;
+      const items = typeof details === 'object' && details.items ? details.items : [];
+      const paymentMethod = typeof details === 'object' && details.payment && details.payment !== 'N/A' ? getFormattedPayment(details.payment, details.installments) : null;
+      
       return (
         <div className="space-y-4">
-          <Card icon="🗑️" title="Registro Eliminado">
-            <Item label="Elemento" value={typeof details === 'string' ? details : `ID: ${getTransactionId(details) || 'N/A'}`} />
+          <Card icon="🗑️" title="Registro Eliminado Permanentemente">
+            <Item label="ID de Transacción">
+              <span className="font-mono text-slate-800 font-bold">#{txId || 'N/A'}</span>
+            </Item>
+            {typeof details === 'object' && details.total !== undefined && (
+               <ChangeRow field="Monto Anulado" oldVal={details.total} newVal={0} isPrice={true} />
+            )}
+            {paymentMethod && <Item label="Método de Pago" value={paymentMethod} />}
           </Card>
+
+          {items.length > 0 && (
+            <Card icon="📦" title="Productos Purgados">
+              {items.map((item, idx) => (
+                <div key={idx} className="flex justify-between items-center px-3 py-2 bg-[#f8fafc] rounded-[9px] text-[11px] border border-[#e2e8f0]">
+                  <span className="text-[#64748b] font-medium flex items-center">
+                    <span className="font-mono text-[9px] font-bold bg-[#cbd5e1] text-white px-1.5 py-[2px] rounded-[4px] mr-2">
+                      {item.quantity || item.qty}
+                    </span>
+                    {item.title || item.name || 'Producto'}
+                  </span>
+                  <span className="text-[#94a3b8] font-bold text-[10px] uppercase tracking-wider">Eliminado</span>
+                </div>
+              ))}
+            </Card>
+          )}
+
+          <MemberImpactCard 
+            clientDisplay={clientDisplay} 
+            pointsEarned={typeof details === 'object' ? details.pointsEarned : 0} 
+            pointsSpent={typeof details === 'object' ? details.pointsSpent : 0} 
+          />
+          
+          {isTestDel && (
+             <div className="bg-orange-100 border border-orange-200 rounded-[14px] p-3 text-[11px] text-orange-800 text-center font-bold flex justify-center items-center gap-2">
+                <AlertTriangle size={14} /> Eliminación de Venta de Prueba
+             </div>
+          )}
+          
           <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
-          <WarnCard>⚠ Este registro fue eliminado permanentemente.</WarnCard>
+          <WarnCard>⚠ Este registro y todos sus rastros fueron purgados de la base de datos permanentemente.</WarnCard>
         </div>
       );
+    }
 
     default: {
       return (

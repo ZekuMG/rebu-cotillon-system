@@ -154,7 +154,7 @@ export default function Sidebar({
               onClick={() => { setActiveTab('bulk-editor'); setShowAdminMenu(false); }}
               className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2 border-t border-slate-50"
             >
-              <Percent size={14} /> Edición Masiva (Debug)
+              <Percent size={14} /> Productos
             </button>
           </div>
         )}

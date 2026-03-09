@@ -12,7 +12,7 @@ import { FancyPrice } from '../FancyPrice';
 
 const getTransactionId = (details) => {
   if (!details || typeof details === 'string') return null;
-  const id = details.transactionId || details.id;
+  const id = details.transactionId || details.id || details.oldTransactionId;
   if (!id) return null;
   if (typeof id === 'string' && id.includes('TRX-')) {
     return id.replace('TRX-', '');
@@ -80,7 +80,6 @@ const c = {
   bk: "bg-[#1e293b] text-white",
 };
 
-// ✨ SABUESO MEJORADO 2.0: Prioriza siempre la edición manual, pero mantiene el rescate histórico.
 export const extractRealNote = (log) => {
   if (!log) return null;
   
@@ -97,28 +96,21 @@ export const extractRealNote = (log) => {
     'venta regular', 'salida de dinero', 'sin motivo', 'ajuste manual', 
     'anulación manual', 'registro manual', 'producto nuevo', 'inicio de operaciones', 
     'gasto general', 'ajuste de horario', 'duplicado desde editor', 'gestión catálogo',
-    'actualización de datos'
+    'actualización de datos', 'restauración manual desde el historial', 'limpieza de historial',
+    'eliminación permanente'
   ];
 
-  // 1. PRIMERA PRIORIDAD: ¿El usuario lo editó manualmente recién?
-  // Si log.reason existe y NO es una palabra genérica, lo usamos inmediatamente.
-  // Esto soluciona el problema de que las ediciones retroactivas no se veían.
   if (r && typeof r === 'string' && r.trim() !== '') {
       const cleanR = r.trim();
       const lowerR = cleanR.toLowerCase();
       
-      // Si la nota principal NO es genérica, la devolvemos como verdad absoluta.
       if (!generics.includes(lowerR)) {
-          // Pequeño filtro para gastos: si la nota es igual a la categoría (ej: "Varios"), no la mostramos
           if (!((log.action === 'Nuevo Gasto' || log.action === 'Gasto') && lowerR === (d.category || '').toLowerCase())) {
               return cleanR;
           }
       }
   }
 
-  // 2. SEGUNDA PRIORIDAD: Rescate Histórico Profundo.
-  // Si llegamos acá, significa que log.reason estaba vacío o era una palabra genérica (ej: "Salida de dinero").
-  // Vamos a bucear en los detalles para ver si encontramos algo.
   const candidates = [d.description, d.note, d.reason, d.extraInfo];
 
   for (let c of candidates) {
@@ -217,6 +209,35 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
             <span className={`${s.b} ${c.br}`}>❌ #{txId}</span>
             <div className={s.ss}></div>
             <span style={{ fontSize: '10px', color: '#dc2626', textDecoration: 'line-through' }}><FancyPrice amount={d.originalTotal || d.total || 0} /></span>
+            {(d.pointsEarned > 0 || d.pointsSpent > 0) && <><div className={s.ss}></div><span className={s.se}>👤 Puntos devueltos</span></>}
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
+      case 'Venta Restaurada': {
+        const txId = getTransactionId(d);
+        const oldId = d.oldTransactionId ? ` (Era #${d.oldTransactionId})` : '';
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bg}`}>♻️ #{txId}</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#15803d' }}><FancyPrice amount={d.total || 0} /></span>
+            <div className={s.ss}></div>
+            <span className={s.se} style={{ fontStyle: 'italic' }}>Restaurada{oldId}</span>
+            {(d.pointsEarned > 0 || d.pointsSpent > 0) && <><div className={s.ss}></div><span className={s.se}>👤 Puntos reasignados</span></>}
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
+      // ✨ ACTUALIZADO: NUEVO NOMBRE VENTA ELIMINADA
+      case 'Venta Eliminada': {
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bk}`}>🗑️ Eliminada</span>
+            <div className={s.ss}></div>
+            <span className={s.se}>{typeof d === 'string' ? d : `Ticket #${getTransactionId(d)}`}</span>
             {getLogReasonUI(log)}
           </div>
         );

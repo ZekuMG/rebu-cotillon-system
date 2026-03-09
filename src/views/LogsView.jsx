@@ -10,7 +10,6 @@ import LogDetailModal from '../components/ActionLogs/LogDetailModal';
 
 const LOGS_PER_PAGE = 50;
 
-// ✨ Agregamos onUpdateLogNote a las propiedades que recibe la vista
 export default function LogsView({ dailyLogs, onUpdateLogNote }) {
   
   const formatFullDate = (isoString) => {
@@ -50,8 +49,9 @@ export default function LogsView({ dailyLogs, onUpdateLogNote }) {
   // ===========================================================================
   // 2. HOOK DE LÓGICA
   // ===========================================================================
+  // ✨ Renombramos temporalmente el resultado de sortedLogs a rawSortedLogs
   const {
-    sortedLogs,
+    sortedLogs: rawSortedLogs,
     uniqueActions,
     hasActiveFilters,
     filterDateStart, setFilterDateStart,
@@ -64,6 +64,21 @@ export default function LogsView({ dailyLogs, onUpdateLogNote }) {
     handleSort,
     clearAllFilters
   } = useLogsFilter(processedLogs);
+
+  // ✨ MAGIA ANTI-TEST: Filtramos los tests DESPUÉS del hook, conservando tu lógica original intacta.
+  const sortedLogs = useMemo(() => {
+    const isSearchingTest = filterSearch.toLowerCase().trim() === 'test';
+    
+    return rawSortedLogs.filter(log => {
+       const isTestLog = log.isTest || (log.details && log.details.isTest) || (log.details && log.details.testMarker === 'test');
+       
+       if (isTestLog) {
+           return isSearchingTest; 
+       } else {
+           return !isSearchingTest; 
+       }
+    });
+  }, [rawSortedLogs, filterSearch]);
 
   // ===========================================================================
   // 3. PAGINACIÓN
@@ -88,7 +103,7 @@ export default function LogsView({ dailyLogs, onUpdateLogNote }) {
   // 4. Estado UI Local
   const [selectedLog, setSelectedLog] = useState(null);
 
-  // ✨ Función puente: Guarda en BD y actualiza el modal abierto al mismo tiempo
+  // Función puente: Guarda en BD y actualiza el modal abierto al mismo tiempo
   const handleSaveNote = async (logId, newNote) => {
     if (onUpdateLogNote) {
       await onUpdateLogNote(logId, newNote);
@@ -192,7 +207,7 @@ export default function LogsView({ dailyLogs, onUpdateLogNote }) {
       <LogDetailModal
         selectedLog={selectedLog}
         onClose={() => setSelectedLog(null)}
-        onUpdateNote={handleSaveNote} // ✨ PASAMOS LA FUNCIÓN AL MODAL DE DETALLES
+        onUpdateNote={handleSaveNote} 
       />
     </div>
   );

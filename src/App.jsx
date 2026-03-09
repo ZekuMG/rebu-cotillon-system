@@ -33,7 +33,7 @@ import RewardsView from './views/RewardsView';
 import ReportsHistoryView from './views/ReportsHistoryView';
 import BulkEditorView from './views/BulkEditorView';
 
-// Modales
+// Modales y Componentes de Impresión
 import {
   OpeningBalanceModal,
   ClosingTimeModal,
@@ -52,12 +52,12 @@ import {
   BarcodeDuplicateModal,
 } from './components/AppModals';
 
-// Modales Nuevos
 import { ExpenseModal } from './components/modals/ExpenseModal';
 import { RedemptionModal } from './components/modals/RedemptionModal';
 import { TicketPrintLayout } from './components/TicketPrintLayout';
 import { ClientSelectionModal } from './components/modals/ClientSelectionModal';
 import { TransactionDetailModal } from './components/modals/HistoryModals'; 
+import { ExportPdfLayout } from './components/ExportPdfLayout'; // ✨ NUEVO: Importamos el diseño del PDF
 
 // Hooks
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
@@ -204,8 +204,9 @@ export default function PartySupplyApp() {
               }
           }
 
-          // ✨ NUEVO: Determinamos si fue restaurada leyendo los logs históricos
-          const isRestored = parsedLogs.some(l => l.action === 'Venta Restaurada' && String(l.details?.transactionId) === String(sale.id));
+          const restoreLog = parsedLogs.find(l => l.action === 'Venta Restaurada' && String(l.details?.transactionId) === String(sale.id));
+          const isRestored = !!restoreLog;
+          const restoredAt = restoreLog ? `${restoreLog.date} ${restoreLog.timestamp}` : null;
 
           const saleObj = {
             id: sale.id,
@@ -220,7 +221,8 @@ export default function PartySupplyApp() {
             pointsSpent: sale.points_spent,
             user: sale.user_name || 'Desconocido',
             status: 'completed',
-            isRestored: isRestored 
+            isRestored: isRestored,
+            restoredAt: restoredAt
           };
           saleObj.isTest = isTestRecord(saleObj);
           return saleObj;
@@ -410,6 +412,7 @@ export default function PartySupplyApp() {
   const [isAutoCloseAlertOpen, setIsAutoCloseAlertOpen] = useState(false);
   
   const [ticketToView, setTicketToView] = useState(null);
+  const [exportPdfData, setExportPdfData] = useState(null); // ✨ NUEVO: Estado para almacenar datos del PDF a exportar
 
   const [isDeleteProductModalOpen, setIsDeleteProductModalOpen] = useState(false);
   const [productToDelete, setProductToDelete] = useState(null);
@@ -535,6 +538,33 @@ export default function PartySupplyApp() {
       console.error("Error actualizando nota del log:", err);
       showNotification('error', 'Error', 'No se pudo actualizar la nota en la nube.');
     }
+  };
+
+  // ✨ NUEVO: Manejador para exportar productos
+  const handleExportProducts = (config, items) => {
+    const dateStr = formatDateAR(new Date());
+    const dataToExport = { config, items, date: dateStr };
+    
+    setExportPdfData(dataToExport);
+
+    const logDetails = {
+      type: config.isForClient ? 'Presupuesto' : 'Reporte Interno',
+      clientName: config.clientName || null,
+      itemCount: items.length,
+      snapshot: dataToExport // La foto exacta con los precios de este preciso momento
+    };
+
+    addLog('Productos Exportados', logDetails, 'Exportación de catálogo');
+
+    // Le damos unos milisegundos para que React dibuje el componente oculto antes de disparar la impresión
+    setTimeout(() => {
+      window.print();
+      
+      // Limpiamos el estado después de imprimir para no interrumpir la impresión de tickets futuros
+      setTimeout(() => {
+        setExportPdfData(null);
+      }, 1000);
+    }, 500);
   };
 
   const handleAddExpense = async (expenseData) => {
@@ -1136,7 +1166,7 @@ export default function PartySupplyApp() {
             showCancelButton: true,
             showDenyButton: true,
             confirmButtonColor: '#10b981', 
-            denyButtonColor: '#64748b',    
+            denyButtonColor: '#64748b',   
             cancelButtonColor: '#ef4444',  
             confirmButtonText: 'Sí, generar reporte',
             denyButtonText: 'No, solo cerrar caja',
@@ -1713,8 +1743,12 @@ export default function PartySupplyApp() {
       }
 
       let updatedClientForTicket = null;
+      let pointsChange = null; 
       if (clientId) {
-          const newPoints = posSelectedClient.points - pointsSpent + pointsEarned;
+          const previousPoints = posSelectedClient.points;
+          const newPoints = previousPoints - pointsSpent + pointsEarned;
+          pointsChange = { previous: previousPoints, new: newPoints, diff: newPoints - previousPoints };
+
           await supabase.from('clients').update({ points: newPoints }).eq('id', clientId);
           
           updatedClientForTicket = { ...posSelectedClient, points: newPoints, currentPoints: newPoints };
@@ -1751,11 +1785,16 @@ export default function PartySupplyApp() {
       }));
 
       const isGuest = !posSelectedClient || posSelectedClient.id === 'guest';
+      
       addLog('Venta Realizada', { 
         transactionId: tx.id, total: total, items: logItems,
+        payment: selectedPayment, 
+        installments: selectedPayment === 'Credito' ? installments : 0,
         client: isGuest ? null : posSelectedClient.name,
         memberNumber: isGuest ? null : posSelectedClient.memberNumber,
-        pointsEarned: clientId ? pointsEarned : 0
+        pointsEarned: clientId ? pointsEarned : 0,
+        pointsSpent: pointsSpent,
+        pointsChange: pointsChange 
       }, 'Venta regular');
       
       setSaleSuccessModal(tx);
@@ -1779,45 +1818,69 @@ export default function PartySupplyApp() {
     const tx = transactionToRefund;
     if (!tx) return;
     
-    console.log("=== INICIANDO ANULACIÓN / BORRADO MODO DEBUG ===", tx);
-
     try {
+      // ==========================================
+      // 1. FLUJO DE BORRADO PERMANENTE (PURGA)
+      // ==========================================
       if (tx.status === 'voided') {
         Swal.fire({ title: 'Borrando...', text: 'Eliminando registro permanentemente...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
         
-        // ✨ FIX: Ahora también borramos los logs de restauración para limpiar por completo
-        const { error: logErr } = await supabase
-          .from('logs')
-          .delete()
-          .or(`and(action.eq.Venta Realizada,details->>transactionId.eq.${tx.id}),and(action.eq.Venta Anulada,details->>id.eq.${tx.id}),and(action.eq.Venta Restaurada,details->>transactionId.eq.${tx.id})`);
-        
-        if (logErr) {
-          console.warn("No se pudo borrar el log en la BD (o ya no existía):", logErr);
+        // 🎯 EL FRANCOTIRADOR: Identificamos la Venta Realizada original (y sus restauraciones).
+        const logsToDelete = dailyLogs.filter(l => 
+          ['Venta Realizada', 'Venta Restaurada', 'Modificación Pedido', 'Venta Modificada'].includes(l.action) &&
+          (String(l.details?.transactionId) === String(tx.id) || String(l.details?.id) === String(tx.id) || String(l.details?.oldTransactionId) === String(tx.id))
+        ).map(l => l.id);
+
+        // Disparamos a la base de datos para borrar SOLO los registros de origen
+        if (logsToDelete.length > 0) {
+          const { error: delLogsErr } = await supabase.from('logs').delete().in('id', logsToDelete);
+          if (delLogsErr) console.warn("Error borrando logs antiguos:", delLogsErr);
         }
 
-        setTransactions(transactions.filter(t => String(t.id) !== String(tx.id)));
-        setDailyLogs(dailyLogs.filter(l => {
-          const detailId = l.details?.transactionId || l.details?.id;
-          return String(detailId) !== String(tx.id);
-        }));
+        // Limpiamos nuestra vista local en tiempo real para que desaparezca el "fantasma"
+        setTransactions(prev => prev.filter(t => String(t.id) !== String(tx.id)));
+        setDailyLogs(prev => prev.filter(l => !logsToDelete.includes(l.id)));
         
-        addLog('Borrado Permanente', `Transacción #${tx.id} eliminada por completo`, refundReason || 'Limpieza de historial');
+        const clientName = tx.client?.name || (typeof tx.client === 'string' ? tx.client : null);
+        const clientNum = tx.client?.memberNumber || tx.memberNumber || null;
+
+        // 🌟 CREAMOS EL LOG DE "VENTA ELIMINADA" (Antes llamado Borrado Permanente)
+        addLog('Venta Eliminada', {
+            transactionId: tx.id,
+            total: tx.total,
+            payment: tx.payment,
+            installments: tx.installments || 0,
+            isTest: tx.isTest || false,
+            testMarker: tx.isTest ? 'test' : 'normal',
+            items: tx.items || [],
+            client: clientName === 'No asociado' ? null : clientName,
+            memberNumber: clientNum,
+            pointsEarned: tx.pointsEarned || 0,
+            pointsSpent: tx.pointsSpent || 0
+        }, refundReason || 'Eliminación permanente');
 
         setIsRefundModalOpen(false);
         setTransactionToRefund(null);
         setRefundReason('');
         Swal.close();
-        showNotification('success', 'Registro Borrado', 'La transacción fue eliminada permanentemente del sistema.');
-        return;
+        showNotification('success', 'Registro Borrado', 'La transacción original fue purgada con éxito.');
+        return; 
       }
 
+      // ==========================================
+      // 2. FLUJO DE ANULACIÓN NORMAL
+      // ==========================================
       Swal.fire({ title: 'Anulando...', text: 'Paso 1: Devolviendo stock...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       const updatedInventory = [...inventory];
       for (const item of tx.items) {
-        if (!item.isReward) { 
-          const prodId = item.productId || item.id;
-          const prodIndex = updatedInventory.findIndex(p => String(p.id) === String(prodId));
+        if (!item.isReward && !item.isCustom) { 
+          const prodIndex = updatedInventory.findIndex(p => 
+               (item.productId && String(p.id) === String(item.productId)) || 
+               (item.id && String(p.id) === String(item.id)) ||
+               p.title === item.title
+          );
           if (prodIndex !== -1) {
+            const prodId = updatedInventory[prodIndex].id;
             const qtyToReturn = Number(item.quantity || item.qty || 0);
             const newStock = updatedInventory[prodIndex].stock + qtyToReturn;
             updatedInventory[prodIndex] = { ...updatedInventory[prodIndex], stock: newStock };
@@ -1830,14 +1893,19 @@ export default function PartySupplyApp() {
       setInventory(updatedInventory);
 
       Swal.fire({ title: 'Anulando...', text: 'Paso 2: Ajustando puntos del socio...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
-      const clientMemberNumber = tx.client?.memberNumber || tx.client?.number;
+      const clientMemberNumber = tx.client?.memberNumber || tx.client?.number || tx.memberNumber;
       let updatedMembers = [...members];
+      let pointsChange = null; 
+      
       if (clientMemberNumber && clientMemberNumber !== '---') {
         const clientIndex = updatedMembers.findIndex(m => String(m.memberNumber) === String(clientMemberNumber));
         if (clientIndex !== -1) {
           const dbClient = updatedMembers[clientIndex];
+          const previousPoints = dbClient.points;
           const newPoints = Math.max(0, dbClient.points - (tx.pointsEarned || 0) + (tx.pointsSpent || 0));
+          
           updatedMembers[clientIndex] = { ...dbClient, points: newPoints };
+          pointsChange = { previous: previousPoints, new: newPoints, diff: newPoints - previousPoints };
           
           const { error: clientErr } = await supabase.from('clients').update({ points: newPoints }).eq('id', dbClient.id);
           if (clientErr) throw new Error(`Fallo actualizando puntos: ${clientErr.message}`);
@@ -1854,9 +1922,22 @@ export default function PartySupplyApp() {
       if (saleErr) throw new Error(`Fallo borrando la venta: ${saleErr.message}`);
 
       Swal.fire({ title: 'Anulando...', text: 'Paso 4: Creando el registro final...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      
+      let clientName = null;
+      if (tx.client && typeof tx.client === 'object') clientName = tx.client.name;
+      else if (typeof tx.client === 'string') clientName = tx.client;
+      else if (tx.memberName) clientName = tx.memberName;
+
       const logDetails = {
         id: tx.id,
         total: tx.total,
+        payment: tx.payment,
+        installments: tx.installments || 0,
+        client: clientName === 'No asociado' ? null : clientName,
+        memberNumber: clientMemberNumber,
+        pointsEarned: tx.pointsEarned || 0,
+        pointsSpent: tx.pointsSpent || 0,
+        pointsChange: pointsChange,
         itemsReturned: tx.items.map(i => ({
           title: i.title,
           quantity: i.quantity || i.qty
@@ -1890,8 +1971,7 @@ export default function PartySupplyApp() {
       });
     }
   };
-
-  // ✨ NUEVO: Función para restaurar (re-activar) una venta anulada conservando TODO
+  
   const handleRestoreTransaction = async (tx) => {
     const result = await Swal.fire({
       title: '¿Restaurar Venta?',
@@ -1906,14 +1986,24 @@ export default function PartySupplyApp() {
 
     if (!result.isConfirmed) return;
 
-    // Verificar que todavía haya stock suficiente para restaurarla
     const stockIssues = [];
     for (const item of tx.items) {
       if (!item.isReward && !item.isCustom) {
-        const prod = inventory.find(p => String(p.id) === String(item.productId || item.id));
+        const prod = inventory.find(p => 
+           (item.productId && String(p.id) === String(item.productId)) || 
+           (item.id && String(p.id) === String(item.id)) ||
+           (item.title && p.title === item.title)
+        );
+        
         const qtyNeeded = Number(item.qty || item.quantity || 0);
-        if (!prod || prod.stock < qtyNeeded) {
-            stockIssues.push(`"${item.title}" (Faltan ${qtyNeeded - (prod?.stock || 0)})`);
+        
+        if (!prod) {
+            stockIssues.push(`"${item.title}" (Producto ya no existe en inventario)`);
+        } else {
+            const currentStock = Number(prod.stock || 0);
+            if (currentStock < qtyNeeded) {
+                stockIssues.push(`"${item.title}" (Faltan ${qtyNeeded - currentStock})`);
+            }
         }
       }
     }
@@ -1926,15 +2016,16 @@ export default function PartySupplyApp() {
     Swal.fire({ title: 'Restaurando...', text: 'Ajustando base de datos...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
     try {
-      // Buscar Cliente para asociarle los puntos
       let clientId = null;
       let clientDb = null;
-      if (tx.memberNumber && tx.memberNumber !== '---') {
-          clientDb = members.find(m => String(m.memberNumber) === String(tx.memberNumber));
+      let pointsChange = null; 
+      
+      const clientNumForRestore = tx.client?.memberNumber || tx.memberNumber || null;
+      if (clientNumForRestore && clientNumForRestore !== '---') {
+          clientDb = members.find(m => String(m.memberNumber) === String(clientNumForRestore));
           if (clientDb) clientId = clientDb.id;
       }
 
-      // Re-insertar en BD de Ventas CON LA FECHA ORIGINAL
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       
       let origCreatedAt = undefined;
@@ -1949,7 +2040,7 @@ export default function PartySupplyApp() {
 
       const salePayload = {
           total: tx.total,
-          payment_method: tx.payment,
+          payment_method: (tx.payment && tx.payment !== 'N/A') ? tx.payment : 'Efectivo',
           installments: tx.installments || 0,
           client_id: clientId,
           points_earned: tx.pointsEarned || 0,
@@ -1963,10 +2054,16 @@ export default function PartySupplyApp() {
       const { data: newSale, error: saleErr } = await supabase.from('sales').insert(salePayload).select().single();
       if (saleErr) throw saleErr;
 
-      // Re-insertar Items vendidos
       const itemsPayload = tx.items.map(i => {
-          let prodId = i.productId || i.id;
+          const prod = inventory.find(p => 
+               (i.productId && String(p.id) === String(i.productId)) || 
+               (i.id && String(p.id) === String(i.id)) ||
+               p.title === i.title
+          );
+          
+          let prodId = prod ? prod.id : (i.productId || i.id);
           if (!uuidRegex.test(prodId)) prodId = null; 
+          
           return {
               sale_id: newSale.id, 
               product_id: prodId, 
@@ -1982,13 +2079,16 @@ export default function PartySupplyApp() {
           if (itemsErr) throw itemsErr;
       }
 
-      // Descontar el Stock nuevamente
       const updatedInventory = [...inventory];
       for (const item of tx.items) {
          if (!item.isReward && !item.isCustom) {
-            const prodId = item.productId || item.id;
-            const prodIndex = updatedInventory.findIndex(p => String(p.id) === String(prodId));
+            const prodIndex = updatedInventory.findIndex(p => 
+               (item.productId && String(p.id) === String(item.productId)) || 
+               (item.id && String(p.id) === String(item.id)) ||
+               p.title === item.title
+            );
             if (prodIndex !== -1) {
+               const prodId = updatedInventory[prodIndex].id;
                const qtyToDeduct = Number(item.qty || item.quantity || 0);
                const newStock = updatedInventory[prodIndex].stock - qtyToDeduct;
                updatedInventory[prodIndex] = { ...updatedInventory[prodIndex], stock: newStock };
@@ -1998,30 +2098,49 @@ export default function PartySupplyApp() {
       }
       setInventory(updatedInventory);
 
-      // Restaurar Puntos del Socio
       if (clientDb) {
+          const previousPoints = clientDb.points;
           const newPoints = clientDb.points + (tx.pointsEarned || 0) - (tx.pointsSpent || 0);
+          
+          pointsChange = { previous: previousPoints, new: newPoints, diff: newPoints - previousPoints };
+          
           await supabase.from('clients').update({ points: newPoints }).eq('id', clientDb.id);
           setMembers(members.map(m => m.id === clientDb.id ? { ...m, points: newPoints } : m));
       }
 
-      // Crear Log de Restauración
+      let clientName = null;
+      if (tx.client && typeof tx.client === 'object') clientName = tx.client.name;
+      else if (typeof tx.client === 'string') clientName = tx.client;
+      else if (tx.memberName) clientName = tx.memberName;
+      
+      const clientNum = tx.client?.memberNumber || tx.memberNumber || null;
+
       const logDetails = {
          transactionId: newSale.id, 
          oldTransactionId: tx.id,
          total: tx.total, 
+         payment: salePayload.payment_method,
+         installments: salePayload.installments,
+         client: clientName === 'No asociado' ? null : clientName,
+         memberNumber: clientNum,
+         pointsEarned: tx.pointsEarned || 0,
+         pointsSpent: tx.pointsSpent || 0,
+         pointsChange: pointsChange,
          itemsRestored: tx.items.map(i => ({ title: i.title, quantity: i.qty || i.quantity }))
       };
       
       addLog('Venta Restaurada', logDetails, 'Restauración manual desde el historial');
 
-      // Actualizar UI Local
+      const now = new Date();
       const restoredTx = {
          ...tx,
          id: newSale.id,
          status: 'completed',
          isHistoric: false,
-         isRestored: true 
+         isRestored: true,
+         payment: salePayload.payment_method,
+         installments: salePayload.installments,
+         restoredAt: `${formatDateAR(now)} ${formatTimeFullAR(now)}`
       };
       restoredTx.isTest = isTestRecord(restoredTx);
       
@@ -2245,6 +2364,8 @@ export default function PartySupplyApp() {
       // G. Log
       const logDetails = {
          transactionId: editingTransaction.id, client: cName, memberNumber: cNum,
+         payment: editingTransaction.payment,
+         installments: editingTransaction.installments || 0,
          changes, productChanges, itemsSnapshot: finalItems, pointsChange
       };
       addLog('Modificación Pedido', logDetails, editReason || 'Ajuste manual');
@@ -2336,7 +2457,6 @@ export default function PartySupplyApp() {
     }
   };
 
-  // --- RENDERIZADO LOGIN ---
   if (isCloudLoading) return <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-100"><RefreshCw className="animate-spin text-fuchsia-600 mb-4" size={48} /><h2 className="text-xl font-bold">Cargando Nube...</h2></div>;
 
   if (!currentUser) {
@@ -2366,7 +2486,6 @@ export default function PartySupplyApp() {
       );
     }
     
-    // ✨ BLOQUEO ABSOLUTO: Siempre mostrar pantalla de selección si no hay usuario
     return (
       <div className="flex h-screen items-center justify-center bg-slate-100">
         <div className="bg-white p-6 rounded-xl shadow-xl w-full max-w-xs text-center border">
@@ -2382,159 +2501,132 @@ export default function PartySupplyApp() {
     );
   }
 
-  // --- MAIN LAYOUT ---
+// --- MAIN LAYOUT ---
   return (
-    <div className="flex h-screen bg-slate-100 font-sans text-slate-900 text-sm overflow-hidden">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} currentUser={currentUser} onLogout={handleLogout} />
-      <div className="flex-1 flex flex-col h-full overflow-hidden relative">
-        
-        {/* ✨ BANNER GLOBAL DE ADVERTENCIA DE MODO PRUEBA */}
-        {isTestActive && (
-          <div className="bg-orange-500 text-white text-xs font-bold px-4 py-2.5 flex items-center justify-center gap-2 z-50 shadow-md w-full animate-in slide-in-from-top">
-            <AlertTriangle size={16} />
-            <span>⚠️ Estás usando la palabra "test". Esta acción NO se contabilizará en el sistema y será usada como prueba únicamente.</span>
-          </div>
-        )}
-
-        <header className="bg-white border-b h-14 flex items-center justify-between px-6 shadow-sm z-10 shrink-0">
-      <div className="flex items-center gap-3">
-        <div>
-          <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
-            {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', history: 'Historial de Ventas', rewards: 'Premios', reports: 'Reportes de Caja', logs: 'Registro de Acciones', categories: 'Categorías', 'bulk-editor': 'Edición Masiva' }[activeTab] || activeTab}
-          </h2>
-              <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                <span>Supabase ON</span>
-                <span className="text-slate-300">|</span>
-                <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>              </div>
+    <>
+      {/* TODA LA INTERFAZ NORMAL SE OCULTA AL IMPRIMIR (print:hidden) */}
+      <div className="print:hidden flex h-screen bg-slate-100 font-sans text-slate-900 text-sm overflow-hidden">
+        <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} currentUser={currentUser} onLogout={handleLogout} />
+        <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+          
+          {isTestActive && (
+            <div className="bg-orange-500 text-white text-xs font-bold px-4 py-2.5 flex items-center justify-center gap-2 z-50 shadow-md w-full animate-in slide-in-from-top">
+              <AlertTriangle size={16} />
+              <span>⚠️ Estás usando la palabra "test". Esta acción NO se contabilizará en el sistema y será usada como prueba únicamente.</span>
             </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <button onClick={currentUser?.role === 'admin' ? toggleRegisterStatus : undefined} className={`flex items-center gap-2 px-3 py-1.5 rounded border transition-colors ${isRegisterClosed ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'} ${currentUser?.role === 'admin' ? 'hover:opacity-80 cursor-pointer' : 'cursor-default'}`} title={currentUser?.role !== 'admin' ? 'Solo el Dueño puede cambiar el estado de la caja' : ''}><Lock size={14} /><span className="text-xs font-bold">{isRegisterClosed ? 'CAJA CERRADA' : 'CAJA ABIERTA'}</span></button>
-              {!isRegisterClosed && closingTime && (<div className="flex items-center gap-1 px-2 py-1 bg-amber-50 border border-amber-200 rounded text-amber-700"><Clock size={12} /><span className="text-[10px] font-bold">Cierre: {closingTime}</span></div>)}
-            </div>
-            <div className="text-right hidden sm:block"><p className="text-xs font-bold text-slate-700">{currentUser?.name}</p><span className={`text-[10px] px-2 py-0.5 rounded font-bold ${currentUser?.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>{currentUser?.role === 'admin' ? 'DUEÑO' : 'VENDEDOR'}</span></div>
-          </div>
-        </header>
-        <main className="flex-1 overflow-y-auto p-4 bg-slate-100 relative">
-          {activeTab === 'dashboard' && (
-            <DashboardView 
-              openingBalance={openingBalance} 
-              totalSales={totalSales} 
-              salesCount={salesCount} 
-              currentUser={currentUser} 
-              setTempOpeningBalance={setTempOpeningBalance} 
-              setIsOpeningBalanceModalOpen={setIsOpeningBalanceModalOpen} 
-              transactions={validTransactions} 
-              dailyLogs={dailyLogs} 
-              inventory={inventory}
-              expenses={expenses}
-              onOpenExpenseModal={() => setIsExpenseModalOpen(true)}
-              onAlertClick={handleDashboardAlertClick} 
-              onNavigate={(tab) => setActiveTab(tab)}
-              onViewTransaction={(tx) => setDetailsModalTx(tx)}
-              />
           )}
 
-          {activeTab === 'inventory' && (<InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} />)}
-          {activeTab === 'pos' && (isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{currentUser?.role === 'admin' ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">El Dueño debe abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} />))}
+          <header className="bg-white border-b h-14 flex items-center justify-between px-6 shadow-sm z-10 shrink-0">
+            <div className="flex items-center gap-3">
+              <div>
+                <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
+                  {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', history: 'Historial de Ventas', rewards: 'Premios', reports: 'Reportes de Caja', logs: 'Registro de Acciones', categories: 'Categorías', 'bulk-editor': 'Productos' }[activeTab] || activeTab}
+                </h2>
+                <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                  <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                  <span>Supabase ON</span>
+                  <span className="text-slate-300">|</span>
+                  <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>             
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <button onClick={currentUser?.role === 'admin' ? toggleRegisterStatus : undefined} className={`flex items-center gap-2 px-3 py-1.5 rounded border transition-colors ${isRegisterClosed ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'} ${currentUser?.role === 'admin' ? 'hover:opacity-80 cursor-pointer' : 'cursor-default'}`} title={currentUser?.role !== 'admin' ? 'Solo el Dueño puede cambiar el estado de la caja' : ''}><Lock size={14} /><span className="text-xs font-bold">{isRegisterClosed ? 'CAJA CERRADA' : 'CAJA ABIERTA'}</span></button>
+                {!isRegisterClosed && closingTime && (<div className="flex items-center gap-1 px-2 py-1 bg-amber-50 border border-amber-200 rounded text-amber-700"><Clock size={12} /><span className="text-[10px] font-bold">Cierre: {closingTime}</span></div>)}
+              </div>
+              <div className="text-right hidden sm:block"><p className="text-xs font-bold text-slate-700">{currentUser?.name}</p><span className={`text-[10px] px-2 py-0.5 rounded font-bold ${currentUser?.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>{currentUser?.role === 'admin' ? 'DUEÑO' : 'VENDEDOR'}</span></div>
+            </div>
+          </header>
           
-          {activeTab === 'clients' && (
-            <ClientsView 
-              members={members} 
-              addMember={handleAddMemberWithLog} 
-              updateMember={handleUpdateMemberWithLog} 
-              deleteMember={handleDeleteMemberWithLog} 
-              currentUser={currentUser} 
-              onViewTicket={handleViewTicket} 
-              onEditTransaction={handleEditTransactionRequest} 
-              onDeleteTransaction={handleDeleteTransaction} 
-              transactions={transactions}
-              checkExpirations={() => {}} 
-            />
-          )}
-          
-          {activeTab === 'history' && (
-             <HistoryView 
-                transactions={transactions} 
-                dailyLogs={dailyLogs} 
-                inventory={inventory} 
+          <main className="flex-1 overflow-y-auto p-4 bg-slate-100 relative">
+            {activeTab === 'dashboard' && (
+              <DashboardView 
+                openingBalance={openingBalance} 
+                totalSales={totalSales} 
+                salesCount={salesCount} 
                 currentUser={currentUser} 
-                members={members} 
-                showNotification={showNotification} 
-                onViewTicket={handleViewTicket} 
-                onDeleteTransaction={handleDeleteTransaction} 
-                onEditTransaction={handleEditTransactionRequest} 
-                onRestoreTransaction={handleRestoreTransaction} // ✨ FUNCIÓN DE RESTAURAR 
-                setTransactions={setTransactions} 
-                setDailyLogs={setDailyLogs} 
-             />
-          )}
-          {activeTab === 'rewards' && (<RewardsView rewards={rewards} onAddReward={handleAddReward} onUpdateReward={handleUpdateReward} onDeleteReward={handleDeleteReward} />)}
-          {activeTab === 'reports' && currentUser?.role === 'admin' && (<ReportsHistoryView pastClosures={pastClosures} members={members}/>)}
-          
-          {activeTab === 'logs' && currentUser?.role === 'admin' && (
-             <LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} />
-          )}
-          
-          {activeTab === 'categories' && currentUser?.role === 'admin' && (
-            <CategoryManagerView 
-              categories={categories} 
-              inventory={inventory} 
-              onAddCategory={handleAddCategoryFromView} 
-              onDeleteCategory={handleDeleteCategoryFromView} 
-              onEditCategory={handleEditCategory}
-              onBatchUpdateProductCategory={handleBatchUpdateProductCategory}
-            />
-          )}
-          {activeTab === 'bulk-editor' && currentUser?.role === 'admin' && (
-            <BulkEditorView 
-              inventory={inventory} 
-              categories={categories} 
-              onSaveSingle={handleBulkSaveSingle} 
-              onSaveBulk={handleBulkSaveMasive} 
-            />
-          )}
-        </main>
+                setTempOpeningBalance={setTempOpeningBalance} 
+                setIsOpeningBalanceModalOpen={setIsOpeningBalanceModalOpen} 
+                transactions={validTransactions} 
+                dailyLogs={dailyLogs} 
+                inventory={inventory}
+                expenses={expenses}
+                onOpenExpenseModal={() => setIsExpenseModalOpen(true)}
+                onAlertClick={handleDashboardAlertClick} 
+                onNavigate={(tab) => setActiveTab(tab)}
+                onViewTransaction={(tx) => setDetailsModalTx(tx)}
+                />
+            )}
+            {activeTab === 'inventory' && (<InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} />)}
+            {activeTab === 'pos' && (isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{currentUser?.role === 'admin' ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">El Dueño debe abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} />))}
+            {activeTab === 'clients' && (<ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={() => {}} />)}
+            {activeTab === 'history' && (<HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} members={members} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setDailyLogs} />)}
+            {activeTab === 'rewards' && (<RewardsView rewards={rewards} onAddReward={handleAddReward} onUpdateReward={handleUpdateReward} onDeleteReward={handleDeleteReward} />)}
+            {activeTab === 'reports' && currentUser?.role === 'admin' && (<ReportsHistoryView pastClosures={pastClosures} members={members}/>)}
+            {activeTab === 'logs' && currentUser?.role === 'admin' && (<LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} />)}
+            {activeTab === 'categories' && currentUser?.role === 'admin' && (<CategoryManagerView categories={categories} inventory={inventory} onAddCategory={handleAddCategoryFromView} onDeleteCategory={handleDeleteCategoryFromView} onEditCategory={handleEditCategory} onBatchUpdateProductCategory={handleBatchUpdateProductCategory} />)}
+            {activeTab === 'bulk-editor' && currentUser?.role === 'admin' && (
+              <BulkEditorView 
+                inventory={inventory} 
+                categories={categories} 
+                onSaveSingle={handleBulkSaveSingle} 
+                onSaveBulk={handleBulkSaveMasive} 
+                onExportProducts={handleExportProducts}
+              />
+            )}
+          </main>
+        </div>
       </div>
 
-      {/* --- MODALES --- */}
-      <div className="hidden"><TicketPrintLayout transaction={ticketToView || saleSuccessModal} /></div>
-      <NotificationModal isOpen={notification.isOpen} onClose={closeNotification} type={notification.type} title={notification.title} message={notification.message} />
-      <OpeningBalanceModal isOpen={isOpeningBalanceModalOpen} onClose={() => setIsOpeningBalanceModalOpen(false)} tempOpeningBalance={tempOpeningBalance} setTempOpeningBalance={setTempOpeningBalance} tempClosingTime={tempClosingTime} setTempClosingTime={setTempClosingTime} onSave={handleSaveOpeningBalance} />
-      <ClosingTimeModal isOpen={isClosingTimeModalOpen} onClose={() => setIsClosingTimeModalOpen(false)} closingTime={closingTime} setClosingTime={setClosingTime} onSave={handleSaveClosingTime} />
-      <AddProductModal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setPendingBarcodeForNewProduct(''); }} newItem={newItem} setNewItem={setNewItem} categories={categories} onImageUpload={handleImageUpload} onAdd={handleAddItem} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} />
-      <EditProductModal product={editingProduct} onClose={() => setEditingProduct(null)} setEditingProduct={setEditingProduct} categories={categories} onImageUpload={handleImageUpload} editReason={editReason} setEditReason={setEditReason} onSave={saveEditProduct} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} onDuplicate={handleDuplicateProduct} currentUser={currentUser} />
-      <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} />
-      <ImageModal isOpen={isImageModalOpen} image={selectedImage} onClose={() => setIsImageModalOpen(false)} />
-      <RefundModal  transaction={transactionToRefund}  onClose={() => {   setIsRefundModalOpen(false);   setTransactionToRefund(null);   setRefundReason('');  }}   refundReason={refundReason}  setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />
-      <CloseCashModal isOpen={isClosingCashModalOpen} onClose={() => setIsClosingCashModalOpen(false)} salesCount={cycleSalesCount} totalSales={cycleTotalSales} totalExpenses={cycleTotalExpenses} cashExpenses={cycleCashExpenses} cashSales={cycleCashSales} openingBalance={openingBalance} onConfirm={handleConfirmCloseCash} />
-      <SaleSuccessModal transaction={saleSuccessModal} onClose={() => setSaleSuccessModal(null)} onViewTicket={() => { const tx = saleSuccessModal; setSaleSuccessModal(null); setTicketToView(tx); }} />
-      <TicketModal transaction={ticketToView} onClose={() => setTicketToView(null)} onPrint={handlePrintTicket} />
-      <AutoCloseAlertModal isOpen={isAutoCloseAlertOpen} onClose={() => setIsAutoCloseAlertOpen(false)} closingTime={closingTime} />
-      <DeleteProductModal product={productToDelete} onClose={() => { setIsDeleteProductModalOpen(false); setProductToDelete(null); setDeleteProductReason(''); }} reason={deleteProductReason} setReason={setDeleteProductReason} onConfirm={confirmDeleteProduct} />
-      <BarcodeNotFoundModal isOpen={barcodeNotFoundModal.isOpen} scannedCode={barcodeNotFoundModal.code} onClose={() => setBarcodeNotFoundModal({ isOpen: false, code: '' })} onAddProduct={handleAddProductFromBarcode} />
-      <BarcodeDuplicateModal isOpen={barcodeDuplicateModal.isOpen} existingProduct={barcodeDuplicateModal.existingProduct} onClose={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onKeepExisting={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onReplaceBarcode={handleReplaceDuplicateBarcode} />
-      <ClientSelectionModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} clients={members} addClient={handleAddMemberWithLog} onSelectClient={(client) => setPosSelectedClient(client)} onCancelFlow={() => { setPosSelectedClient({ id: 'guest', name: 'No asociado', memberNumber: '---', points: 0 }); setIsClientModalOpen(false); }} />
-      <RedemptionModal isOpen={isRedemptionModalOpen} onClose={() => setIsRedemptionModalOpen(false)} client={posSelectedClient} rewards={rewards} onRedeem={handleRedeemReward} />
-      <ExpenseModal isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} onSave={handleAddExpense} />
-      
-      <TransactionDetailModal
-        transaction={detailsModalTx}
-        onClose={() => setDetailsModalTx(null)}
-        currentUser={currentUser}
-        members={members}
-        onEditTransaction={(tx) => {
-          setDetailsModalTx(null); 
-          handleEditTransactionRequest(tx); 
-        }}
-        onDeleteTransaction={(tx) => {
-          setDetailsModalTx(null);
-          handleDeleteTransaction(tx);
-        }}
-        onViewTicket={handleViewTicket}
-      />
-    </div>
+      {/* ========================================================================= */}
+      {/* ✨ ZONA DE IMPRESIÓN (SIN LÍMITES DE TAMAÑO, SOLO SE VE AL IMPRIMIR) */}
+      {/* ========================================================================= */}
+      <div className="hidden print:block w-full h-auto bg-white">
+        {exportPdfData ? (
+          <ExportPdfLayout data={exportPdfData} />
+        ) : (
+          <TicketPrintLayout transaction={ticketToView || saleSuccessModal} />
+        )}
+      </div>
+
+      {/* --- MODALES NORMALES DE LA APP (NO SE IMPRIMEN) --- */}
+      <div className="print:hidden">
+        <NotificationModal isOpen={notification.isOpen} onClose={closeNotification} type={notification.type} title={notification.title} message={notification.message} />
+        <OpeningBalanceModal isOpen={isOpeningBalanceModalOpen} onClose={() => setIsOpeningBalanceModalOpen(false)} tempOpeningBalance={tempOpeningBalance} setTempOpeningBalance={setTempOpeningBalance} tempClosingTime={tempClosingTime} setTempClosingTime={setTempClosingTime} onSave={handleSaveOpeningBalance} />
+        <ClosingTimeModal isOpen={isClosingTimeModalOpen} onClose={() => setIsClosingTimeModalOpen(false)} closingTime={closingTime} setClosingTime={setClosingTime} onSave={handleSaveClosingTime} />
+        <AddProductModal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setPendingBarcodeForNewProduct(''); }} newItem={newItem} setNewItem={setNewItem} categories={categories} onImageUpload={handleImageUpload} onAdd={handleAddItem} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} />
+        <EditProductModal product={editingProduct} onClose={() => setEditingProduct(null)} setEditingProduct={setEditingProduct} categories={categories} onImageUpload={handleImageUpload} editReason={editReason} setEditReason={setEditReason} onSave={saveEditProduct} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} onDuplicate={handleDuplicateProduct} currentUser={currentUser} />
+        <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} />
+        <ImageModal isOpen={isImageModalOpen} image={selectedImage} onClose={() => setIsImageModalOpen(false)} />
+        <RefundModal  transaction={transactionToRefund}  onClose={() => {   setIsRefundModalOpen(false);   setTransactionToRefund(null);   setRefundReason('');  }}   refundReason={refundReason}  setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />
+        <CloseCashModal isOpen={isClosingCashModalOpen} onClose={() => setIsClosingCashModalOpen(false)} salesCount={cycleSalesCount} totalSales={cycleTotalSales} totalExpenses={cycleTotalExpenses} cashExpenses={cycleCashExpenses} cashSales={cycleCashSales} openingBalance={openingBalance} onConfirm={handleConfirmCloseCash} />
+        <SaleSuccessModal transaction={saleSuccessModal} onClose={() => setSaleSuccessModal(null)} onViewTicket={() => { const tx = saleSuccessModal; setSaleSuccessModal(null); setTicketToView(tx); }} />
+        <TicketModal transaction={ticketToView} onClose={() => setTicketToView(null)} onPrint={handlePrintTicket} />
+        <AutoCloseAlertModal isOpen={isAutoCloseAlertOpen} onClose={() => setIsAutoCloseAlertOpen(false)} closingTime={closingTime} />
+        <DeleteProductModal product={productToDelete} onClose={() => { setIsDeleteProductModalOpen(false); setProductToDelete(null); setDeleteProductReason(''); }} reason={deleteProductReason} setReason={setDeleteProductReason} onConfirm={confirmDeleteProduct} />
+        <BarcodeNotFoundModal isOpen={barcodeNotFoundModal.isOpen} scannedCode={barcodeNotFoundModal.code} onClose={() => setBarcodeNotFoundModal({ isOpen: false, code: '' })} onAddProduct={handleAddProductFromBarcode} />
+        <BarcodeDuplicateModal isOpen={barcodeDuplicateModal.isOpen} existingProduct={barcodeDuplicateModal.existingProduct} onClose={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onKeepExisting={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onReplaceBarcode={handleReplaceDuplicateBarcode} />
+        <ClientSelectionModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} clients={members} addClient={handleAddMemberWithLog} onSelectClient={(client) => setPosSelectedClient(client)} onCancelFlow={() => { setPosSelectedClient({ id: 'guest', name: 'No asociado', memberNumber: '---', points: 0 }); setIsClientModalOpen(false); }} />
+        <RedemptionModal isOpen={isRedemptionModalOpen} onClose={() => setIsRedemptionModalOpen(false)} client={posSelectedClient} rewards={rewards} onRedeem={handleRedeemReward} />
+        <ExpenseModal isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} onSave={handleAddExpense} />
+        
+        <TransactionDetailModal
+          transaction={detailsModalTx}
+          onClose={() => setDetailsModalTx(null)}
+          currentUser={currentUser}
+          members={members}
+          onEditTransaction={(tx) => {
+            setDetailsModalTx(null); 
+            handleEditTransactionRequest(tx); 
+          }}
+          onDeleteTransaction={(tx) => {
+            setDetailsModalTx(null);
+            handleDeleteTransaction(tx);
+          }}
+          onViewTicket={handleViewTicket}
+        />
+      </div>
+    </>
   );
 }
