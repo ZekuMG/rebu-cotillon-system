@@ -5,6 +5,7 @@ import {
   FileText, X, User, Edit3, ChevronDown, Plus, Trash2
 } from 'lucide-react';
 import { FancyPrice } from '../components/FancyPrice';
+import Swal from 'sweetalert2';
 
 export default function BulkEditorView({ inventory: realInventory, categories, onSaveSingle, onSaveBulk, onExportProducts }) {
   // --- SANDBOX (Inventario Clonado) ---
@@ -25,8 +26,6 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
   // --- Estado de Vista Previa de Exportación ---
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportItems, setExportItems] = useState([]);
-  
-  // ✨ NUEVO: Agregamos documentTitle al estado inicial
   const [exportConfig, setExportConfig] = useState({
     isForClient: true,
     documentTitle: '', 
@@ -36,6 +35,9 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
     columns: { cost: false, price: true, newPrice: false, stock: false },
     clientColumns: { showQty: true, showUnitPrice: true, showSubtotal: false, showTotal: true }
   });
+
+  // --- Estado para el autocompletado de productos extra ---
+  const [focusedTempId, setFocusedTempId] = useState(null);
 
   // --- LÍMITES DE CARGA DIFERIDA ---
   const ITEMS_PER_CHUNK = 30;
@@ -197,9 +199,13 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
   };
 
   const openExportPreview = () => {
-    const itemsToExport = sandboxInventory
+    const customItems = exportItems.filter(item => typeof item.id === 'string' && (item.id.startsWith('temp-') || item.id.includes('-')));
+    
+    const regularItems = sandboxInventory
       .filter(p => selectedIds.includes(p.id))
       .map(p => {
+         const existingItem = exportItems.find(ex => ex.id === p.id);
+         
          let cat = 'Otros';
          if (Array.isArray(p.categories) && p.categories.length > 0) {
            cat = p.categories[0];
@@ -213,15 +219,15 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
            category: cat, 
            cost: getOriginalVal(p, 'purchasePrice'),
            price: getOriginalVal(p, 'price'),
-           newPrice: Number(edits[p.id]?.price) || getOriginalVal(p, 'price'),
+           newPrice: existingItem ? existingItem.newPrice : (Number(edits[p.id]?.price) || getOriginalVal(p, 'price')),
            stock: Number(edits[p.id]?.stock) || getOriginalVal(p, 'stock'),
-           qty: p.product_type === 'weight' ? 1000 : 1, 
+           qty: existingItem ? existingItem.qty : (p.product_type === 'weight' ? 1000 : 1), 
            product_type: p.product_type,
            isTemporary: false
          };
       });
     
-    setExportItems(itemsToExport);
+    setExportItems([...regularItems, ...customItems]);
     setPreviewLimit(ITEMS_PER_CHUNK);
     setIsExportModalOpen(true);
   };
@@ -237,9 +243,53 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
       stock: 0,
       qty: 1,
       product_type: 'quantity',
-      isTemporary: true
+      isTemporary: true,
+      isTitleLocked: false 
     };
     setExportItems(prev => [newItem, ...prev]);
+  };
+
+  const handleSelectProductForTemp = (tempId, product) => {
+    setExportItems(prev => prev.map(item => {
+      if (item.id === tempId) {
+         let cat = 'Otros';
+         if (Array.isArray(product.categories) && product.categories.length > 0) {
+           cat = product.categories[0];
+         } else if (product.category) {
+           cat = product.category.split(',')[0].trim();
+         }
+
+         return {
+           id: `${product.id}-${Date.now()}`, 
+           title: product.title,
+           category: cat,
+           cost: getOriginalVal(product, 'purchasePrice'),
+           price: getOriginalVal(product, 'price'),
+           newPrice: Number(edits[product.id]?.price) || getOriginalVal(product, 'price'),
+           stock: Number(edits[product.id]?.stock) || getOriginalVal(product, 'stock'),
+           qty: product.product_type === 'weight' ? 1000 : 1,
+           product_type: product.product_type,
+           isTemporary: false 
+         };
+      }
+      return item;
+    }));
+    setFocusedTempId(null);
+  };
+
+  const handleSetAsCustomProduct = (tempId) => {
+    setExportItems(prev => prev.map(item => {
+      if (item.id === tempId) {
+         return {
+           ...item,
+           title: item.title.startsWith('*') ? item.title : `* ${item.title || 'Personalizado'}`,
+           category: item.category || 'Adicionales',
+           isTitleLocked: true
+         };
+      }
+      return item;
+    }));
+    setFocusedTempId(null);
   };
 
   const updateExportItemField = (id, field, value) => {
@@ -261,7 +311,40 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
       const cleanItems = exportItems.filter(item => item.title && item.title.trim() !== '');
       onExportProducts(exportConfig, cleanItems);
     }
+    setExportItems([]);
+    setSelectedIds([]);
     setIsExportModalOpen(false);
+  };
+
+  const handleClearPreview = async () => {
+    const totalItems = exportItems.length;
+
+    if (totalItems === 0) return;
+
+    const result = await Swal.fire({
+      title: '¿Querés vaciar el presupuesto?',
+      text: `Hay ${totalItems} ítem(s) en la lista. Se borrarán para empezar desde cero.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#ef4444',
+      cancelButtonColor: '#64748b',
+      confirmButtonText: 'Sí, vaciar todo',
+      cancelButtonText: 'No, cancelar',
+      reverseButtons: true
+    });
+
+    if (result.isConfirmed) {
+      setExportItems([]); 
+      setSelectedIds([]); 
+      
+      Swal.fire({
+        title: '¡Vaciado!',
+        text: 'El presupuesto quedó en cero.',
+        icon: 'success',
+        timer: 1500,
+        showConfirmButton: false
+      });
+    }
   };
 
   const getOriginalVal = (p, field) => {
@@ -349,11 +432,10 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
         <div className="pl-3 border-l border-slate-200 flex items-center gap-2">
           <button 
             onClick={openExportPreview}
-            disabled={selectedIds.length === 0}
-            className="bg-indigo-600 text-white px-3 py-1.5 rounded-md font-bold text-xs shadow-md hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center gap-1.5 whitespace-nowrap"
+            className="bg-indigo-600 text-white px-3 py-1.5 rounded-md font-bold text-xs shadow-md hover:bg-indigo-700 transition-colors flex items-center gap-1.5 whitespace-nowrap"
           >
             <FileText size={14} />
-            Generar PDF ({selectedIds.length})
+            Generar Preview {selectedIds.length > 0 ? `(${selectedIds.length})` : (exportItems.length > 0 ? '(*)' : '')}
           </button>
 
           <button 
@@ -525,150 +607,146 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
         </div>
       </div>
 
-      {/* INTERFAZ DE VISTA PREVIA Y EDICIÓN DE CANTIDADES */}
+      {/* ✨ HUD COMPACTO: VISTA PREVIA Y EDICIÓN DE CANTIDADES */}
       {isExportModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6">
-          <div className="bg-slate-100 rounded-2xl shadow-2xl w-full max-w-6xl h-full max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-300">
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-slate-100 rounded-xl shadow-2xl w-full max-w-6xl h-full max-h-[95vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-300">
             
             {/* Modal Header */}
-            <div className="bg-indigo-700 px-6 py-4 flex justify-between items-center text-white shrink-0">
+            <div className="bg-indigo-700 px-4 py-2.5 flex justify-between items-center text-white shrink-0">
               <div>
-                <h3 className="font-bold text-lg flex items-center gap-2">
-                  <FileText size={20} /> Asistente de Exportación PDF
+                <h3 className="font-bold text-base flex items-center gap-2">
+                  <FileText size={18} /> Preview de PDF
                 </h3>
-                <p className="text-indigo-200 text-xs mt-0.5">Revisa la configuración y ajusta las cantidades antes de generar el documento.</p>
               </div>
-              <button onClick={() => setIsExportModalOpen(false)} className="text-indigo-300 hover:text-white transition-colors bg-indigo-800/50 p-2 rounded-lg">
-                <X size={20} />
+              <button onClick={() => setIsExportModalOpen(false)} className="text-indigo-300 hover:text-white transition-colors bg-indigo-800/50 p-1.5 rounded-lg">
+                <X size={18} />
               </button>
             </div>
             
             {/* Modal Body */}
             <div className="flex flex-1 overflow-hidden">
               
-              {/* COLUMNA IZQUIERDA: Configuración */}
-              <div className="w-1/3 bg-white border-r border-slate-200 p-6 flex flex-col overflow-y-auto custom-scrollbar">
+              {/* COLUMNA IZQUIERDA: Configuración (Miniaturizada) */}
+              <div className="w-1/3 bg-white border-r border-slate-200 p-4 flex flex-col overflow-y-auto custom-scrollbar">
                 
-                <h4 className="font-black text-slate-800 uppercase tracking-wider text-xs mb-4 flex items-center gap-2">
-                  <User size={16} className="text-indigo-600"/> Tipo de Documento
+                <h4 className="font-black text-slate-800 uppercase tracking-wider text-[11px] mb-3 flex items-center gap-1.5">
+                  <User size={14} className="text-indigo-600"/> Tipo de Documento
                 </h4>
                 
-                <div className="flex items-center justify-between p-4 bg-slate-50 border border-slate-200 rounded-xl mb-6">
+                <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl mb-4">
                   <div>
-                    <p className="font-bold text-sm text-slate-800">Presupuesto a Cliente</p>
-                    <p className="text-[11px] text-slate-500 leading-tight mt-1">Habilita edición de columnas visuales.</p>
+                    <p className="font-bold text-xs text-slate-800">Presupuesto a Cliente</p>
                   </div>
                   <label className="relative inline-flex items-center cursor-pointer">
                     <input type="checkbox" className="sr-only peer" checked={exportConfig.isForClient} onChange={(e) => setExportConfig({...exportConfig, isForClient: e.target.checked})} />
-                    <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                    <div className="w-9 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
                   </label>
                 </div>
 
                 {exportConfig.isForClient ? (
-                  <div className="space-y-4 animate-in fade-in duration-300">
-                    <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-4 space-y-4">
+                  <div className="space-y-3 animate-in fade-in duration-300">
+                    <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-3 space-y-3">
                       
-                      {/* ✨ NUEVO: Campo para el título del documento */}
                       <div>
-                        <label className="block text-[10px] font-bold text-indigo-800 mb-1.5 uppercase tracking-wider">
-                          Título del Documento (Opcional)
+                        <label className="block text-[9px] font-bold text-indigo-800 mb-1 uppercase tracking-wider">
+                          Título del Documento
                         </label>
                         <input 
                           type="text" 
                           maxLength={30} 
-                          placeholder="Ej: PRESUPUESTO, FACTURA..." 
-                          className="w-full p-2.5 border border-indigo-200 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white font-bold uppercase placeholder:normal-case placeholder:font-normal" 
+                          placeholder="Ej: PRESUPUESTO" 
+                          className="w-full px-2.5 py-1.5 border border-indigo-200 rounded-lg text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white font-bold uppercase placeholder:normal-case placeholder:font-normal" 
                           value={exportConfig.documentTitle} 
                           onChange={(e) => setExportConfig({...exportConfig, documentTitle: e.target.value.toUpperCase()})} 
                         />
                       </div>
 
                       <div>
-                        <label className="block text-[10px] font-bold text-indigo-800 mb-1.5 uppercase tracking-wider">
-                          Nombre del Cliente (Max 40 letras)
+                        <label className="block text-[9px] font-bold text-indigo-800 mb-1 uppercase tracking-wider">
+                          Nombre del Cliente
                         </label>
                         <input 
                           type="text" 
                           maxLength={40} 
-                          placeholder="Ej: Cumpleaños de Sofía" 
-                          className="w-full p-2.5 border border-indigo-200 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
+                          placeholder="Ej: Sofía" 
+                          className="w-full px-2.5 py-1.5 border border-indigo-200 rounded-lg text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
                           value={exportConfig.clientName} 
                           onChange={(e) => setExportConfig({...exportConfig, clientName: e.target.value})} 
                         />
                       </div>
                     </div>
                     
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-4">
-                      {/* Evento primero, luego Teléfono */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-3">
                       <div>
-                        <label className="block text-[10px] font-bold text-slate-600 mb-1.5 uppercase tracking-wider">Detalle del Evento (Max 40 letras)</label>
+                        <label className="block text-[9px] font-bold text-slate-600 mb-1 uppercase tracking-wider">Detalle del Evento</label>
                         <input 
                           type="text" 
                           maxLength={40} 
-                          placeholder="Ej: 15 Años, Temática Neón" 
-                          className="w-full p-2.5 border border-slate-300 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
+                          placeholder="Ej: 15 Años" 
+                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
                           value={exportConfig.clientEvent} 
                           onChange={(e) => setExportConfig({...exportConfig, clientEvent: e.target.value})} 
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-bold text-slate-600 mb-1.5 uppercase tracking-wider">Teléfono (Max 10 números)</label>
+                        <label className="block text-[9px] font-bold text-slate-600 mb-1 uppercase tracking-wider">Teléfono</label>
                         <input 
                           type="text" 
                           maxLength={10} 
                           placeholder="Ej: 1112345678" 
-                          className="w-full p-2.5 border border-slate-300 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
+                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
                           value={exportConfig.clientPhone} 
                           onChange={(e) => setExportConfig({...exportConfig, clientPhone: e.target.value})} 
                         />
                       </div>
                     </div>
 
-                    <div className="mt-6 pt-4 border-t border-slate-200">
-                      <label className="block text-[10px] font-bold text-slate-600 mb-3 uppercase tracking-wider">Información a mostrar en el PDF:</label>
+                    <div className="mt-4 pt-3 border-t border-slate-200">
+                      <label className="block text-[9px] font-bold text-slate-600 mb-2 uppercase tracking-wider">Mostrar en PDF:</label>
                       <div className="grid grid-cols-2 gap-2">
-                        <label className="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 bg-white shadow-sm transition-colors">
-                          <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={exportConfig.clientColumns.showQty} onChange={(e) => setExportConfig({...exportConfig, clientColumns: {...exportConfig.clientColumns, showQty: e.target.checked}})} />
-                          <span className="text-xs font-bold text-slate-700">Cantidades</span>
+                        <label className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 bg-white shadow-sm transition-colors">
+                          <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.clientColumns.showQty} onChange={(e) => setExportConfig({...exportConfig, clientColumns: {...exportConfig.clientColumns, showQty: e.target.checked}})} />
+                          <span className="text-[10px] font-bold text-slate-700">Cantidades</span>
                         </label>
-                        <label className="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 bg-white shadow-sm transition-colors">
-                          <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={exportConfig.clientColumns.showUnitPrice} onChange={(e) => setExportConfig({...exportConfig, clientColumns: {...exportConfig.clientColumns, showUnitPrice: e.target.checked}})} />
-                          <span className="text-xs font-bold text-slate-700">Precio Unitario</span>
+                        <label className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 bg-white shadow-sm transition-colors">
+                          <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.clientColumns.showUnitPrice} onChange={(e) => setExportConfig({...exportConfig, clientColumns: {...exportConfig.clientColumns, showUnitPrice: e.target.checked}})} />
+                          <span className="text-[10px] font-bold text-slate-700">Precio Unitario</span>
                         </label>
-                        <label className="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 bg-white shadow-sm transition-colors">
-                          <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={exportConfig.clientColumns.showSubtotal} onChange={(e) => setExportConfig({...exportConfig, clientColumns: {...exportConfig.clientColumns, showSubtotal: e.target.checked}})} />
-                          <span className="text-xs font-bold text-slate-700">Subtotales</span>
+                        <label className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 bg-white shadow-sm transition-colors">
+                          <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.clientColumns.showSubtotal} onChange={(e) => setExportConfig({...exportConfig, clientColumns: {...exportConfig.clientColumns, showSubtotal: e.target.checked}})} />
+                          <span className="text-[10px] font-bold text-slate-700">Subtotales</span>
                         </label>
-                        <label className="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 bg-white shadow-sm transition-colors">
-                          <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={exportConfig.clientColumns.showTotal} onChange={(e) => setExportConfig({...exportConfig, clientColumns: {...exportConfig.clientColumns, showTotal: e.target.checked}})} />
-                          <span className="text-xs font-bold text-slate-700">Total Final</span>
+                        <label className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 bg-white shadow-sm transition-colors">
+                          <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.clientColumns.showTotal} onChange={(e) => setExportConfig({...exportConfig, clientColumns: {...exportConfig.clientColumns, showTotal: e.target.checked}})} />
+                          <span className="text-[10px] font-bold text-slate-700">Total Final</span>
                         </label>
                       </div>
                     </div>
 
                   </div>
                 ) : (
-                  <div className="space-y-4 animate-in fade-in duration-300">
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
-                      <p className="text-amber-800 text-xs font-medium">Estás exportando un <strong>Reporte Interno</strong>. Solo mostrará la información de catálogo sin agrupar por cliente.</p>
+                  <div className="space-y-3 animate-in fade-in duration-300">
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">
+                      <p className="text-amber-800 text-[10px] font-medium">Estás exportando un <strong>Reporte Interno</strong>.</p>
                     </div>
-                    <label className="block text-[10px] font-bold text-slate-600 mb-2 uppercase tracking-wider">Columnas Visibles en PDF:</label>
-                    <div className="space-y-2">
-                      <label className="flex items-center gap-3 p-3 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 transition-colors bg-white shadow-sm">
-                        <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={exportConfig.columns.cost} onChange={(e) => setExportConfig({...exportConfig, columns: {...exportConfig.columns, cost: e.target.checked}})} />
-                        <span className="text-sm font-bold text-slate-700">Costo Original</span>
+                    <label className="block text-[9px] font-bold text-slate-600 mb-2 uppercase tracking-wider">Columnas Visibles:</label>
+                    <div className="space-y-1.5">
+                      <label className="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 transition-colors bg-white shadow-sm">
+                        <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.columns.cost} onChange={(e) => setExportConfig({...exportConfig, columns: {...exportConfig.columns, cost: e.target.checked}})} />
+                        <span className="text-xs font-bold text-slate-700">Costo Original</span>
                       </label>
-                      <label className="flex items-center gap-3 p-3 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 transition-colors bg-white shadow-sm">
-                        <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={exportConfig.columns.price} onChange={(e) => setExportConfig({...exportConfig, columns: {...exportConfig.columns, price: e.target.checked}})} />
-                        <span className="text-sm font-bold text-slate-700">Precio Original</span>
+                      <label className="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 transition-colors bg-white shadow-sm">
+                        <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.columns.price} onChange={(e) => setExportConfig({...exportConfig, columns: {...exportConfig.columns, price: e.target.checked}})} />
+                        <span className="text-xs font-bold text-slate-700">Precio Original</span>
                       </label>
-                      <label className="flex items-center gap-3 p-3 border border-indigo-200 rounded-lg cursor-pointer hover:bg-indigo-50 transition-colors bg-indigo-50/30 shadow-sm">
-                        <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={exportConfig.columns.newPrice} onChange={(e) => setExportConfig({...exportConfig, columns: {...exportConfig.columns, newPrice: e.target.checked}})} />
-                        <span className="text-sm font-bold text-indigo-900">Precio Editado (Recomendado)</span>
+                      <label className="flex items-center gap-2 p-2 border border-indigo-200 rounded-lg cursor-pointer hover:bg-indigo-50 transition-colors bg-indigo-50/30 shadow-sm">
+                        <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.columns.newPrice} onChange={(e) => setExportConfig({...exportConfig, columns: {...exportConfig.columns, newPrice: e.target.checked}})} />
+                        <span className="text-xs font-bold text-indigo-900">Precio Editado (Rec.)</span>
                       </label>
-                      <label className="flex items-center gap-3 p-3 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 transition-colors bg-white shadow-sm">
-                        <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={exportConfig.columns.stock} onChange={(e) => setExportConfig({...exportConfig, columns: {...exportConfig.columns, stock: e.target.checked}})} />
-                        <span className="text-sm font-bold text-slate-700">Stock Físico Actual</span>
+                      <label className="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 transition-colors bg-white shadow-sm">
+                        <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.columns.stock} onChange={(e) => setExportConfig({...exportConfig, columns: {...exportConfig.columns, stock: e.target.checked}})} />
+                        <span className="text-xs font-bold text-slate-700">Stock Actual</span>
                       </label>
                     </div>
                   </div>
@@ -676,82 +754,139 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
               </div>
 
               {/* COLUMNA DERECHA: Vista Previa */}
-              <div className="w-2/3 bg-slate-100 flex flex-col p-6 overflow-hidden">
-                <div className="flex justify-between items-center mb-4">
-                  <h4 className="font-black text-slate-800 uppercase tracking-wider text-xs flex items-center gap-2">
-                    <Edit3 size={16} className="text-indigo-600"/> 
+              <div className="w-2/3 bg-slate-100 flex flex-col p-4 overflow-hidden">
+                <div className="flex justify-between items-center mb-3">
+                  <h4 className="font-black text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                    <Edit3 size={14} className="text-indigo-600"/> 
                     {exportConfig.isForClient ? 'Ajustar Cantidades del Presupuesto' : 'Resumen de Productos a Exportar'}
                   </h4>
-                  {exportConfig.isForClient && (
+                  <div className="flex items-center gap-2">
                     <button 
-                      onClick={handleAddTemporaryItem}
-                      className="bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-bold text-[10px] px-2.5 py-1.5 rounded flex items-center gap-1 transition-colors uppercase tracking-wider border border-indigo-200 shadow-sm"
+                      onClick={handleClearPreview}
+                      className="bg-white hover:bg-red-50 text-slate-500 hover:text-red-600 font-bold text-[9px] px-2 py-1 rounded flex items-center gap-1 transition-colors uppercase tracking-wider border border-slate-200 hover:border-red-200 shadow-sm"
+                      title="Vaciar todo el presupuesto"
                     >
-                      <Plus size={12} strokeWidth={3} /> Producto Extra
+                      <Trash2 size={10} strokeWidth={3} /> Vaciar
                     </button>
-                  )}
+                    
+                    {exportConfig.isForClient && (
+                      <button 
+                        onClick={handleAddTemporaryItem}
+                        className="bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-bold text-[9px] px-2 py-1 rounded flex items-center gap-1 transition-colors uppercase tracking-wider border border-indigo-200 shadow-sm"
+                      >
+                        <Plus size={10} strokeWidth={3} /> Producto Extra
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="bg-white border border-slate-200 rounded-xl flex-1 overflow-hidden flex flex-col shadow-sm">
-                  {/* SCROLL CONTAINER */}
+                  {/* SCROLL CONTAINER (Tabla Ajustada) */}
                   <div className="overflow-y-auto custom-scrollbar flex-1 relative" onScroll={handlePreviewScroll}>
                     <table className="w-full text-left text-sm">
-                      <thead className="bg-slate-800 text-white sticky top-0 z-10">
+                      <thead className="bg-slate-800 text-white sticky top-0 z-[70]">
                         <tr>
-                          <th className="py-3 px-4 font-bold text-[10px] uppercase tracking-wider">Producto</th>
+                          <th className="py-2 px-3 font-bold text-[9px] uppercase tracking-wider">Producto</th>
                           {exportConfig.isForClient ? (
                             <>
-                              {exportConfig.clientColumns.showUnitPrice && <th className="py-3 px-4 font-bold text-[10px] uppercase tracking-wider text-right w-28">Precio Ud.</th>}
-                              {exportConfig.clientColumns.showQty && <th className="py-3 px-4 font-bold text-[10px] uppercase tracking-wider text-center w-28">Cantidad</th>}
-                              {exportConfig.clientColumns.showSubtotal && <th className="py-3 px-4 font-bold text-[10px] uppercase tracking-wider text-right w-32">Subtotal Visual</th>}
-                              <th className="w-10"></th>
+                              {exportConfig.clientColumns.showUnitPrice && <th className="py-2 px-3 font-bold text-[9px] uppercase tracking-wider text-right w-24">Precio Ud.</th>}
+                              {exportConfig.clientColumns.showQty && <th className="py-2 px-3 font-bold text-[9px] uppercase tracking-wider text-center w-20">Cantidad</th>}
+                              {exportConfig.clientColumns.showSubtotal && <th className="py-2 px-3 font-bold text-[9px] uppercase tracking-wider text-right w-28">Subtotal Visual</th>}
+                              <th className="w-8"></th>
                             </>
                           ) : (
                             <>
-                              <th className="py-3 px-4 font-bold text-[10px] uppercase tracking-wider text-right w-28">Precio Ud.</th>
-                              <th className="w-10"></th>
+                              <th className="py-2 px-3 font-bold text-[9px] uppercase tracking-wider text-right w-24">Precio Ud.</th>
+                              <th className="w-8"></th>
                             </>
                           )}
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
+                      <tbody className="divide-y divide-slate-100 pb-20">
                         {exportItems.slice(0, previewLimit).map((item, idx) => {
                           const isWeight = item.product_type === 'weight';
                           const subtotal = isWeight ? item.newPrice * (item.qty / 1000) : item.newPrice * item.qty;
                           
-                          // ✨ EFECTO CEBRADO: Alternamos color en la vista previa
                           const rowColorClass = idx % 2 !== 0 ? 'bg-slate-50/80' : 'bg-transparent';
 
                           return (
                             <tr key={item.id} className={`hover:bg-slate-100 transition-colors ${rowColorClass}`}>
-                              <td className="py-2.5 px-4">
-                                <div className="flex flex-col gap-1">
-                                  {item.isTemporary ? (
-                                    <input 
-                                      type="text"
-                                      className="w-full p-1 text-xs font-bold border border-slate-300 rounded focus:border-indigo-500 outline-none"
-                                      value={item.title}
-                                      onChange={(e) => updateExportItemField(item.id, 'title', e.target.value)}
-                                      placeholder="Nombre del producto o servicio..."
-                                      autoFocus
-                                    />
+                              <td className="py-1.5 px-3 relative">
+                                <div className="flex flex-col gap-0.5">
+                                  {/* SI ES TEMPORAL Y NO ESTÁ BLOQUEADO */}
+                                  {item.isTemporary && !item.isTitleLocked ? (
+                                    <div className="relative">
+                                      <input 
+                                        type="text"
+                                        className="w-full px-1.5 py-1 text-[11px] font-bold border border-slate-300 rounded focus:border-indigo-500 outline-none shadow-sm"
+                                        value={item.title}
+                                        onChange={(e) => {
+                                          updateExportItemField(item.id, 'title', e.target.value);
+                                          setFocusedTempId(item.id);
+                                        }}
+                                        onFocus={() => setFocusedTempId(item.id)}
+                                        onBlur={() => setTimeout(() => setFocusedTempId(null), 250)}
+                                        placeholder="Nombre del producto o servicio..."
+                                        autoFocus
+                                      />
+                                      {focusedTempId === item.id && item.title.length >= 2 && (
+                                        <ul className="absolute top-full left-0 w-full min-w-[250px] bg-white border border-indigo-200 shadow-2xl rounded-lg mt-1 z-[80] max-h-[160px] overflow-y-auto custom-scrollbar divide-y divide-slate-100">
+                                          {sandboxInventory
+                                            .filter(p => p.title.toLowerCase().includes(item.title.toLowerCase()) || (p.barcode && p.barcode.includes(item.title)))
+                                            .slice(0, 15)
+                                            .map(p => {
+                                              const previewPrice = Number(edits[p.id]?.price) || getOriginalVal(p, 'price');
+                                              return (
+                                                <li
+                                                  key={p.id}
+                                                  className="p-1.5 hover:bg-indigo-50 cursor-pointer flex justify-between items-center transition-colors"
+                                                  onMouseDown={(e) => {
+                                                    e.preventDefault();
+                                                    handleSelectProductForTemp(item.id, p);
+                                                  }}
+                                                >
+                                                  <div className="truncate flex-1 pr-2">
+                                                    <span className="font-bold text-[11px] text-slate-800 block truncate">{p.title}</span>
+                                                    <span className="text-[8px] text-slate-500 uppercase">{p.category}</span>
+                                                  </div>
+                                                  <span className="text-[11px] font-bold text-indigo-600 shrink-0">
+                                                    $<FancyPrice amount={previewPrice} />
+                                                  </span>
+                                                </li>
+                                              )
+                                            })}
+                                          {sandboxInventory.filter(p => p.title.toLowerCase().includes(item.title.toLowerCase()) || (p.barcode && p.barcode.includes(item.title))).length === 0 && (
+                                            <li 
+                                              className="p-1.5 text-[10px] font-bold text-indigo-600 hover:bg-indigo-50 cursor-pointer text-center transition-colors flex items-center justify-center gap-1"
+                                              onMouseDown={(e) => {
+                                                e.preventDefault();
+                                                handleSetAsCustomProduct(item.id);
+                                              }}
+                                            >
+                                              <Plus size={12} /> Fijar personalizado
+                                            </li>
+                                          )}
+                                        </ul>
+                                      )}
+                                    </div>
                                   ) : (
-                                    <div className="flex items-center gap-2">
-                                      <p className="font-bold text-slate-800 text-xs">{item.title}</p>
+                                    /* SI YA SE BLOQUEÓ, SE MUESTRA COMO TEXTO NORMAL */
+                                    <div className="flex items-center gap-1.5">
+                                      <p className="font-bold text-slate-800 text-[11px]">{item.title}</p>
                                       {isWeight && <span className="bg-amber-100 text-amber-700 text-[8px] px-1 rounded font-bold uppercase tracking-widest border border-amber-200 whitespace-nowrap">Por Peso</span>}
                                     </div>
                                   )}
                                   
-                                  {item.isTemporary ? (
+                                  {item.isTemporary && !item.isTitleLocked ? (
                                     <input 
                                       type="text"
-                                      className="w-full max-w-[150px] p-1 text-[9px] font-bold border border-slate-200 rounded outline-none text-slate-500 uppercase"
+                                      className="w-full max-w-[120px] px-1 py-0.5 text-[8px] font-bold border border-slate-200 rounded outline-none text-slate-500 uppercase"
                                       value={item.category}
                                       onChange={(e) => updateExportItemField(item.id, 'category', e.target.value)}
                                       placeholder="Categoría..."
                                     />
                                   ) : (
-                                    <p className="text-[9px] text-slate-400 font-bold uppercase">{item.category}</p>
+                                    <p className="text-[8px] text-slate-400 font-bold uppercase">{item.category}</p>
                                   )}
                                 </div>
                               </td>
@@ -759,59 +894,59 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
                               {exportConfig.isForClient ? (
                                 <>
                                   {exportConfig.clientColumns.showUnitPrice && (
-                                    <td className="py-2.5 px-4 text-right">
+                                    <td className="py-1.5 px-3 text-right">
                                       {item.isTemporary ? (
-                                        <div className="relative inline-block w-24">
-                                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">$</span>
+                                        <div className="relative inline-block w-20">
+                                          <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-400 text-[11px] font-bold">$</span>
                                           <input 
                                             type="number"
-                                            className="no-spinners w-full pl-5 pr-2 py-1 text-xs font-bold border border-slate-300 rounded focus:border-indigo-500 outline-none text-right"
+                                            className="no-spinners w-full pl-4 pr-1.5 py-1 text-[11px] font-bold border border-slate-300 rounded focus:border-indigo-500 outline-none text-right"
                                             value={item.newPrice}
                                             onChange={(e) => updateExportItemField(item.id, 'newPrice', Number(e.target.value) || 0)}
                                           />
                                         </div>
                                       ) : (
                                         <>
-                                          <span className="font-medium text-slate-600 text-xs"><FancyPrice amount={item.newPrice} /></span>
-                                          {isWeight && <span className="block text-[9px] text-slate-400 -mt-0.5">por Kg</span>}
+                                          <span className="font-medium text-slate-600 text-[11px]"><FancyPrice amount={item.newPrice} /></span>
+                                          {isWeight && <span className="block text-[8px] text-slate-400 -mt-0.5">por Kg</span>}
                                         </>
                                       )}
                                     </td>
                                   )}
                                   {exportConfig.clientColumns.showQty && (
-                                    <td className="py-2.5 px-4">
+                                    <td className="py-1.5 px-3">
                                       <div className="flex justify-center items-center">
                                         <input 
                                           type="number"
                                           min="1"
-                                          className="no-spinners w-16 p-1.5 text-center text-xs font-bold border border-slate-300 rounded focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                                          className="no-spinners w-12 p-1 text-center text-[11px] font-bold border border-slate-300 rounded focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
                                           value={item.qty}
                                           onChange={(e) => updateExportItemQty(item.id, e.target.value)}
                                         />
-                                        {isWeight && <span className="ml-1 text-[10px] font-bold text-amber-600">g</span>}
+                                        {isWeight && <span className="ml-1 text-[9px] font-bold text-amber-600">g</span>}
                                       </div>
                                     </td>
                                   )}
                                   {exportConfig.clientColumns.showSubtotal && (
-                                    <td className="py-2.5 px-4 text-right">
-                                      <span className="font-black text-indigo-700 text-sm"><FancyPrice amount={subtotal} /></span>
+                                    <td className="py-1.5 px-3 text-right">
+                                      <span className="font-black text-indigo-700 text-xs"><FancyPrice amount={subtotal} /></span>
                                     </td>
                                   )}
                                 </>
                               ) : (
-                                <td className="py-2.5 px-4 text-right">
-                                  <span className="font-medium text-slate-600 text-xs"><FancyPrice amount={item.newPrice} /></span>
-                                  {isWeight && <span className="block text-[9px] text-slate-400 -mt-0.5">por Kg</span>}
+                                <td className="py-1.5 px-3 text-right">
+                                  <span className="font-medium text-slate-600 text-[11px]"><FancyPrice amount={item.newPrice} /></span>
+                                  {isWeight && <span className="block text-[8px] text-slate-400 -mt-0.5">por Kg</span>}
                                 </td>
                               )}
                               
-                              <td className="py-2.5 px-2 text-center">
+                              <td className="py-1.5 px-1.5 text-center">
                                 <button 
                                   onClick={() => removeExportItem(item.id)} 
-                                  className="p-1.5 rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                                  className="p-1 rounded-md text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors"
                                   title="Quitar de este PDF"
                                 >
-                                  <Trash2 size={16} />
+                                  <Trash2 size={14} />
                                 </button>
                               </td>
                             </tr>
@@ -820,21 +955,25 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
                         
                         {previewLimit < exportItems.length && (
                           <tr>
-                            <td colSpan="5" className="p-3 text-center text-slate-400 text-[10px] font-bold bg-slate-50 flex items-center justify-center gap-2">
-                              <ChevronDown size={14} className="animate-bounce" /> Mostrando {previewLimit} de {exportItems.length}. Baja para ver el resto.
+                            <td colSpan="5" className="p-2 text-center text-slate-400 text-[9px] font-bold bg-slate-50 flex items-center justify-center gap-1.5">
+                              <ChevronDown size={12} className="animate-bounce" /> Mostrando {previewLimit} de {exportItems.length}
                             </td>
                           </tr>
                         )}
                         
+                        {/* Espaciador al final para que el dropdown del último elemento no se corte tanto */}
+                        {exportItems.length > 0 && exportItems[exportItems.length - 1].isTemporary && !exportItems[exportItems.length - 1].isTitleLocked && (
+                          <tr className="h-16 bg-transparent pointer-events-none"><td colSpan="5"></td></tr>
+                        )}
                       </tbody>
                     </table>
                   </div>
                   
                   {/* Fila de Total */}
                   {exportConfig.isForClient && exportConfig.clientColumns.showTotal && (
-                    <div className="bg-slate-50 border-t border-slate-200 p-4 flex justify-between items-center shrink-0">
-                      <span className="font-black text-slate-500 uppercase tracking-widest text-xs">Total del Presupuesto:</span>
-                      <span className="text-2xl font-black text-emerald-600">
+                    <div className="bg-slate-50 border-t border-slate-200 p-3 flex justify-between items-center shrink-0 z-20">
+                      <span className="font-black text-slate-500 uppercase tracking-widest text-[10px]">Total del Presupuesto:</span>
+                      <span className="text-xl font-black text-emerald-600">
                         <FancyPrice amount={exportItems.reduce((acc, item) => acc + (item.product_type === 'weight' ? item.newPrice * (item.qty / 1000) : item.newPrice * item.qty), 0)} />
                       </span>
                     </div>
@@ -844,23 +983,23 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
             </div>
 
             {/* Modal Footer */}
-            <div className="bg-white border-t border-slate-200 p-4 flex justify-between items-center shrink-0">
-              <span className="text-xs font-bold text-slate-400 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
-                {exportItems.length} ítems listos para el PDF
+            <div className="bg-white border-t border-slate-200 p-3 flex justify-between items-center shrink-0 z-20">
+              <span className="text-[11px] font-bold text-slate-400 bg-slate-100 px-2.5 py-1.5 rounded-md border border-slate-200">
+                {exportItems.length} ítems listos
               </span>
-              <div className="flex gap-3">
+              <div className="flex gap-2.5">
                 <button 
                   onClick={() => setIsExportModalOpen(false)}
-                  className="px-5 py-2.5 rounded-lg text-sm font-bold text-slate-600 hover:bg-slate-100 transition-colors"
+                  className="px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors"
                 >
                   Cancelar
                 </button>
                 <button 
                   onClick={handleConfirmExport}
                   disabled={exportItems.length === 0}
-                  className="px-6 py-2.5 rounded-lg text-sm font-black bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-all flex items-center gap-2 shadow-lg shadow-indigo-200 hover:shadow-indigo-300 transform hover:-translate-y-0.5"
+                  className="px-5 py-2 rounded-lg text-xs font-black bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-all flex items-center gap-1.5 shadow-lg shadow-indigo-200 hover:shadow-indigo-300 transform hover:-translate-y-0.5"
                 >
-                  <FileText size={18} /> IMPRIMIR / GUARDAR PDF
+                  <FileText size={16} /> IMPRIMIR / GUARDAR PDF
                 </button>
               </div>
             </div>
