@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 // src/components/ActionLogs/LogDetailRenderer.jsx
 import React, { useState } from 'react';
-import { ArrowRight, CheckCircle, Edit3, Plus, Save, AlertTriangle } from 'lucide-react';
+import { ArrowRight, CheckCircle, Edit3, Plus, Save, AlertTriangle, FileText, Download } from 'lucide-react';
 import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
 import { extractRealNote } from './LogsTable';
@@ -41,81 +41,6 @@ const getClientDisplay = (details) => {
   if (!cName || cName === 'No asociado' || cName === 'Consumidor Final') return null;
   return `${cName} ${cNum && cNum !== '---' ? '#' + String(cNum).padStart(4, '0') : ''}`.trim();
 };
-
-export const getDetailTitle = (action) => {
-  const titles = {
-    'Apertura de Caja': 'Reporte de Apertura',
-    'Cierre de Caja': 'Reporte de Cierre',
-    'Cierre Automático': 'Reporte Automático',
-    'Venta Realizada': 'Detalle de Transacción',
-    'Venta Anulada': 'Anulación de Venta',
-    'Venta Restaurada': 'Restauración de Venta', 
-    'Modificación Pedido': 'Ajuste de Pedido',
-    'Venta Modificada': 'Ajuste de Pedido',
-    'Nuevo Gasto': 'Comprobante de Gasto',
-    'Gasto': 'Comprobante de Gasto',
-    'Alta de Producto': 'Ingreso de Producto',
-    'Edición Producto': 'Modificación de Inventario',
-    'Baja Producto': 'Egreso de Producto',
-    'Producto Duplicado': 'Producto Duplicado',
-    'Nuevo Socio': 'Ficha de Nuevo Socio',
-    'Edición de Socio': 'Actualización de Perfil',
-    'Edición de Puntos': 'Movimiento de Puntos',
-    'Baja de Socio': 'Eliminación de Registro',
-    'Nuevo Premio': 'Alta de Premio',
-    'Editar Premio': 'Edición de Premio',
-    'Eliminar Premio': 'Baja de Premio',
-    'Categoría': 'Gestión de Categorías',
-    'Actualización Masiva': 'Reporte de Cambios Masivos',
-    'Edición Masiva Categorías': 'Reporte de Cambios Masivos',
-    'Horario Modificado': 'Cambio de Horario',
-    'Sistema Iniciado': 'Información del Sistema',
-    'Venta Eliminada': 'Registro Eliminado',
-    'Login': 'Inicio de Sesión'
-  };
-  return titles[action] || 'Detalles del Registro';
-};
-
-export const getDetailIcon = (action) => {
-  const icons = {
-    'Venta Realizada': '🛒', 'Venta Anulada': '❌', 'Venta Restaurada': '♻️',
-    'Modificación Pedido': '📝', 'Venta Modificada': '📝',
-    'Apertura de Caja': '💰', 'Cierre de Caja': '🔒', 'Cierre Automático': '⏰',
-    'Edición Producto': '✏️', 'Alta de Producto': '📦', 'Baja Producto': '🗑️',
-    'Producto Duplicado': '📋',
-    'Categoría': '🏷️', 'Edición Masiva Categorías': '🏷️', 'Actualización Masiva': '🏷️',
-    'Nuevo Socio': '👤', 'Edición de Socio': '👤', 'Edición de Puntos': '🏆', 'Baja de Socio': '👤',
-    'Nuevo Gasto': '📉', 'Gasto': '📉',
-    'Nuevo Premio': '🎁', 'Editar Premio': '🎁', 'Eliminar Premio': '🎁',
-    'Login': '🔑', 'Horario Modificado': '🕐', 'Sistema Iniciado': '⚡',
-    'Venta Eliminada': '🗑️'
-  };
-  return icons[action] || '📄';
-};
-
-export const getDetailColor = (action) => {
-  const colors = {
-    'Venta Realizada': 'green', 'Apertura de Caja': 'green', 'Venta Restaurada': 'green', 
-    'Venta Anulada': 'red', 'Baja Producto': 'red', 'Baja de Socio': 'red', 'Eliminar Premio': 'red', 'Venta Eliminada': 'red', 'Nuevo Gasto': 'red', 'Gasto': 'red',
-    'Alta de Producto': 'blue', 'Edición Producto': 'blue', 'Producto Duplicado': 'blue',
-    'Nuevo Socio': 'blue', 'Edición de Socio': 'blue', 
-    'Edición de Puntos': 'violet', 'Nuevo Premio': 'violet', 'Editar Premio': 'violet',
-    'Modificación Pedido': 'amber', 'Venta Modificada': 'amber', 'Categoría': 'amber', 'Actualización Masiva': 'amber', 'Edición Masiva Categorías': 'amber', 'Horario Modificado': 'amber',
-    'Cierre de Caja': 'slate', 'Cierre Automático': 'slate', 'Login': 'slate', 'Sistema Iniciado': 'slate'
-  };
-  return colors[action] || 'slate';
-};
-
-export const ACTION_GROUPS = [
-  { label: '💰 Caja', actions: ['Apertura de Caja', 'Cierre de Caja', 'Cierre Automático'] },
-  { label: '🛒 Ventas', actions: ['Venta Realizada', 'Venta Anulada', 'Venta Restaurada', 'Venta Modificada', 'Venta Eliminada'] }, 
-  { label: '📉 Gastos', actions: ['Nuevo Gasto'] },
-  { label: '📦 Productos', actions: ['Alta de Producto', 'Edición Producto', 'Baja Producto', 'Producto Duplicado'] },
-  { label: '👤 Socios', actions: ['Nuevo Socio', 'Edición de Socio', 'Edición de Puntos', 'Baja de Socio'] },
-  { label: '🎁 Premios', actions: ['Nuevo Premio', 'Editar Premio', 'Eliminar Premio'] },
-  { label: '🏷️ Categorías', actions: ['Categoría', 'Actualización Masiva', 'Edición Masiva Categorías'] },
-  { label: '⚙️ Sistema', actions: ['Login', 'Horario Modificado', 'Sistema Iniciado'] }
-];
 
 // ════════════════════════════════════════════
 //  SUB-COMPONENTES REUTILIZABLES
@@ -176,7 +101,8 @@ const Badge = ({ color, children }) => {
     fuchsia: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200',
     violet: 'bg-violet-100 text-violet-700 border-violet-200',
     amber: 'bg-amber-100 text-amber-700 border-amber-200',
-    slate: 'bg-slate-100 text-slate-600 border-slate-200'
+    slate: 'bg-slate-100 text-slate-600 border-slate-200',
+    indigo: 'bg-indigo-100 text-indigo-700 border-indigo-200' // ✨ Agregado Indigo
   };
   return (
     <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-bold border ${classes[color] || classes.slate}`}>
@@ -317,7 +243,8 @@ const EditableReasonCard = ({ note, logId, onUpdateNote }) => {
   );
 };
 
-export default function LogDetailRenderer({ log, onUpdateNote }) {
+// ✨ RECIBIMOS onReprintPdf ACÁ
+export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
   const action = log.action;
   const details = log.details;
 
@@ -356,6 +283,59 @@ export default function LogDetailRenderer({ log, onUpdateNote }) {
   };
 
   switch (action) {
+    
+    // ==============================================
+    // CASO: EXPORTACIÓN PDF
+    // ==============================================
+    case 'Exportación PDF': {
+      // Leemos el config que está ADENTRO del snapshot
+      const snap = details.snapshot || {};
+      const config = snap.config || {};
+      
+      const isClient = config.isForClient;
+      const itemsCount = details.itemCount || (snap.items ? snap.items.length : 0);
+      const displayTitle = (config.documentTitle || 'PRESUPUESTO').toUpperCase();
+      
+      return (
+        <div className="space-y-4">
+          
+          <button 
+            onClick={() => onReprintPdf && onReprintPdf(details)}
+            className="w-full flex flex-col items-center justify-center gap-2 p-5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-[14px] shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-0.5 border border-indigo-500 group"
+          >
+            <Download size={28} className="group-hover:scale-110 transition-transform duration-300" />
+            <div className="text-center">
+              <span className="block font-black text-sm uppercase tracking-wider mb-1">Volver a Descargar PDF</span>
+              <span className="text-[10px] text-indigo-200 font-medium">Recrea el documento exactamente como fue generado</span>
+            </div>
+          </button>
+
+          <Card icon="📄" title="Datos del Documento Generado">
+            <Item label="Tipo de Documento">
+              <Badge color={isClient ? 'indigo' : 'slate'}>
+                {isClient ? 'Presupuesto a Cliente' : 'Reporte Interno'}
+              </Badge>
+            </Item>
+            
+            {isClient && (
+              <>
+                <Item label="Título" value={displayTitle} />
+                <Item label="Cliente" value={config.clientName || 'Sin especificar'} />
+                <Item label="Evento" value={config.clientEvent || 'Sin especificar'} />
+              </>
+            )}
+            
+            <Item label="Cantidad de Ítems">
+              <span className="font-bold text-slate-800">{itemsCount} productos</span>
+            </Item>
+          </Card>
+
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+    }
+
+    // ==============================================
 
     case 'Apertura de Caja':
       return (

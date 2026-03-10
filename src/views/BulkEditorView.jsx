@@ -25,8 +25,11 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
   // --- Estado de Vista Previa de Exportación ---
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportItems, setExportItems] = useState([]);
+  
+  // ✨ NUEVO: Agregamos documentTitle al estado inicial
   const [exportConfig, setExportConfig] = useState({
     isForClient: true,
+    documentTitle: '', 
     clientName: '',
     clientPhone: '',
     clientEvent: '',
@@ -212,7 +215,7 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
            price: getOriginalVal(p, 'price'),
            newPrice: Number(edits[p.id]?.price) || getOriginalVal(p, 'price'),
            stock: Number(edits[p.id]?.stock) || getOriginalVal(p, 'stock'),
-           qty: 1, 
+           qty: p.product_type === 'weight' ? 1000 : 1, 
            product_type: p.product_type,
            isTemporary: false
          };
@@ -563,30 +566,40 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
 
                 {exportConfig.isForClient ? (
                   <div className="space-y-4 animate-in fade-in duration-300">
-                    <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-4">
-                      <label className="block text-[10px] font-bold text-indigo-800 mb-1.5 uppercase tracking-wider">Nombre del Cliente (Max 40 letras)</label>
-                      <input 
-                        type="text" 
-                        maxLength={40} 
-                        placeholder="Ej: Cumpleaños de Sofía" 
-                        className="w-full p-2.5 border border-indigo-200 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
-                        value={exportConfig.clientName} 
-                        onChange={(e) => setExportConfig({...exportConfig, clientName: e.target.value})} 
-                      />
+                    <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-4 space-y-4">
+                      
+                      {/* ✨ NUEVO: Campo para el título del documento */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-indigo-800 mb-1.5 uppercase tracking-wider">
+                          Título del Documento (Opcional)
+                        </label>
+                        <input 
+                          type="text" 
+                          maxLength={30} 
+                          placeholder="Ej: PRESUPUESTO, FACTURA..." 
+                          className="w-full p-2.5 border border-indigo-200 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white font-bold uppercase placeholder:normal-case placeholder:font-normal" 
+                          value={exportConfig.documentTitle} 
+                          onChange={(e) => setExportConfig({...exportConfig, documentTitle: e.target.value.toUpperCase()})} 
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-indigo-800 mb-1.5 uppercase tracking-wider">
+                          Nombre del Cliente (Max 40 letras)
+                        </label>
+                        <input 
+                          type="text" 
+                          maxLength={40} 
+                          placeholder="Ej: Cumpleaños de Sofía" 
+                          className="w-full p-2.5 border border-indigo-200 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
+                          value={exportConfig.clientName} 
+                          onChange={(e) => setExportConfig({...exportConfig, clientName: e.target.value})} 
+                        />
+                      </div>
                     </div>
                     
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-4">
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-600 mb-1.5 uppercase tracking-wider">Teléfono (Max 10 números)</label>
-                        <input 
-                          type="text" 
-                          maxLength={10} 
-                          placeholder="Ej: 1112345678" 
-                          className="w-full p-2.5 border border-slate-300 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
-                          value={exportConfig.clientPhone} 
-                          onChange={(e) => setExportConfig({...exportConfig, clientPhone: e.target.value})} 
-                        />
-                      </div>
+                      {/* Evento primero, luego Teléfono */}
                       <div>
                         <label className="block text-[10px] font-bold text-slate-600 mb-1.5 uppercase tracking-wider">Detalle del Evento (Max 40 letras)</label>
                         <input 
@@ -596,6 +609,17 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
                           className="w-full p-2.5 border border-slate-300 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
                           value={exportConfig.clientEvent} 
                           onChange={(e) => setExportConfig({...exportConfig, clientEvent: e.target.value})} 
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 mb-1.5 uppercase tracking-wider">Teléfono (Max 10 números)</label>
+                        <input 
+                          type="text" 
+                          maxLength={10} 
+                          placeholder="Ej: 1112345678" 
+                          className="w-full p-2.5 border border-slate-300 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
+                          value={exportConfig.clientPhone} 
+                          onChange={(e) => setExportConfig({...exportConfig, clientPhone: e.target.value})} 
                         />
                       </div>
                     </div>
@@ -691,12 +715,15 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {exportItems.slice(0, previewLimit).map(item => {
+                        {exportItems.slice(0, previewLimit).map((item, idx) => {
                           const isWeight = item.product_type === 'weight';
                           const subtotal = isWeight ? item.newPrice * (item.qty / 1000) : item.newPrice * item.qty;
+                          
+                          // ✨ EFECTO CEBRADO: Alternamos color en la vista previa
+                          const rowColorClass = idx % 2 !== 0 ? 'bg-slate-50/80' : 'bg-transparent';
 
                           return (
-                            <tr key={item.id} className="hover:bg-slate-50 transition-colors">
+                            <tr key={item.id} className={`hover:bg-slate-100 transition-colors ${rowColorClass}`}>
                               <td className="py-2.5 px-4">
                                 <div className="flex flex-col gap-1">
                                   {item.isTemporary ? (

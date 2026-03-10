@@ -97,7 +97,7 @@ export const extractRealNote = (log) => {
     'anulación manual', 'registro manual', 'producto nuevo', 'inicio de operaciones', 
     'gasto general', 'ajuste de horario', 'duplicado desde editor', 'gestión catálogo',
     'actualización de datos', 'restauración manual desde el historial', 'limpieza de historial',
-    'eliminación permanente'
+    'eliminación permanente', 'exportación de catálogo'
   ];
 
   if (r && typeof r === 'string' && r.trim() !== '') {
@@ -113,9 +113,9 @@ export const extractRealNote = (log) => {
 
   const candidates = [d.description, d.note, d.reason, d.extraInfo];
 
-  for (let c of candidates) {
-     if (typeof c === 'string' && c.trim() !== '') {
-         const clean = c.trim();
+  for (let cand of candidates) {
+     if (typeof cand === 'string' && cand.trim() !== '') {
+         const clean = cand.trim();
          const lower = clean.toLowerCase();
          if (!generics.includes(lower)) {
              if ((log.action === 'Nuevo Gasto' || log.action === 'Gasto') && lower === (d.category || '').toLowerCase()) continue;
@@ -152,6 +152,34 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
     }
 
     switch (action) {
+
+      // ✨ NUEVO CASO: EXPORTACIÓN PDF
+      case 'Exportación PDF': {
+        const snap = d.snapshot || {};
+        const config = snap.config || {};
+        
+        const isClient = config.isForClient;
+        const itemsCount = d.itemCount || (snap.items ? snap.items.length : 0);
+        const displayTitle = (config.documentTitle || 'PRESUPUESTO').toUpperCase();
+        
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.br}`}>📄 PDF</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#1e293b' }}>{displayTitle}</span>
+            <div className={s.ss}></div>
+            {isClient && config.clientName && (
+               <><span className={s.se}>👤 {config.clientName}</span><div className={s.ss}></div></>
+            )}
+            {isClient && config.clientEvent && (
+               <><span className={s.se}>🎉 {config.clientEvent}</span><div className={s.ss}></div></>
+            )}
+            <span className={`${s.b} ${c.bs}`}>{itemsCount} ítems</span>
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
       case 'Venta Realizada': {
         const txId = getTransactionId(d);
         const items = d.items || [];
@@ -231,7 +259,6 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
         );
       }
 
-      // ✨ ACTUALIZADO: NUEVO NOMBRE VENTA ELIMINADA
       case 'Venta Eliminada': {
         return (
           <div className={s.sr}>
@@ -533,6 +560,6 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
           )}
         </tbody>
       </table>
-    </div>
+    </div> 
   );
 }

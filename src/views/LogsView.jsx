@@ -10,7 +10,8 @@ import LogDetailModal from '../components/ActionLogs/LogDetailModal';
 
 const LOGS_PER_PAGE = 50;
 
-export default function LogsView({ dailyLogs, onUpdateLogNote }) {
+// ✨ NUEVO: Agregamos onReprintPdf en los props
+export default function LogsView({ dailyLogs, onUpdateLogNote, onReprintPdf }) {
   
   const formatFullDate = (isoString) => {
     if (!isoString) return '--/--/---- --:--';
@@ -49,7 +50,6 @@ export default function LogsView({ dailyLogs, onUpdateLogNote }) {
   // ===========================================================================
   // 2. HOOK DE LÓGICA
   // ===========================================================================
-  // ✨ Renombramos temporalmente el resultado de sortedLogs a rawSortedLogs
   const {
     sortedLogs: rawSortedLogs,
     uniqueActions,
@@ -65,7 +65,7 @@ export default function LogsView({ dailyLogs, onUpdateLogNote }) {
     clearAllFilters
   } = useLogsFilter(processedLogs);
 
-  // ✨ MAGIA ANTI-TEST: Filtramos los tests DESPUÉS del hook, conservando tu lógica original intacta.
+  // MAGIA ANTI-TEST: Filtramos los tests DESPUÉS del hook
   const sortedLogs = useMemo(() => {
     const isSearchingTest = filterSearch.toLowerCase().trim() === 'test';
     
@@ -207,7 +207,8 @@ export default function LogsView({ dailyLogs, onUpdateLogNote }) {
       <LogDetailModal
         selectedLog={selectedLog}
         onClose={() => setSelectedLog(null)}
-        onUpdateNote={handleSaveNote} 
+        onUpdateNote={handleSaveNote}
+        onReprintPdf={onReprintPdf} /* ✨ NUEVO: Pasamos la orden al modal */
       />
     </div>
   );

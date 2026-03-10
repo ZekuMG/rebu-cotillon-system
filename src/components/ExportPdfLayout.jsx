@@ -11,12 +11,6 @@ const formatCurrency = (amount) => {
   }).format(amount || 0);
 };
 
-// Límite estricto dinámico
-const limitText = (text, limit = 40) => {
-  if (!text) return '-';
-  return text.length > limit ? text.substring(0, limit) + '...' : text;
-};
-
 export const ExportPdfLayout = ({ data }) => {
   if (!data) return null;
 
@@ -45,6 +39,8 @@ export const ExportPdfLayout = ({ data }) => {
   if (clientCols.showUnitPrice) activeColsCount++;
   if (clientCols.showSubtotal) activeColsCount++;
 
+  const displayTitle = (config.documentTitle || 'PRESUPUESTO').toUpperCase();
+
   return (
     <div className="bg-white text-black w-full max-w-[210mm] mx-auto text-sm print:p-0 print:max-w-none relative min-h-screen overflow-hidden">
       
@@ -54,120 +50,141 @@ export const ExportPdfLayout = ({ data }) => {
           src={logoImg} 
           alt="Watermark" 
           className="w-[80%] max-w-[600px] object-contain opacity-[0.04]"
-          style={{ WebkitPrintColorAdjust: 'exact' }} 
+          style={{ WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }} 
         />
       </div>
 
-      {/* Contenido principal */}
-      <div className="relative z-10 w-full bg-transparent">
+      <div className="relative z-10 w-full bg-transparent px-2">
         {isClient ? (
           <div className="block w-full">
             
             {/* ENCABEZADO */}
-            <div className="mb-6 border-b-2 border-slate-800 flex justify-between items-end px-4">
+            <div className="mb-4 border-b-2 border-slate-800 flex justify-between items-end pb-2">
               
-              {/* IZQUIERDA: Grilla de Tarjetas Adaptable (No infinita) */}
-              <div className="w-full max-w-[380px] mb-4 grid grid-cols-2 gap-3 ml-2">
+              {/* IZQUIERDA: Título y Datos */}
+              <div className="flex flex-col w-full max-w-[420px]">
                 
-                {/* Tarjeta: Cliente (Límite 40) */}
-                <div 
-                  className="col-span-2 border border-slate-200 rounded-lg p-2.5 flex flex-col justify-center shadow-sm"
-                  style={{ backgroundColor: '#f8fafc', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}
+                <h1 
+                  className="text-2xl font-black tracking-[0.2em] text-slate-800 mb-3"
+                  style={{ fontFamily: 'Calibri, sans-serif' }}
                 >
-                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-0.5">Cliente</span>
-                  <span className="text-[13px] font-black text-slate-800">{limitText(config.clientName, 40)}</span>
-                </div>
+                  {displayTitle}
+                </h1>
 
-                {/* Tarjeta: Teléfono (Límite 10) */}
-                <div 
-                  className="border border-slate-200 rounded-lg p-2.5 flex flex-col justify-center shadow-sm"
-                  style={{ backgroundColor: '#f8fafc', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}
-                >
-                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-0.5">Teléfono</span>
-                  <span className="text-[13px] font-black text-slate-800">{limitText(config.clientPhone, 10)}</span>
-                </div>
+                <div className="space-y-3" style={{ fontFamily: 'Calibri, sans-serif' }}>
+                  <div className="flex gap-4">
+                    <div className="flex flex-col flex-1">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-[2px]">Cliente</span>
+                      <span className="text-[13px] leading-tight font-black text-slate-800 border-b border-slate-300 min-h-[17px]">
+                        {config.clientName || ''}
+                      </span>
+                    </div>
+                    <div className="flex flex-col w-[150px]">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-[2px]">Fecha y Hora</span>
+                      <span className="text-[13px] leading-tight font-black text-slate-800 border-b border-slate-300 min-h-[17px]">
+                        {date} - {time} hs
+                      </span>
+                    </div>
+                  </div>
 
-                {/* Tarjeta: Fecha y Hora */}
-                <div 
-                  className="border border-slate-200 rounded-lg p-2.5 flex flex-col justify-center shadow-sm"
-                  style={{ backgroundColor: '#f8fafc', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}
-                >
-                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-0.5">Fecha y Hora</span>
-                  <span className="text-[13px] font-black text-slate-800">{date} - {time} hs</span>
+                  <div className="flex gap-4">
+                    <div className="flex flex-col flex-1">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-[2px]">Evento</span>
+                      <span className="text-[13px] leading-tight font-black text-slate-800 border-b border-slate-300 min-h-[17px]">
+                        {config.clientEvent || ''}
+                      </span>
+                    </div>
+                    <div className="flex flex-col w-[130px]">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-[2px]">Teléfono</span>
+                      <span className="text-[13px] leading-tight font-black text-slate-800 border-b border-slate-300 min-h-[17px]">
+                        {config.clientPhone || ''}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-
-                {/* Tarjeta: Evento (Límite 40) */}
-                <div 
-                  className="col-span-2 border border-slate-200 rounded-lg p-2.5 flex flex-col justify-center shadow-sm"
-                  style={{ backgroundColor: '#f8fafc', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}
-                >
-                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-0.5">Evento</span>
-                  <span className="text-[13px] font-black text-slate-800">{limitText(config.clientEvent, 40)}</span>
-                </div>
-
               </div>
 
-              {/* DERECHA: Logo tocando la línea negra */}
-              <div className="shrink-0 flex items-end justify-end w-[160px] mr-2">
+              {/* DERECHA: Logo apoyado en la línea */}
+              <div className="shrink-0 flex items-end justify-end">
                 <img 
                   src={logoImg} 
                   alt="REBU Cotillón" 
-                  className="h-[170px] w-auto object-contain -mb-[2px]" 
-                  style={{ WebkitPrintColorAdjust: 'exact' }} 
+                  className="h-[175px] w-auto object-contain -mb-[2px]" 
+                  style={{ WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }} 
                 />
               </div>
             </div>
 
-            {/* Tabla de Productos */}
+            {/* TABLA DE PRODUCTOS */}
             <table className="w-full border-collapse mb-6 text-sm">
               <thead className="table-header-group">
                 <tr className="bg-slate-100 border-y-2 border-slate-800">
-                  <th className="text-left py-2 px-3 font-bold uppercase tracking-wider">Producto</th>
-                  {clientCols.showQty && <th className="text-center py-2 px-3 font-bold uppercase tracking-wider w-24">Cant.</th>}
-                  {clientCols.showUnitPrice && <th className="text-right py-2 px-3 font-bold uppercase tracking-wider w-36">Precio Unit.</th>}
-                  {clientCols.showSubtotal && <th className="text-right py-2 px-3 font-bold uppercase tracking-wider w-36">Subtotal</th>}
+                  <th className="text-left py-2 px-3 font-bold uppercase tracking-wider text-[11px]">Producto</th>
+                  {clientCols.showQty && <th className="text-center py-2 px-3 font-bold uppercase tracking-wider w-20 text-[11px]">Cant.</th>}
+                  {clientCols.showUnitPrice && <th className="text-right py-2 px-3 font-bold uppercase tracking-wider w-32 text-[11px]">Precio Unit.</th>}
+                  {clientCols.showSubtotal && <th className="text-right py-2 px-3 font-bold uppercase tracking-wider w-32 text-[11px]">Subtotal</th>}
                 </tr>
               </thead>
               <tbody className="table-row-group">
-                
                 {Object.entries(groupedItems).map(([category, catItems]) => (
                   <React.Fragment key={category}>
-                    <tr className="bg-slate-200 break-after-avoid">
-                      <td colSpan={activeColsCount} className="py-2 px-3 font-black text-slate-800 uppercase tracking-widest text-[11px] border-b border-slate-300">
+                    <tr className="bg-slate-100/50 break-after-avoid">
+                      <td colSpan={activeColsCount} className="py-1.5 px-3 font-black text-slate-700 uppercase tracking-widest text-[11px] border-b border-slate-200">
                         {category}
                       </td>
                     </tr>
-                    
                     {catItems.map((item, idx) => {
                       const isWeight = item.product_type === 'weight';
                       const q = Number(item.qty) || 1;
                       const p = Number(item.newPrice) || 0;
                       const subtotal = isWeight ? p * (q / 1000) : p * q;
 
+                      const rowColorClass = idx % 2 !== 0 ? 'bg-slate-50/80' : 'bg-transparent';
+                      
+                      // ✨ LOGICA DE AGOTADO / SIN PRECIO:
+                      // Si el stock es <= 0 (y no es item extra) O si el precio es 0
+                      const isAgotado = (item.stock !== undefined && Number(item.stock) <= 0 && !item.isTemporary) || p === 0;
+
                       return (
-                        <tr key={item.id || idx} className="border-b border-slate-200 break-inside-avoid">
-                          <td className="py-1.5 px-4 font-medium text-slate-800 flex items-center gap-2">
-                            <span className="text-slate-400 text-lg leading-none">•</span> 
+                        <tr 
+                          key={item.id || idx} 
+                          className={`border-b border-slate-100 break-inside-avoid ${rowColorClass} ${isAgotado ? 'opacity-80' : ''}`}
+                          style={{ WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}
+                        >
+                          <td className={`py-1.5 px-4 font-medium flex items-center flex-wrap gap-x-2 gap-y-1 text-[12px] ${isAgotado ? 'text-slate-500' : 'text-slate-800'}`}>
+                            <span className="text-slate-400 text-lg leading-none shrink-0">•</span> 
                             <span>{item.title}</span>
+                            
+                            {/* CARTEL DE AGOTADO / CONSULTAR */}
+                            {isAgotado && (
+                              <span className="bg-red-100 text-red-700 text-[8px] px-1.5 py-0.5 rounded font-black uppercase tracking-widest border border-red-300 whitespace-nowrap shrink-0">
+                                Agotado - Preguntar Stock
+                              </span>
+                            )}
+                            
                             {isWeight && (
-                              <span className="bg-amber-100 text-amber-700 text-[8px] px-1.5 py-0.5 rounded font-bold uppercase tracking-widest border border-amber-300 whitespace-nowrap">
-                                Por Peso
+                              <span className="bg-amber-100 text-amber-700 text-[8px] px-1 py-0.5 rounded font-bold uppercase tracking-widest border border-amber-200 whitespace-nowrap shrink-0">
+                                Peso
                               </span>
                             )}
                           </td>
                           {clientCols.showQty && (
-                            <td className="py-1.5 px-3 text-center font-mono text-xs">
-                              {q} <span className="text-[10px] text-slate-400">{isWeight ? 'g' : 'u'}</span>
+                            <td className={`py-1.5 px-3 text-center font-mono text-[12px] ${isAgotado ? 'text-slate-400' : ''}`}>
+                              {isWeight && q >= 1000 && q % 100 === 0 ? (
+                                <>{q / 1000} <span className="text-[10px] text-slate-400">Kg</span></>
+                              ) : (
+                                <>{q} <span className="text-[10px] text-slate-400">{isWeight ? 'g' : 'u'}</span></>
+                              )}
                             </td>
                           )}
                           {clientCols.showUnitPrice && (
-                            <td className="py-1.5 px-3 text-right">
+                            <td className={`py-1.5 px-3 text-right text-[12px] ${isAgotado ? 'text-slate-400' : ''}`}>
                               {formatCurrency(p)}
-                              {isWeight && <span className="block text-[8px] text-slate-400 -mt-1">por Kg</span>}
+                              {isWeight && <span className="block text-[9px] text-slate-400 -mt-1">/Kg</span>}
                             </td>
                           )}
                           {clientCols.showSubtotal && (
-                            <td className="py-1.5 px-3 text-right font-bold">
+                            <td className={`py-1.5 px-3 text-right font-bold text-[12px] ${isAgotado ? 'text-slate-400' : ''}`}>
                               {formatCurrency(subtotal)}
                             </td>
                           )}
@@ -176,60 +193,64 @@ export const ExportPdfLayout = ({ data }) => {
                     })}
                   </React.Fragment>
                 ))}
-
                 {clientCols.showTotal && (
-                  <tr className="border-t-2 border-slate-800 font-black text-lg bg-slate-50 break-inside-avoid">
-                    <td colSpan={Math.max(1, activeColsCount - 1)} className="text-right py-3 px-3 uppercase tracking-widest">TOTAL PRESUPUESTO:</td>
-                    <td className="text-right py-3 px-3 text-emerald-600">{formatCurrency(total)}</td>
+                  <tr className="border-t-2 border-slate-800 font-black text-lg bg-slate-50 break-inside-avoid" style={{ WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}>
+                    <td colSpan={Math.max(1, activeColsCount - 1)} className="text-right py-3 px-3 uppercase tracking-widest text-sm">
+                      TOTAL PRESUPUESTO:
+                    </td>
+                    <td className="text-right py-3 px-3 text-emerald-600">
+                      {formatCurrency(total)}
+                    </td>
                   </tr>
                 )}
               </tbody>
             </table>
 
-            {/* Términos y Condiciones */}
+            {/* CONDICIONES COMERCIALES */}
             <div className="border border-slate-300 rounded-lg p-4 break-inside-avoid shadow-sm" style={{ backgroundColor: '#f8fafc', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}>
-              <h4 className="font-black mb-2 uppercase tracking-wider text-slate-800 text-xs">Pasos para realizar tu compra:</h4>
-              <ol className="list-decimal pl-4 space-y-1.5 text-[11px] text-slate-700 text-justify">
-                <li><strong>Reserva:</strong> Para confirmar el pedido y reservar la mercadería se solicita una seña del 50% del total del presupuesto. El saldo restante deberá abonarse antes o al momento de la entrega o retiro.</li>
-                <li><strong>Modificaciones:</strong> Cualquier modificación en el pedido deberá realizarse con al menos 72 horas de anticipación del día pactado de entrega, y quedará sujeta a disponibilidad de stock.</li>
-                <li><strong>Cancelaciones:</strong> En caso de cancelación del pedido, la seña entregada no es reembolsable, ya que se utiliza para la reserva de mercadería y preparación del pedido.</li>
-                <li><strong>Actualización de precios:</strong> Los precios indicados en el presupuesto quedan congelados únicamente al realizar el pago de la seña. En caso contrario, los valores podrán sufrir modificaciones.</li>
-                <li><strong>Validez del presupuesto:</strong> Este presupuesto tiene una validez de 7 días.</li>
+              <h4 className="font-black mb-2 uppercase tracking-wider text-slate-800 text-[11px]">Pasos para realizar tu compra:</h4>
+              <ol className="list-decimal pl-4 space-y-1 text-[11px] text-slate-700">
+                <li><strong>Reserva:</strong> Seña del 50% para confirmar y reservar mercadería. El saldo se abona al momento de la entrega o retiro.</li>
+                <li><strong>Modificaciones:</strong> Con 72hs de anticipación, sujeto a disponibilidad de stock.</li>
+                <li><strong>Cancelaciones:</strong> La seña no es reembolsable ya que se utiliza para reserva de mercadería.</li>
+                <li><strong>Actualización:</strong> Los precios quedan congelados únicamente con el pago de la seña.</li>
+                <li><strong>Validez:</strong> Este presupuesto tiene una validez de 7 días.</li>
               </ol>
-              <p className="mt-4 font-black text-center text-xs text-fuchsia-700 uppercase tracking-widest">Muchas gracias por elegir REBU Cotillón para tu evento.</p>
             </div>
           </div>
         ) : (
 
-          /* MODO 2: REPORTE INTERNO DE CATÁLOGO */
+          /* ========================================= */
+          /* MODO 2: REPORTE INTERNO DE INVENTARIO     */
+          /* ========================================= */
           <div className="block w-full">
             
-            <div className="mb-6 border-b-2 border-slate-800 flex justify-between items-end px-4">
-              
-              <div className="w-full max-w-[380px] mb-4 grid grid-cols-2 gap-3 ml-2">
-                <div 
-                  className="col-span-2 border border-slate-200 rounded-lg p-2.5 flex flex-col justify-center shadow-sm"
-                  style={{ backgroundColor: '#f8fafc', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}
+            <div className="mb-4 border-b-2 border-slate-800 flex justify-between items-end pb-2">
+              <div className="flex flex-col w-full max-w-[400px]">
+                
+                <h1 
+                  className="text-2xl font-black uppercase tracking-[0.1em] text-slate-800 mb-3"
+                  style={{ fontFamily: 'Calibri, sans-serif' }}
                 >
-                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-0.5">Fecha y Hora</span>
-                  <span className="text-[13px] font-black text-slate-800">{date} - {time} hs</span>
-                </div>
+                  Reporte Interno
+                </h1>
 
-                <div 
-                  className="col-span-2 border border-indigo-200 rounded-lg p-2.5 flex flex-col justify-center shadow-sm"
-                  style={{ backgroundColor: '#eef2ff', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}
-                >
-                  <span className="text-[10px] uppercase font-bold text-indigo-400 tracking-widest mb-0.5">Tipo de Documento</span>
-                  <span className="text-[13px] font-black text-indigo-800">Reporte Interno de Inventario</span>
+                <div className="space-y-2.5" style={{ fontFamily: 'Calibri, sans-serif' }}>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-[2px]">Fecha y Hora</span>
+                    <span className="text-[13px] leading-tight font-black text-slate-800 border-b border-slate-300 min-h-[17px]">
+                      {date} - {time} hs
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              <div className="shrink-0 flex items-end justify-end w-[160px] mr-2">
+              <div className="shrink-0 flex items-end justify-end">
                 <img 
                   src={logoImg} 
                   alt="REBU Cotillón" 
-                  className="h-[150px] w-auto object-contain -mb-[2px]" 
-                  style={{ WebkitPrintColorAdjust: 'exact' }} 
+                  className="h-[130px] w-auto object-contain -mb-[2px]" 
+                  style={{ WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }} 
                 />
               </div>
             </div>
@@ -237,34 +258,51 @@ export const ExportPdfLayout = ({ data }) => {
             <table className="w-full border-collapse text-sm">
               <thead className="table-header-group">
                 <tr className="bg-slate-100 border-y-2 border-slate-800">
-                  <th className="text-left py-2 px-3 font-bold uppercase">Producto</th>
-                  {config.columns.cost && <th className="text-right py-2 px-3 font-bold uppercase">Costo</th>}
-                  {config.columns.price && <th className="text-right py-2 px-3 font-bold uppercase">Precio Orig.</th>}
-                  {config.columns.newPrice && <th className="text-right py-2 px-3 font-bold uppercase text-indigo-700">Precio Edit.</th>}
-                  {config.columns.stock && <th className="text-right py-2 px-3 font-bold uppercase">Stock</th>}
+                  <th className="text-left py-2 px-3 font-bold uppercase text-[11px]">Producto</th>
+                  {config.columns.cost && <th className="text-right py-2 px-3 font-bold uppercase text-[11px]">Costo</th>}
+                  {config.columns.price && <th className="text-right py-2 px-3 font-bold uppercase text-[11px]">Precio Orig.</th>}
+                  {config.columns.newPrice && <th className="text-right py-2 px-3 font-bold uppercase text-indigo-700 text-[11px]">Precio Edit.</th>}
+                  {config.columns.stock && <th className="text-right py-2 px-3 font-bold uppercase text-[11px]">Stock</th>}
                 </tr>
               </thead>
               <tbody className="table-row-group">
                 {Object.entries(groupedItems).map(([category, catItems]) => (
                   <React.Fragment key={category}>
-                    <tr className="bg-slate-200 break-after-avoid">
-                      <td colSpan={1 + (config.columns.cost?1:0) + (config.columns.price?1:0) + (config.columns.newPrice?1:0) + (config.columns.stock?1:0)} className="py-2 px-3 font-black text-slate-800 uppercase tracking-widest text-[11px] border-b border-slate-300">
+                    <tr className="bg-slate-100/50 break-after-avoid">
+                      <td colSpan={1 + (config.columns.cost?1:0) + (config.columns.price?1:0) + (config.columns.newPrice?1:0) + (config.columns.stock?1:0)} className="py-1.5 px-3 font-black text-slate-700 uppercase tracking-widest text-[11px] border-b border-slate-300">
                         {category}
                       </td>
                     </tr>
                     {catItems.map((item, idx) => {
                       const isWeight = item.product_type === 'weight';
+                      const rowColorClass = idx % 2 !== 0 ? 'bg-slate-50/80' : 'bg-transparent';
+                      const p = Number(item.newPrice) || 0;
+                      
+                      // ✨ LOGICA DE AGOTADO EN REPORTE INTERNO (Stock 0 o Precio 0)
+                      const isAgotado = (item.stock !== undefined && Number(item.stock) <= 0) || p === 0;
+
                       return (
-                        <tr key={idx} className="border-b border-slate-200 break-inside-avoid">
-                          <td className="py-1.5 px-4 font-medium flex items-center gap-2">
+                        <tr 
+                          key={idx} 
+                          className={`border-b border-slate-100 break-inside-avoid ${rowColorClass} ${isAgotado ? 'opacity-80' : ''}`}
+                          style={{ WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}
+                        >
+                          <td className={`py-1.5 px-4 font-medium flex items-center flex-wrap gap-x-2 gap-y-1 text-[12px] ${isAgotado ? 'text-slate-500' : 'text-slate-800'}`}>
                             <span className="text-slate-400">•</span> 
                             <span>{item.title}</span>
-                            {isWeight && <span className="bg-amber-100 text-amber-700 text-[8px] px-1.5 py-0.5 rounded font-bold uppercase tracking-widest border border-amber-300 whitespace-nowrap">Por Peso</span>}
+                            
+                            {isAgotado && (
+                              <span className="bg-red-100 text-red-700 text-[8px] px-1 py-0.5 rounded font-black uppercase tracking-widest border border-red-300 whitespace-nowrap shrink-0">
+                                Agotado - Preguntar
+                              </span>
+                            )}
+
+                            {isWeight && <span className="bg-amber-100 text-amber-700 text-[8px] px-1 py-0.5 rounded font-bold uppercase tracking-widest border border-amber-200 whitespace-nowrap shrink-0">Peso</span>}
                           </td>
-                          {config.columns.cost && <td className="text-right py-1.5 px-3 text-slate-500">{formatCurrency(item.cost)} {isWeight && <span className="text-[9px] text-slate-400">/Kg</span>}</td>}
-                          {config.columns.price && <td className="text-right py-1.5 px-3">{formatCurrency(item.price)} {isWeight && <span className="text-[9px] text-slate-400">/Kg</span>}</td>}
-                          {config.columns.newPrice && <td className="text-right py-1.5 px-3 font-bold text-indigo-600">{formatCurrency(item.newPrice)} {isWeight && <span className="text-[9px] text-indigo-300">/Kg</span>}</td>}
-                          {config.columns.stock && <td className="text-right py-1.5 px-3 font-mono">{item.stock} <span className="text-slate-400 text-[10px]">{isWeight ? 'g' : 'u'}</span></td>}
+                          {config.columns.cost && <td className={`text-right py-1.5 px-3 text-[12px] ${isAgotado ? 'text-slate-400' : 'text-slate-500'}`}>{formatCurrency(item.cost)} {isWeight && <span className="text-[9px] text-slate-400">/Kg</span>}</td>}
+                          {config.columns.price && <td className={`text-right py-1.5 px-3 text-[12px] ${isAgotado ? 'text-slate-400' : ''}`}>{formatCurrency(item.price)} {isWeight && <span className="text-[9px] text-slate-400">/Kg</span>}</td>}
+                          {config.columns.newPrice && <td className={`text-right py-1.5 px-3 font-bold text-[12px] ${isAgotado ? 'text-slate-400' : 'text-indigo-600'}`}>{formatCurrency(item.newPrice)} {isWeight && <span className={`text-[9px] ${isAgotado ? 'text-slate-400' : 'text-indigo-300'}`}>/Kg</span>}</td>}
+                          {config.columns.stock && <td className={`text-right py-1.5 px-3 font-mono text-[12px] ${isAgotado ? 'text-red-500 font-bold' : ''}`}>{item.stock} <span className="text-slate-400 text-[10px]">{isWeight ? 'g' : 'u'}</span></td>}
                         </tr>
                       );
                     })}
@@ -272,7 +310,7 @@ export const ExportPdfLayout = ({ data }) => {
                 ))}
               </tbody>
             </table>
-            <div className="mt-4 text-right text-xs font-bold text-slate-400 break-inside-avoid">
+            <div className="mt-4 text-right text-[11px] font-bold text-slate-400 break-inside-avoid">
               Total de ítems exportados: {items.length}
             </div>
           </div>

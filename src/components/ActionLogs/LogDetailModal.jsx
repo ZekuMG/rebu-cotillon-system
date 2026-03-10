@@ -1,7 +1,8 @@
 // src/components/ActionLogs/LogDetailModal.jsx
 import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
-import LogDetailRenderer, { getDetailTitle, getDetailIcon, getDetailColor } from './LogDetailRenderer';
+import LogDetailRenderer from './LogDetailRenderer';
+import { getDetailTitle, getDetailIcon, getDetailColor } from './logHelpers';
 import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
 
@@ -13,8 +14,8 @@ const getTransactionId = (details) => {
   return typeof id === 'string' && id.includes('TRX-') ? id.replace('TRX-', '') : id;
 };
 
-// ✨ Recibimos onUpdateNote desde LogsView
-export default function LogDetailModal({ selectedLog, onClose, onUpdateNote }) {
+// ✨ Recibimos onReprintPdf desde LogsView
+export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onReprintPdf }) {
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
@@ -83,7 +84,12 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote }) {
       case 'Actualización Masiva': return (d.count || (d.details && d.details.length) || (d.changes && d.changes.length) || 0) + ' cambios';
       case 'Modificación Pedido': 
       case 'Venta Modificada': return d.changes?.total ? <FancyPrice amount={d.changes.total.new} /> : 'Editado';
-      default: return '';
+      // EXPORTACIÓN PDF
+      case 'Exportación PDF': {
+      const isClient = d.snapshot?.config?.isForClient;
+      const clientName = d.snapshot?.config?.clientName;
+      return isClient ? (clientName || 'Presupuesto Cliente') : 'Reporte Interno';
+      }
     }
   };
 
@@ -125,6 +131,8 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote }) {
       case 'Cierre Automático': return 'Cierre automático del sistema';
       case 'Modificación Pedido': 
       case 'Venta Modificada': return `Ajuste en Transacción #${getTransactionId(d) || 'S/N'}`;
+      // EXPORTACIÓN PDF
+      case 'Exportación PDF': return d.config?.isForClient ? (d.config?.clientName || 'Presupuesto Cliente') : 'Reporte Interno';
       default: return d.title || d.name || d.product || action;
     }
   };
@@ -174,7 +182,11 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote }) {
 
         <div className="flex-1 overflow-y-auto p-[16px_18px] relative z-[1] custom-scrollbar">
           {/* ✨ PASAMOS LA FUNCIÓN AL RENDERER */}
-          <LogDetailRenderer log={selectedLog} onUpdateNote={onUpdateNote} />
+          <LogDetailRenderer 
+            log={selectedLog} 
+            onUpdateNote={onUpdateNote} 
+            onReprintPdf={onReprintPdf} 
+          />
         </div>
 
         <div className="p-[14px_18px] border-t border-[#d4d9e3] flex justify-end bg-[rgba(255,255,255,0.4)] relative z-[1]">

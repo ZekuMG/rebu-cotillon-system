@@ -12,13 +12,8 @@ import {
 // ════════════════════════════════════════════
 //  CONSTANTES DE AGRUPACIÓN (Categorías)
 // ════════════════════════════════════════════
-const ACTION_GROUPS = [
-  { label: '🛒 Ventas', actions: ['Venta Realizada', 'Venta Anulada', 'Venta Modificada'] },
-  { label: '📦 Productos', actions: ['Alta de Producto', 'Edición Producto', 'Baja Producto', 'Producto Duplicado', 'Categoría', 'Actualización Masiva', 'Edición Masiva Categorías'] },
-  { label: '👥 Socios', actions: ['Nuevo Socio', 'Edición de Socio', 'Edición de Puntos', 'Baja de Socio'] },
-  { label: '💰 Caja / Finanzas', actions: ['Apertura de Caja', 'Cierre de Caja', 'Cierre Automático', 'Nuevo Gasto', 'Gasto', 'Nuevo Premio', 'Editar Premio', 'Eliminar Premio'] },
-  { label: '⚙️ Sistema', actions: ['Login', 'Horario Modificado', 'Sistema Iniciado', 'Borrado Permanente'] }
-];
+
+import { ACTION_GROUPS } from './logHelpers';
 
 // ════════════════════════════════════════════
 //  COMPONENTE DROPDOWN CUSTOM

@@ -263,3 +263,15 @@ export const formatWeight = (grams) => {
 export const getPricePerKg = (pricePerGram) => {
   return formatPrice(Number(pricePerGram) * 1000);
 };
+
+// ==========================================
+// ✨ DETECTOR GLOBAL DE MODO PRUEBA
+// ==========================================
+export const isTestRecord = (obj) => {
+  if (!obj) return false;
+  if (typeof obj === 'string') return /\btest\b/i.test(obj);
+  if (typeof obj === 'number' || typeof obj === 'boolean') return false;
+  if (Array.isArray(obj)) return obj.some(isTestRecord);
+  if (typeof obj === 'object') return Object.values(obj).some(isTestRecord);
+  return false;
+};

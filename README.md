@@ -3,13 +3,13 @@
 ## README Técnico para IAs
 
 > **Este documento describe la arquitectura completa del sistema para que una IA pueda entender y modificar el código sin necesidad de leer cada archivo.**
-> Última actualización: Marzo 2026 — **Versión 0.6.2**
+> Última actualización: Marzo 2026 — **Versión 0.7.0**
 
 ---
 
 ## 1. DESCRIPCIÓN GENERAL
 
-Sistema de Punto de Venta (POS) para una tienda de cotillón (artículos de fiesta) llamada **Rebu Cotillón**. Incluye gestión de inventario, ventas, clientes con sistema de puntos/recompensas, caja diaria, reportes, y registro de actividad (logs).
+Sistema de Punto de Venta (POS) para una tienda de cotillón (artículos de fiesta) llamada **Rebu Cotillón**. Incluye gestión de inventario, ventas, clientes con sistema de puntos/recompensas, caja diaria, reportes, registro de actividad (logs) y motor avanzado de generación de presupuestos en PDF.
 
 **Stack:** React 18 + Vite + Tailwind CSS + Supabase (PostgreSQL + Auth + Storage + Realtime) + Electron (escritorio)
 
@@ -32,6 +32,7 @@ Punto de Venta Rebu - Release/
 │   │   │   ├── LogAuxModals.jsx
 │   │   │   ├── LogDetailModal.jsx
 │   │   │   ├── LogDetailRenderer.jsx   ← Renderizado de detalles con Sabueso de Notas
+│   │   │   ├── logHelpers.js           ← NUEVO: Constantes para evitar error de Vite Fast Refresh
 │   │   │   ├── LogsControls.jsx
 │   │   │   └── LogsTable.jsx           ← Tabla principal y export de extractRealNote()
 │   │   ├── dashboard/
@@ -50,14 +51,15 @@ Punto de Venta Rebu - Release/
 │   │   │   ├── ExpenseModal.jsx        ← Envía 'note' explícito
 │   │   │   ├── HistoryModals.jsx
 │   │   │   ├── NotificationModal.jsx
-│   │   │   ├── ProductModals.jsx        ← Modales crear/editar/eliminar producto
+│   │   │   ├── ProductModals.jsx       ← Modales crear/editar/eliminar producto
 │   │   │   ├── RedemptionModal.jsx
 │   │   │   ├── SaleModals.jsx
 │   │   │   └── TransactionModals.jsx
 │   │   ├── AppModals.jsx               ← Orquestador de todos los modales
+│   │   ├── ExportPdfLayout.jsx         ← NUEVO: Motor de renderizado A4 para Presupuestos
 │   │   ├── ProductImage.jsx            ← Placeholder con gradiente si no hay foto
 │   │   ├── Sidebar.jsx                 ← Navegación lateral
-│   │   └── TicketPrintLayout.jsx       ← ⚠️ NO TOCAR - Layout de impresión 58mm
+│   │   └── TicketPrintLayout.jsx       ← ⚠️ NO TOCAR - Layout de impresión térmica 58mm
 │   ├── data/
 │   │   ├── seedHelpers.js
 │   │   ├── seedLogs.js
@@ -71,9 +73,10 @@ Punto de Venta Rebu - Release/
 │   │   └── client.js                   ← Configuración Supabase (credenciales hardcoded)
 │   ├── utils/
 │   │   ├── devGenerator.js             ← Generador de datos de prueba
-│   │   ├── helpers.js                  ← Funciones compartidas (formatPrice, formatStock, etc.)
+│   │   ├── helpers.js                  ← NUEVO: Funciones compartidas + isTestRecord (Filtro Global)
 │   │   └── storage.js                  ← Upload/delete de imágenes en Supabase Storage
 │   ├── views/                          ← Vistas principales (una por sección)
+│   │   ├── BulkEditorView.jsx          ← NUEVO: Editor Masivo y Asistente de Exportación PDF
 │   │   ├── CategoryManagerView.jsx     ← ABM categorías
 │   │   ├── ClientsView.jsx             ← Gestión de socios (Buscador + Select de Ordenamiento integrados)
 │   │   ├── DashboardView.jsx           ← Panel de métricas
@@ -86,7 +89,7 @@ Punto de Venta Rebu - Release/
 │   ├── App.css
 │   ├── App.jsx                         ← ⚠️ LÓGICA PRINCIPAL (estados globales, handlers, addLog)
 │   ├── data.js                         ← Constantes (PAYMENT_METHODS, etc.)
-│   ├── index.css                       ← Estilos Tailwind + estilos de impresión
+│   ├── index.css                       ← Estilos Tailwind + estilos de impresión A4/58mm
 │   └── main.jsx                        ← Entry point React
 ├── electron-main.cjs                   ← Entry point Electron
 ├── index.html
@@ -101,14 +104,19 @@ Punto de Venta Rebu - Release/
 
 `App.jsx` es el componente raíz que contiene **TODA** la lógica de negocio:
 
-- **Todos los estados globales** (inventory, cart, clients, logs, rewards, etc.)
-- **Todos los handlers** (addToCart, handleCheckout, saveEditProduct, etc.)
+- **Todos los estados globales** (inventory, cart, clients, logs, rewards, exportPdfData, etc.)
+- **Todos los handlers** (addToCart, handleCheckout, saveEditProduct, handleExportProducts, etc.)
 - **fetchCloudData()** — Carga inicial de TODOS los datos desde Supabase
 - **addLog()** — Registra cada acción en la tabla `logs` (con inteligencia de notas).
 
 Las **views** (`POSView`, `InventoryView`, etc.) son componentes de presentación que reciben datos y callbacks por props desde `App.jsx`.
 
 Los **modales** están en `components/modals/` y se orquestan desde `AppModals.jsx`.
+
+### Sistema de Impresión Dual (CSS Print Media)
+El sistema maneja dos flujos de impresión totalmente distintos controlados por CSS (`print:hidden` vs `print:block`):
+1. **Ticket Térmico (58mm):** Se ejecuta al vender. Utiliza `TicketPrintLayout.jsx`.
+2. **Documento A4 (Presupuesto PDF):** Se ejecuta desde `BulkEditorView` o `LogsView`. Utiliza `ExportPdfLayout.jsx`.
 
 ### Flujo de datos simplificado
 
@@ -209,7 +217,18 @@ El sistema soporta **2 tipos** de productos que coexisten:
 
 ---
 
-## 7. SISTEMA DE PUNTOS Y RECOMPENSAS
+## 7. FLUJO DE EXPORTACIÓN A PDF Y "TIME MACHINE"
+
+Se implementó un sistema para generar presupuestos profesionales y reportes internos:
+
+1. **Creación:** Desde `BulkEditorView`, el usuario selecciona productos y configura el documento (Cliente, Evento, Ocultar/Mostrar columnas). Permite agregar productos "Extra" temporales y ajustar cantidades al vuelo.
+2. **Renderizado (`ExportPdfLayout.jsx`):** Construye una vista A4 estéticamente atractiva (híbrido tipográfico Calibri + Sans), con "cebrado" en tablas. Detecta stock en 0 y estampa alertas de **"AGOTADO - PREGUNTAR"**. Si es por peso y múltiplo de 1000, imprime "Kg".
+3. **El Snapshot:** Al imprimir, `App.jsx` inyecta en la tabla `logs` (bajo la acción `Exportación PDF`) una copia exacta (*snapshot*) de la configuración, títulos y precios de ese preciso instante.
+4. **Time Machine (`LogsView`):** Si un administrador entra a la bitácora y abre ese Log, verá un botón para "Volver a Descargar PDF". El sistema inyecta el snapshot viejo, recreando el PDF idéntico sin que lo afecte la inflación o los cambios actuales de inventario.
+
+---
+
+## 8. SISTEMA DE PUNTOS Y RECOMPENSAS
 
 - Los socios (`clients`) acumulan puntos: **1 punto por cada $500 de compra** (Actualizado v0.6)
 - `pointsToEarn = Math.floor(total / 500)`
@@ -219,7 +238,7 @@ El sistema soporta **2 tipos** de productos que coexisten:
 
 ---
 
-## 8. SISTEMA DE CAJA
+## 9. SISTEMA DE CAJA
 
 - **Estado:** `register_state` tabla con 1 fila (`id=1`)
 - **Abrir caja:** Define `opening_balance` y `is_open = true`
@@ -228,7 +247,7 @@ El sistema soporta **2 tipos** de productos que coexisten:
 
 ---
 
-## 9. ROLES Y PERMISOS
+## 10. ROLES Y PERMISOS
 
 Dos roles: `admin` y `vendedor`
 
@@ -238,6 +257,7 @@ Dos roles: `admin` y `vendedor`
 | Ver inventario | ✅ | ✅ (solo lectura) |
 | Crear/editar/eliminar productos | ✅ | ❌ |
 | Gestionar categorías | ✅ | ❌ |
+| Gestión Masiva y PDFs | ✅ | ❌ |
 | Ver dashboard completo | ✅ | ✅ (parcial) |
 | Abrir/cerrar caja | ✅ | ✅ |
 | Ver logs | ✅ | ✅ |
@@ -246,16 +266,17 @@ El campo `currentUser.role` controla los permisos en UI (botones ocultos/deshabi
 
 ---
 
-## 10. ARCHIVOS CLAVE Y QUÉ HACEN
+## 11. ARCHIVOS CLAVE Y QUÉ HACEN
 
-### `App.jsx` (~1200+ líneas)
+### `App.jsx` (~1300+ líneas)
 El componente más importante. Contiene:
-- **~40 estados** con `useState` (inventory, cart, clients, logs, etc.)
+- **~40 estados** con `useState` (inventory, cart, clients, logs, exportPdfData, etc.)
 - **fetchCloudData()** — Promise.allSettled de 9 queries a Supabase. Posee Auto-Sanación de items vacíos en ventas históricas.
 - **addLog(action, details, defaultReason)** — Registra actividad en Supabase. *Posee inteligencia de notas*: detecta si en los `details` viaja alguna nota (`description`, `note`, `extraInfo`) y pisa automáticamente los textos aburridos (ej. "Salida de dinero") guardando la nota real del usuario en la BD.
 
 ### `LogsTable.jsx` & `LogDetailRenderer.jsx`
 - **`extractRealNote(log)`**: Funciona como un **"Sabueso de Notas"**. Rastrea en la base de datos (tanto en la columna `reason` como dentro del JSON `details`) intentando rescatar la nota real ingresada por el usuario (ignorando los strings genéricos generados por el sistema, dándole retroactividad a registros viejos).
+- Renderiza el detalle visual y contiene el botón de Reimpresión de PDFs históricos.
 
 ### `ClientsView.jsx`
 - Lista de Socios. Integra un **buscador en tiempo real fusionado con un select de ordenamiento reactivo** (por id, alfabético, saldo de puntos, fecha de ingreso y última compra). Muestra de forma calculada el último movimiento de cada socio procesando las transacciones al vuelo.
@@ -263,16 +284,18 @@ El componente más importante. Contiene:
 ### `POSView.jsx` y `InventoryView.jsx`
 - Vistas Core de negocio (Catálogo con grid/lista, Carrito, Pagos, Modales Pre-Checkout).
 
-### `TicketPrintLayout.jsx`
+### `TicketPrintLayout.jsx` & `ExportPdfLayout.jsx`
 > ⚠️ **NO MODIFICAR** sin leer la guía de impresión en el README del repo.
-Layout para impresoras térmicas 58mm. Usa estilos inline críticos, fuente Arial bold 11px, color #000000 absoluto. Configuración `@page { margin: 0; size: 58mm auto; }`.
+- **TicketPrintLayout:** Layout para impresoras térmicas 58mm. Usa estilos inline críticos, fuente Arial bold 11px, color #000000 absoluto. Configuración `@page { margin: 0; size: 58mm auto; }`.
+- **ExportPdfLayout:** Motor A4. Híbrido tipográfico, cebrado CSS y lógicas visuales dependientes de WebkitPrintColorAdjust.
 
 ---
 
-## 11. CONVENCIONES DE CÓDIGO
+## 12. CONVENCIONES DE CÓDIGO
 
 - **Lenguaje UI:** Español argentino (vos, tu)
 - **Formato precio:** Puntos de miles, sin decimales → $1.500
+- **Modo Debug/Prueba:** Todo registro cuyo texto, detalle o motivo contenga la palabra "test" activa la función global `isTestRecord` (en `helpers.js`), la cual lo oculta de las métricas oficiales y lo enmarca con alertas.
 - **Manejo de Notas en Logs:** Para evitar que el sistema pise notas personalizadas con textos genéricos (ej: "Salida de dinero"), `App.jsx` detecta la nota real, y `extractRealNote()` en `LogsTable.jsx` prioriza visualizar lo que el usuario verdaderamente escribió.
 - **Notificaciones:** `showNotification(type, title, message)` — type: success/error/warning
 - **Supabase client:** Credenciales hardcoded en `supabase/client.js` (no .env)
@@ -280,7 +303,7 @@ Layout para impresoras térmicas 58mm. Usa estilos inline críticos, fuente Aria
 
 ---
 
-## 12. SUPABASE CONFIG
+## 13. SUPABASE CONFIG
 
 URL: https://rwqqjthrvweubksrlqzy.supabase.co
 Key: eyJhbGciOiJIUzI1NiIs... (anon key, hardcoded en client.js)
@@ -292,7 +315,7 @@ El cliente tiene configuración especial para Electron:
 
 ---
 
-## 13. BUGS CONOCIDOS Y SOLUCIONES APLICADAS
+## 14. BUGS CONOCIDOS Y SOLUCIONES APLICADAS
 
 | Bug | Causa raíz | Solución |
 |-----|-----------|----------|
@@ -303,21 +326,22 @@ El cliente tiene configuración especial para Electron:
 | Crear categoría daba 409 Conflict | Secuencia de `categories.id` desincronizada | `SELECT setval(pg_get_serial_sequence(...))` |
 | Notas de gastos o socios ocultas por textos genéricos | Supabase recibía "Salida de dinero" en vez de la nota real | Lógica de detección en `addLog` + "Sabueso" (`extractRealNote`) en `LogsTable.jsx` |
 | Edición de Venta fallaba con IDs no UUID | Supabase rechazaba IDs que no fueran tipo UUID válidos | Filtro RegEx UUID en `handleSaveEditedTransaction` para evitar crash |
+| Vite Fast Refresh Roto (Pantalla roja) | Exportar componentes React y Funciones normales en un mismo archivo | Lógica estática/JS extraída a archivos puros (`utils/helpers.js` y `logHelpers.js`) |
 
 ---
 
-## 14. CÓMO AGREGAR UNA NUEVA FUNCIONALIDAD
+## 15. CÓMO AGREGAR UNA NUEVA FUNCIONALIDAD
 
 1. **Si requiere datos nuevos:** Agregar columna en Supabase SQL Editor con `DEFAULT` para no romper existentes
 2. **Si es lógica de negocio:** Agregar handler en `App.jsx`, pasarlo como prop a la vista
 3. **Si es UI en una vista:** Modificar el archivo en `views/`
 4. **Si es un modal nuevo:** Crear en `components/modals/`, agregar estado en `App.jsx`, renderizar en `AppModals.jsx`
-5. **Si necesita helper:** Agregar en `utils/helpers.js` y exportar
+5. **Si necesita helper:** Agregar en `utils/helpers.js` y exportar (No mezclar con componentes).
 6. **Siempre:** Agregar `addLog()` para registrar la acción
 
 ---
 
-## 15. COMANDOS
+## 16. COMANDOS
 
 # Desarrollo web
 npm run dev

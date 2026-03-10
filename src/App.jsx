@@ -15,10 +15,7 @@ import { supabase } from './supabase/client';
 import { uploadProductImage, deleteProductImage } from './utils/storage';
 import { formatDateAR, formatTimeAR, formatTimeFullAR, formatCurrency, formatNumber } from './utils/helpers';
 
-import {
-  USERS,
-  getInitialState,
-} from './data';
+import {  USERS,  getInitialState, } from './data';
 import Sidebar from './components/Sidebar';
 
 // Vistas
@@ -59,18 +56,11 @@ import { ClientSelectionModal } from './components/modals/ClientSelectionModal';
 import { TransactionDetailModal } from './components/modals/HistoryModals'; 
 import { ExportPdfLayout } from './components/ExportPdfLayout'; // ✨ NUEVO: Importamos el diseño del PDF
 
-// Hooks
+// Código de barras
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 
-// ✨ DETECTOR GLOBAL DE MODO PRUEBA
-export const isTestRecord = (obj) => {
-  if (!obj) return false;
-  if (typeof obj === 'string') return /\btest\b/i.test(obj);
-  if (typeof obj === 'number' || typeof obj === 'boolean') return false;
-  if (Array.isArray(obj)) return obj.some(isTestRecord);
-  if (typeof obj === 'object') return Object.values(obj).some(isTestRecord);
-  return false;
-};
+// Utils: isTestRecord: Función recursiva para detectar si un objeto (o cualquier valor dentro de él) contiene la palabra "test" (case-insensitive). Se usa para marcar registros sospechosos de ser pruebas o datos no reales, y así excluirlos de métricas y cierres oficiales.
+import { isTestRecord } from './utils/helpers.js'; // (Ajustá la ruta si hace falta)
 
 export default function PartySupplyApp() {
   
@@ -554,13 +544,34 @@ export default function PartySupplyApp() {
       snapshot: dataToExport // La foto exacta con los precios de este preciso momento
     };
 
-    addLog('Productos Exportados', logDetails, 'Exportación de catálogo');
+    addLog('Exportación PDF', logDetails, 'Exportación de catálogo');
 
     // Le damos unos milisegundos para que React dibuje el componente oculto antes de disparar la impresión
     setTimeout(() => {
       window.print();
       
       // Limpiamos el estado después de imprimir para no interrumpir la impresión de tickets futuros
+      setTimeout(() => {
+        setExportPdfData(null);
+      }, 1000);
+    }, 500);
+  };
+  
+  // ✨ NUEVO: Manejador para re-imprimir PDFs viejos desde Logs
+  const handleReprintPdf = (logDetails) => {
+    if (!logDetails || !logDetails.snapshot) {
+      showNotification('error', 'Error', 'No hay datos guardados para recrear este PDF.');
+      return;
+    }
+    
+    // 1. Cargamos los datos viejos en el estado de impresión
+    setExportPdfData(logDetails.snapshot);
+
+    // 2. Damos un instante para que React dibuje la vista y disparamos la impresión
+    setTimeout(() => {
+      window.print();
+      
+      // 3. Limpiamos para no romper futuros tickets
       setTimeout(() => {
         setExportPdfData(null);
       }, 1000);
@@ -2564,7 +2575,7 @@ export default function PartySupplyApp() {
             {activeTab === 'history' && (<HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} members={members} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setDailyLogs} />)}
             {activeTab === 'rewards' && (<RewardsView rewards={rewards} onAddReward={handleAddReward} onUpdateReward={handleUpdateReward} onDeleteReward={handleDeleteReward} />)}
             {activeTab === 'reports' && currentUser?.role === 'admin' && (<ReportsHistoryView pastClosures={pastClosures} members={members}/>)}
-            {activeTab === 'logs' && currentUser?.role === 'admin' && (<LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} />)}
+            {activeTab === 'logs' && currentUser?.role === 'admin' && (<LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} />)}
             {activeTab === 'categories' && currentUser?.role === 'admin' && (<CategoryManagerView categories={categories} inventory={inventory} onAddCategory={handleAddCategoryFromView} onDeleteCategory={handleDeleteCategoryFromView} onEditCategory={handleEditCategory} onBatchUpdateProductCategory={handleBatchUpdateProductCategory} />)}
             {activeTab === 'bulk-editor' && currentUser?.role === 'admin' && (
               <BulkEditorView 
