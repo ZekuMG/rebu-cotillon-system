@@ -269,7 +269,7 @@ export const getPricePerKg = (pricePerGram) => {
 // ==========================================
 export const isTestRecord = (obj) => {
   if (!obj) return false;
-  if (typeof obj === 'string') return /\btest\b/i.test(obj);
+  if (typeof obj === 'string') return /test/i.test(obj);
   if (typeof obj === 'number' || typeof obj === 'boolean') return false;
   if (Array.isArray(obj)) return obj.some(isTestRecord);
   if (typeof obj === 'object') return Object.values(obj).some(isTestRecord);

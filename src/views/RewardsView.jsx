@@ -11,9 +11,9 @@ import {
   Save,
   AlertCircle
 } from 'lucide-react';
-// ♻️ FIX: Importamos formatNumber y FancyPrice
-import { formatNumber } from '../utils/helpers';
-import { FancyPrice } from '../components/FancyPrice'; // Ajustá la ruta si FancyPrice está en otra carpeta
+// ♻️ FIX: Importamos formatNumber y FancyPrice y añadimos isTestRecord
+import { formatNumber, isTestRecord } from '../utils/helpers';
+import { FancyPrice } from '../components/FancyPrice'; 
 
 export default function RewardsView({
   rewards,
@@ -24,7 +24,7 @@ export default function RewardsView({
   // --- ESTADOS LOCALES ---
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState('create'); // 'create' | 'edit'
+  const [modalMode, setModalMode] = useState('create'); 
   
   // Estado del Formulario
   const [formData, setFormData] = useState({
@@ -32,19 +32,24 @@ export default function RewardsView({
     title: '',
     description: '',
     pointsCost: '',
-    type: 'product', // 'product' | 'discount'
-    discountAmount: '', // Solo si type === 'discount'
-    stock: '' // Solo si type === 'product' (stock del premio específico)
+    type: 'product', 
+    discountAmount: '', 
+    stock: '' 
   });
 
   // Estado para eliminar
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [rewardToDelete, setRewardToDelete] = useState(null);
 
-  // --- FILTRADO ---
-  const filteredRewards = rewards.filter((r) =>
-    r.title.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // --- FILTRADO (CON DEFENSA MODO TEST) ---
+  const isSearchTest = searchTerm.toLowerCase().includes('test');
+  
+  const filteredRewards = rewards.filter((r) => {
+    // ✨ Si es un test y NO lo están buscando explícitamente, se oculta
+    if (isTestRecord(r) && !isSearchTest) return false;
+    
+    return r.title.toLowerCase().includes(searchTerm.toLowerCase());
+  });
 
   // --- HANDLERS ---
   const openCreateModal = () => {
@@ -78,7 +83,6 @@ export default function RewardsView({
   const handleSubmit = (e) => {
     e.preventDefault();
     
-    // Validaciones básicas
     if (!formData.title || !formData.pointsCost) return;
 
     const payload = {
@@ -184,7 +188,6 @@ export default function RewardsView({
                       ) : (
                         <>
                           <span className="text-gray-400 font-medium">Valor:</span>
-                          {/* ♻️ FIX: FancyPrice al descuento */}
                           <span className="font-bold text-emerald-600">
                             <FancyPrice amount={reward.discountAmount} />
                           </span>
@@ -239,7 +242,6 @@ export default function RewardsView({
             </div>
             
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
-              {/* Título */}
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre del Premio *</label>
                 <input 
@@ -253,7 +255,6 @@ export default function RewardsView({
                 />
               </div>
 
-              {/* Tipo de Premio */}
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tipo de Recompensa</label>
                 <div className="grid grid-cols-2 gap-3">
@@ -282,7 +283,6 @@ export default function RewardsView({
                 </div>
               </div>
 
-              {/* Campos dinámicos según tipo */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Costo en Puntos *</label>
@@ -324,7 +324,6 @@ export default function RewardsView({
                 )}
               </div>
 
-              {/* Descripción */}
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Descripción / Notas</label>
                 <textarea 
@@ -336,7 +335,6 @@ export default function RewardsView({
                 ></textarea>
               </div>
 
-              {/* Botones */}
               <div className="pt-2 flex gap-3">
                 <button 
                   type="button" 

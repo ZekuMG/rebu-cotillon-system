@@ -18,6 +18,7 @@ import {
   LayoutManagerControls,
 } from '../components/dashboard';
 import { FancyPrice } from '../components/FancyPrice';
+import { isTestRecord } from '../utils/helpers'; // ✨ Importado el escudo anti-test
 
 const DEFAULT_BOTTOM_ORDER = ['chart', 'payments', 'topProducts', 'lowStock', 'financialActivity', 'systemLogs'];
 const DEFAULT_TOP_ORDER = ['sales', 'revenue', 'net', 'opening', 'average', 'expenses'];
@@ -39,6 +40,12 @@ export default function DashboardView({
   onViewTransaction
 }) {
   const isAdmin = currentUser?.role === 'admin';
+
+  // ✨ LIMPIEZA ABSOLUTA DE MODO TEST ANTES DE CALCULAR NADA
+  const cleanTransactions = useMemo(() => (transactions || []).filter(t => !isTestRecord(t)), [transactions]);
+  const cleanDailyLogs = useMemo(() => (dailyLogs || []).filter(l => !isTestRecord(l)), [dailyLogs]);
+  const cleanInventory = useMemo(() => (inventory || []).filter(i => !isTestRecord(i)), [inventory]);
+  const cleanExpenses = useMemo(() => (expenses || []).filter(e => !isTestRecord(e)), [expenses]);
 
   const [globalFilter, setGlobalFilter] = useState('day');
   const [rankingMode, setRankingMode] = useState('products');
@@ -106,6 +113,7 @@ export default function DashboardView({
     setHasUnsavedChanges(false);
   };
 
+  // ✨ ALIMENTAMOS LOS CALCULOS SOLO CON DATA LIMPIA
   const {
     kpiStats,
     averageTicket,
@@ -119,13 +127,13 @@ export default function DashboardView({
     filteredData,       
     filteredExpenses,  
   } = useDashboardData({ 
-    transactions, 
-    dailyLogs, 
-    inventory, 
+    transactions: cleanTransactions, 
+    dailyLogs: cleanDailyLogs, 
+    inventory: cleanInventory, 
     globalFilter, 
     rankingMode, 
     rankingCriteria,
-    expenses 
+    expenses: cleanExpenses 
   });
 
   const combinedActivity = useMemo(() => {
@@ -234,7 +242,8 @@ export default function DashboardView({
                           const isSale = item.type === 'sale';
                           const handleItemClick = () => {
                             if (isSale && onViewTransaction) {
-                              const originalTx = transactions.find(t => String(t.id) === String(item.id));
+                              // ✨ Como esto es visual, buscamos en cleanTransactions para asegurar congruencia
+                              const originalTx = cleanTransactions.find(t => String(t.id) === String(item.id));
                               if (originalTx) {
                                 onViewTransaction(originalTx);
                               }
@@ -312,8 +321,9 @@ export default function DashboardView({
               <div className="relative flex-1 min-h-[280px]">
                 <div className="absolute inset-0 overflow-y-auto custom-scrollbar pr-1">
                   <div className="ml-2.5 mt-2 space-y-0 border-l border-slate-200">
-                    {dailyLogs && dailyLogs.length > 0 ? (
-                      dailyLogs.slice(0, 50).map((log) => (
+                    {/* ✨ USAMOS cleanDailyLogs en lugar de dailyLogs crudos */}
+                    {cleanDailyLogs && cleanDailyLogs.length > 0 ? (
+                      cleanDailyLogs.slice(0, 50).map((log) => (
                         <div key={log.id} className="group/log relative pb-5 pl-5 transition-all">
                           <div className="absolute -left-[5.5px] top-1.5 w-2.5 h-2.5 rounded-full bg-slate-200 ring-4 ring-white group-hover/log:bg-fuchsia-500 group-hover/log:scale-125 transition-all duration-200" />
                           

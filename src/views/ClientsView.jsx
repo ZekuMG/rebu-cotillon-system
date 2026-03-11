@@ -1,4 +1,3 @@
-// src/views/ClientsView.jsx
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Search, 
@@ -18,11 +17,11 @@ import {
   XCircle,
   Printer,
   ClipboardCheck,
-  CalendarDays, // ✨ Nuevo icono para fechas
-  Clock, // ✨ Nuevo icono para fechas
-  ArrowUpDown // ✨ Nuevo icono para ordenamiento
+  CalendarDays, 
+  Clock, 
+  ArrowUpDown 
 } from 'lucide-react';
-import { formatNumber } from '../utils/helpers';
+import { formatNumber, isTestRecord } from '../utils/helpers'; // ✨ Importado isTestRecord
 import { FancyPrice } from '../components/FancyPrice';
 
 export default function ClientsView({ 
@@ -39,7 +38,7 @@ export default function ClientsView({
 }) {
   
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortBy, setSortBy] = useState('date_added_desc'); // ✨ Estado para el filtro/orden
+  const [sortBy, setSortBy] = useState('date_added_desc'); 
 
   const [selectedMember, setSelectedMember] = useState(null);
   const [selectedTx, setSelectedTx] = useState(null);
@@ -58,18 +57,15 @@ export default function ClientsView({
     if (!isoString) return '--/--/----';
     try {
       const d = new Date(isoString);
-      // Lo cambiamos a '2-digit' 👇
       return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' });
     } catch {
       return '--/--/----';
     }
   };
 
-  // ✨ NUEVO: Función para buscar la última compra de un socio
   const getLastPurchaseDate = (member) => {
     if (!member || !transactions || transactions.length === 0) return null;
     
-    // Filtramos las transacciones válidas de este socio
     const memberTx = transactions.filter(tx => 
       tx.status !== 'voided' && 
       tx.client && 
@@ -78,7 +74,6 @@ export default function ClientsView({
 
     if (memberTx.length === 0) return null;
 
-    // Ordenamos por fecha (la más reciente primero) y devolvemos la primera
     memberTx.sort((a, b) => {
        const parseDate = (dStr) => {
          if (!dStr) return 0;
@@ -110,8 +105,8 @@ export default function ClientsView({
       return {
         id: tx.id,
         orderId: tx.id,
-        date: tx.date || '--/--/--', // ✨ Ya viene como DD/MM/AA
-        time: tx.time || tx.timestamp || '--:--', // ✨ Rescatamos la hora real
+        date: tx.date || '--/--/--', 
+        time: tx.time || tx.timestamp || '--:--', 
         type: isRedemption ? 'redeemed' : 'earned',
         concept: isRedemption ? 'Canje en Compra' : 'Compra Regular',
         totalSale: tx.total,
@@ -120,7 +115,6 @@ export default function ClientsView({
         prevPoints: isRedemption ? member.points + pointsDiff : member.points - pointsDiff
       };
     }).sort((a, b) => {
-      // Ordenamiento seguro combinando Fecha y Hora
       const parseDateTime = (dStr, tStr) => {
         if (!dStr || dStr === '--/--/--') return 0;
         if (dStr.includes('/')) {
@@ -142,11 +136,17 @@ export default function ClientsView({
     }
   }, [selectedMember]);
 
-  // ✨ NUEVO: Lógica combinada de Filtrado (Buscador) y Ordenamiento (Select)
   const sortedMembers = useMemo(() => {
-    // 1. Filtrar por buscador
+    // ✨ 1. Evaluamos si el usuario busca test explícitamente
+    const isSearchTest = searchTerm.toLowerCase().includes('test');
+
     let result = (Array.isArray(members) ? members : []).filter((m) => {
       if (!m) return false;
+      
+      // ✨ LIMPIEZA DE TEST: Si el socio tiene palabra "test" y no lo buscan, no aparece
+      const isTest = isTestRecord(m);
+      if (isTest && !isSearchTest) return false;
+
       const term = searchTerm.toLowerCase();
       const name = m.name ? String(m.name).toLowerCase() : '';
       const number = m.memberNumber ? String(m.memberNumber) : '';
@@ -157,7 +157,6 @@ export default function ClientsView({
       return name.includes(term) || number.includes(term) || dni.includes(term) || phone.includes(term) || email.includes(term);
     });
 
-    // Helper interno para convertir cualquier fecha a milisegundos y poder ordenarlas matemáticamente
     const getMs = (dateStr) => {
       if (!dateStr || dateStr === '--/--/----' || dateStr === '--/--/--') return 0;
       if (dateStr.includes('T')) return new Date(dateStr).getTime();
@@ -169,7 +168,6 @@ export default function ClientsView({
       return new Date(dateStr).getTime() || 0;
     };
 
-    // 2. Aplicar el orden seleccionado
     result.sort((a, b) => {
       switch (sortBy) {
         case 'name_asc': return (a.name || '').localeCompare(b.name || '');
@@ -311,7 +309,6 @@ export default function ClientsView({
         
         <div className="flex items-center gap-2 shrink-0">
           
-          {/* ✨ SELECTOR DE ORDENAMIENTO */}
           <div className="relative">
             <ArrowUpDown className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={14} />
             <select
@@ -366,17 +363,14 @@ export default function ClientsView({
               <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider text-center">N° Socio</th>
               <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider">Nombre</th>
               <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider">Contacto</th>
-              {/* ✨ NUEVAS COLUMNAS */}
               <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider hidden lg:table-cell">Actividad</th>
               <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider text-center">Puntos</th>
               <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider text-center">Acciones</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {/* ✨ Usamos sortedMembers en vez de filteredMembers */}
             {sortedMembers.length > 0 ? (
               sortedMembers.map((member) => {
-                // ✨ Calculamos la última compra al vuelo
                 const lastPurchase = getLastPurchaseDate(member);
 
                 return (
@@ -423,7 +417,6 @@ export default function ClientsView({
                       </div>
                     </td>
                     
-                    {/* ✨ CELDA DE ACTIVIDAD (Adición y Última Compra) */}
                     <td className="p-4 hidden lg:table-cell">
                       <div className="flex flex-col gap-1.5">
                         <div className="flex items-center gap-1.5 text-xs text-slate-500" title="Fecha de Adición">
@@ -479,7 +472,6 @@ export default function ClientsView({
             className="w-full max-w-lg h-full bg-white shadow-2xl flex flex-col animate-in slide-in-from-right duration-300" 
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Drawer Header */}
             <div className="p-6 border-b border-gray-100 flex justify-between items-start bg-slate-50/50">
               <div>
                 {!isDrawerEditMode ? (
@@ -494,7 +486,6 @@ export default function ClientsView({
                       {selectedMember.dni && <p>DNI: {selectedMember.dni}</p>}
                       {selectedMember.phone && <p>Tel: {selectedMember.phone}</p>}
                       {selectedMember.email && <p>{selectedMember.email}</p>}
-                      {/* ✨ Mostramos fecha de ingreso también en el perfil */}
                       {(selectedMember.created_at || selectedMember.createdAt) && <p className="text-xs mt-1 text-slate-400">Socio desde: {formatShortDate(selectedMember.created_at || selectedMember.createdAt)}</p>}
                     </div>
                   </>
@@ -522,7 +513,6 @@ export default function ClientsView({
               </div>
             </div>
 
-            {/* Drawer Body */}
             <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
               
               {isDrawerEditMode ? (
@@ -545,7 +535,6 @@ export default function ClientsView({
                 </form>
               ) : (
                 <>
-                  {/* Tarjeta de Saldo */}
                   <div className="bg-gradient-to-r from-blue-600 to-indigo-700 rounded-2xl p-6 text-white shadow-lg mb-4 relative overflow-hidden">
                     <div className="relative z-10">
                       <p className="text-blue-100 text-sm font-medium mb-1 uppercase tracking-wide">Saldo de Puntos</p>
@@ -557,7 +546,6 @@ export default function ClientsView({
                     <div className="absolute right-0 top-0 opacity-10 transform translate-x-4 -translate-y-4"><User size={120} /></div>
                   </div>
 
-                  {/* Botón Imprimir Ticket Puntos */}
                   <button
                     onClick={handlePrintPoints}
                     className="w-full mb-6 py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition shadow-lg flex items-center justify-center gap-2 active:scale-95"
@@ -565,7 +553,6 @@ export default function ClientsView({
                     <Printer size={20} /> Imprimir Ticket de Puntos
                   </button>
 
-                  {/* Historial Timeline */}
                   <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-sm uppercase tracking-wider">
                     <History size={16} className="text-blue-600" />
                     Historial de Movimientos
@@ -580,7 +567,6 @@ export default function ClientsView({
                               <p className={`text-sm font-bold ${mov.type === 'earned' ? 'text-green-600' : mov.type === 'redeemed' ? 'text-orange-600' : 'text-red-600'}`}>
                                 {mov.type === 'earned' ? (mov.concept || 'Compra Realizada') : mov.type === 'redeemed' ? (mov.concept || 'Canje de Puntos') : (mov.concept || 'Vencimiento')}
                               </p>
-                              {/* ✨ FIX: Formato de hora limpio en el Drawer */}
                               <p className="text-xs text-gray-400 font-medium mt-0.5">
                                 {mov.date} • {mov.time.replace(/hs/ig, '').trim().slice(0, 5)} hs
                               </p>
@@ -638,7 +624,7 @@ export default function ClientsView({
         </div>
       )}
 
-      {/* --- MODAL DETALLES TRANSACCIÓN (COMPLETO) --- */}
+      {/* --- MODAL DETALLES TRANSACCIÓN --- */}
       {selectedTx && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[80vh] overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -700,7 +686,6 @@ export default function ClientsView({
               </div>
             </div>
 
-            {/* Acciones Modal */}
             <div className="p-4 border-t bg-slate-50 flex gap-2 justify-end">
                 <button
                   onClick={() => {
@@ -746,7 +731,7 @@ export default function ClientsView({
         </div>
       )}
 
-      {/* --- MODAL CREAR / EDITAR SOCIO (EXTERNO) --- */}
+      {/* --- MODAL CREAR / EDITAR SOCIO --- */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
