@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { ArrowRight, CheckCircle, Edit3, Plus, Save, AlertTriangle, FileText, Download } from 'lucide-react';
 import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
-import { extractRealNote } from './LogsTable';
+import { extractRealNote } from './logHelpers';
 
 // ════════════════════════════════════════════
 //  HELPERS EXPORTABLES
@@ -102,7 +102,7 @@ const Badge = ({ color, children }) => {
     violet: 'bg-violet-100 text-violet-700 border-violet-200',
     amber: 'bg-amber-100 text-amber-700 border-amber-200',
     slate: 'bg-slate-100 text-slate-600 border-slate-200',
-    indigo: 'bg-indigo-100 text-indigo-700 border-indigo-200' // ✨ Agregado Indigo
+    indigo: 'bg-indigo-100 text-indigo-700 border-indigo-200' 
   };
   return (
     <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-bold border ${classes[color] || classes.slate}`}>
@@ -243,7 +243,6 @@ const EditableReasonCard = ({ note, logId, onUpdateNote }) => {
   );
 };
 
-// ✨ RECIBIMOS onReprintPdf ACÁ
 export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
   const action = log.action;
   const details = log.details;
@@ -283,6 +282,118 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
   };
 
   switch (action) {
+
+    // ==============================================
+    // CASOS: OFERTAS Y COMBOS
+    // ==============================================
+    case 'Oferta Creada': {
+      return (
+        <div className="space-y-4">
+          <Card icon="🎫" title="Datos de la Oferta">
+            <Item label="Nombre" value={details.name} />
+            <Item label="Tipo">
+              <Badge color="violet">{details.type}</Badge>
+            </Item>
+            <Item label="Aplicación" value={details.applyTo === 'Seleccion' ? 'Botón POS (Armado)' : 'Automático'} />
+            
+            {details.itemsCount > 0 && <Item label="Cantidad Mínima Requerida" value={details.itemsCount} />}
+            {details.offerPrice > 0 && (
+              <Item label="Precio de Oferta">
+                <span className="text-[#059669] font-bold"><FancyPrice amount={details.offerPrice} /></span>
+              </Item>
+            )}
+            {details.discountValue > 0 && (
+              <Item label="Descuento Directo">
+                <span className="text-red-500 font-bold">-$<FancyPrice amount={details.discountValue} /></span>
+              </Item>
+            )}
+          </Card>
+          
+          {details.productsIncluded && details.productsIncluded.length > 0 && (
+            <Card icon="📦" title="Productos Incluidos">
+              <div className="max-h-40 overflow-y-auto space-y-1.5 custom-scrollbar">
+                {details.productsIncluded.map((pName, idx) => (
+                  <div key={idx} className="px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1] text-slate-700 font-medium">
+                    <span className="text-violet-500 mr-2">•</span>{pName}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+          
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+    }
+
+    case 'Oferta Editada': {
+      return (
+        <div className="space-y-4">
+          <Card icon="🎫" title="Datos de la Oferta">
+            <Item label="Nombre" value={details.name} />
+            <Item label="Tipo">
+              <Badge color="violet">{details.type}</Badge>
+            </Item>
+          </Card>
+
+          <Card icon="🔄" title="Modificaciones Principales">
+            {details.oldPrice !== details.newPrice ? (
+              <ChangeRow field="Precio / Descuento" oldVal={details.oldPrice || 0} newVal={details.newPrice || 0} isPrice={true} />
+            ) : (
+              <Item label="Precios" value="Sin cambios" />
+            )}
+            
+            {details.changedCount && (
+               <div className="mt-2.5 px-3 py-2 bg-[#e0e7ff] text-[#4338ca] rounded-[9px] text-[11px] border border-[#c7d2fe] font-bold flex items-center justify-between">
+                 <div className="flex items-center gap-1.5"><AlertTriangle size={14}/> Listado de Productos</div>
+                 <span>Modificado</span>
+               </div>
+            )}
+          </Card>
+
+          {details.productsIncluded && details.productsIncluded.length > 0 && (
+            <Card icon="📦" title="Nueva Lista de Productos">
+              <div className="max-h-40 overflow-y-auto space-y-1.5 custom-scrollbar">
+                {details.productsIncluded.map((pName, idx) => (
+                  <div key={idx} className="px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1] text-slate-700 font-medium">
+                    <span className="text-violet-500 mr-2">•</span>{pName}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+    }
+
+    case 'Oferta Eliminada': {
+      return (
+        <div className="space-y-4">
+          <Card icon="🗑️" title="Datos de la Oferta Eliminada">
+            <Item label="Nombre" value={details.name} />
+            <Item label="Tipo">
+              <Badge color="red">{details.type}</Badge>
+            </Item>
+            {details.offerPrice > 0 && (
+              <Item label="Precio Final que tenía">
+                <FancyPrice amount={details.offerPrice} />
+              </Item>
+            )}
+          </Card>
+          
+          <Card icon="🔗" title="Impacto en el Catálogo">
+             <Item label="Productos desvinculados" className="!bg-[#fef2f2] !border-[#fecaca]">
+               <span className="text-[#dc2626] font-bold">{details.affectedProductsCount || 0} productos</span>
+             </Item>
+          </Card>
+
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+          <WarnCard>⚠ La oferta fue purgada y retirada automáticamente de todos los productos que la tenían asignada.</WarnCard>
+        </div>
+      );
+    }
     
     // ==============================================
     // CASO: EXPORTACIÓN PDF

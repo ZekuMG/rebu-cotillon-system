@@ -147,9 +147,9 @@ export default function Sidebar({
               onClick={() => { setActiveTab('categories'); setShowAdminMenu(false); }}
               className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2"
             >
-              <Tag size={14} /> Categorías
+              <Tag size={14} /> Categorias y Ofertas
             </button>
-            {/* ✅ Botón de Edición Masiva (Debug Mode) */}
+            {/* ✅ Botón de Edición Masiva */}
             <button
               onClick={() => { setActiveTab('bulk-editor'); setShowAdminMenu(false); }}
               className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2 border-t border-slate-50"

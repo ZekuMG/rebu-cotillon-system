@@ -86,10 +86,15 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
       case 'Venta Modificada': return d.changes?.total ? <FancyPrice amount={d.changes.total.new} /> : 'Editado';
       // EXPORTACIÓN PDF
       case 'Exportación PDF': {
-      const isClient = d.snapshot?.config?.isForClient;
-      const clientName = d.snapshot?.config?.clientName;
-      return isClient ? (clientName || 'Presupuesto Cliente') : 'Reporte Interno';
+        const isClient = d.snapshot?.config?.isForClient;
+        const clientName = d.snapshot?.config?.clientName;
+        return isClient ? (clientName || 'Presupuesto Cliente') : 'Reporte Interno';
       }
+      // OFERTAS
+      case 'Oferta Creada':
+      case 'Oferta Editada':
+      case 'Oferta Eliminada': return d.type ? d.type : 'Oferta';
+      default: return '';
     }
   };
 
@@ -133,6 +138,10 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
       case 'Venta Modificada': return `Ajuste en Transacción #${getTransactionId(d) || 'S/N'}`;
       // EXPORTACIÓN PDF
       case 'Exportación PDF': return d.config?.isForClient ? (d.config?.clientName || 'Presupuesto Cliente') : 'Reporte Interno';
+      // OFERTAS
+      case 'Oferta Creada':
+      case 'Oferta Editada':
+      case 'Oferta Eliminada': return d.name || 'Registro de Oferta';
       default: return d.title || d.name || d.product || action;
     }
   };

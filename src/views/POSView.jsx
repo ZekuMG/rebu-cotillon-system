@@ -22,14 +22,14 @@ import {
   Scale,
   Edit2,
   Wand2,
-  AlertTriangle // ✨ Usado para el icono de vencido
+  AlertTriangle,
+  TicketPercent // ✨ Icono para ofertas
 } from 'lucide-react';
+import Swal from 'sweetalert2'; // ✨ Para las alertas inteligentes
 import { PAYMENT_METHODS } from '../data';
-// ♻️ FIX: Importamos FancyPrice junto con los helpers
 import { formatNumber, formatWeight, getPricePerKg } from '../utils/helpers';
 import { FancyPrice } from '../components/FancyPrice';
 
-// ✨ HELPER: Verifica si la fecha ya pasó (sin problemas de zona horaria)
 const isProductExpired = (dateString) => {
   if (!dateString) return false;
   const today = new Date();
@@ -39,9 +39,6 @@ const isProductExpired = (dateString) => {
   return expDate.getTime() < today.getTime();
 };
 
-// ==========================================
-// MINI-MODAL: Ingreso de gramos para peso
-// ==========================================
 const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
   const [grams, setGrams] = useState('');
   const gramsNum = parseInt(grams) || 0;
@@ -115,9 +112,6 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
   );
 };
 
-// ==========================================
-// MINI-MODAL: Producto Personalizado (Rápido)
-// ==========================================
 const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
   const [title, setTitle] = useState('');
   const [type, setType] = useState('quantity'); 
@@ -143,7 +137,7 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
       title: `* ${title.trim()}`, 
       price: type === 'weight' ? p / 1000 : p,
       product_type: type,
-      stock: 999999, 
+      stock: 999999, // Ficticio para que no joda
       isCustom: true
     };
 
@@ -253,16 +247,14 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
   );
 };
 
-// ==========================================
-// VISTA PRINCIPAL: POS
-// ==========================================
 export default function POSView({
   inventory, categories, addToCart, cart, removeFromCart, updateCartItemQty,
   selectedPayment, setSelectedPayment, installments, setInstallments,
   calculateTotal, handleCheckout, posSearch, setPosSearch,
   selectedCategory, setSelectedCategory, posViewMode, setPosViewMode,
   gridColumns, setGridColumns, selectedClient, setSelectedClient,
-  onOpenClientModal, onOpenRedemptionModal
+  onOpenClientModal, onOpenRedemptionModal,
+  offers = [] // ✨ Recibimos las ofertas
 }) {
   const [showGridMenu, setShowGridMenu] = useState(false);
   const [showClientCheckModal, setShowClientCheckModal] = useState(false);
@@ -271,6 +263,7 @@ export default function POSView({
   const [editingWeightValue, setEditingWeightValue] = useState('');
   
   const [isCustomModalOpen, setIsCustomModalOpen] = useState(false);
+  const [isOffersDrawerOpen, setIsOffersDrawerOpen] = useState(false); // ✨ Modal de combos
 
   const [visibleCount, setVisibleCount] = useState(40);
 
@@ -279,7 +272,13 @@ export default function POSView({
   }, [posSearch, selectedCategory]);
 
   const getEffectiveStock = (productId, originalStock) => {
-    const itemInCart = cart.find(item => item.id === productId && !item.isReward && !item.isCustom);
+    // Si el item es custom, combo, o de descuento, NO revisamos contra el stock original
+    // (Ya que el stock original suele ser undef o 0 o no importa para estos items)
+    if (String(productId).startsWith('custom_') || String(productId).startsWith('combo_') || String(productId).startsWith('desc_')) {
+      return 999999;
+    }
+
+    const itemInCart = cart.find(item => item.id === productId && !item.isReward && !item.isCustom && !item.isCombo && !item.isDiscount);
     const qtyInCart = itemInCart ? itemInCart.quantity : 0;
     return originalStock - qtyInCart;
   };
@@ -305,6 +304,27 @@ export default function POSView({
     addToCart(customProduct, amount);
   };
 
+  // ✨ AGREGAR OFERTA AL CARRITO
+  const handleAddComboToCart = (offer) => {
+    const comboId = `combo_${Date.now()}`;
+    const comboItem = {
+      id: comboId,
+      title: `🎫 ${offer.name} (${offer.type})`,
+      price: Number(offer.offerPrice),
+      quantity: 1,
+      isCombo: true,
+      originalOfferId: offer.id,
+      product_type: 'quantity',
+      productsIncluded: offer.productsIncluded, // Guardamos qué contiene para luego descontar stock en checkout
+      stock: 999999 // Ficticio para evitar alertas
+    };
+
+    addToCart(comboItem, 1);
+    setIsOffersDrawerOpen(false);
+    
+    // (Opcional: Mostrar alerta si falta stock de alguno de los items del combo)
+  };
+
   const handleSaveWeightEdit = (itemId) => {
     const newGrams = parseInt(editingWeightValue);
     if (!isNaN(newGrams) && newGrams > 0) {
@@ -314,12 +334,153 @@ export default function POSView({
     setEditingWeightValue('');
   };
 
-  const handlePreCheckout = () => {
+  // ✨ AUTO-CHEQUEO INTELIGENTE DE OFERTAS
+  const checkSmartDiscounts = () => {
+    const applicableOffers = [];
+
+    // 1. Agrupamos cantidades del carrito por ID (ignorando premios o combos ya armados)
+    const cartQtyMap = {};
+    cart.forEach(item => {
+      if (!item.isReward && !item.isCustom && !item.isCombo && !item.isDiscount) {
+        cartQtyMap[item.id] = (cartQtyMap[item.id] || 0) + item.quantity;
+      }
+    });
+
+    // 2. Evaluamos cada oferta activa
+    offers.forEach(offer => {
+      if (offer.applyTo === 'Seleccion') return; // Ignoramos los Combos manuales
+
+      // Evitamos aplicar la misma oferta 2 veces si ya está el ítem de descuento
+      const alreadyApplied = cart.some(c => c.isDiscount && c.originalOfferId === offer.id);
+      if (alreadyApplied) return; 
+
+      // Evaluador MULTI-BUY (2x1, 3x2, etc)
+      if (['2x1', '3x1', '3x2', '4x2', '4x3'].includes(offer.type)) {
+        let matchCount = 0;
+        let applicableItems = [];
+        
+        offer.productsIncluded.forEach(op => {
+          if (cartQtyMap[op.id]) {
+            matchCount += cartQtyMap[op.id];
+            applicableItems.push({ ...op, inCart: cartQtyMap[op.id] });
+          }
+        });
+
+        const [req, pay] = offer.type.split('x').map(Number); // ej: 3x2 -> req=3, pay=2
+        
+        if (matchCount >= req) {
+           const timesApplied = Math.floor(matchCount / req);
+           const freeItemsCount = timesApplied * (req - pay);
+           
+           // Ordenamos de menor a mayor precio para descontar los más baratos (lógica comercial estándar)
+           applicableItems.sort((a, b) => a.price - b.price);
+           let discountAmount = 0;
+           let freeItemsLeft = freeItemsCount;
+           
+           applicableItems.forEach(item => {
+              if (freeItemsLeft > 0) {
+                 const deductQty = Math.min(item.inCart, freeItemsLeft);
+                 discountAmount += deductQty * item.price;
+                 freeItemsLeft -= deductQty;
+              }
+           });
+
+           if (discountAmount > 0) {
+             applicableOffers.push({
+               id: `desc_${offer.id}_${Date.now()}`,
+               title: `🎁 Promo ${offer.type}: ${offer.name}`,
+               price: -discountAmount, // Precio negativo para restar al total
+               quantity: 1,
+               isCustom: true, // Ignora validación de stock
+               isDiscount: true,
+               originalOfferId: offer.id,
+               product_type: 'quantity',
+               description: `Aplicar ${offer.type} en ${offer.name} (-$${discountAmount.toLocaleString('es-AR')})`,
+               stock: 999999
+             });
+           }
+        }
+      }
+      
+      // Evaluador MAYORISTA
+      if (offer.type === 'Mayorista') {
+         offer.productsIncluded.forEach(op => {
+            if (cartQtyMap[op.id] >= offer.itemsCount) {
+               const currentPriceInCart = cart.find(c => c.id === op.id)?.price;
+               if (currentPriceInCart > offer.offerPrice) {
+                  const diff = currentPriceInCart - offer.offerPrice;
+                  const discountAmount = diff * cartQtyMap[op.id];
+                  applicableOffers.push({
+                     id: `desc_mayo_${op.id}_${Date.now()}`,
+                     title: `💎 Mayorista: ${op.title}`,
+                     price: -discountAmount,
+                     quantity: 1,
+                     isCustom: true,
+                     isDiscount: true,
+                     originalOfferId: offer.id,
+                     product_type: 'quantity',
+                     description: `Precio Mayorista en ${op.title} (-$${discountAmount.toLocaleString('es-AR')})`,
+                     stock: 999999
+                  });
+               }
+            }
+         });
+      }
+    });
+
+    // 3. Si hay ofertas aplicables, frenamos el flujo y preguntamos
+    if (applicableOffers.length > 0) {
+       let htmlContent = '<ul style="text-align:left; font-size:14px; margin-top:10px; color:#475569;">';
+       applicableOffers.forEach(o => {
+          htmlContent += `<li style="margin-bottom:4px;">✅ <b>${o.description}</b></li>`;
+       });
+       htmlContent += '</ul>';
+
+       Swal.fire({
+          title: '¡Ofertas Detectadas!',
+          html: `El sistema detectó descuentos aplicables a este carrito:${htmlContent}`,
+          icon: 'info',
+          showCancelButton: true,
+          confirmButtonText: 'Aplicar Descuentos',
+          cancelButtonText: 'No, continuar así',
+          confirmButtonColor: '#8b5cf6', 
+          cancelButtonColor: '#94a3b8'
+       }).then((result) => {
+          if (result.isConfirmed) {
+             // Inyectamos los descuentos al carrito
+             applicableOffers.forEach(discountItem => {
+                addToCart(discountItem);
+             });
+             // Mensaje de éxito e interrupción para que el vendedor vea el carrito actualizado
+             Swal.fire({
+               title: '¡Aplicado!',
+               text: 'Revisa el total actualizado y presiona Cobrar nuevamente.',
+               icon: 'success',
+               timer: 2000,
+               showConfirmButton: false
+             });
+          } else if (result.dismiss === Swal.DismissReason.cancel) {
+             // El usuario decidió no aplicarlos, seguimos al cobro normal
+             proceedToCheckoutFlow();
+          }
+       });
+       return true; // Retornamos true para pausar el handlePreCheckout
+    }
+    return false; // No hay ofertas, sigue de largo
+  };
+
+  const proceedToCheckoutFlow = () => {
     if (cart.length > 0 && !selectedClient) {
       setShowClientCheckModal(true);
     } else {
       handleCheckout();
     }
+  };
+
+  const handlePreCheckout = () => {
+    const hasDiscountsPending = checkSmartDiscounts();
+    if (hasDiscountsPending) return; // Pausa
+    proceedToCheckoutFlow(); // Sigue
   };
 
   const confirmCheckoutWithoutClient = () => {
@@ -361,6 +522,7 @@ export default function POSView({
   };
 
   const displayedProducts = filteredProducts.slice(0, visibleCount);
+  const selectableOffers = offers.filter(o => o.applyTo === 'Seleccion'); // Solo mostramos combos/kits armados
 
   const subtotal = cart.reduce((t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
   const total = calculateTotal();
@@ -374,6 +536,19 @@ export default function POSView({
         
         {/* Header POS */}
         <div className="p-4 bg-white border-b shrink-0 flex gap-3 items-center z-30 relative">
+          
+          {/* ✨ BOTÓN DE OFERTAS */}
+          {selectableOffers.length > 0 && (
+            <button 
+              onClick={() => setIsOffersDrawerOpen(true)}
+              className="bg-violet-100 hover:bg-violet-200 text-violet-700 border border-violet-200 px-3 py-3 rounded-xl font-black flex items-center gap-2 shadow-sm transition-colors shrink-0"
+              title="Ver Combos y Ofertas"
+            >
+              <TicketPercent size={20} />
+              <span className="hidden md:inline uppercase text-xs tracking-wider">Combos</span>
+            </button>
+          )}
+
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
             <input type="text" placeholder="Buscar producto o escanear..." className="w-full pl-10 pr-4 py-3 border rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-fuchsia-500 outline-none transition-all font-medium" value={posSearch} onChange={(e) => setPosSearch(e.target.value)} autoFocus />
@@ -431,7 +606,6 @@ export default function POSView({
                 const isWeight = product.product_type === 'weight';
                 let stockBadgeClass = effectiveStock > (isWeight ? 500 : 10) ? 'bg-green-100 text-green-700' : effectiveStock > (isWeight ? 100 : 5) ? 'bg-amber-100 text-amber-700' : effectiveStock > 0 ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-500';
                 
-                // ✨ CHEQUEO DE VENCIMIENTO
                 const expired = isProductExpired(product.expiration_date);
 
                 return (
@@ -439,7 +613,6 @@ export default function POSView({
                     <div className="aspect-[4/3] bg-slate-50 relative overflow-hidden w-full">
                       {product.image ? (<img src={product.image} alt={product.title} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-500" />) : (<div className="w-full h-full flex flex-col items-center justify-center bg-slate-200/50 p-2 text-center group-hover:bg-slate-200 transition-colors"><span className={`font-bold text-slate-500 uppercase leading-tight ${gridColumns > 6 ? 'text-[10px]' : 'text-xs'}`}>{product.title}</span></div>)}
                       
-                      {/* ✨ OVERLAY DE VENCIDO (Superpone al stock si está vencido pero no agotado) */}
                       {expired && !isOutOfStock && (
                         <div className="absolute inset-0 bg-red-500/10 flex items-center justify-center z-10 pointer-events-none backdrop-blur-[0.5px]">
                            <span className="bg-red-600 text-white text-[10px] font-black px-2 py-1 rounded shadow-md border border-red-800 flex items-center gap-1">
@@ -506,7 +679,6 @@ export default function POSView({
                 const isOutOfStock = effectiveStock <= 0;
                 const isWeight = product.product_type === 'weight';
                 
-                // ✨ CHEQUEO DE VENCIMIENTO
                 const expired = isProductExpired(product.expiration_date);
 
                 return (
@@ -515,7 +687,6 @@ export default function POSView({
                       {product.image ? (<img src={product.image} alt="" className="w-full h-full object-cover" />) : (<div className="w-full h-full flex items-center justify-center bg-slate-200 text-[8px] font-bold text-slate-500 p-1 text-center leading-none">{product.title.slice(0, 8)}..</div>)}
                       {isWeight && <div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-1 py-0.5 z-20"><Scale size={8} className="text-white" /></div>}
                       
-                      {/* ✨ OVERLAY LISTA */}
                       {expired && !isOutOfStock && (
                         <div className="absolute inset-0 bg-red-600/20 flex items-center justify-center backdrop-blur-[1px] z-10 pointer-events-none">
                           <AlertTriangle size={16} className="text-red-600 drop-shadow-md" />
@@ -525,7 +696,6 @@ export default function POSView({
                     <div className="flex-1 min-w-0">
                       <h4 className={`font-bold text-sm truncate ${expired ? 'text-red-700' : 'text-slate-800'}`}>
                         {product.title}
-                        {/* ✨ BADGE LISTA */}
                         {expired && <span className="ml-2 text-[8px] bg-red-100 text-red-700 border border-red-200 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider align-middle">Vencido</span>}
                       </h4>
                       {isWeight && <span className="text-[10px] text-amber-600 font-bold">Producto por peso</span>}
@@ -581,18 +751,23 @@ export default function POSView({
               const isWeight = item.product_type === 'weight';
               const isEditingWeight = editingWeightItemId === item.id;
               const isCustom = item.isCustom;
-              
-              // ✨ CHEQUEO VENCIMIENTO EN CARRITO
+              const isCombo = item.isCombo; // ✨ Detectamos si es un combo
+              const isDiscount = item.isDiscount; // ✨ Detectamos si es un descuento
+
               const expired = isProductExpired(item.expiration_date);
 
               return (
-                <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`flex gap-3 p-3 rounded-xl border shadow-sm transition-colors group ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : isCustom ? 'bg-indigo-50/40 border-indigo-100' : 'bg-white hover:border-fuchsia-200'}`}>
-                  <div className="w-14 h-14 bg-slate-50 rounded-lg overflow-hidden shrink-0 border relative flex items-center justify-center">
+                <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`flex gap-3 p-3 rounded-xl border shadow-sm transition-colors group ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : isDiscount ? 'bg-emerald-50/50 border-emerald-200' : isCustom ? 'bg-indigo-50/40 border-indigo-100' : isCombo ? 'bg-violet-50/50 border-violet-200' : 'bg-white hover:border-fuchsia-200'}`}>
+                  <div className={`w-14 h-14 rounded-lg overflow-hidden shrink-0 border relative flex items-center justify-center ${isCombo ? 'bg-violet-100' : isDiscount ? 'bg-emerald-100' : 'bg-slate-50'}`}>
                     {item.image ? (
                       <img src={item.image} alt="" className="w-full h-full object-cover" />
                     ) : (
-                      isCustom ? (
+                      isDiscount ? (
+                         <TicketPercent size={20} className="text-emerald-500" />
+                      ) : isCustom ? (
                          <Wand2 size={20} className="text-indigo-400" />
+                      ) : isCombo ? (
+                         <TicketPercent size={20} className="text-violet-500" />
                       ) : (
                          <div className="w-full h-full flex items-center justify-center bg-slate-100 text-[9px] font-bold text-slate-400 text-center p-1 leading-none">{item.title.slice(0,12)}..</div>
                       )
@@ -602,10 +777,9 @@ export default function POSView({
                   
                   <div className="flex-1 min-w-0 flex flex-col justify-between">
                     <div className="flex justify-between items-start gap-2">
-                      <h4 className={`font-bold text-sm line-clamp-1 leading-tight ${item.isReward ? 'text-fuchsia-700' : isCustom ? 'text-indigo-800' : expired ? 'text-red-700' : 'text-slate-800'}`}>
+                      <h4 className={`font-bold text-sm line-clamp-2 leading-tight ${item.isReward ? 'text-fuchsia-700' : isDiscount ? 'text-emerald-700' : isCustom ? 'text-indigo-800' : isCombo ? 'text-violet-800' : expired ? 'text-red-700' : 'text-slate-800'}`}>
                         {item.isReward && <Gift size={12} className="inline mr-1 text-fuchsia-500" />}
                         {item.title}
-                        {/* ✨ ICONO ALERTA EN CARRITO */}
                         {expired && <AlertTriangle size={12} className="inline ml-1 text-red-500" title="¡Producto Vencido!" />}
                       </h4>
                       <button onClick={() => removeFromCart(item.id)} className="text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
@@ -629,13 +803,13 @@ export default function POSView({
                         </div>
                       ) : (
                         <div className="flex items-center gap-2 bg-slate-50 rounded-lg p-0.5 border">
-                          <button onClick={() => updateCartItemQty(item.id, item.quantity - 1)} className="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:text-red-500 disabled:opacity-50" disabled={item.quantity <= 1 || item.isReward}><Minus size={12} /></button>
+                          <button onClick={() => updateCartItemQty(item.id, item.quantity - 1)} className="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:text-red-500 disabled:opacity-50" disabled={item.quantity <= 1 || item.isReward || isDiscount}><Minus size={12} /></button>
                           <span className="text-xs font-bold w-4 text-center">{item.quantity}</span>
-                          <button onClick={() => updateCartItemQty(item.id, item.quantity + 1)} className="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:text-green-500 disabled:opacity-50" disabled={item.isReward}><Plus size={12} /></button>
+                          <button onClick={() => updateCartItemQty(item.id, item.quantity + 1)} className="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:text-green-500 disabled:opacity-50" disabled={item.isReward || isCombo || isDiscount}><Plus size={12} /></button>
                         </div>
                       )}
-                      <p className={`font-bold ${item.isReward ? 'text-fuchsia-600' : 'text-slate-800'}`}>
-                        {item.isReward ? 'GRATIS' : <FancyPrice amount={item.price * item.quantity} />}
+                      <p className={`font-bold ${item.isReward ? 'text-fuchsia-600' : isDiscount ? 'text-emerald-600' : isCombo ? 'text-violet-700' : 'text-slate-800'}`}>
+                        {item.isReward ? 'GRATIS' : isDiscount ? <span className="text-emerald-600 font-black">-${Math.abs(item.price * item.quantity).toLocaleString('es-AR')}</span> : <FancyPrice amount={item.price * item.quantity} />}
                       </p>
                     </div>
                   </div>
@@ -751,6 +925,56 @@ export default function POSView({
           </div>
         </div>
       )}
+
+      {/* ✨ DRAWER DE OFERTAS Y COMBOS */}
+      {isOffersDrawerOpen && (
+        <>
+          <div 
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm z-[60] transition-opacity"
+            onClick={() => setIsOffersDrawerOpen(false)}
+          ></div>
+          <div className="absolute top-0 left-0 h-full w-[400px] max-w-full bg-white shadow-2xl z-[61] flex flex-col animate-in slide-in-from-left duration-300">
+            <div className="p-4 bg-violet-700 text-white flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-2">
+                <TicketPercent size={20} />
+                <h2 className="font-bold text-lg">Combos Disponibles</h2>
+              </div>
+              <button onClick={() => setIsOffersDrawerOpen(false)} className="text-violet-200 hover:text-white bg-violet-800/50 p-1.5 rounded-lg"><X size={20}/></button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-4 bg-slate-50 custom-scrollbar space-y-3">
+              {selectableOffers.map(offer => (
+                <div key={offer.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col">
+                   <div className="flex justify-between items-start mb-2">
+                     <div>
+                       <span className="bg-violet-100 text-violet-700 text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider">{offer.type}</span>
+                       <h3 className="font-bold text-slate-800 text-base mt-1">{offer.name}</h3>
+                     </div>
+                     <span className="font-black text-emerald-600 text-lg">${Number(offer.offerPrice).toLocaleString('es-AR')}</span>
+                   </div>
+                   
+                   <div className="mt-2 pt-2 border-t border-slate-100 mb-4">
+                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Incluye:</p>
+                     <ul className="text-xs text-slate-600 font-medium space-y-1">
+                       {offer.productsIncluded.map((p, i) => (
+                         <li key={i} className="flex items-start gap-1"><span className="text-violet-400 mt-0.5">•</span> {p.title}</li>
+                       ))}
+                     </ul>
+                   </div>
+
+                   <button 
+                     onClick={() => handleAddComboToCart(offer)}
+                     className="w-full mt-auto py-2.5 bg-violet-50 text-violet-700 font-bold text-sm rounded-lg border border-violet-200 hover:bg-violet-600 hover:text-white hover:border-violet-600 transition-colors flex justify-center items-center gap-2"
+                   >
+                     <Plus size={16} /> Agregar al Pedido
+                   </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
     </div>
   );
 }

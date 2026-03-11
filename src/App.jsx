@@ -25,7 +25,7 @@ import POSView from './views/POSView';
 import ClientsView from './views/ClientsView';
 import HistoryView from './views/HistoryView';
 import LogsView from './views/LogsView';
-import CategoryManagerView from './views/CategoryManagerView';
+import CatalogManagerView from './views/CatalogManagerView';
 import RewardsView from './views/RewardsView';
 import ReportsHistoryView from './views/ReportsHistoryView';
 import BulkEditorView from './views/BulkEditorView';
@@ -54,13 +54,11 @@ import { RedemptionModal } from './components/modals/RedemptionModal';
 import { TicketPrintLayout } from './components/TicketPrintLayout';
 import { ClientSelectionModal } from './components/modals/ClientSelectionModal';
 import { TransactionDetailModal } from './components/modals/HistoryModals'; 
-import { ExportPdfLayout } from './components/ExportPdfLayout'; // ✨ NUEVO: Importamos el diseño del PDF
+import { ExportPdfLayout } from './components/ExportPdfLayout';
 
 // Código de barras
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
-
-// Utils: isTestRecord: Función recursiva para detectar si un objeto (o cualquier valor dentro de él) contiene la palabra "test" (case-insensitive). Se usa para marcar registros sospechosos de ser pruebas o datos no reales, y así excluirlos de métricas y cierres oficiales.
-import { isTestRecord } from './utils/helpers.js'; // (Ajustá la ruta si hace falta)
+import { isTestRecord } from './utils/helpers.js';
 
 export default function PartySupplyApp() {
   
@@ -77,6 +75,7 @@ export default function PartySupplyApp() {
   const [members, setMembers] = useState([]);
   const [pastClosures, setPastClosures] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  const [offers, setOffers] = useState([]); // ✨ NUEVO ESTADO: Ofertas
 
   const [openingBalance, setOpeningBalance] = useState(0);
   const [isRegisterClosed, setIsRegisterClosed] = useState(true); 
@@ -101,7 +100,8 @@ export default function PartySupplyApp() {
         closureResult,
         catResult,
         rewardsResult,
-        registerResult
+        registerResult,
+        offersResult // ✨ NUEVA QUERY
       ] = await Promise.allSettled([
         supabase.from('products').select('*').eq('is_active', true).order('title').limit(10000),
         supabase.from('clients').select('*').eq('is_active', true).order('name').limit(10000),
@@ -111,7 +111,8 @@ export default function PartySupplyApp() {
         supabase.from('cash_closures').select('*').order('created_at', { ascending: false }).limit(10000),
         supabase.from('categories').select('*').order('name').limit(5000),
         supabase.from('rewards').select('*').order('points_cost', { ascending: true }).limit(5000),
-        supabase.from('register_state').select('*').eq('id', 1).maybeSingle() 
+        supabase.from('register_state').select('*').eq('id', 1).maybeSingle(),
+        supabase.from('offers').select('*').eq('is_active', true).order('created_at', { ascending: false }) // ✨ Cargar Ofertas
       ]);
 
       const safeData = (result, tableName) => {
@@ -280,6 +281,23 @@ export default function PartySupplyApp() {
         })));
       }
 
+      // ✨ Procesar Ofertas
+      const offersData = safeData(offersResult, 'ofertas');
+      if (offersData) {
+        setOffers(offersData.map(o => ({
+          id: o.id,
+          name: o.name,
+          type: o.type,
+          applyTo: o.apply_to,
+          productsIncluded: o.products_included || [],
+          itemsCount: Number(o.items_count),
+          discountValue: Number(o.discount_value),
+          offerPrice: Number(o.offer_price),
+          profitMargin: Number(o.profit_margin),
+          createdBy: o.created_by
+        })));
+      }
+
       let registerState = null;
       if (registerResult.status === 'fulfilled' && !registerResult.value.error) {
         registerState = registerResult.value.data;
@@ -402,7 +420,7 @@ export default function PartySupplyApp() {
   const [isAutoCloseAlertOpen, setIsAutoCloseAlertOpen] = useState(false);
   
   const [ticketToView, setTicketToView] = useState(null);
-  const [exportPdfData, setExportPdfData] = useState(null); // ✨ NUEVO: Estado para almacenar datos del PDF a exportar
+  const [exportPdfData, setExportPdfData] = useState(null);
 
   const [isDeleteProductModalOpen, setIsDeleteProductModalOpen] = useState(false);
   const [productToDelete, setProductToDelete] = useState(null);
@@ -530,7 +548,6 @@ export default function PartySupplyApp() {
     }
   };
 
-  // ✨ NUEVO: Manejador para exportar productos
   const handleExportProducts = (config, items) => {
     const dateStr = formatDateAR(new Date());
     const dataToExport = { config, items, date: dateStr };
@@ -541,42 +558,179 @@ export default function PartySupplyApp() {
       type: config.isForClient ? 'Presupuesto' : 'Reporte Interno',
       clientName: config.clientName || null,
       itemCount: items.length,
-      snapshot: dataToExport // La foto exacta con los precios de este preciso momento
+      snapshot: dataToExport
     };
 
     addLog('Exportación PDF', logDetails, 'Exportación de catálogo');
 
-    // Le damos unos milisegundos para que React dibuje el componente oculto antes de disparar la impresión
     setTimeout(() => {
       window.print();
       
-      // Limpiamos el estado después de imprimir para no interrumpir la impresión de tickets futuros
       setTimeout(() => {
         setExportPdfData(null);
       }, 1000);
     }, 500);
   };
   
-  // ✨ NUEVO: Manejador para re-imprimir PDFs viejos desde Logs
   const handleReprintPdf = (logDetails) => {
     if (!logDetails || !logDetails.snapshot) {
       showNotification('error', 'Error', 'No hay datos guardados para recrear este PDF.');
       return;
     }
     
-    // 1. Cargamos los datos viejos en el estado de impresión
     setExportPdfData(logDetails.snapshot);
 
-    // 2. Damos un instante para que React dibuje la vista y disparamos la impresión
     setTimeout(() => {
       window.print();
       
-      // 3. Limpiamos para no romper futuros tickets
       setTimeout(() => {
         setExportPdfData(null);
       }, 1000);
     }, 500);
   };
+
+  // ==========================================
+  // ✨ HANDLERS DE OFERTAS
+  // ==========================================
+  const handleAddOffer = async (offerData) => {
+    try {
+      const payload = {
+        name: offerData.name,
+        type: offerData.type,
+        apply_to: offerData.applyTo,
+        products_included: offerData.productsIncluded || [],
+        items_count: Number(offerData.itemsCount) || 0,
+        discount_value: Number(offerData.discountValue) || 0,
+        offer_price: Number(offerData.offerPrice) || 0,
+        profit_margin: Number(offerData.profitMargin) || 0,
+        created_by: currentUser?.name || 'Sistema'
+      };
+
+      const { data, error } = await supabase.from('offers').insert([payload]).select().single();
+      if (error) throw error;
+
+      const newOffer = {
+        id: data.id,
+        name: data.name,
+        type: data.type,
+        applyTo: data.apply_to,
+        productsIncluded: data.products_included,
+        itemsCount: data.items_count,
+        discountValue: data.discount_value,
+        offerPrice: data.offer_price,
+        profitMargin: data.profit_margin,
+        createdBy: data.created_by
+      };
+
+      setOffers([newOffer, ...offers]);
+      
+      addLog('Oferta Creada', {
+        name: newOffer.name,
+        type: newOffer.type,
+        applyTo: newOffer.applyTo,
+        productsIncluded: newOffer.productsIncluded.map(p => p.title),
+        itemsCount: newOffer.itemsCount,
+        discountValue: newOffer.discountValue,
+        offerPrice: newOffer.offerPrice,
+        profitMargin: newOffer.profitMargin
+      });
+      
+      showNotification('success', 'Oferta Creada', 'La oferta se guardó en el catálogo.');
+    } catch (e) {
+      console.error(e);
+      showNotification('error', 'Error', 'No se pudo crear la oferta en la nube.');
+    }
+  };
+
+  const handleUpdateOffer = async (id, updatedData) => {
+    try {
+      const oldOffer = offers.find(o => o.id === id);
+
+      const payload = {
+        name: updatedData.name,
+        type: updatedData.type,
+        apply_to: updatedData.applyTo,
+        products_included: updatedData.productsIncluded || [],
+        items_count: Number(updatedData.itemsCount) || 0,
+        discount_value: Number(updatedData.discountValue) || 0,
+        offer_price: Number(updatedData.offerPrice) || 0,
+        profit_margin: Number(updatedData.profitMargin) || 0
+      };
+
+      const { error } = await supabase.from('offers').update(payload).eq('id', id);
+      if (error) throw error;
+
+      setOffers(offers.map(o => o.id === id ? { ...o, ...updatedData } : o));
+      
+      addLog('Oferta Editada', {
+        id,
+        name: updatedData.name,
+        type: updatedData.type,
+        applyTo: updatedData.applyTo,
+        productsIncluded: updatedData.productsIncluded.map(p => p.title),
+        itemsCount: updatedData.itemsCount,
+        discountValue: updatedData.discountValue,
+        offerPrice: updatedData.offerPrice,
+        profitMargin: updatedData.profitMargin,
+        // Comparativas para el Log
+        changedCount: updatedData.productsIncluded.length !== oldOffer.productsIncluded.length,
+        oldPrice: oldOffer.offerPrice,
+        newPrice: updatedData.offerPrice
+      });
+
+      showNotification('success', 'Oferta Actualizada', 'Los cambios se guardaron.');
+    } catch (e) {
+      console.error(e);
+      showNotification('error', 'Error', 'No se pudo actualizar la oferta.');
+    }
+  };
+
+  const handleDeleteOffer = async (id) => {
+    try {
+      const offerToDelete = offers.find(o => o.id === id);
+      if (!offerToDelete) return;
+
+      const { error } = await supabase.from('offers').update({ is_active: false }).eq('id', id);
+      if (error) throw error;
+
+      // 1. Quitar la oferta del estado de React
+      setOffers(offers.filter(o => o.id !== id));
+
+      // 2. Eliminar la oferta de los productos en el inventario (Para cuando el POS las busque por producto)
+      // (Esta lógica se disparará localmente, luego se sincronizará con la nube si es necesario).
+      const affectedProducts = inventory.filter(p => p.activeOffers && p.activeOffers.includes(id));
+      if (affectedProducts.length > 0) {
+          const promises = affectedProducts.map(p => {
+              const newActiveOffers = p.activeOffers.filter(oid => oid !== id);
+              return supabase.from('products').update({ active_offers: newActiveOffers }).eq('id', p.id);
+          });
+          await Promise.allSettled(promises);
+          
+          setInventory(inventory.map(p => {
+              if (p.activeOffers && p.activeOffers.includes(id)) {
+                  return { ...p, activeOffers: p.activeOffers.filter(oid => oid !== id) };
+              }
+              return p;
+          }));
+      }
+
+      addLog('Oferta Eliminada', {
+        id,
+        name: offerToDelete.name,
+        type: offerToDelete.type,
+        applyTo: offerToDelete.applyTo,
+        itemsCount: offerToDelete.itemsCount,
+        offerPrice: offerToDelete.offerPrice,
+        affectedProductsCount: affectedProducts.length
+      }, 'Eliminación permanente');
+
+      showNotification('success', 'Oferta Eliminada', 'Se retiró del sistema y de los productos aplicados.');
+    } catch (e) {
+      console.error(e);
+      showNotification('error', 'Error al Eliminar', 'No se pudo eliminar la oferta.');
+    }
+  };
+
 
   const handleAddExpense = async (expenseData) => {
     try {
@@ -852,48 +1006,66 @@ export default function PartySupplyApp() {
     }
   };
 
-  const addToCart = (item, grams = null) => {
-    if (item.stock === 0) return;
+  const addToCart = (item, initialQty = null) => {
+    // Definimos la cantidad inicial a agregar (por defecto 1, o los gramos/cantidad pasada)
+    const qtyToAdd = Number(initialQty) || 1;
+
+    // Si es un producto regular y su stock es 0, bloqueamos
+    if (item.stock === 0 && !item.isCustom && !item.isCombo && !item.isDiscount) return;
     
-    if (item.product_type === 'weight' && grams) {
+    if (item.product_type === 'weight' && initialQty && !item.isCustom) {
       const existing = cart.find((c) => c.id === item.id && !c.isReward);
       if (existing) {
-        const newTotal = existing.quantity + grams;
+        const newTotal = existing.quantity + qtyToAdd;
         if (newTotal > item.stock) {
           showNotification('error', 'Stock Insuficiente', `Solo quedan ${item.stock}g disponibles.`);
           return;
         }
         setCart(cart.map((c) => (c.id === item.id && !c.isReward ? { ...c, quantity: newTotal } : c)));
       } else {
-        if (grams > item.stock) {
+        if (qtyToAdd > item.stock) {
           showNotification('error', 'Stock Insuficiente', `Solo quedan ${item.stock}g disponibles.`);
           return;
         }
-        setCart([...cart, { ...item, quantity: grams }]);
+        setCart([...cart, { ...item, quantity: qtyToAdd }]);
       }
       return;
     }
     
     const existing = cart.find((c) => c.id === item.id && !c.isReward);
     if (existing) {
-      if (existing.quantity >= item.stock) {
+      // Validamos stock solo si NO es un item especial
+      if (!item.isCustom && !item.isCombo && !item.isDiscount && existing.quantity + qtyToAdd > item.stock) {
         showNotification('error', 'Stock Insuficiente', 'No quedan más unidades de este producto.');
         return;
       }
-      setCart(cart.map((c) => (c.id === item.id && !c.isReward ? { ...c, quantity: c.quantity + 1 } : c)));
+      setCart(cart.map((c) => (c.id === item.id && !c.isReward ? { ...c, quantity: c.quantity + qtyToAdd } : c)));
     } else {
-      setCart([...cart, { ...item, quantity: 1 }]);
+      setCart([...cart, { ...item, quantity: qtyToAdd }]); // Añadimos la cantidad exacta que nos pasan
     }
   };
 
   const updateCartItemQty = (id, newQty) => {
     const qty = parseInt(newQty);
     if (isNaN(qty) || qty < 1) return;
+    
+    const itemInCart = cart.find(c => c.id === id);
+    if (!itemInCart) return;
+
+    // Si es libre (Custom), Combo o Descuento, no validamos contra el inventario
+    if (itemInCart.isCustom || itemInCart.isCombo || itemInCart.isDiscount || itemInCart.isReward) {
+      setCart(cart.map((c) => (c.id === id ? { ...c, quantity: qty } : c)));
+      return;
+    }
+
     const itemInStock = inventory.find((i) => i.id === id);
+    if (!itemInStock) return;
+
     if (qty > itemInStock.stock) {
       showNotification('error', 'Stock Insuficiente', `Máximo disponible: ${itemInStock.stock}`);
       return;
     }
+    
     setCart(cart.map((c) => (c.id === id ? { ...c, quantity: qty } : c)));
   };
   
@@ -1715,12 +1887,35 @@ export default function PartySupplyApp() {
   const handleCheckout = async () => {
     const total = calculateTotal();
     
-    const stockIssues = cart.filter(c => !c.isReward && !c.isCustom).filter(c => {
-      const i = inventory.find(x => x.id === c.id);
-      return !i || i.stock < c.quantity;
+    // ✨ MAGIA: Agrupamos todo el stock requerido (productos sueltos + los que están adentro de combos)
+    const requiredStock = {};
+    cart.forEach(c => {
+      if (c.isReward || c.isCustom || c.isDiscount) return; // IGNORAMOS REWARDS, CUSTOM Y DESCUENTOS PUROS
+      
+      if (c.isCombo && c.productsIncluded) {
+        c.productsIncluded.forEach(includedItem => {
+          requiredStock[includedItem.id] = (requiredStock[includedItem.id] || 0) + c.quantity;
+        });
+      } else if (!c.isCombo) {
+        requiredStock[c.id] = (requiredStock[c.id] || 0) + c.quantity;
+      }
     });
 
-    if (stockIssues.length > 0) { showNotification('error', 'Error Stock', 'Revise el stock disponible.'); return; }
+    const stockIssues = [];
+    Object.keys(requiredStock).forEach(id => {
+      // Ignoramos IDs generados manualmente que se hayan colado
+      if (String(id).startsWith('custom_') || String(id).startsWith('desc_') || String(id).startsWith('combo_')) return;
+      
+      const p = inventory.find(x => x.id === id);
+      if (!p || p.stock < requiredStock[id]) {
+        stockIssues.push(p ? p.title : 'Desconocido');
+      }
+    });
+
+    if (stockIssues.length > 0) { 
+      showNotification('error', 'Falta Stock', `Revisar: ${stockIssues.join(', ')}`); 
+      return; 
+    }
 
     try {
       Swal.fire({ title: 'Procesando...', didOpen: () => Swal.showLoading() });
@@ -1738,7 +1933,8 @@ export default function PartySupplyApp() {
 
       const itemsPayload = cart.map(i => ({
           sale_id: sale.id, 
-          product_id: i.isCustom ? null : i.id, 
+          // 🔥 Evitamos error FK: Si es combo o personalizado, no pasamos el ID como UUID de producto
+          product_id: (i.isCustom || i.isCombo) ? null : i.id, 
           product_title: i.title, 
           quantity: i.quantity, 
           price: i.price, 
@@ -1746,11 +1942,12 @@ export default function PartySupplyApp() {
         }));
         await supabase.from('sale_items').insert(itemsPayload);
 
-      for (const item of cart) {
-          if (!item.isReward && !item.isCustom) {
-             const prod = inventory.find(p => p.id === item.id);
-             if (prod) await supabase.from('products').update({ stock: prod.stock - item.quantity }).eq('id', item.id);
-          }
+      // ✨ Descontamos stock usando el mapa que agrupamos al principio
+      for (const [id, qtyToDeduct] of Object.entries(requiredStock)) {
+         const prod = inventory.find(p => p.id === id);
+         if (prod) {
+             await supabase.from('products').update({ stock: prod.stock - qtyToDeduct }).eq('id', id);
+         }
       }
 
       let updatedClientForTicket = null;
@@ -1766,9 +1963,10 @@ export default function PartySupplyApp() {
           setMembers(members.map(m => m.id === clientId ? updatedClientForTicket : m));
       }
 
+      // ✨ Actualizamos el inventario local en React
       setInventory(inventory.map(p => {
-        const c = cart.find(x => x.id === p.id && !x.isReward && !x.isCustom);
-        return c ? { ...p, stock: p.stock - c.quantity } : p;
+        const qtyToDeduct = requiredStock[p.id];
+        return qtyToDeduct ? { ...p, stock: p.stock - qtyToDeduct } : p;
       }));
 
       const tx = {
@@ -1792,7 +1990,7 @@ export default function PartySupplyApp() {
       const logItems = cart.map(item => ({
         id: item.id, title: item.title, quantity: item.quantity, price: item.price,
         isReward: item.isReward || false, product_type: item.product_type || 'quantity',
-        isCustom: item.isCustom || false
+        isCustom: item.isCustom || false, isCombo: item.isCombo || false // ✨ Guardamos flag en log
       }));
 
       const isGuest = !posSelectedClient || posSelectedClient.id === 'guest';
@@ -1817,7 +2015,7 @@ export default function PartySupplyApp() {
       Swal.fire('Error', 'Fallo al guardar la venta', 'error');
     }
   };
-  
+
   const handleDeleteTransaction = (tx) => {
     setTransactionToRefund(tx);
     setRefundReason('');
@@ -2397,6 +2595,9 @@ export default function PartySupplyApp() {
     }
   };
 
+  // ==========================================
+  // ✨ HANDLERS DE PREMIOS (Restaurados)
+  // ==========================================
   const handleAddReward = async (rewardData) => {
     try {
       const payload = {
@@ -2515,7 +2716,6 @@ export default function PartySupplyApp() {
 // --- MAIN LAYOUT ---
   return (
     <>
-      {/* TODA LA INTERFAZ NORMAL SE OCULTA AL IMPRIMIR (print:hidden) */}
       <div className="print:hidden flex h-screen bg-slate-100 font-sans text-slate-900 text-sm overflow-hidden">
         <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} currentUser={currentUser} onLogout={handleLogout} />
         <div className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -2531,13 +2731,13 @@ export default function PartySupplyApp() {
             <div className="flex items-center gap-3">
               <div>
                 <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
-                  {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', history: 'Historial de Ventas', rewards: 'Premios', reports: 'Reportes de Caja', logs: 'Registro de Acciones', categories: 'Categorías', 'bulk-editor': 'Productos' }[activeTab] || activeTab}
+                  {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', history: 'Historial de Ventas', rewards: 'Premios', reports: 'Reportes de Caja', logs: 'Registro de Acciones', categories: 'Catálogo y Reglas', 'bulk-editor': 'Productos' }[activeTab] || activeTab}
                 </h2>
                 <div className="flex items-center gap-2 text-[10px] text-slate-400">
                   <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
                   <span>Supabase ON</span>
                   <span className="text-slate-300">|</span>
-                  <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>             
+                  <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>              
                 </div>
               </div>
             </div>
@@ -2576,7 +2776,20 @@ export default function PartySupplyApp() {
             {activeTab === 'rewards' && (<RewardsView rewards={rewards} onAddReward={handleAddReward} onUpdateReward={handleUpdateReward} onDeleteReward={handleDeleteReward} />)}
             {activeTab === 'reports' && currentUser?.role === 'admin' && (<ReportsHistoryView pastClosures={pastClosures} members={members}/>)}
             {activeTab === 'logs' && currentUser?.role === 'admin' && (<LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} />)}
-            {activeTab === 'categories' && currentUser?.role === 'admin' && (<CategoryManagerView categories={categories} inventory={inventory} onAddCategory={handleAddCategoryFromView} onDeleteCategory={handleDeleteCategoryFromView} onEditCategory={handleEditCategory} onBatchUpdateProductCategory={handleBatchUpdateProductCategory} />)}
+            {activeTab === 'categories' && currentUser?.role === 'admin' && (
+              <CatalogManagerView 
+                categories={categories} 
+                inventory={inventory} 
+                offers={offers} // ✨ NUEVO: Pasamos las ofertas a la vista
+                onAddCategory={handleAddCategoryFromView} 
+                onDeleteCategory={handleDeleteCategoryFromView} 
+                onEditCategory={handleEditCategory} 
+                onBatchUpdateProductCategory={handleBatchUpdateProductCategory}
+                onAddOffer={handleAddOffer} // ✨ NUEVO: Funciones de Ofertas
+                onUpdateOffer={handleUpdateOffer}
+                onDeleteOffer={handleDeleteOffer}
+              />
+            )}
             {activeTab === 'bulk-editor' && currentUser?.role === 'admin' && (
               <BulkEditorView 
                 inventory={inventory} 

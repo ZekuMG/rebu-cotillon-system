@@ -77,7 +77,7 @@ Punto de Venta Rebu - Release/
 │   │   └── storage.js                  ← Upload/delete de imágenes en Supabase Storage
 │   ├── views/                          ← Vistas principales (una por sección)
 │   │   ├── BulkEditorView.jsx          ← NUEVO: Editor Masivo y Asistente de Exportación PDF
-│   │   ├── CategoryManagerView.jsx     ← ABM categorías
+│   │   ├── CatalogManagerView.jsx     ← ABM categorías
 │   │   ├── ClientsView.jsx             ← Gestión de socios (Buscador + Select de Ordenamiento integrados)
 │   │   ├── DashboardView.jsx           ← Panel de métricas
 │   │   ├── HistoryView.jsx             ← Historial de ventas

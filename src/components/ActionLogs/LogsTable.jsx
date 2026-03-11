@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
+import { extractRealNote } from './logHelpers'; // ✨ NUEVA IMPORTACIÓN
 
 const getTransactionId = (details) => {
   if (!details || typeof details === 'string') return null;
@@ -80,53 +81,6 @@ const c = {
   bk: "bg-[#1e293b] text-white",
 };
 
-export const extractRealNote = (log) => {
-  if (!log) return null;
-  
-  let r = log.reason;
-  let d = log.details;
-  
-  if (typeof d === 'string') {
-    try { d = JSON.parse(d); } catch(e) { d = {}; }
-  } else if (!d) {
-    d = {};
-  }
-
-  const generics = [
-    'venta regular', 'salida de dinero', 'sin motivo', 'ajuste manual', 
-    'anulación manual', 'registro manual', 'producto nuevo', 'inicio de operaciones', 
-    'gasto general', 'ajuste de horario', 'duplicado desde editor', 'gestión catálogo',
-    'actualización de datos', 'restauración manual desde el historial', 'limpieza de historial',
-    'eliminación permanente', 'exportación de catálogo'
-  ];
-
-  if (r && typeof r === 'string' && r.trim() !== '') {
-      const cleanR = r.trim();
-      const lowerR = cleanR.toLowerCase();
-      
-      if (!generics.includes(lowerR)) {
-          if (!((log.action === 'Nuevo Gasto' || log.action === 'Gasto') && lowerR === (d.category || '').toLowerCase())) {
-              return cleanR;
-          }
-      }
-  }
-
-  const candidates = [d.description, d.note, d.reason, d.extraInfo];
-
-  for (let cand of candidates) {
-     if (typeof cand === 'string' && cand.trim() !== '') {
-         const clean = cand.trim();
-         const lower = clean.toLowerCase();
-         if (!generics.includes(lower)) {
-             if ((log.action === 'Nuevo Gasto' || log.action === 'Gasto') && lower === (d.category || '').toLowerCase()) continue;
-             return clean;
-         }
-     }
-  }
-  
-  return null;
-};
-
 export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSort, onViewDetails, selectedLogId }) {
 
   const getLogReasonUI = (log) => {
@@ -153,7 +107,35 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
 
     switch (action) {
 
-      // ✨ NUEVO CASO: EXPORTACIÓN PDF
+      case 'Oferta Creada':
+      case 'Oferta Editada': {
+        const isEdit = action === 'Oferta Editada';
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bv}`}>🎫 {isEdit ? 'Editada' : 'Creada'}</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name}</span>
+            <div className={s.ss}></div>
+            <span className={`${s.b} ${c.bs}`}>{d.type}</span>
+            {d.offerPrice > 0 && <><div className={s.ss}></div><span className={s.se}>$<FancyPrice amount={d.offerPrice} /></span></>}
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
+      case 'Oferta Eliminada': {
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.br}`}>🎫 Eliminada</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8', textDecoration: 'line-through' }}>{d.name}</span>
+            <div className={s.ss}></div>
+            <span className={`${s.b} ${c.bs}`}>{d.type}</span>
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
       case 'Exportación PDF': {
         const snap = d.snapshot || {};
         const config = snap.config || {};
