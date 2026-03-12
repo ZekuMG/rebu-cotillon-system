@@ -7,7 +7,19 @@ import {
 import { FancyPrice } from '../components/FancyPrice';
 import Swal from 'sweetalert2';
 
-export default function BulkEditorView({ inventory: realInventory, categories, onSaveSingle, onSaveBulk, onExportProducts }) {
+export default function BulkEditorView({ 
+  inventory: realInventory, 
+  categories, 
+  onSaveSingle, 
+  onSaveBulk, 
+  onExportProducts,
+  // ✨ PROPS DE PERSISTENCIA INYECTADAS DESDE APP.JSX
+  exportItems = [],
+  setExportItems,
+  exportConfig,
+  setExportConfig,
+  onCreateFixedProduct
+}) {
   // --- SANDBOX (Inventario Clonado) ---
   const [sandboxInventory, setSandboxInventory] = useState([]);
 
@@ -25,16 +37,6 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
 
   // --- Estado de Vista Previa de Exportación ---
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
-  const [exportItems, setExportItems] = useState([]);
-  const [exportConfig, setExportConfig] = useState({
-    isForClient: true,
-    documentTitle: '', 
-    clientName: '',
-    clientPhone: '',
-    clientEvent: '',
-    columns: { cost: false, price: true, newPrice: false, stock: false },
-    clientColumns: { showQty: true, showUnitPrice: true, showSubtotal: false, showTotal: true }
-  });
 
   // --- Estado para el autocompletado de productos extra ---
   const [focusedTempId, setFocusedTempId] = useState(null);
@@ -198,14 +200,20 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
     setIsSaving(false);
   };
 
+  // ✨ AHORA EL PDF FUNCIONA COMO UN "CARRITO" ACUMULATIVO
   const openExportPreview = () => {
-    const customItems = exportItems.filter(item => typeof item.id === 'string' && (item.id.startsWith('temp-') || item.id.includes('-')));
+    if (selectedIds.length === 0) {
+      setPreviewLimit(ITEMS_PER_CHUNK);
+      setIsExportModalOpen(true);
+      return;
+    }
+
+    // Filtrar IDs que no estén duplicados en el PDF actual
+    const newIdsToAdd = selectedIds.filter(id => !exportItems.some(ex => ex.id === id));
     
-    const regularItems = sandboxInventory
-      .filter(p => selectedIds.includes(p.id))
+    const newRegularItems = sandboxInventory
+      .filter(p => newIdsToAdd.includes(p.id))
       .map(p => {
-         const existingItem = exportItems.find(ex => ex.id === p.id);
-         
          let cat = 'Otros';
          if (Array.isArray(p.categories) && p.categories.length > 0) {
            cat = p.categories[0];
@@ -219,15 +227,16 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
            category: cat, 
            cost: getOriginalVal(p, 'purchasePrice'),
            price: getOriginalVal(p, 'price'),
-           newPrice: existingItem ? existingItem.newPrice : (Number(edits[p.id]?.price) || getOriginalVal(p, 'price')),
+           newPrice: Number(edits[p.id]?.price) || getOriginalVal(p, 'price'),
            stock: Number(edits[p.id]?.stock) || getOriginalVal(p, 'stock'),
-           qty: existingItem ? existingItem.qty : (p.product_type === 'weight' ? 1000 : 1), 
+           qty: p.product_type === 'weight' ? 1000 : 1, 
            product_type: p.product_type,
            isTemporary: false
          };
       });
     
-    setExportItems([...regularItems, ...customItems]);
+    setExportItems(prev => [...prev, ...newRegularItems]);
+    setSelectedIds([]); // Vaciamos la selección tras añadir al carrito del PDF
     setPreviewLimit(ITEMS_PER_CHUNK);
     setIsExportModalOpen(true);
   };
@@ -277,18 +286,31 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
     setFocusedTempId(null);
   };
 
-  const handleSetAsCustomProduct = (tempId) => {
-    setExportItems(prev => prev.map(item => {
-      if (item.id === tempId) {
-         return {
-           ...item,
-           title: item.title.startsWith('*') ? item.title : `* ${item.title || 'Personalizado'}`,
-           category: item.category || 'Adicionales',
-           isTitleLocked: true
-         };
-      }
-      return item;
-    }));
+  // ✨ NUEVO: CREADOR DE PRODUCTO DESDE EL PRESUPUESTO
+  const handleSetAsCustomProduct = async (tempId) => {
+    const targetItem = exportItems.find(i => i.id === tempId);
+    if (!targetItem) return;
+
+    if (onCreateFixedProduct) {
+       const newRealProduct = await onCreateFixedProduct(targetItem.title, targetItem.newPrice);
+       if (newRealProduct) {
+          setExportItems(prev => prev.map(item => {
+             if (item.id === tempId) {
+                return {
+                  ...item,
+                  id: newRealProduct.id,
+                  title: newRealProduct.title,
+                  category: newRealProduct.categories?.[0] || 'Depósito',
+                  cost: newRealProduct.purchasePrice || 0,
+                  price: newRealProduct.price || 0,
+                  isTemporary: false,
+                  isTitleLocked: true
+                };
+             }
+             return item;
+          }));
+       }
+    }
     setFocusedTempId(null);
   };
 
@@ -322,13 +344,13 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
     if (totalItems === 0) return;
 
     const result = await Swal.fire({
-      title: '¿Querés vaciar el presupuesto?',
+      title: '¿Querés limpiar el presupuesto?',
       text: `Hay ${totalItems} ítem(s) en la lista. Se borrarán para empezar desde cero.`,
       icon: 'warning',
       showCancelButton: true,
       confirmButtonColor: '#ef4444',
       cancelButtonColor: '#64748b',
-      confirmButtonText: 'Sí, vaciar todo',
+      confirmButtonText: 'Sí, limpiar todo',
       cancelButtonText: 'No, cancelar',
       reverseButtons: true
     });
@@ -338,7 +360,7 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
       setSelectedIds([]); 
       
       Swal.fire({
-        title: '¡Vaciado!',
+        title: '¡Limpieza exitosa!',
         text: 'El presupuesto quedó en cero.',
         icon: 'success',
         timer: 1500,
@@ -435,7 +457,7 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
             className="bg-indigo-600 text-white px-3 py-1.5 rounded-md font-bold text-xs shadow-md hover:bg-indigo-700 transition-colors flex items-center gap-1.5 whitespace-nowrap"
           >
             <FileText size={14} />
-            Generar Preview {selectedIds.length > 0 ? `(${selectedIds.length})` : (exportItems.length > 0 ? '(*)' : '')}
+            {selectedIds.length > 0 ? `Añadir al PDF (${selectedIds.length})` : `Ver Presupuesto ${exportItems.length > 0 ? `(${exportItems.length})` : ''}`}
           </button>
 
           <button 
@@ -764,9 +786,9 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
                     <button 
                       onClick={handleClearPreview}
                       className="bg-white hover:bg-red-50 text-slate-500 hover:text-red-600 font-bold text-[9px] px-2 py-1 rounded flex items-center gap-1 transition-colors uppercase tracking-wider border border-slate-200 hover:border-red-200 shadow-sm"
-                      title="Vaciar todo el presupuesto"
+                      title="Limpiar todo el presupuesto"
                     >
-                      <Trash2 size={10} strokeWidth={3} /> Vaciar
+                      <Trash2 size={10} strokeWidth={3} /> Limpiar
                     </button>
                     
                     {exportConfig.isForClient && (
@@ -831,8 +853,16 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
                                       />
                                       {focusedTempId === item.id && item.title.length >= 2 && (
                                         <ul className="absolute top-full left-0 w-full min-w-[250px] bg-white border border-indigo-200 shadow-2xl rounded-lg mt-1 z-[80] max-h-[160px] overflow-y-auto custom-scrollbar divide-y divide-slate-100">
+                                          {/* ✨ BÚSQUEDA TOKENIZADA */}
                                           {sandboxInventory
-                                            .filter(p => p.title.toLowerCase().includes(item.title.toLowerCase()) || (p.barcode && p.barcode.includes(item.title)))
+                                            .filter(p => {
+                                              const searchStr = (item.title || '').toLowerCase().trim();
+                                              if (!searchStr) return true;
+                                              const words = searchStr.split(/\s+/);
+                                              const targetTitle = (p.title || '').toLowerCase();
+                                              const targetBarcode = (p.barcode || '').toLowerCase();
+                                              return words.every(w => targetTitle.includes(w) || targetBarcode.includes(w));
+                                            })
                                             .slice(0, 15)
                                             .map(p => {
                                               const previewPrice = Number(edits[p.id]?.price) || getOriginalVal(p, 'price');
@@ -855,7 +885,14 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
                                                 </li>
                                               )
                                             })}
-                                          {sandboxInventory.filter(p => p.title.toLowerCase().includes(item.title.toLowerCase()) || (p.barcode && p.barcode.includes(item.title))).length === 0 && (
+                                          {sandboxInventory.filter(p => {
+                                              const searchStr = (item.title || '').toLowerCase().trim();
+                                              if (!searchStr) return true;
+                                              const words = searchStr.split(/\s+/);
+                                              const targetTitle = (p.title || '').toLowerCase();
+                                              const targetBarcode = (p.barcode || '').toLowerCase();
+                                              return words.every(w => targetTitle.includes(w) || targetBarcode.includes(w));
+                                            }).length === 0 && (
                                             <li 
                                               className="p-1.5 text-[10px] font-bold text-indigo-600 hover:bg-indigo-50 cursor-pointer text-center transition-colors flex items-center justify-center gap-1"
                                               onMouseDown={(e) => {
@@ -863,7 +900,7 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
                                                 handleSetAsCustomProduct(item.id);
                                               }}
                                             >
-                                              <Plus size={12} /> Fijar personalizado
+                                              <Plus size={12} /> Fijar en base de datos
                                             </li>
                                           )}
                                         </ul>
@@ -895,22 +932,17 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
                                 <>
                                   {exportConfig.clientColumns.showUnitPrice && (
                                     <td className="py-1.5 px-3 text-right">
-                                      {item.isTemporary ? (
-                                        <div className="relative inline-block w-20">
-                                          <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-400 text-[11px] font-bold">$</span>
-                                          <input 
-                                            type="number"
-                                            className="no-spinners w-full pl-4 pr-1.5 py-1 text-[11px] font-bold border border-slate-300 rounded focus:border-indigo-500 outline-none text-right"
-                                            value={item.newPrice}
-                                            onChange={(e) => updateExportItemField(item.id, 'newPrice', Number(e.target.value) || 0)}
-                                          />
-                                        </div>
-                                      ) : (
-                                        <>
-                                          <span className="font-medium text-slate-600 text-[11px]"><FancyPrice amount={item.newPrice} /></span>
-                                          {isWeight && <span className="block text-[8px] text-slate-400 -mt-0.5">por Kg</span>}
-                                        </>
-                                      )}
+                                      {/* ✨ PRECIO EDITABLE PARA TODOS LOS PRODUCTOS */}
+                                      <div className="relative inline-block w-24">
+                                        <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-400 text-[11px] font-bold">$</span>
+                                        <input 
+                                          type="number"
+                                          className="no-spinners w-full pl-4 pr-1.5 py-1 text-[11px] font-bold border border-slate-300 rounded hover:border-slate-400 focus:border-indigo-500 outline-none text-right transition-colors"
+                                          value={item.newPrice}
+                                          onChange={(e) => updateExportItemField(item.id, 'newPrice', Number(e.target.value) || 0)}
+                                        />
+                                      </div>
+                                      {isWeight && <span className="block text-[8px] text-slate-400 mt-0.5">por Kg</span>}
                                     </td>
                                   )}
                                   {exportConfig.clientColumns.showQty && (
@@ -919,7 +951,7 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
                                         <input 
                                           type="number"
                                           min="1"
-                                          className="no-spinners w-12 p-1 text-center text-[11px] font-bold border border-slate-300 rounded focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                                          className="no-spinners w-12 p-1 text-center text-[11px] font-bold border border-slate-300 hover:border-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-colors"
                                           value={item.qty}
                                           onChange={(e) => updateExportItemQty(item.id, e.target.value)}
                                         />
@@ -935,8 +967,17 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
                                 </>
                               ) : (
                                 <td className="py-1.5 px-3 text-right">
-                                  <span className="font-medium text-slate-600 text-[11px]"><FancyPrice amount={item.newPrice} /></span>
-                                  {isWeight && <span className="block text-[8px] text-slate-400 -mt-0.5">por Kg</span>}
+                                  {/* ✨ PRECIO EDITABLE PARA TODOS LOS PRODUCTOS (REPORTE INTERNO) */}
+                                  <div className="relative inline-block w-24">
+                                    <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-400 text-[11px] font-bold">$</span>
+                                    <input 
+                                      type="number"
+                                      className="no-spinners w-full pl-4 pr-1.5 py-1 text-[11px] font-bold border border-slate-300 rounded hover:border-slate-400 focus:border-indigo-500 outline-none text-right transition-colors"
+                                      value={item.newPrice}
+                                      onChange={(e) => updateExportItemField(item.id, 'newPrice', Number(e.target.value) || 0)}
+                                    />
+                                  </div>
+                                  {isWeight && <span className="block text-[8px] text-slate-400 mt-0.5">por Kg</span>}
                                 </td>
                               )}
                               
@@ -992,14 +1033,14 @@ export default function BulkEditorView({ inventory: realInventory, categories, o
                   onClick={() => setIsExportModalOpen(false)}
                   className="px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors"
                 >
-                  Cancelar
+                  Cerrar Vista Previa
                 </button>
                 <button 
                   onClick={handleConfirmExport}
                   disabled={exportItems.length === 0}
                   className="px-5 py-2 rounded-lg text-xs font-black bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-all flex items-center gap-1.5 shadow-lg shadow-indigo-200 hover:shadow-indigo-300 transform hover:-translate-y-0.5"
                 >
-                  <FileText size={16} /> IMPRIMIR / GUARDAR PDF
+                  <FileText size={16} /> GUARDAR COMO PDF
                 </button>
               </div>
             </div>

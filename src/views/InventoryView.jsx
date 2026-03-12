@@ -17,7 +17,8 @@ import {
   List,
   Scale,
   PackageX,
-  CalendarX // ✨ NUEVO ICONO
+  CalendarX, // ✨ NUEVO ICONO
+  ArrowDownUp // ✨ AÑADIDO PARA ORDENAR
 } from 'lucide-react';
 // ♻️ FIX: Importamos FancyPrice junto con helpers
 import { formatStock, formatNumber } from '../utils/helpers';
@@ -49,6 +50,8 @@ export default function InventoryView({
   // ✨ ESTADOS DE FILTROS RÁPIDOS
   const [showOnlyOutOfStock, setShowOnlyOutOfStock] = useState(false);
   const [showOnlyExpirations, setShowOnlyExpirations] = useState(false);
+  
+  const [sortBy, setSortBy] = useState('title-asc'); // ✨ ESTADO PARA EL ORDEN
 
   const [visibleCount, setVisibleCount] = useState(40);
 
@@ -91,16 +94,35 @@ export default function InventoryView({
     return matchesSearch && matchesCategory && matchesStock && matchesExpiration;
   });
 
+  // ✨ LÓGICA DE ORDENAMIENTO APLICADA SOBRE LOS FILTRADOS
+  const sortedInventory = [...filteredInventory].sort((a, b) => {
+    switch (sortBy) {
+      case 'recent':
+        const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return dateB - dateA; // Ordena de más nuevo a más viejo
+      case 'price-desc':
+        return (Number(b.price) || 0) - (Number(a.price) || 0);
+      case 'price-asc':
+        return (Number(a.price) || 0) - (Number(b.price) || 0);
+      case 'stock-desc':
+        return (Number(b.stock) || 0) - (Number(a.stock) || 0);
+      case 'title-asc':
+      default:
+        return (a.title || '').localeCompare(b.title || '');
+    }
+  });
+
   const handleScroll = (e) => {
     const { scrollTop, clientHeight, scrollHeight } = e.target;
     if (scrollHeight - scrollTop <= clientHeight + 400) {
-      if (visibleCount < filteredInventory.length) {
+      if (visibleCount < sortedInventory.length) {
         setVisibleCount((prev) => prev + 40);
       }
     }
   };
 
-  const displayedInventory = filteredInventory.slice(0, visibleCount);
+  const displayedInventory = sortedInventory.slice(0, visibleCount);
 
   const handleCardClick = (product) => {
     if (selectedProduct && selectedProduct.id === product.id) {
@@ -145,6 +167,22 @@ export default function InventoryView({
               <select className="pl-9 pr-8 py-2 border rounded-lg bg-slate-50 text-sm focus:ring-2 focus:ring-fuchsia-500 outline-none appearance-none cursor-pointer" value={inventoryCategoryFilter} onChange={(e) => setInventoryCategoryFilter(e.target.value)}>
                 <option value="Todas">Todas</option>
                 {categories.map((cat) => (<option key={cat} value={cat}>{cat}</option>))}
+              </select>
+            </div>
+
+            {/* ✨ DROPDOWN: ORDENAR POR */}
+            <div className="relative hidden md:block">
+              <ArrowDownUp className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+              <select 
+                className="pl-9 pr-8 py-2 border rounded-lg bg-slate-50 text-sm font-bold text-slate-600 focus:ring-2 focus:ring-fuchsia-500 outline-none appearance-none cursor-pointer" 
+                value={sortBy} 
+                onChange={(e) => setSortBy(e.target.value)}
+              >
+                <option value="title-asc">A-Z (Alfabético)</option>
+                <option value="recent">⭐ Más Recientes</option>
+                <option value="price-desc">Mayor Precio</option>
+                <option value="price-asc">Menor Precio</option>
+                <option value="stock-desc">Mayor Stock</option>
               </select>
             </div>
 

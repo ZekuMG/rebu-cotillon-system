@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"cross-env BROWSER=none npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:build": "vite build && electron-builder -w --publish always",
-    "publish": "dotenv electron-builder -- --publish always"
+    "publish": "dotenv electron-builder -- --publish always",
+    "dev:fresh": "npm run build && npm run electron:dev"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",

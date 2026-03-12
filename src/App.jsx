@@ -422,6 +422,18 @@ export default function PartySupplyApp() {
   const [ticketToView, setTicketToView] = useState(null);
   const [exportPdfData, setExportPdfData] = useState(null);
 
+  // ✨ ESTADOS PARA PERSISTENCIA DE PRESUPUESTO EN BULK EDITOR
+  const [bulkExportItems, setBulkExportItems] = useState([]);
+  const [bulkExportConfig, setBulkExportConfig] = useState({
+    isForClient: true,
+    documentTitle: '', 
+    clientName: '',
+    clientPhone: '',
+    clientEvent: '',
+    columns: { cost: false, price: true, newPrice: false, stock: false },
+    clientColumns: { showQty: true, showUnitPrice: true, showSubtotal: false, showTotal: true }
+  });
+
   const [isDeleteProductModalOpen, setIsDeleteProductModalOpen] = useState(false);
   const [productToDelete, setProductToDelete] = useState(null);
   const [deleteProductReason, setDeleteProductReason] = useState('');
@@ -563,12 +575,36 @@ export default function PartySupplyApp() {
 
     addLog('Exportación PDF', logDetails, 'Exportación de catálogo');
 
-    setTimeout(() => {
-      window.print();
+    const defaultTitle = config.documentTitle 
+      ? `${config.documentTitle} - ${config.clientName || 'Cliente'}` 
+      : 'Reporte Interno';
+
+    const safeName = defaultTitle.replace(/[^a-zA-Z0-9 _-]/g, '');
+
+    setTimeout(async () => {
+      try {
+        // Obtenemos Electron evadiendo bloqueos de Vite
+        const electronReq = window.require || window['require'];
+        
+        if (electronReq) {
+          const ipc = electronReq('electron').ipcRenderer;
+          const result = await ipc.invoke('save-as-pdf', `${safeName}.pdf`);
+          
+          if (result.success) {
+            showNotification('success', 'PDF Guardado', `Guardado en: ${result.filePath}`);
+          } else if (!result.canceled) {
+            Swal.fire('Error', 'No se pudo guardar el PDF: ' + result.error, 'error');
+          }
+        } else {
+          // SI NO DETECTA ELECTRON, NO IMPRIME NADA PARA PROTEGER LA TICKETERA
+          Swal.fire('Atención', 'No se detectó el motor de escritorio (Electron). Guardado de PDF deshabilitado en navegador web para proteger la ticketera térmica.', 'warning');
+        }
+      } catch (e) {
+        console.error('Error IPC:', e);
+        Swal.fire('Error de Comunicación', 'Falló la conexión con Windows: ' + e.message, 'error');
+      }
       
-      setTimeout(() => {
-        setExportPdfData(null);
-      }, 1000);
+      setTimeout(() => setExportPdfData(null), 500);
     }, 500);
   };
   
@@ -579,14 +615,72 @@ export default function PartySupplyApp() {
     }
     
     setExportPdfData(logDetails.snapshot);
+    const config = logDetails.snapshot.config || {};
+    const defaultTitle = config.documentTitle 
+      ? `${config.documentTitle} - ${config.clientName || 'Cliente'} (Copia)` 
+      : 'Reporte_Historico';
+    const safeName = defaultTitle.replace(/[^a-zA-Z0-9 _-]/g, '');
 
-    setTimeout(() => {
-      window.print();
+    setTimeout(async () => {
+      try {
+        const electronReq = window.require || window['require'];
+        
+        if (electronReq) {
+          const ipc = electronReq('electron').ipcRenderer;
+          const result = await ipc.invoke('save-as-pdf', `${safeName}.pdf`);
+          
+          if (result.success) {
+            showNotification('success', 'PDF Guardado', `Guardado en: ${result.filePath}`);
+          } else if (!result.canceled) {
+            Swal.fire('Error', 'No se pudo guardar el PDF: ' + result.error, 'error');
+          }
+        } else {
+          Swal.fire('Atención', 'No se detectó el motor de escritorio (Electron). Guardado de PDF deshabilitado en navegador web para proteger la ticketera térmica.', 'warning');
+        }
+      } catch (e) {
+        console.error('Error IPC:', e);
+        Swal.fire('Error de Comunicación', 'Falló la conexión con Windows: ' + e.message, 'error');
+      }
       
-      setTimeout(() => {
-        setExportPdfData(null);
-      }, 1000);
+      setTimeout(() => setExportPdfData(null), 500);
     }, 500);
+  };
+  
+
+    // ✨ NUEVO: HANDLER PARA FIJAR PRODUCTO PERSONALIZADO DESDE EL PRESUPUESTO
+  const handleCreateFixedProduct = async (title, price) => {
+    try {
+      const payload = {
+        title: title,
+        brand: '',
+        price: Number(price) || 0,
+        purchasePrice: 0,
+        stock: 0,
+        category: 'Depósito', 
+        barcode: null,
+        image: '',
+        product_type: 'quantity',
+        expiration_date: null
+      };
+      
+      const { data, error } = await supabase.from('products').insert([payload]).select().single();
+      if (error) throw error;
+      
+      const itemFormatted = { 
+          ...data, 
+          categories: ['Depósito'] 
+      };
+      setInventory(prev => [...prev, itemFormatted]);
+      
+      addLog('Alta de Producto', { id: data.id, title: data.title, price: data.price, category: data.category }, 'Fijado desde Presupuesto');
+      showNotification('success', 'Producto Fijado', `Se guardó en Depósito con stock 0.`);
+      
+      return itemFormatted;
+    } catch (err) {
+      console.error('Error fijando producto:', err);
+      showNotification('error', 'Error', 'No se pudo fijar el producto.');
+      return null;
+    }
   };
 
   // ==========================================
@@ -2799,6 +2893,12 @@ export default function PartySupplyApp() {
                 onSaveSingle={handleBulkSaveSingle} 
                 onSaveBulk={handleBulkSaveMasive} 
                 onExportProducts={handleExportProducts}
+                // ✨ NUEVAS PROPS PARA PDF PERSISTENTE
+                exportItems={bulkExportItems}
+                setExportItems={setBulkExportItems}
+                exportConfig={bulkExportConfig}
+                setExportConfig={setBulkExportConfig}
+                onCreateFixedProduct={handleCreateFixedProduct}
               />
             )}
           </main>
