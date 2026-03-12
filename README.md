@@ -1,356 +1,141 @@
-# 🛒 PartyManager — Rebu Cotillón POS System
-
-## README Técnico para IAs
-
-> **Este documento describe la arquitectura completa del sistema para que una IA pueda entender y modificar el código sin necesidad de leer cada archivo.**
-> Última actualización: Marzo 2026 — **Versión 0.7.0**
-
----
-
-## 1. DESCRIPCIÓN GENERAL
-
-Sistema de Punto de Venta (POS) para una tienda de cotillón (artículos de fiesta) llamada **Rebu Cotillón**. Incluye gestión de inventario, ventas, clientes con sistema de puntos/recompensas, caja diaria, reportes, registro de actividad (logs) y motor avanzado de generación de presupuestos en PDF.
-
-**Stack:** React 18 + Vite + Tailwind CSS + Supabase (PostgreSQL + Auth + Storage + Realtime) + Electron (escritorio)
-
-**Repo:** `https://github.com/ZekuMG/rebu-cotillon-system`
-
----
-
-## 2. ESTRUCTURA DE ARCHIVOS
-
-Punto de Venta Rebu - Release/
-├── public/
-│   ├── favicon.svg
-│   └── icons.svg
-├── src/
-│   ├── assets/
-│   │   ├── react.svg
-│   │   └── vite.svg
-│   ├── components/
-│   │   ├── ActionLogs/
-│   │   │   ├── LogAuxModals.jsx
-│   │   │   ├── LogDetailModal.jsx
-│   │   │   ├── LogDetailRenderer.jsx   ← Renderizado de detalles con Sabueso de Notas
-│   │   │   ├── logHelpers.js           ← NUEVO: Constantes para evitar error de Vite Fast Refresh
-│   │   │   ├── LogsControls.jsx
-│   │   │   └── LogsTable.jsx           ← Tabla principal y export de extractRealNote()
-│   │   ├── dashboard/
-│   │   │   ├── DashboardControls.jsx
-│   │   │   ├── KpiCards.jsx
-│   │   │   ├── LowStockAlert.jsx
-│   │   │   ├── PaymentBreakdown.jsx
-│   │   │   ├── SalesChart.jsx
-│   │   │   ├── TopRanking.jsx
-│   │   │   └── index.js
-│   │   ├── modals/
-│   │   │   ├── BarcodeModals.jsx
-│   │   │   ├── CashModals.jsx
-│   │   │   ├── ClientSelectionModal.jsx
-│   │   │   ├── DailyReportModal.jsx
-│   │   │   ├── ExpenseModal.jsx        ← Envía 'note' explícito
-│   │   │   ├── HistoryModals.jsx
-│   │   │   ├── NotificationModal.jsx
-│   │   │   ├── ProductModals.jsx       ← Modales crear/editar/eliminar producto
-│   │   │   ├── RedemptionModal.jsx
-│   │   │   ├── SaleModals.jsx
-│   │   │   └── TransactionModals.jsx
-│   │   ├── AppModals.jsx               ← Orquestador de todos los modales
-│   │   ├── ExportPdfLayout.jsx         ← NUEVO: Motor de renderizado A4 para Presupuestos
-│   │   ├── ProductImage.jsx            ← Placeholder con gradiente si no hay foto
-│   │   ├── Sidebar.jsx                 ← Navegación lateral
-│   │   └── TicketPrintLayout.jsx       ← ⚠️ NO TOCAR - Layout de impresión térmica 58mm
-│   ├── data/
-│   │   ├── seedHelpers.js
-│   │   ├── seedLogs.js
-│   │   └── seedTransactions.js
-│   ├── hooks/
-│   │   ├── useBarcodeScanner.js        ← Escucha teclado para lectoras de barras
-│   │   ├── useClients.js               ← CRUD de clientes/socios
-│   │   ├── useDashboardData.js         ← Cálculos del dashboard
-│   │   └── useLogsFilter.js            ← Filtros del historial de logs
-│   ├── supabase/
-│   │   └── client.js                   ← Configuración Supabase (credenciales hardcoded)
-│   ├── utils/
-│   │   ├── devGenerator.js             ← Generador de datos de prueba
-│   │   ├── helpers.js                  ← NUEVO: Funciones compartidas + isTestRecord (Filtro Global)
-│   │   └── storage.js                  ← Upload/delete de imágenes en Supabase Storage
-│   ├── views/                          ← Vistas principales (una por sección)
-│   │   ├── BulkEditorView.jsx          ← NUEVO: Editor Masivo y Asistente de Exportación PDF
-│   │   ├── CatalogManagerView.jsx     ← ABM categorías
-│   │   ├── ClientsView.jsx             ← Gestión de socios (Buscador + Select de Ordenamiento integrados)
-│   │   ├── DashboardView.jsx           ← Panel de métricas
-│   │   ├── HistoryView.jsx             ← Historial de ventas
-│   │   ├── InventoryView.jsx           ← Catálogo con grid/lista + panel lateral
-│   │   ├── LogsView.jsx                ← Registro de actividad
-│   │   ├── POSView.jsx                 ← ⭐ PUNTO DE VENTA PRINCIPAL
-│   │   ├── ReportsHistoryView.jsx      ← Reportes de cierres de caja
-│   │   └── RewardsView.jsx            ← Gestión de recompensas canjeables
-│   ├── App.css
-│   ├── App.jsx                         ← ⚠️ LÓGICA PRINCIPAL (estados globales, handlers, addLog)
-│   ├── data.js                         ← Constantes (PAYMENT_METHODS, etc.)
-│   ├── index.css                       ← Estilos Tailwind + estilos de impresión A4/58mm
-│   └── main.jsx                        ← Entry point React
-├── electron-main.cjs                   ← Entry point Electron
-├── index.html
-├── package.json
-└── vite.config.js
-
----
-
-## 3. ARQUITECTURA Y FLUJO DE DATOS
-
-### Patrón: "God Component" centralizado
-
-`App.jsx` es el componente raíz que contiene **TODA** la lógica de negocio:
-
-- **Todos los estados globales** (inventory, cart, clients, logs, rewards, exportPdfData, etc.)
-- **Todos los handlers** (addToCart, handleCheckout, saveEditProduct, handleExportProducts, etc.)
-- **fetchCloudData()** — Carga inicial de TODOS los datos desde Supabase
-- **addLog()** — Registra cada acción en la tabla `logs` (con inteligencia de notas).
-
-Las **views** (`POSView`, `InventoryView`, etc.) son componentes de presentación que reciben datos y callbacks por props desde `App.jsx`.
-
-Los **modales** están en `components/modals/` y se orquestan desde `AppModals.jsx`.
-
-### Sistema de Impresión Dual (CSS Print Media)
-El sistema maneja dos flujos de impresión totalmente distintos controlados por CSS (`print:hidden` vs `print:block`):
-1. **Ticket Térmico (58mm):** Se ejecuta al vender. Utiliza `TicketPrintLayout.jsx`.
-2. **Documento A4 (Presupuesto PDF):** Se ejecuta desde `BulkEditorView` o `LogsView`. Utiliza `ExportPdfLayout.jsx`.
-
-### Flujo de datos simplificado
-
-Supabase DB ──fetchCloudData()──→ App.jsx (estados) ──props──→ Views/Modales
-                                      ↑                              │
-                                      └──── handlers ←──── eventos ──┘
-
-### Sincronización en tiempo real
-
-- **Carga inicial:** `fetchCloudData(true)` con spinner
-- **Re-sync al volver a la app:** `visibilitychange` → `fetchCloudData(false)` sin spinner
-- **Cooldown de 15s** para evitar re-syncs del file picker
-- **Realtime:** Supabase channels para `register_state` y `cash_closures`
-- **NO hay listener de `focus`** (causaba bugs con diálogos nativos del SO)
-
----
-
-## 4. BASE DE DATOS (Supabase PostgreSQL)
-
-### Tablas principales
-
-| Tabla | Descripción | Campos clave |
-|-------|-------------|-------------|
-| `products` | Inventario de productos | `id`, `title`, `price`, `purchasePrice`, `stock`, `category`, `barcode`, `image`, `product_type` |
-| `clients` | Socios del programa de puntos | `id`, `name`, `member_number`, `phone`, `points` |
-| `sales` | Encabezado de ventas | `id`, `client_id`, `total`, `payment_method`, `installments`, `created_at` |
-| `sale_items` | Detalle de items por venta | `id`, `sale_id`, `product_id`, `quantity`, `price` |
-| `categories` | Categorías de productos | `id`, `name` |
-| `logs` | Registro de actividad | `id`, `action`, `details` (JSONB), `reason`, `user_name`, `created_at` |
-| `expenses` | Gastos registrados | `id`, `description`, `amount`, `created_at` |
-| `rewards` | Recompensas canjeables | `id`, `title`, `points_cost`, `stock` |
-| `register_state` | Estado de la caja (1 fila) | `id=1`, `is_open`, `opening_balance`, `closing_time` |
-| `cash_closures` | Cierres de caja históricos | Muchos campos de resumen |
-
-### Campo `product_type`
-
-ALTER TABLE products ADD COLUMN IF NOT EXISTS product_type TEXT DEFAULT 'quantity';
-
-Valores posibles: `'quantity'` (unidades) o `'weight'` (gramos).
-
-### Supabase Storage
-
-**Bucket:** `product-images` (público)
-- File size limit: 5MB
-- MIME types: image/jpeg, image/png, image/webp, image/gif
-- 3 policies: INSERT (anon), SELECT (anon), DELETE (anon)
-
-Las imágenes se suben vía `src/utils/storage.js` y se almacena solo la URL pública en el campo `image` de `products`.
-
----
-
-## 5. SISTEMA DE PRODUCTOS
-
-### Tipos de producto
-
-El sistema soporta **2 tipos** de productos que coexisten:
-
-#### Tipo CANTIDAD (`product_type: 'quantity'`)
-- Stock: unidades enteras (ej: 50 unidades)
-- Precio: por unidad (ej: $500)
-- Costo: por unidad (ej: $300)
-- POS: click agrega 1 unidad, botones +/-
-- Inventario: "50 u."
-
-#### Tipo PESO (`product_type: 'weight'`)
-- Stock: almacenado internamente en **gramos** (ej: 1500 = 1.5kg)
-- Precio: almacenado internamente en **$/gramo** (ej: 10 = $10/g)
-- Costo: almacenado internamente en **$/gramo**
-- **UI muestra todo en $/kg** — la conversión ×1000 se hace en los modales y vistas
-- POS: click abre mini-modal para ingresar gramos, botones rápidos (50g, 100g, 250g, 500g, 1kg)
-- Inventario: "1.5kg" o "500g"
-- Semáforo stock: crítico <100g, alerta <500g (vs ≤5 y ≤10 para cantidad)
-
-### Conversión precio en modales (ProductModals.jsx)
-
-**Al CREAR:** El usuario ingresa en $/kg → el modal divide por 1000 antes de guardar en DB.
-**Al EDITAR:** El precio viene de DB en $/g → el modal multiplica ×1000 para mostrar → al guardar divide ×1000.
-**Al MOSTRAR (POS/Inventario):** Se usa `getPricePerKg(price)` que multiplica ×1000 y formatea.
-
----
-
-## 6. FLUJO DE VENTA (POSView + App.jsx)
-
-### Productos por cantidad
-1. Click en producto → `addToCart(product)` → agrega con quantity=1 o incrementa
-2. Botones +/- en carrito → `updateCartItemQty(id, newQty)`
-3. Seleccionar medio de pago → `selectedPayment`
-4. Click COBRAR → `handlePreCheckout()` → Verifica si hay socio asignado
-5. Si no hay socio → Modal "¿Asignar Socio?" → "Consumidor Final" o buscar
-6. `handleCheckout()` → Descuenta stock, guarda en `sales` + `sale_items`, suma puntos al socio, addLog()
-
-### Productos por peso
-1. Click en producto → Abre `WeightInputModal`
-2. Input de gramos + botones rápidos → validación contra stock disponible
-3. "Agregar Xg" → `addToCart(product, grams)` → quantity = gramos
-4. En carrito: click en badge de gramos → input inline editable
-5. Checkout: `price × quantity` funciona igual (price es $/g, quantity es gramos)
-
----
-
-## 7. FLUJO DE EXPORTACIÓN A PDF Y "TIME MACHINE"
-
-Se implementó un sistema para generar presupuestos profesionales y reportes internos:
-
-1. **Creación:** Desde `BulkEditorView`, el usuario selecciona productos y configura el documento (Cliente, Evento, Ocultar/Mostrar columnas). Permite agregar productos "Extra" temporales y ajustar cantidades al vuelo.
-2. **Renderizado (`ExportPdfLayout.jsx`):** Construye una vista A4 estéticamente atractiva (híbrido tipográfico Calibri + Sans), con "cebrado" en tablas. Detecta stock en 0 y estampa alertas de **"AGOTADO - PREGUNTAR"**. Si es por peso y múltiplo de 1000, imprime "Kg".
-3. **El Snapshot:** Al imprimir, `App.jsx` inyecta en la tabla `logs` (bajo la acción `Exportación PDF`) una copia exacta (*snapshot*) de la configuración, títulos y precios de ese preciso instante.
-4. **Time Machine (`LogsView`):** Si un administrador entra a la bitácora y abre ese Log, verá un botón para "Volver a Descargar PDF". El sistema inyecta el snapshot viejo, recreando el PDF idéntico sin que lo afecte la inflación o los cambios actuales de inventario.
-
----
-
-## 8. SISTEMA DE PUNTOS Y RECOMPENSAS
-
-- Los socios (`clients`) acumulan puntos: **1 punto por cada $500 de compra** (Actualizado v0.6)
-- `pointsToEarn = Math.floor(total / 500)`
-- Las recompensas (`rewards`) tienen un costo en puntos y stock propio
-- Al canjear: se descuentan puntos del socio, se agrega al carrito como `isReward: true` con `price: 0`
-- Items de recompensa no se pueden modificar en el carrito (botones +/- deshabilitados)
-
----
-
-## 9. SISTEMA DE CAJA
-
-- **Estado:** `register_state` tabla con 1 fila (`id=1`)
-- **Abrir caja:** Define `opening_balance` y `is_open = true`
-- **Cerrar caja:** Genera un registro en `cash_closures` con resumen completo (ventas, gastos, métodos de pago, items vendidos, etc.)
-- **Realtime:** Cambios en `register_state` se reflejan instantáneamente en todos los clientes conectados
-
----
-
-## 10. ROLES Y PERMISOS
-
-Dos roles: `admin` y `vendedor`
-
-| Funcionalidad | Admin | Vendedor |
-|---------------|-------|----------|
-| Ver POS y vender | ✅ | ✅ |
-| Ver inventario | ✅ | ✅ (solo lectura) |
-| Crear/editar/eliminar productos | ✅ | ❌ |
-| Gestionar categorías | ✅ | ❌ |
-| Gestión Masiva y PDFs | ✅ | ❌ |
-| Ver dashboard completo | ✅ | ✅ (parcial) |
-| Abrir/cerrar caja | ✅ | ✅ |
-| Ver logs | ✅ | ✅ |
-
-El campo `currentUser.role` controla los permisos en UI (botones ocultos/deshabilitados).
-
----
-
-## 11. ARCHIVOS CLAVE Y QUÉ HACEN
-
-### `App.jsx` (~1300+ líneas)
-El componente más importante. Contiene:
-- **~40 estados** con `useState` (inventory, cart, clients, logs, exportPdfData, etc.)
-- **fetchCloudData()** — Promise.allSettled de 9 queries a Supabase. Posee Auto-Sanación de items vacíos en ventas históricas.
-- **addLog(action, details, defaultReason)** — Registra actividad en Supabase. *Posee inteligencia de notas*: detecta si en los `details` viaja alguna nota (`description`, `note`, `extraInfo`) y pisa automáticamente los textos aburridos (ej. "Salida de dinero") guardando la nota real del usuario en la BD.
-
-### `LogsTable.jsx` & `LogDetailRenderer.jsx`
-- **`extractRealNote(log)`**: Funciona como un **"Sabueso de Notas"**. Rastrea en la base de datos (tanto en la columna `reason` como dentro del JSON `details`) intentando rescatar la nota real ingresada por el usuario (ignorando los strings genéricos generados por el sistema, dándole retroactividad a registros viejos).
-- Renderiza el detalle visual y contiene el botón de Reimpresión de PDFs históricos.
-
-### `ClientsView.jsx`
-- Lista de Socios. Integra un **buscador en tiempo real fusionado con un select de ordenamiento reactivo** (por id, alfabético, saldo de puntos, fecha de ingreso y última compra). Muestra de forma calculada el último movimiento de cada socio procesando las transacciones al vuelo.
-
-### `POSView.jsx` y `InventoryView.jsx`
-- Vistas Core de negocio (Catálogo con grid/lista, Carrito, Pagos, Modales Pre-Checkout).
-
-### `TicketPrintLayout.jsx` & `ExportPdfLayout.jsx`
-> ⚠️ **NO MODIFICAR** sin leer la guía de impresión en el README del repo.
-- **TicketPrintLayout:** Layout para impresoras térmicas 58mm. Usa estilos inline críticos, fuente Arial bold 11px, color #000000 absoluto. Configuración `@page { margin: 0; size: 58mm auto; }`.
-- **ExportPdfLayout:** Motor A4. Híbrido tipográfico, cebrado CSS y lógicas visuales dependientes de WebkitPrintColorAdjust.
-
----
-
-## 12. CONVENCIONES DE CÓDIGO
-
-- **Lenguaje UI:** Español argentino (vos, tu)
-- **Formato precio:** Puntos de miles, sin decimales → $1.500
-- **Modo Debug/Prueba:** Todo registro cuyo texto, detalle o motivo contenga la palabra "test" activa la función global `isTestRecord` (en `helpers.js`), la cual lo oculta de las métricas oficiales y lo enmarca con alertas.
-- **Manejo de Notas en Logs:** Para evitar que el sistema pise notas personalizadas con textos genéricos (ej: "Salida de dinero"), `App.jsx` detecta la nota real, y `extractRealNote()` en `LogsTable.jsx` prioriza visualizar lo que el usuario verdaderamente escribió.
-- **Notificaciones:** `showNotification(type, title, message)` — type: success/error/warning
-- **Supabase client:** Credenciales hardcoded en `supabase/client.js` (no .env)
-- **Electron:** Custom fetch header `Origin: http://localhost` para evitar bloqueos CORS
-
----
-
-## 13. SUPABASE CONFIG
-
-URL: https://rwqqjthrvweubksrlqzy.supabase.co
-Key: eyJhbGciOiJIUzI1NiIs... (anon key, hardcoded en client.js)
-
-El cliente tiene configuración especial para Electron:
-- `detectSessionInUrl: false`
-- `persistSession: true`
-- Custom fetch que fuerza `Origin: http://localhost`
-
----
-
-## 14. BUGS CONOCIDOS Y SOLUCIONES APLICADAS
-
-| Bug | Causa raíz | Solución |
-|-----|-----------|----------|
-| Imagen no se guardaba al subir | Closure obsoleta en FileReader.onloadend | `setNewItem(prev => ({...prev}))` funcional |
-| saveEditProduct no persistía imagen | Payload no incluía `image` ni `purchasePrice` | Agregados al payload |
-| File picker cerraba modales | Listeners `focus` + `visibilitychange` disparaban fetchCloudData | Quitado listener `focus`, cooldown 15s en `visibilitychange` |
-| Spinner tapaba modales al re-sync | `setIsCloudLoading(true)` siempre | `fetchCloudData(showSpinner=false)` para re-syncs |
-| Crear categoría daba 409 Conflict | Secuencia de `categories.id` desincronizada | `SELECT setval(pg_get_serial_sequence(...))` |
-| Notas de gastos o socios ocultas por textos genéricos | Supabase recibía "Salida de dinero" en vez de la nota real | Lógica de detección en `addLog` + "Sabueso" (`extractRealNote`) en `LogsTable.jsx` |
-| Edición de Venta fallaba con IDs no UUID | Supabase rechazaba IDs que no fueran tipo UUID válidos | Filtro RegEx UUID en `handleSaveEditedTransaction` para evitar crash |
-| Vite Fast Refresh Roto (Pantalla roja) | Exportar componentes React y Funciones normales en un mismo archivo | Lógica estática/JS extraída a archivos puros (`utils/helpers.js` y `logHelpers.js`) |
-
----
-
-## 15. CÓMO AGREGAR UNA NUEVA FUNCIONALIDAD
-
-1. **Si requiere datos nuevos:** Agregar columna en Supabase SQL Editor con `DEFAULT` para no romper existentes
-2. **Si es lógica de negocio:** Agregar handler en `App.jsx`, pasarlo como prop a la vista
-3. **Si es UI en una vista:** Modificar el archivo en `views/`
-4. **Si es un modal nuevo:** Crear en `components/modals/`, agregar estado en `App.jsx`, renderizar en `AppModals.jsx`
-5. **Si necesita helper:** Agregar en `utils/helpers.js` y exportar (No mezclar con componentes).
-6. **Siempre:** Agregar `addLog()` para registrar la acción
-
----
-
-## 16. COMANDOS
-
-# Desarrollo web
-npm run dev
-
-# Build producción
-npm run build
-
-# Electron (desarrollo)
-npm run electron:dev
-
-# Electron (build)
-npm run electron:build
+================================================================================
+🚀 PARTY MANAGER — REBU COTILLÓN POS SYSTEM
+📖 DOCUMENTACIÓN TÉCNICA MAESTRA PARA INTELIGENCIAS ARTIFICIALES
+================================================================================
+
+ATENCIÓN IA: Este documento contiene el contexto absoluto, la arquitectura, los paradigmas de UI/UX y las soluciones a bugs históricos del proyecto. DEBES leer detenidamente las secciones de "Reglas Críticas" y "Manejo de Estados" antes de proponer modificaciones estructurales o de interfaces.
+
+Última actualización: Marzo 2026
+Versión: 0.9.0 (Unificación Modular "Extras" y Blindaje Vite/Electron)
+
+--------------------------------------------------------------------------------
+1. STACK TECNOLÓGICO
+--------------------------------------------------------------------------------
+- Frontend: React 18 (Funcional, uso intensivo de Hooks) + Vite.
+- Estilos: Tailwind CSS + Lucide React (Iconografía).
+- Backend / Base de Datos: Supabase (PostgreSQL, Auth, Storage público, Realtime).
+- Escritorio: Electron (Empaquetado y renderizado nativo Chromium).
+- Generación de Documentos: html2pdf.js y Media Queries de impresión nativa CSS.
+
+--------------------------------------------------------------------------------
+2. ARQUITECTURA DE SOFTWARE (EL "GOD COMPONENT")
+--------------------------------------------------------------------------------
+El proyecto utiliza un patrón centralizado estricto para evitar problemas de desincronización de estados entre vistas:
+
+- `App.jsx` es el "God Component". Contiene TODOS los estados globales de la aplicación (~40 estados: inventory, cart, clients, logs, rewards, categories, offers, etc.).
+- Funciones Core: `fetchCloudData()` hace un `Promise.allSettled` a Supabase para precargar todo en memoria.
+- Prop Drilling: `App.jsx` inyecta los datos y los manejadores de eventos (handlers) hacia abajo a las Vistas (`src/views/`).
+- Gestor de Modales: Existe un archivo `AppModals.jsx` que orquesta la aparición de todos los modales globales (Checkout, Configuración, Clientes) para evitar problemas de z-index y contexto de renderizado.
+
+--------------------------------------------------------------------------------
+3. PARADIGMAS DE DISEÑO UI/UX (REGLAS DE ESTILOS)
+--------------------------------------------------------------------------------
+Para mantener la coherencia visual en toda la aplicación, se DEBEN respetar estas reglas:
+1. Pestañas (Folder Tabs): Las navegaciones internas (como en ExtrasView) usan un diseño de "Carpeta Física". El contenedor tiene un borde inferior grueso (`border-b-2`). La pestaña activa baja 2 píxeles (`-mb-[2px]` o similar) con fondo blanco para "pisar" y ocultar la línea divisoria, creando el efecto visual de una solapa abierta.
+2. Scrollbars Ocultas: Todo contenedor horizontal (`overflow-x-auto`) debe llevar la clase Tailwind `[&::-webkit-scrollbar]:hidden` y el estilo inline `style={{ scrollbarWidth: 'none' }}` para evitar que Windows inyecte barras grises feas.
+3. Empty States: Si un array de datos está vacío, se debe mostrar un contenedor gris (`bg-slate-50`), con borde punteado (`border-dashed`), un icono grande de Lucide en el centro dentro de un círculo blanco, y un texto descriptivo.
+4. Tipografía Financiera: Todo precio o número importante usa la fuente `font-black` y componentes como `<FancyPrice />` para separar los miles.
+
+--------------------------------------------------------------------------------
+4. MODELO DE DATOS Y CONVERSIÓN "CANTIDAD VS PESO"
+--------------------------------------------------------------------------------
+Supabase guarda los datos maestros. Existe un dualismo crítico en el inventario:
+La tabla `products` incluye la columna `product_type` ('quantity' o 'weight').
+
+A. PRODUCTOS POR CANTIDAD ('quantity'):
+- Stock: Unidades enteras (ej: 50).
+- Precio/Costo: Por unidad.
+- UI: El carrito suma de 1 en 1.
+
+B. PRODUCTOS POR PESO ('weight') - ¡ALERTA MATEMÁTICA!:
+- Base de Datos: El stock se almacena en GRAMOS (ej: 1500 = 1.5kg). El costo y precio se almacenan en $/GRAMO (ej: si cuesta $10.000 el kilo, en la DB se guarda 10).
+- Interfaz de Usuario (UI): Todas las vistas y tablas muestran la información en KILOS ($/kg).
+- Modales: `ProductModals.jsx` realiza la conversión de fondo. Al editar, multiplica por 1000 para que el humano vea el precio por kilo. Al guardar, divide por 1000.
+- Punto de Venta (POS): Al hacer clic en un producto por peso, se abre un `WeightInputModal` donde el usuario teclea los gramos deseados. En el carrito, la `quantity` equivale a gramos. El total es `precio (por gramo) * quantity (en gramos)`.
+
+--------------------------------------------------------------------------------
+5. MÓDULOS DEL SISTEMA (`src/views/`)
+--------------------------------------------------------------------------------
+* POSView (Caja): Escucha eventos de teclado (`useBarcodeScanner`) para pistola láser. Pre-checkout permite asignar un socio o "Consumidor Final". Los presupuestos se guardan en el estado global para persistir aunque el usuario cambie de pestaña.
+* InventoryView: Vista de cuadrícula responsiva (de 4 a 10 columnas ajustables por el usuario) o vista de lista. Cuenta con ordenamiento múltiple (A-Z, Más recientes vía `created_at`, Precio, Stock).
+* ExtrasView [NUEVO]: Consolidación absoluta del negocio. Contiene 3 pestañas:
+  - Categorías: ABM y asignación masiva de productos.
+  - Ofertas: Reglas automáticas detectadas por el POS (2x1, 3x2, Combos fijos, KITS, Mayoristas por cantidad, Descuentos).
+  - Premios: Recompensas canjeables.
+* ClientsView: CRUD de Socios. Integra un buscador que filtra al vuelo y un select dinámico. El "Último Movimiento" se calcula iterando las transacciones históricas.
+* BulkEditorView: Editor masivo estilo hoja de cálculo para ajustar precios por porcentaje. Sirve como antesala para el generador de Presupuestos PDF.
+
+--------------------------------------------------------------------------------
+6. IMPRESIÓN DUAL, PDFS Y EL "TIME MACHINE" (MÁQUINA DEL TIEMPO)
+--------------------------------------------------------------------------------
+El sistema utiliza clases utilitarias de CSS (`print:hidden`, `print:block`) para manejar dos motores de impresión distintos:
+1. Ticket Térmico: Usa `TicketPrintLayout.jsx`. Formato 58mm estricto, Arial 11px, blanco y negro puro. Se dispara automáticamente tras una venta en el POS.
+2. Motor A4 PDF: Usa `ExportPdfLayout.jsx`. Genera Presupuestos estéticos con logos, tipografías mixtas y tablas cebradas.
+
+[ LA MÁQUINA DEL TIEMPO DE PDFS ]
+- Cuando se genera un Presupuesto PDF, `App.jsx` inyecta un registro en la tabla `logs` (Acción: Exportación PDF).
+- En la columna `details` (JSONB) de la DB, guarda una FOTOGRAFÍA EXACTA (Snapshot) de los productos, precios, cliente y configuración en ese milisegundo.
+- Si un admin va a `LogsView` un mes después y selecciona "Reimprimir", el motor PDF vuelve a armar el documento consumiendo el Snapshot, ignorando que los productos reales hayan subido de precio debido a la inflación.
+
+--------------------------------------------------------------------------------
+7. LOGS DE AUDITORÍA Y "SABUESO DE NOTAS"
+--------------------------------------------------------------------------------
+Todas las acciones relevantes llaman a `addLog(action, details, reason)`.
+Problema histórico: A veces Supabase o funciones automáticas inyectaban razones aburridas como "Salida de dinero", ocultando la nota escrita por el cajero.
+Solución ("Sabueso"): Se creó la función `extractRealNote(log)` en `LogsTable.jsx` que excava de forma recursiva dentro del objeto JSON `details` buscando claves (`description`, `note`, `extraInfo`). Si la encuentra, pisa visualmente el texto del sistema, restaurando la retroactividad de los comentarios reales del usuario.
+- Test Global: La función `isTestRecord(item)` oculta automáticamente de las vistas y reportes oficiales cualquier venta, gasto o cliente que contenga la palabra "test".
+
+--------------------------------------------------------------------------------
+8. FIDELIZACIÓN: SISTEMA DE PUNTOS
+--------------------------------------------------------------------------------
+- Tasa de acumulación: 1 Punto por cada $500 de venta neta.
+- Las recompensas (`rewards`) pueden ser productos físicos (descuentan stock) o vouchers de descuento financiero.
+- En el POS, los premios ingresan al carrito con la flag `isReward: true` forzando un precio $0 y bloqueando los botones de sumar/restar cantidad.
+
+--------------------------------------------------------------------------------
+9. REGLAS Y BUGS CONOCIDOS PARA PREVENIR ERRORES
+--------------------------------------------------------------------------------
+- [CRÍTICO] Error de Vite (Fast Refresh): Nunca exportar componentes de React y utilidades Javascript normales en el mismo archivo. Todo lo que sea lógica abstracta (ej: generadores de IDs, formateadores de precio) DEBE vivir en `src/utils/helpers.js`.
+- [CRÍTICO] Caché de Electron ("Código Fantasma"): Trabajar con Electron y Vite corriendo asincrónicamente provoca que Electron lea el `/dist` viejo. SIEMPRE usar el script personalizado `npm run dev:fresh` para matar la caché, compilar y luego abrir Electron.
+- Caída de la DB por UUIDs: Si se intenta borrar o buscar una venta con un ID malformado, PostgreSQL rechaza la petición causando un crash general. Se mitigó usando una expresión regular de validación de UUIDs en los handlers.
+- Cierre de modales involuntarios: El evento `focus` nativo de Windows (al abrir el selector de archivos para subir imágenes) causaba un re-render global que cerraba los modales de React. Se eliminó el listener `focus` del window y se le dio un cooldown de 15s al listener de `visibilitychange`.
+- Restricción de CORS en Electron: Electron requiere que el cliente de Supabase asuma un origen válido local. En `supabase/client.js` se forzó el `detectSessionInUrl: false` y fetch custom headers para evitar rechazos de red.
+
+--------------------------------------------------------------------------------
+10. ESTRUCTURA DE ARCHIVOS OFICIAL
+--------------------------------------------------------------------------------
+src/
+├── components/
+│   ├── ActionLogs/           # Tablas, renderizadores de detalle y Sabueso
+│   ├── dashboard/            # KPIs, Kioscos y Gráficos
+│   ├── modals/               # Formularios flotantes segmentados
+│   ├── AppModals.jsx         # Orquestador de Modales
+│   ├── ExportPdfLayout.jsx   # Plantilla de Presupuestos (Motor A4)
+│   ├── Sidebar.jsx           # Navegación (Control de roles de Usuario)
+│   └── TicketPrintLayout.jsx # Pantilla de Ticket Térmico 58mm
+├── hooks/
+│   └── useBarcodeScanner.js  # Lector de código de barras global
+├── supabase/
+│   └── client.js             # Conexión DB
+├── utils/
+│   └── helpers.js            # Funciones puras (Formateo, isTestRecord)
+├── views/
+│   ├── BulkEditorView.jsx    # Editor Excel-like y creador de PDFs
+│   ├── ClientsView.jsx       # Gestión de Socios
+│   ├── DashboardView.jsx     # Panel inicial
+│   ├── ExtrasView.jsx        # ⭐ Módulo Unificado: Promos, Catálogo y Premios
+│   ├── HistoryView.jsx       # Transacciones de venta
+│   ├── InventoryView.jsx     # Gestor de Stock principal
+│   ├── LogsView.jsx          # Auditoría
+│   ├── POSView.jsx           # Punto de Venta y Carrito
+│   └── ReportsHistoryView.jsx# Cierres de caja (Ciegos)
+└── App.jsx                   # CEREBRO DEL SISTEMA (God Component)
+
+--------------------------------------------------------------------------------
+11. COMANDOS DE DESARROLLO Y BUILD
+--------------------------------------------------------------------------------
+> npm install             (Instalación de dependencias iniciales)
+> npm run dev:fresh       (🚀 COMANDO OBLIGATORIO PARA DESARROLLAR: Limpia, hace build y lanza Electron)
+> npm run build           (Compila la aplicación estática en Vite)
+> npm run electron:dev    (Lanza solo Electron asumiendo que el build ya se hizo)
+> npm run electron:build  (Empaqueta el ejecutable nativo para Windows/Mac)

@@ -25,8 +25,7 @@ import POSView from './views/POSView';
 import ClientsView from './views/ClientsView';
 import HistoryView from './views/HistoryView';
 import LogsView from './views/LogsView';
-import CatalogManagerView from './views/CatalogManagerView';
-import RewardsView from './views/RewardsView';
+import ExtrasView from './views/ExtrasView';
 import ReportsHistoryView from './views/ReportsHistoryView';
 import BulkEditorView from './views/BulkEditorView';
 
@@ -2827,7 +2826,7 @@ export default function PartySupplyApp() {
             <div className="flex items-center gap-3">
               <div>
                 <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
-                  {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', history: 'Historial de Ventas', rewards: 'Premios', reports: 'Reportes de Caja', logs: 'Registro de Acciones', categories: 'Catálogo y Reglas', 'bulk-editor': 'Productos' }[activeTab] || activeTab}
+                  {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', history: 'Historial de Ventas', reports: 'Reportes de Caja', logs: 'Registro de Acciones', extras: 'Extras', 'bulk-editor': 'Productos' }[activeTab] || activeTab}
                 </h2>
                 <div className="flex items-center gap-2 text-[10px] text-slate-400">
                   <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
@@ -2872,20 +2871,24 @@ export default function PartySupplyApp() {
             {activeTab === 'rewards' && (<RewardsView rewards={rewards} onAddReward={handleAddReward} onUpdateReward={handleUpdateReward} onDeleteReward={handleDeleteReward} />)}
             {activeTab === 'reports' && currentUser?.role === 'admin' && (<ReportsHistoryView pastClosures={pastClosures} members={members}/>)}
             {activeTab === 'logs' && currentUser?.role === 'admin' && (<LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} />)}
-            {activeTab === 'categories' && currentUser?.role === 'admin' && (
-              <CatalogManagerView 
+            {activeTab === 'extras' && currentUser?.role === 'admin' && (
+              <ExtrasView 
                 categories={categories} 
                 inventory={inventory} 
-                offers={offers} // ✨ NUEVO: Pasamos las ofertas a la vista
+                offers={offers} 
+                rewards={rewards}
                 onAddCategory={handleAddCategoryFromView} 
                 onDeleteCategory={handleDeleteCategoryFromView} 
                 onEditCategory={handleEditCategory} 
                 onBatchUpdateProductCategory={handleBatchUpdateProductCategory}
-                onAddOffer={handleAddOffer} // ✨ NUEVO: Funciones de Ofertas
+                onAddOffer={handleAddOffer} 
                 onUpdateOffer={handleUpdateOffer}
                 onDeleteOffer={handleDeleteOffer}
+                onAddReward={handleAddReward}
+                onUpdateReward={handleUpdateReward}
+                onDeleteReward={handleDeleteReward}
               />
-            )}
+            )}            
             {activeTab === 'bulk-editor' && currentUser?.role === 'admin' && (
               <BulkEditorView 
                 inventory={inventory} 

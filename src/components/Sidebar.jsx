@@ -7,11 +7,10 @@ import {
   History,
   LogOut,
   FileText,
-  Tag,
-  Users,
-  Gift,
+  Gift, // Usaremos Gift para Marketing y Extras
   FileBarChart,
-  Percent // ✅ Ícono agregado para la edición masiva
+  Percent,
+  Users // ✅ Ícono de Socios restaurado
 } from 'lucide-react';
 
 const SidebarButton = ({ onClick, isActive, icon: Icon, label }) => {
@@ -90,12 +89,6 @@ export default function Sidebar({
           icon={Users}
           label="Socios"
         />
-        <SidebarButton
-          onClick={() => setActiveTab('rewards')}
-          isActive={activeTab === 'rewards'}
-          icon={Gift}
-          label="Premios"
-        />
       </nav>
 
       <SidebarButton
@@ -143,18 +136,18 @@ export default function Sidebar({
             >
               <FileText size={14} /> Registro de Acciones
             </button>
+            {/* ✨ BOTÓN UNIFICADO */}
             <button
-              onClick={() => { setActiveTab('categories'); setShowAdminMenu(false); }}
+              onClick={() => { setActiveTab('extras'); setShowAdminMenu(false); }}
               className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2"
             >
-              <Tag size={14} /> Categorias y Ofertas
+              <Gift size={14} /> Extras
             </button>
-            {/* ✅ Botón de Edición Masiva */}
             <button
               onClick={() => { setActiveTab('bulk-editor'); setShowAdminMenu(false); }}
               className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2 border-t border-slate-50"
             >
-              <Percent size={14} /> Productos
+              <Percent size={14} /> Productos (Avanzado)
             </button>
           </div>
         )}
