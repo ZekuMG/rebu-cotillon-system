@@ -13,9 +13,23 @@ import Swal from 'sweetalert2';
 // --- CONEXIÓN A LA NUBE ---
 import { supabase } from './supabase/client';
 import { uploadProductImage, deleteProductImage } from './utils/storage';
-import { formatDateAR, formatTimeAR, formatTimeFullAR, formatCurrency, formatNumber } from './utils/helpers';
+import { formatDateAR, formatTimeAR, formatTimeFullAR, isTestRecord } from './utils/helpers';
+import {
+  mapCashClosureRecord,
+  mapCashClosureRecords,
+  mapCategoryRecords,
+  mapExpenseRecords,
+  mapInventoryRecords,
+  mapLogRecords,
+  mapMemberRecords,
+  mapOfferRecords,
+  mapRegisterState,
+  mapRewardRecords,
+  mapSaleRecords,
+  safeCloudData,
+} from './utils/cloudMappers';
 
-import {  USERS,  getInitialState, } from './data';
+import { USERS } from './data';
 import Sidebar from './components/Sidebar';
 
 // Vistas
@@ -57,7 +71,20 @@ import { ExportPdfLayout } from './components/ExportPdfLayout';
 
 // Código de barras
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
-import { isTestRecord } from './utils/helpers.js';
+
+function PersistentTabPanel({ tab, activeTab, className = '', children }) {
+  const cachedChildrenRef = useRef(children);
+
+  if (activeTab === tab) {
+    cachedChildrenRef.current = children;
+  }
+
+  return (
+    <div className={`${activeTab === tab ? 'block' : 'hidden'} ${className}`.trim()}>
+      {cachedChildrenRef.current}
+    </div>
+  );
+}
 
 export default function PartySupplyApp() {
   
@@ -82,6 +109,16 @@ export default function PartySupplyApp() {
   const [registerOpenedAt, setRegisterOpenedAt] = useState(null);
 
   const isAutoClosing = useRef(false);
+
+  const syncRegisterState = (registerState) => {
+    const mappedRegisterState = mapRegisterState(registerState);
+    if (!mappedRegisterState) return;
+
+    setIsRegisterClosed(mappedRegisterState.isRegisterClosed);
+    setOpeningBalance(mappedRegisterState.openingBalance);
+    setClosingTime(mappedRegisterState.closingTime);
+    setRegisterOpenedAt(mappedRegisterState.registerOpenedAt);
+  };
 
   // ==========================================
   // 1.5 CONEXIÓN SUPABASE
@@ -114,188 +151,37 @@ export default function PartySupplyApp() {
         supabase.from('offers').select('*').eq('is_active', true).order('created_at', { ascending: false }) // ✨ Cargar Ofertas
       ]);
 
-      const safeData = (result, tableName) => {
-        if (result.status === 'fulfilled' && !result.value.error) {
-          return result.value.data || [];
-        }
-        console.error(`Error en tabla [${tableName}]:`, result.status === 'rejected' ? result.reason : result.value.error);
-        return null;
-      };
+      const prodData = safeCloudData(prodResult, 'productos');
+      if (prodData) setInventory(mapInventoryRecords(prodData));
 
-      const prodData = safeData(prodResult, 'productos');
-      if (prodData) {
-        setInventory(prodData.map(p => ({
-          ...p,
-          categories: p.category ? p.category.split(',').map(c => c.trim()).filter(Boolean) : [],
-          purchasePrice: p.purchasePrice || 0,
-          expiration_date: p.expiration_date || null
-        })));
-      }
+      const clientData = safeCloudData(clientResult, 'clientes');
+      if (clientData) setMembers(mapMemberRecords(clientData));
 
-      const clientData = safeData(clientResult, 'clientes');
-      if (clientData) {
-        setMembers(clientData.map(c => ({
-          ...c,
-          memberNumber: c.member_number,
-          createdAt: c.created_at
-        })));
-      }
-
-      const logsData = safeData(logsResult, 'logs');
+      const logsData = safeCloudData(logsResult, 'logs');
       let parsedLogs = [];
       if (logsData) {
-        parsedLogs = logsData.map(log => {
-          const isMod = ['Venta Modificada', 'Modificacion Pedido', 'Modificación de Pedido'].includes(log.action);
-          const finalAction = isMod ? 'Modificación Pedido' : log.action;
-
-          const logObj = {
-            id: log.id,
-            action: finalAction,
-            details: log.details,
-            user: log.user,
-            reason: log.reason,
-            date: formatDateAR(new Date(log.created_at)),
-            timestamp: formatTimeFullAR(new Date(log.created_at))
-          };
-          logObj.isTest = isTestRecord({ action: logObj.action, details: logObj.details, reason: logObj.reason });
-          return logObj;
-        });
+        parsedLogs = mapLogRecords(logsData);
         setDailyLogs(parsedLogs);
       }
 
-      const salesData = safeData(salesResult, 'ventas');
-      if (salesData) {
-        const parsedSales = salesData.map(sale => {
-          let items = (sale.sale_items || []).map(i => ({
-            id: i.product_id,
-            title: i.product_title,
-            qty: i.quantity,
-            price: i.price,
-            isReward: i.is_reward,
-            productId: i.product_id
-          }));
+      const salesData = safeCloudData(salesResult, 'ventas');
+      if (salesData) setTransactions(mapSaleRecords(salesData, parsedLogs));
 
-          if (items.length === 0 && Number(sale.total) > 0) {
-              const recoveryLog = parsedLogs.find(l => 
-                  (l.action === 'Venta Realizada' || l.action === 'Modificación Pedido') && 
-                  String(l.details?.transactionId) === String(sale.id)
-              );
-              
-              if (recoveryLog) {
-                  const recoveredItems = recoveryLog.details?.items || recoveryLog.details?.itemsSnapshot || [];
-                  items = recoveredItems.map(ri => ({
-                      id: ri.id || ri.productId,
-                      title: ri.title || ri.name || 'Producto Recuperado',
-                      qty: Number(ri.quantity || ri.qty || 1),
-                      price: Number(ri.price || 0),
-                      isReward: ri.isReward || false,
-                      productId: ri.productId || ri.id
-                  }));
-              }
-          }
+      const expData = safeCloudData(expResult, 'gastos');
+      if (expData) setExpenses(mapExpenseRecords(expData));
 
-          const restoreLog = parsedLogs.find(l => l.action === 'Venta Restaurada' && String(l.details?.transactionId) === String(sale.id));
-          const isRestored = !!restoreLog;
-          const restoredAt = restoreLog ? `${restoreLog.date} ${restoreLog.timestamp}` : null;
+      const closureData = safeCloudData(closureResult, 'reportes');
+      if (closureData) setPastClosures(mapCashClosureRecords(closureData));
 
-          const saleObj = {
-            id: sale.id,
-            date: formatDateAR(new Date(sale.created_at)),
-            time: formatTimeFullAR(new Date(sale.created_at)),
-            total: sale.total,
-            payment: sale.payment_method,
-            installments: sale.installments,
-            items: items, 
-            client: sale.clients ? { name: sale.clients.name, memberNumber: sale.clients.member_number } : null,
-            pointsEarned: sale.points_earned,
-            pointsSpent: sale.points_spent,
-            user: sale.user_name || 'Desconocido',
-            status: 'completed',
-            isRestored: isRestored,
-            restoredAt: restoredAt
-          };
-          saleObj.isTest = isTestRecord(saleObj);
-          return saleObj;
-        });
-        
-        setTransactions(parsedSales);
-      }
+      const catData = safeCloudData(catResult, 'categorias');
+      if (catData) setCategories(mapCategoryRecords(catData));
 
-      const expData = safeData(expResult, 'gastos');
-      if (expData) {
-        setExpenses(expData.map(e => {
-          const expObj = {
-            id: e.id,
-            description: e.description,
-            amount: e.amount,
-            category: e.category,
-            paymentMethod: e.payment_method,
-            date: formatDateAR(new Date(e.created_at)),
-            time: formatTimeFullAR(new Date(e.created_at)),
-            user: e.user_name || 'Sistema'
-          };
-          expObj.isTest = isTestRecord({ description: expObj.description, category: expObj.category });
-          return expObj;
-        }));
-      }
-
-      const closureData = safeData(closureResult, 'reportes');
-      if (closureData) {
-        setPastClosures(closureData.map(c => ({
-          id: c.id,
-          date: c.date,
-          openTime: c.open_time,
-          closeTime: c.close_time,
-          user: c.user_name,
-          type: c.type,
-          openingBalance: Number(c.opening_balance),
-          totalSales: Number(c.total_sales),
-          finalBalance: Number(c.final_balance),
-          totalCost: Number(c.total_cost),
-          totalExpenses: Number(c.total_expenses),
-          netProfit: Number(c.net_profit),
-          salesCount: c.sales_count,
-          averageTicket: Number(c.average_ticket),
-          paymentMethods: c.payment_methods_summary,
-          itemsSold: c.items_sold_list,
-          newClients: c.new_clients_list,
-          expensesSnapshot: c.expenses_snapshot,
-          transactionsSnapshot: c.transactions_snapshot
-        })));
-      }
-
-      const catData = safeData(catResult, 'categorias');
-      if (catData) setCategories(catData.map(c => c.name));
-
-      const rewardsData = safeData(rewardsResult, 'premios');
-      if (rewardsData) {
-        setRewards(rewardsData.map(r => ({
-          id: r.id,
-          title: r.title,
-          description: r.description,
-          pointsCost: r.points_cost,
-          type: r.type,
-          discountAmount: r.discount_amount,
-          stock: r.stock
-        })));
-      }
+      const rewardsData = safeCloudData(rewardsResult, 'premios');
+      if (rewardsData) setRewards(mapRewardRecords(rewardsData));
 
       // ✨ Procesar Ofertas
-      const offersData = safeData(offersResult, 'ofertas');
-      if (offersData) {
-        setOffers(offersData.map(o => ({
-          id: o.id,
-          name: o.name,
-          type: o.type,
-          applyTo: o.apply_to,
-          productsIncluded: o.products_included || [],
-          itemsCount: Number(o.items_count),
-          discountValue: Number(o.discount_value),
-          offerPrice: Number(o.offer_price),
-          profitMargin: Number(o.profit_margin),
-          createdBy: o.created_by
-        })));
-      }
+      const offersData = safeCloudData(offersResult, 'ofertas');
+      if (offersData) setOffers(mapOfferRecords(offersData));
 
       let registerState = null;
       if (registerResult.status === 'fulfilled' && !registerResult.value.error) {
@@ -312,12 +198,7 @@ export default function PartySupplyApp() {
         if (!upsertErr && newState) registerState = newState;
       }
 
-      if (registerState) {
-        setIsRegisterClosed(!registerState.is_open);
-        setOpeningBalance(Number(registerState.opening_balance));
-        setClosingTime(registerState.closing_time || '21:00');
-        setRegisterOpenedAt(registerState.opened_at || null);
-      }
+      syncRegisterState(registerState);
 
     } catch (error) {
       console.error('Error general de conexión:', error);
@@ -337,12 +218,7 @@ export default function PartySupplyApp() {
         { event: 'UPDATE', schema: 'public', table: 'register_state', filter: 'id=eq.1' },
         (payload) => {
           const newState = payload.new;
-          if (newState) {
-            setIsRegisterClosed(!newState.is_open);
-            setOpeningBalance(Number(newState.opening_balance));
-            setClosingTime(newState.closing_time);
-            setRegisterOpenedAt(newState.opened_at || null);
-          }
+          syncRegisterState(newState);
         }
       )
       .on(
@@ -351,27 +227,7 @@ export default function PartySupplyApp() {
         (payload) => {
           const c = payload.new;
           if (c) {
-             const newReport = {
-                 id: c.id, 
-                 date: c.date,
-                 openTime: c.open_time,
-                 closeTime: c.close_time,
-                 user: c.user_name,
-                 type: c.type,
-                 openingBalance: Number(c.opening_balance || 0),
-                 totalSales: Number(c.total_sales || 0),
-                 finalBalance: Number(c.final_balance || 0),
-                 totalCost: Number(c.total_cost || 0),
-                 totalExpenses: Number(c.total_expenses || 0),
-                 netProfit: Number(c.net_profit || 0),
-                 salesCount: c.sales_count || 0,
-                 averageTicket: Number(c.average_ticket || 0),
-                 paymentMethods: c.payment_methods_summary || {}, 
-                 itemsSold: c.items_sold_list || [],             
-                 newClients: c.new_clients_list || [],            
-                 expensesSnapshot: c.expenses_snapshot || [],    
-                 transactionsSnapshot: c.transactions_snapshot || []
-             };
+             const newReport = mapCashClosureRecord(c);
              setPastClosures((prev) => [newReport, ...prev]);
           }
         }
@@ -402,6 +258,12 @@ export default function PartySupplyApp() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [currentUser, setCurrentUser] = useState(null);
   const [activeTab, setActiveTab] = useState('pos');
+
+  useEffect(() => {
+    if (activeTab === 'rewards') {
+      setActiveTab('extras');
+    }
+  }, [activeTab]);
   const [cart, setCart] = useState([]);
 
   const [loginStep, setLoginStep] = useState('select');
@@ -433,7 +295,6 @@ export default function PartySupplyApp() {
     clientColumns: { showQty: true, showUnitPrice: true, showSubtotal: false, showTotal: true }
   });
 
-  const [isDeleteProductModalOpen, setIsDeleteProductModalOpen] = useState(false);
   const [productToDelete, setProductToDelete] = useState(null);
   const [deleteProductReason, setDeleteProductReason] = useState('');
 
@@ -443,14 +304,11 @@ export default function PartySupplyApp() {
 
   const [editingTransaction, setEditingTransaction] = useState(null);
   const [transactionSearch, setTransactionSearch] = useState('');
-  const [isRefundModalOpen, setIsRefundModalOpen] = useState(false);
   const [transactionToRefund, setTransactionToRefund] = useState(null);
   const [refundReason, setRefundReason] = useState('');
 
   const [barcodeNotFoundModal, setBarcodeNotFoundModal] = useState({ isOpen: false, code: '' });
   const [barcodeDuplicateModal, setBarcodeDuplicateModal] = useState({ isOpen: false, existingProduct: null, newBarcode: '' });
-  const [pendingBarcodeForNewProduct, setPendingBarcodeForNewProduct] = useState('');
-
   const [isClientModalOpen, setIsClientModalOpen] = useState(false);
   const [posSelectedClient, setPosSelectedClient] = useState(null);
   const [isRedemptionModalOpen, setIsRedemptionModalOpen] = useState(false);
@@ -959,8 +817,6 @@ export default function PartySupplyApp() {
     }
   };
   
-  const checkExpirations = () => {};
-
   const playBeep = (success = true) => {
     try {
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -978,7 +834,7 @@ export default function PartySupplyApp() {
       
       oscillator.start(audioContext.currentTime);
       oscillator.stop(audioContext.currentTime + 0.1);
-    } catch (e) {
+    } catch {
       console.log('Audio not supported');
     }
   };
@@ -1164,7 +1020,7 @@ export default function PartySupplyApp() {
   
   const removeFromCart = (id) => setCart(cart.filter((c) => c.id !== id));
 
-  const handleBarcodeScan = (scannedCode, wasInInput) => {
+  const handleBarcodeScan = (scannedCode) => {
     const product = inventory.find(
       (p) => String(p.barcode) === scannedCode
     );
@@ -1208,7 +1064,7 @@ export default function PartySupplyApp() {
     }
   };
 
-  const handleInputScan = (scannedCode) => {
+  const handleInputScan = () => {
     if (activeTab === 'pos') {
       setPosSearch(''); 
     }
@@ -1222,7 +1078,6 @@ export default function PartySupplyApp() {
 
   const handleAddProductFromBarcode = (barcode) => {
     setBarcodeNotFoundModal({ isOpen: false, code: '' });
-    setPendingBarcodeForNewProduct(barcode);
     setNewItem({
       title: '', brand: '', price: '', purchasePrice: '', stock: '',
       categories: [], image: '', barcode: barcode,
@@ -1247,12 +1102,6 @@ export default function PartySupplyApp() {
     ));
     setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' });
     showNotification('info', 'Código Reemplazado', `Se quitó el código de "${existingProduct.title}".`);
-  };
-
-  const handleLogin = (role) => {
-    setCurrentUser(USERS[role]);
-    setActiveTab(role === 'admin' ? 'dashboard' : 'pos');
-    addLog('Login', { role, name: USERS[role]?.name || role });
   };
 
   const handleSelectRole = (role) => {
@@ -1485,68 +1334,70 @@ export default function PartySupplyApp() {
             return;
         }
 
+        const openTime = registerOpenedAt 
+          ? formatTimeFullAR(new Date(registerOpenedAt))
+          : (dailyLogs.find(l => l.action === 'Apertura de Caja')?.timestamp || '--:--');
+        const closeTime = formatTimeFullAR(closeDate);
+        const user = currentUser?.name || 'Automático';
+        const type = isAuto ? 'Automático' : 'Manual';
+
+        const closurePayload = {
+            date: formatDateAR(closeDate),
+            open_time: openTime,
+            close_time: closeTime,
+            user_name: user,
+            type: type,
+            opening_balance: openingBalance,
+            total_sales: cycleTotalSales,
+            final_balance: finalPhysicalBalance,
+            total_cost: totalCost,
+            total_expenses: totalExpenses,
+            net_profit: netProfit,
+            sales_count: cycleSalesCount,
+            average_ticket: averageTicket,
+            payment_methods_summary: paymentMethodsSummary,
+            items_sold_list: itemsSoldList,
+            new_clients_list: cycleNewClients,
+            expenses_snapshot: cycleExpenses,
+            transactions_snapshot: cycleTransactions
+        };
+
+        const closureLogDetails = {
+          date: closurePayload.date,
+          openTime,
+          closeTime,
+          user,
+          type,
+          openingBalance,
+          totalSales: cycleTotalSales,
+          finalBalance: finalPhysicalBalance,
+          totalCost,
+          totalExpenses,
+          netProfit,
+          salesCount: cycleSalesCount,
+          averageTicket,
+          paymentMethods: paymentMethodsSummary,
+          itemsSold: itemsSoldList,
+          newClients: cycleNewClients,
+          expensesSnapshot: cycleExpenses,
+          transactionsSnapshot: cycleTransactions,
+          isTestMode: !shouldSaveReport
+        };
+
         if (shouldSaveReport) {
-            const openTime = registerOpenedAt 
-              ? formatTimeFullAR(new Date(registerOpenedAt))
-              : (dailyLogs.find(l => l.action === 'Apertura de Caja')?.timestamp || '--:--');
-            const closeTime = formatTimeFullAR(closeDate);
-            const user = currentUser?.name || 'Automático';
-            const type = isAuto ? 'Automático' : 'Manual';
-
-            const payload = {
-                date: formatDateAR(closeDate),
-                open_time: openTime,
-                close_time: closeTime,
-                user_name: user,
-                type: type,
-                opening_balance: openingBalance,
-                total_sales: cycleTotalSales,
-                final_balance: finalPhysicalBalance,
-                total_cost: totalCost,
-                total_expenses: totalExpenses,
-                net_profit: netProfit,
-                sales_count: cycleSalesCount,
-                average_ticket: averageTicket,
-                payment_methods_summary: paymentMethodsSummary,
-                items_sold_list: itemsSoldList,
-                new_clients_list: cycleNewClients,
-                expenses_snapshot: cycleExpenses,
-                transactions_snapshot: cycleTransactions
-            };
-
-            const { data: savedReport, error } = await supabase.from('cash_closures').insert([payload]).select().single();
+            const { data: savedReport, error } = await supabase.from('cash_closures').insert([closurePayload]).select().single();
             if (error) throw error;
 
-            const adaptedReport = {
-                id: savedReport.id,
-                date: savedReport.date,
-                openTime: savedReport.open_time,
-                closeTime: savedReport.close_time,
-                user: savedReport.user_name,
-                type: savedReport.type,
-                openingBalance: Number(savedReport.opening_balance),
-                totalSales: Number(savedReport.total_sales),
-                finalBalance: Number(savedReport.final_balance),
-                totalCost: Number(savedReport.total_cost),
-                totalExpenses: Number(savedReport.total_expenses),
-                netProfit: Number(savedReport.net_profit),
-                salesCount: savedReport.sales_count,
-                averageTicket: Number(savedReport.average_ticket),
-                paymentMethods: savedReport.payment_methods_summary,
-                itemsSold: savedReport.items_sold_list,
-                newClients: savedReport.new_clients_list,
-                expensesSnapshot: savedReport.expenses_snapshot,
-                transactionsSnapshot: savedReport.transactions_snapshot
-            };
-
+            const adaptedReport = mapCashClosureRecord(savedReport);
             setPastClosures([adaptedReport, ...pastClosures]);
+            closureLogDetails.id = savedReport.id;
         }
         
         setIsRegisterClosed(true);
         setRegisterOpenedAt(null);
         
-        const logMsg = shouldSaveReport ? 'Cierre de Caja' : 'Cierre de Caja (Modo Prueba)';
-        addLog(logMsg, { totalSales: cycleTotalSales, salesCount: cycleSalesCount }, isAuto ? 'Automático' : 'Manual');
+        const logMsg = isAuto ? 'Cierre Automático' : 'Cierre de Caja';
+        addLog(logMsg, closureLogDetails, isAuto ? 'Automático' : 'Manual');
         
         setTransactions([]);
         setExpenses([]); 
@@ -1767,7 +1618,6 @@ export default function PartySupplyApp() {
         product_type: 'quantity', expiration_date: '' 
       });
       setIsModalOpen(false);
-      setPendingBarcodeForNewProduct('');
       showNotification('success', 'Producto Agregado', 'Guardado en la nube.');
     } catch (err) {
       console.error('Error agregando producto:', err);
@@ -1823,7 +1673,6 @@ export default function PartySupplyApp() {
     if (product) {
       setProductToDelete(product);
       setDeleteProductReason('');
-      setIsDeleteProductModalOpen(true);
     }
   };
 
@@ -1904,7 +1753,6 @@ export default function PartySupplyApp() {
 
         setInventory(inventory.filter((x) => x.id !== productToDelete.id));
         addLog('Baja Producto', { id: productToDelete.id, title: productToDelete.title }, deleteProductReason || 'Sin motivo');
-        setIsDeleteProductModalOpen(false);
         setProductToDelete(null);
         showNotification('success', 'Producto Eliminado', 'Se quitó del inventario.');
       } catch (err) {
@@ -2114,7 +1962,6 @@ export default function PartySupplyApp() {
   const handleDeleteTransaction = (tx) => {
     setTransactionToRefund(tx);
     setRefundReason('');
-    setIsRefundModalOpen(true);
   };
   
   const handleConfirmRefund = async (e) => {
@@ -2163,7 +2010,6 @@ export default function PartySupplyApp() {
             pointsSpent: tx.pointsSpent || 0
         }, refundReason || 'Eliminación permanente');
 
-        setIsRefundModalOpen(false);
         setTransactionToRefund(null);
         setRefundReason('');
         Swal.close();
@@ -2257,7 +2103,6 @@ export default function PartySupplyApp() {
         setTransactions([{ ...tx, status: 'voided' }, ...transactions]);
       }
       
-      setIsRefundModalOpen(false);
       setTransactionToRefund(null);
       setRefundReason('');
       
@@ -2764,6 +2609,26 @@ export default function PartySupplyApp() {
     }
   };
 
+  const tabsWithInternalScroll = new Set([
+    'inventory',
+    'pos',
+    'clients',
+    'history',
+    'reports',
+    'logs',
+    'extras',
+    'bulk-editor',
+  ]);
+
+  const mainContentClass = [
+    'flex-1',
+    'min-h-0',
+    'p-4',
+    'bg-slate-100',
+    'relative',
+    tabsWithInternalScroll.has(activeTab) ? 'overflow-hidden' : 'overflow-y-auto',
+  ].join(' ');
+
   if (isCloudLoading) return <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-100"><RefreshCw className="animate-spin text-fuchsia-600 mb-4" size={48} /><h2 className="text-xl font-bold">Cargando Nube...</h2></div>;
 
   if (!currentUser) {
@@ -2822,17 +2687,14 @@ export default function PartySupplyApp() {
             </div>
           )}
 
-          <header className="bg-white border-b h-14 flex items-center justify-between px-6 shadow-sm z-10 shrink-0">
+          <header className="bg-white border-b h-12 flex items-center justify-between px-5 shadow-sm z-10 shrink-0">
             <div className="flex items-center gap-3">
-              <div>
+              <div className="pl-1">
                 <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
-                  {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', history: 'Historial de Ventas', reports: 'Reportes de Caja', logs: 'Registro de Acciones', extras: 'Extras', 'bulk-editor': 'Productos' }[activeTab] || activeTab}
+                  {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', history: 'Historial de Ventas', reports: 'Reportes de Caja', logs: 'Registro de Acciones', extras: 'Gestion de Extras', 'bulk-editor': 'Productos' }[activeTab] || activeTab}
                 </h2>
-                <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                  <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                  <span>Supabase ON</span>
-                  <span className="text-slate-300">|</span>
-                  <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>              
+                <div className="-mt-0.5 flex items-center gap-2 text-[12px] font-bold text-slate-500">
+                  <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>
                 </div>
               </div>
             </div>
@@ -2845,8 +2707,8 @@ export default function PartySupplyApp() {
             </div>
           </header>
           
-          <main className="flex-1 overflow-y-auto p-4 bg-slate-100 relative">
-            {activeTab === 'dashboard' && (
+          <main className={mainContentClass}>
+            <PersistentTabPanel tab="dashboard" activeTab={activeTab}>
               <DashboardView 
                 openingBalance={openingBalance} 
                 totalSales={totalSales} 
@@ -2862,35 +2724,36 @@ export default function PartySupplyApp() {
                 onAlertClick={handleDashboardAlertClick} 
                 onNavigate={(tab) => setActiveTab(tab)}
                 onViewTransaction={(tx) => setDetailsModalTx(tx)}
-                />
-            )}
-            {activeTab === 'inventory' && (<InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} />)}
-            {activeTab === 'pos' && (isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{currentUser?.role === 'admin' ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">El Dueño debe abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} offers={offers} />))}
-            {activeTab === 'clients' && (<ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={() => {}} />)}
-            {activeTab === 'history' && (<HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} members={members} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setDailyLogs} />)}
-            {activeTab === 'rewards' && (<RewardsView rewards={rewards} onAddReward={handleAddReward} onUpdateReward={handleUpdateReward} onDeleteReward={handleDeleteReward} />)}
-            {activeTab === 'reports' && currentUser?.role === 'admin' && (<ReportsHistoryView pastClosures={pastClosures} members={members}/>)}
-            {activeTab === 'logs' && currentUser?.role === 'admin' && (<LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} />)}
-            {activeTab === 'extras' && currentUser?.role === 'admin' && (
-              <ExtrasView 
-                categories={categories} 
-                inventory={inventory} 
-                offers={offers} 
-                rewards={rewards}
-                onAddCategory={handleAddCategoryFromView} 
-                onDeleteCategory={handleDeleteCategoryFromView} 
-                onEditCategory={handleEditCategory} 
-                onBatchUpdateProductCategory={handleBatchUpdateProductCategory}
-                onAddOffer={handleAddOffer} 
-                onUpdateOffer={handleUpdateOffer}
-                onDeleteOffer={handleDeleteOffer}
-                onAddReward={handleAddReward}
-                onUpdateReward={handleUpdateReward}
-                onDeleteReward={handleDeleteReward}
               />
-            )}            
-            {activeTab === 'bulk-editor' && currentUser?.role === 'admin' && (
-              <BulkEditorView 
+            </PersistentTabPanel>
+            <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} /></PersistentTabPanel>
+            <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{currentUser?.role === 'admin' ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">El Dueño debe abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} offers={offers} />)}</PersistentTabPanel>
+            <PersistentTabPanel tab="clients" activeTab={activeTab} className="h-full min-h-0"><ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={() => {}} /></PersistentTabPanel>
+            <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} members={members} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setDailyLogs} /></PersistentTabPanel>
+            {currentUser?.role === 'admin' && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members}/></PersistentTabPanel>)}
+            {currentUser?.role === 'admin' && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} /></PersistentTabPanel>)}
+            <PersistentTabPanel tab="extras" activeTab={activeTab} className="h-full min-h-0">
+              <ExtrasView 
+              categories={categories} 
+              inventory={inventory} 
+              offers={offers} 
+              rewards={rewards}
+              currentUser={currentUser}
+              onAddCategory={handleAddCategoryFromView} 
+              onDeleteCategory={handleDeleteCategoryFromView} 
+              onEditCategory={handleEditCategory} 
+              onBatchUpdateProductCategory={handleBatchUpdateProductCategory}
+              onAddOffer={handleAddOffer} 
+              onUpdateOffer={handleUpdateOffer}
+              onDeleteOffer={handleDeleteOffer}
+              onAddReward={handleAddReward}
+              onUpdateReward={handleUpdateReward}
+              onDeleteReward={handleDeleteReward}
+              />
+            </PersistentTabPanel>
+            {currentUser?.role === 'admin' && (
+              <PersistentTabPanel tab="bulk-editor" activeTab={activeTab} className="h-full min-h-0">
+                <BulkEditorView 
                 inventory={inventory} 
                 categories={categories} 
                 onSaveSingle={handleBulkSaveSingle} 
@@ -2902,7 +2765,8 @@ export default function PartySupplyApp() {
                 exportConfig={bulkExportConfig}
                 setExportConfig={setBulkExportConfig}
                 onCreateFixedProduct={handleCreateFixedProduct}
-              />
+                />
+              </PersistentTabPanel>
             )}
           </main>
         </div>
@@ -2924,16 +2788,16 @@ export default function PartySupplyApp() {
         <NotificationModal isOpen={notification.isOpen} onClose={closeNotification} type={notification.type} title={notification.title} message={notification.message} />
         <OpeningBalanceModal isOpen={isOpeningBalanceModalOpen} onClose={() => setIsOpeningBalanceModalOpen(false)} tempOpeningBalance={tempOpeningBalance} setTempOpeningBalance={setTempOpeningBalance} tempClosingTime={tempClosingTime} setTempClosingTime={setTempClosingTime} onSave={handleSaveOpeningBalance} />
         <ClosingTimeModal isOpen={isClosingTimeModalOpen} onClose={() => setIsClosingTimeModalOpen(false)} closingTime={closingTime} setClosingTime={setClosingTime} onSave={handleSaveClosingTime} />
-        <AddProductModal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setPendingBarcodeForNewProduct(''); }} newItem={newItem} setNewItem={setNewItem} categories={categories} onImageUpload={handleImageUpload} onAdd={handleAddItem} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} />
+        <AddProductModal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); }} newItem={newItem} setNewItem={setNewItem} categories={categories} onImageUpload={handleImageUpload} onAdd={handleAddItem} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} />
         <EditProductModal product={editingProduct} onClose={() => setEditingProduct(null)} setEditingProduct={setEditingProduct} categories={categories} onImageUpload={handleImageUpload} editReason={editReason} setEditReason={setEditReason} onSave={saveEditProduct} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} onDuplicate={handleDuplicateProduct} currentUser={currentUser} />
         <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} />
         <ImageModal isOpen={isImageModalOpen} image={selectedImage} onClose={() => setIsImageModalOpen(false)} />
-        <RefundModal  transaction={transactionToRefund}  onClose={() => {   setIsRefundModalOpen(false);   setTransactionToRefund(null);   setRefundReason('');  }}   refundReason={refundReason}  setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />
+        <RefundModal  transaction={transactionToRefund}  onClose={() => {   setTransactionToRefund(null);   setRefundReason('');  }}   refundReason={refundReason}  setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />
         <CloseCashModal isOpen={isClosingCashModalOpen} onClose={() => setIsClosingCashModalOpen(false)} salesCount={cycleSalesCount} totalSales={cycleTotalSales} totalExpenses={cycleTotalExpenses} cashExpenses={cycleCashExpenses} cashSales={cycleCashSales} openingBalance={openingBalance} onConfirm={handleConfirmCloseCash} />
         <SaleSuccessModal transaction={saleSuccessModal} onClose={() => setSaleSuccessModal(null)} onViewTicket={() => { const tx = saleSuccessModal; setSaleSuccessModal(null); setTicketToView(tx); }} />
         <TicketModal transaction={ticketToView} onClose={() => setTicketToView(null)} onPrint={handlePrintTicket} />
         <AutoCloseAlertModal isOpen={isAutoCloseAlertOpen} onClose={() => setIsAutoCloseAlertOpen(false)} closingTime={closingTime} />
-        <DeleteProductModal product={productToDelete} onClose={() => { setIsDeleteProductModalOpen(false); setProductToDelete(null); setDeleteProductReason(''); }} reason={deleteProductReason} setReason={setDeleteProductReason} onConfirm={confirmDeleteProduct} />
+        <DeleteProductModal product={productToDelete} onClose={() => { setProductToDelete(null); setDeleteProductReason(''); }} reason={deleteProductReason} setReason={setDeleteProductReason} onConfirm={confirmDeleteProduct} />
         <BarcodeNotFoundModal isOpen={barcodeNotFoundModal.isOpen} scannedCode={barcodeNotFoundModal.code} onClose={() => setBarcodeNotFoundModal({ isOpen: false, code: '' })} onAddProduct={handleAddProductFromBarcode} />
         <BarcodeDuplicateModal isOpen={barcodeDuplicateModal.isOpen} existingProduct={barcodeDuplicateModal.existingProduct} onClose={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onKeepExisting={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onReplaceBarcode={handleReplaceDuplicateBarcode} />
         <ClientSelectionModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} clients={members} addClient={handleAddMemberWithLog} onSelectClient={(client) => setPosSelectedClient(client)} onCancelFlow={() => { setPosSelectedClient({ id: 'guest', name: 'No asociado', memberNumber: '---', points: 0 }); setIsClientModalOpen(false); }} />
@@ -2959,3 +2823,5 @@ export default function PartySupplyApp() {
     </>
   );
 }
+
+

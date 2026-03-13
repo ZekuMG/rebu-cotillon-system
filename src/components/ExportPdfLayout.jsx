@@ -151,22 +151,26 @@ export const ExportPdfLayout = ({ data }) => {
                           className={`border-b border-slate-100 break-inside-avoid ${rowColorClass} ${isAgotado ? 'opacity-80' : ''}`}
                           style={{ WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}
                         >
-                          <td className={`py-1.5 px-4 font-medium flex items-center flex-wrap gap-x-2 gap-y-1 text-[12px] ${isAgotado ? 'text-slate-500' : 'text-slate-800'}`}>
-                            <span className="text-slate-400 text-lg leading-none shrink-0">•</span> 
-                            <span>{item.title}</span>
-                            
-                            {/* CARTEL DE AGOTADO / CONSULTAR */}
-                            {isAgotado && (
-                              <span className="bg-red-100 text-red-700 text-[8px] px-1.5 py-0.5 rounded font-black uppercase tracking-widest border border-red-300 whitespace-nowrap shrink-0">
-                                Agotado - Preguntar Stock
-                              </span>
-                            )}
-                            
-                            {isWeight && (
-                              <span className="bg-amber-100 text-amber-700 text-[8px] px-1 py-0.5 rounded font-bold uppercase tracking-widest border border-amber-200 whitespace-nowrap shrink-0">
-                                Peso
-                              </span>
-                            )}
+                          <td className={`py-1.5 px-4 font-medium text-[0px] ${isAgotado ? 'text-slate-500' : 'text-slate-800'}`}>
+                            <div className="flex items-start gap-2 text-[12px]">
+                              <span className="text-slate-400 text-lg leading-none shrink-0">•</span>
+                              <div className="min-w-0 flex-1">
+                                <span className="break-words">{item.title}</span>
+                                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                                  {isAgotado && (
+                                    <span className="bg-red-100 text-red-700 text-[8px] px-1.5 py-0.5 rounded font-black uppercase tracking-widest border border-red-300 whitespace-nowrap shrink-0">
+                                      Agotado - Preguntar Stock
+                                    </span>
+                                  )}
+
+                                  {isWeight && (
+                                    <span className="bg-amber-100 text-amber-700 text-[8px] px-1 py-0.5 rounded font-bold uppercase tracking-widest border border-amber-200 whitespace-nowrap shrink-0">
+                                      Peso
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
                           </td>
                           {clientCols.showQty && (
                             <td className={`py-1.5 px-3 text-center font-mono text-[12px] ${isAgotado ? 'text-slate-400' : ''}`}>
@@ -287,17 +291,27 @@ export const ExportPdfLayout = ({ data }) => {
                           className={`border-b border-slate-100 break-inside-avoid ${rowColorClass} ${isAgotado ? 'opacity-80' : ''}`}
                           style={{ WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}
                         >
-                          <td className={`py-1.5 px-4 font-medium flex items-center flex-wrap gap-x-2 gap-y-1 text-[12px] ${isAgotado ? 'text-slate-500' : 'text-slate-800'}`}>
+                          <td className={`py-1.5 px-4 font-medium text-[12px] ${isAgotado ? 'text-slate-500' : 'text-slate-800'}`}>
                             <span className="text-slate-400">•</span> 
-                            <span>{item.title}</span>
-                            
-                            {isAgotado && (
-                              <span className="bg-red-100 text-red-700 text-[8px] px-1 py-0.5 rounded font-black uppercase tracking-widest border border-red-300 whitespace-nowrap shrink-0">
-                                Agotado - Preguntar
-                              </span>
-                            )}
+                            <div className="flex items-start gap-2">
+                              <span className="text-slate-400 text-lg leading-none shrink-0">•</span>
+                              <div className="min-w-0 flex-1">
+                                <span className="break-words">{item.title}</span>
+                                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                                  {isAgotado && (
+                                    <span className="bg-red-100 text-red-700 text-[8px] px-1 py-0.5 rounded font-black uppercase tracking-widest border border-red-300 whitespace-nowrap shrink-0">
+                                      Agotado - Preguntar
+                                    </span>
+                                  )}
 
-                            {isWeight && <span className="bg-amber-100 text-amber-700 text-[8px] px-1 py-0.5 rounded font-bold uppercase tracking-widest border border-amber-200 whitespace-nowrap shrink-0">Peso</span>}
+                                  {isWeight && (
+                                    <span className="bg-amber-100 text-amber-700 text-[8px] px-1 py-0.5 rounded font-bold uppercase tracking-widest border border-amber-200 whitespace-nowrap shrink-0">
+                                      Peso
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
                           </td>
                           {config.columns.cost && <td className={`text-right py-1.5 px-3 text-[12px] ${isAgotado ? 'text-slate-400' : 'text-slate-500'}`}>{formatCurrency(item.cost)} {isWeight && <span className="text-[9px] text-slate-400">/Kg</span>}</td>}
                           {config.columns.price && <td className={`text-right py-1.5 px-3 text-[12px] ${isAgotado ? 'text-slate-400' : ''}`}>{formatCurrency(item.price)} {isWeight && <span className="text-[9px] text-slate-400">/Kg</span>}</td>}

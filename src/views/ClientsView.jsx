@@ -288,7 +288,7 @@ export default function ClientsView({
   };
 
   return (
-    <div className="h-full flex flex-col relative bg-slate-50 p-6">
+    <div className="h-full min-h-0 flex flex-col relative overflow-hidden bg-slate-50 p-6">
       
       {/* HEADER COMPACTO */}
       <div className="bg-white p-2.5 rounded-xl shadow-sm border border-slate-200 mb-4 flex flex-wrap items-center justify-between gap-3 shrink-0 z-10">
@@ -356,7 +356,7 @@ export default function ClientsView({
 
       
       {/* TABLA DE SOCIOS */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex-1 overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex-1 min-h-0 overflow-y-auto">
         <table className="w-full text-left">
           <thead className="bg-gray-50/50 border-b border-gray-100 sticky top-0 z-10 backdrop-blur-sm">
             <tr>

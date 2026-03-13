@@ -1,186 +1,242 @@
-// src/hooks/useLogsFilter.js
-import { useState, useMemo } from 'react';
+import { useDeferredValue, useMemo, useState } from 'react';
+
+const normalizeAction = (action) => {
+  const actionMap = {
+    'Nueva Venta': 'Venta Realizada',
+    'Edición Venta': 'Venta Modificada',
+    Venta: 'Venta Realizada',
+    Gasto: 'Nuevo Gasto',
+    'Registrar Gasto': 'Nuevo Gasto',
+    'Gasto Registrado': 'Nuevo Gasto',
+  };
+
+  return actionMap[action] || action;
+};
+
+const detectActionType = (log) => {
+  const action = normalizeAction(log.action);
+  const details = log.details;
+
+  const explicitActions = [
+    'Venta Realizada',
+    'Venta Modificada',
+    'Venta Anulada',
+    'Edición Producto',
+    'Venta Eliminada',
+    'Venta Restaurada',
+    'Nuevo Socio',
+    'Edición de Puntos',
+    'Edición de Socio',
+    'Baja de Socio',
+    'Nuevo Gasto',
+    'Cierre de Caja',
+    'Cierre Automático',
+  ];
+
+  if (explicitActions.includes(action)) return action;
+  if (!details || typeof details === 'string') return action;
+
+  if (
+    (typeof details.product === 'string' || details.title || details.name) &&
+    !details.transactionId &&
+    !details.productChanges &&
+    !details.itemsSnapshot &&
+    (details.changes || action.includes('Edición'))
+  ) {
+    return 'Edición Producto';
+  }
+
+  if (details.items && details.total !== undefined && !details.changes && !details.itemsSnapshot && !details.productChanges) {
+    return 'Venta Realizada';
+  }
+
+  if (details.items && (details.originalTotal || details.status === 'voided')) {
+    return 'Venta Anulada';
+  }
+
+  if (details.transactionId && (details.changes || details.itemsSnapshot || details.productChanges)) {
+    return 'Venta Modificada';
+  }
+
+  if (details.salesCount !== undefined && details.totalSales !== undefined && details.finalBalance !== undefined) {
+    return action.includes('Automático') ? 'Cierre Automático' : 'Cierre de Caja';
+  }
+
+  if (details.amount !== undefined && details.scheduledClosingTime !== undefined && details.salesCount === undefined) {
+    return 'Apertura de Caja';
+  }
+
+  if (details.amount !== undefined && details.category && details.salesCount === undefined) {
+    return 'Nuevo Gasto';
+  }
+
+  if (details.type && details.name) return 'Categoría';
+
+  if ((details.title || details.name) && details.price !== undefined && (action === 'Alta de Producto' || action === 'Baja Producto')) {
+    return action === 'Baja Producto' ? 'Baja Producto' : 'Alta de Producto';
+  }
+
+  if (action === 'Edición Masiva Categorías' || (details.count !== undefined && Array.isArray(details.details))) {
+    return 'Edición Masiva Categorías';
+  }
+
+  return action;
+};
+
+const getLogDateNumber = (dateStr) => {
+  if (!dateStr) return 0;
+  const parts = dateStr.split('/');
+  if (parts.length !== 3) return 0;
+
+  let year = parseInt(parts[2], 10);
+  if (year < 100) year += 2000;
+
+  const month = parseInt(parts[1], 10);
+  const day = parseInt(parts[0], 10);
+  return year * 10000 + month * 100 + day;
+};
+
+const getInputDateNumber = (dateStr) => {
+  if (!dateStr) return 0;
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return 0;
+
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10);
+  const day = parseInt(parts[2], 10);
+  return year * 10000 + month * 100 + day;
+};
+
+const parseTime = (timeStr) => {
+  if (!timeStr) return 0;
+  const parts = timeStr.split(':');
+  if (parts.length < 2) return 0;
+
+  return (
+    (parseInt(parts[0], 10) || 0) * 3600 +
+    (parseInt(parts[1], 10) || 0) * 60 +
+    (parseInt(parts[2], 10) || 0)
+  );
+};
+
+const getFullTimestamp = (log) => {
+  if (!log.date) return 0;
+  const parts = log.date.split('/');
+  if (parts.length !== 3) return 0;
+
+  let year = parseInt(parts[2], 10);
+  if (year < 100) year += 2000;
+
+  const date = new Date(year, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+  return date.getTime() + parseTime(log.timestamp) * 1000;
+};
+
+const buildSearchIndex = (log, normalizedAction) => {
+  const detailsText =
+    typeof log.details === 'string'
+      ? log.details
+      : JSON.stringify(log.details || {});
+
+  return [
+    normalizedAction,
+    log.user || 'Sistema',
+    log.reason || '',
+    log.date || '',
+    log.timestamp || '',
+    detailsText,
+  ]
+    .join(' ')
+    .toLowerCase();
+};
 
 export function useLogsFilter(dailyLogs = []) {
-  // 1. Estados de Filtros
   const [filterDateStart, setFilterDateStart] = useState('');
   const [filterDateEnd, setFilterDateEnd] = useState('');
   const [filterUser, setFilterUser] = useState('');
   const [filterAction, setFilterAction] = useState('');
   const [filterSearch, setFilterSearch] = useState('');
-  
-  // 2. Estados de Ordenamiento
   const [sortColumn, setSortColumn] = useState('datetime');
   const [sortDirection, setSortDirection] = useState('desc');
 
-  const safeLogs = Array.isArray(dailyLogs) ? dailyLogs : [];
+  const deferredFilterSearch = useDeferredValue(filterSearch);
 
-  // =====================================================
-  // HELPERS INTERNOS
-  // =====================================================
-  const normalizeAction = (action) => {
-    const actionMap = {
-      'Nueva Venta': 'Venta Realizada',
-      'Edición Venta': 'Venta Modificada',
-      'Venta': 'Venta Realizada',
-      'Gasto': 'Nuevo Gasto',
-      'Registrar Gasto': 'Nuevo Gasto',
-      'Gasto Registrado': 'Nuevo Gasto'
-    };
-    return actionMap[action] || action;
-  };
+  const normalizedLogs = useMemo(
+    () => {
+      const safeLogs = Array.isArray(dailyLogs) ? dailyLogs : [];
 
-  const detectActionType = (log) => {
-    const action = normalizeAction(log.action);
-    const details = log.details;
+      return safeLogs.map((log) => {
+        const action = detectActionType(log);
 
-    const explicitActions = [
-      'Venta Realizada', 'Venta Modificada', 'Venta Anulada', 
-      'Edición Producto', 'Nuevo Socio', 'Edición de Puntos', 
-      'Edición de Socio', 'Baja de Socio', 'Nuevo Gasto'
-    ];
+        return {
+          ...log,
+          action,
+          _originalAction: log.action,
+          _dateNumber: getLogDateNumber(log.date || ''),
+          _fullTimestamp: getFullTimestamp(log),
+          _searchIndex: buildSearchIndex(log, action),
+        };
+      });
+    },
+    [dailyLogs]
+  );
 
-    if (explicitActions.includes(action)) return action;
-    if (!details || typeof details === 'string') return action;
-
-    // Lógica de detección automática
-    if ((typeof details.product === 'string' || details.title || details.name) && !details.transactionId && !details.productChanges && !details.itemsSnapshot && (details.changes || action.includes('Edición'))) return 'Edición Producto';
-    if (details.items && details.total !== undefined && !details.changes && !details.itemsSnapshot && !details.productChanges) return 'Venta Realizada';
-    if (details.items && (details.originalTotal || details.status === 'voided')) return 'Venta Anulada';
-    if (details.transactionId && (details.changes || details.itemsSnapshot || details.productChanges)) return 'Venta Modificada';
-    if (details.salesCount !== undefined && details.totalSales !== undefined && details.finalBalance !== undefined) return action.includes('Automático') ? 'Cierre Automático' : 'Cierre de Caja';
-    if (details.amount !== undefined && details.scheduledClosingTime !== undefined && details.salesCount === undefined) return 'Apertura de Caja';
-    if (details.amount !== undefined && details.category && details.salesCount === undefined) return 'Nuevo Gasto';
-    if (details.type && details.name) return 'Categoría';
-    if ((details.title || details.name) && details.price !== undefined && (action === 'Alta de Producto' || action === 'Baja Producto')) return action === 'Baja Producto' ? 'Baja Producto' : 'Alta de Producto';
-    if (action === 'Edición Masiva Categorías' || (details.count !== undefined && Array.isArray(details.details))) return 'Edición Masiva Categorías';
-    
-    return action;
-  };
-
-  // ✨ FIX DEFINITIVO PARA FECHAS ✨
-  // Convertimos todo a números enteros (Ej: 20260224) para comparar matemáticamente
-  const getLogDateNumber = (dateStr) => {
-    if (!dateStr) return 0;
-    const parts = dateStr.split('/');
-    if (parts.length !== 3) return 0;
-    let y = parseInt(parts[2], 10);
-    if (y < 100) y += 2000; // Si es 26, lo pasa a 2026
-    let m = parseInt(parts[1], 10);
-    let d = parseInt(parts[0], 10);
-    return (y * 10000) + (m * 100) + d; // Ej: 20260224
-  };
-
-  const getInputDateNumber = (dateStr) => {
-    if (!dateStr) return 0;
-    // El input type="date" de HTML siempre devuelve YYYY-MM-DD
-    const parts = dateStr.split('-'); 
-    if (parts.length !== 3) return 0;
-    let y = parseInt(parts[0], 10);
-    let m = parseInt(parts[1], 10);
-    let d = parseInt(parts[2], 10);
-    return (y * 10000) + (m * 100) + d; // Ej: 20260224
-  };
-
-  const parseTime = (timeStr) => { 
-    if (!timeStr) return 0; 
-    const parts = timeStr.split(':'); 
-    if (parts.length < 2) return 0; 
-    return ((parseInt(parts[0], 10) || 0) * 3600 + (parseInt(parts[1], 10) || 0) * 60 + (parseInt(parts[2], 10) || 0)); 
-  };
-
-  const getFullTimestamp = (log) => { 
-    if (!log.date) return 0;
-    const parts = log.date.split('/');
-    if (parts.length !== 3) return 0;
-    let y = parseInt(parts[2], 10);
-    if (y < 100) y += 2000;
-    const date = new Date(y, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)); 
-    return date.getTime() + parseTime(log.timestamp) * 1000; 
-  };
-
-  // =====================================================
-  // MEMOS (Cálculos pesados)
-  // =====================================================
-  
-  // 1. Normalizar logs
-  const normalizedLogs = useMemo(() => {
-    return safeLogs.map((log) => ({
-      ...log,
-      action: detectActionType(log),
-      _originalAction: log.action,
-    }));
-  }, [safeLogs]);
-
-  // 2. Obtener acciones únicas para el select (IGNORAMOS TESTS PARA QUE NO SALGAN EN EL SELECT)
   const uniqueActions = useMemo(() => {
-    const validLogsForSelect = normalizedLogs.filter(log => !log.isTest);
+    const validLogsForSelect = normalizedLogs.filter((log) => !log.isTest);
     return [...new Set(validLogsForSelect.map((log) => log.action || 'Desconocido'))].sort();
   }, [normalizedLogs]);
 
   const hasActiveFilters = filterDateStart || filterDateEnd || filterUser || filterAction || filterSearch;
 
-  // 3. Filtrar
   const filteredLogs = useMemo(() => {
-    const isSearchingTest = filterSearch.toLowerCase().trim() === 'test';
+    const normalizedSearch = deferredFilterSearch.toLowerCase().trim();
+    const isSearchingTest = normalizedSearch === 'test';
 
     return normalizedLogs.filter((log) => {
       if (!log) return false;
 
-      // ✨ LÓGICA DEL "MODO PRUEBA":
-      // Si el log es de prueba, lo ocultamos SIEMPRE, a menos que el usuario busque exactamente "test"
       if (log.isTest) {
         if (!isSearchingTest) return false;
-      } else {
-        // Si el log NO es de prueba, pero el usuario está buscando "test", lo ocultamos para que solo se vean las pruebas
-        if (isSearchingTest) return false;
+      } else if (isSearchingTest) {
+        return false;
       }
 
-      const logDate = log.date || '';
-      const logUser = log.user || 'Sistema';
-      const logAction = log.action || 'Acción';
-
-      // COMPARACIÓN MATEMÁTICA DE FECHAS
-      if (filterDateStart || filterDateEnd) {
-        const logNum = getLogDateNumber(logDate);
-        if (logNum === 0) return false;
-        
-        if (filterDateStart) { 
-          const startNum = getInputDateNumber(filterDateStart); 
-          if (startNum > 0 && logNum < startNum) return false; 
-        }
-        if (filterDateEnd) { 
-          const endNum = getInputDateNumber(filterDateEnd); 
-          if (endNum > 0 && logNum > endNum) return false; 
-        }
+      if (filterDateStart) {
+        const startNum = getInputDateNumber(filterDateStart);
+        if (startNum > 0 && log._dateNumber < startNum) return false;
       }
 
-      if (filterUser && !logUser.toLowerCase().includes(filterUser.toLowerCase())) return false;
-
-      if (filterAction && logAction !== filterAction && !(filterAction === 'Venta Modificada' && logAction === 'Modificación Pedido')) return false;
-
-      // Si no estamos buscando "test" estrictamente, aplicamos la búsqueda normal
-      if (filterSearch && !isSearchingTest) { 
-        const search = filterSearch.toLowerCase(); 
-        const rawString = JSON.stringify(log).toLowerCase(); 
-        if (!rawString.includes(search)) return false; 
+      if (filterDateEnd) {
+        const endNum = getInputDateNumber(filterDateEnd);
+        if (endNum > 0 && log._dateNumber > endNum) return false;
       }
-      
+
+      if (filterUser && !(log.user || 'Sistema').toLowerCase().includes(filterUser.toLowerCase())) {
+        return false;
+      }
+
+      if (filterAction && log.action !== filterAction && !(filterAction === 'Venta Modificada' && log.action === 'Modificación Pedido')) {
+        return false;
+      }
+
+      if (normalizedSearch && !isSearchingTest && !log._searchIndex.includes(normalizedSearch)) {
+        return false;
+      }
+
       return true;
     });
-  }, [normalizedLogs, filterDateStart, filterDateEnd, filterUser, filterAction, filterSearch]);
+  }, [normalizedLogs, filterDateStart, filterDateEnd, filterUser, filterAction, deferredFilterSearch]);
 
-  // 4. Ordenar
   const sortedLogs = useMemo(() => {
     if (!sortColumn) return filteredLogs;
 
     return [...filteredLogs].sort((a, b) => {
-      let valA, valB;
+      let valA;
+      let valB;
 
       switch (sortColumn) {
         case 'datetime':
-          valA = getFullTimestamp(a);
-          valB = getFullTimestamp(b);
+          valA = a._fullTimestamp;
+          valB = b._fullTimestamp;
           break;
         case 'user':
           valA = (a.user || '').toLowerCase();
@@ -205,9 +261,6 @@ export function useLogsFilter(dailyLogs = []) {
     });
   }, [filteredLogs, sortColumn, sortDirection]);
 
-  // =====================================================
-  // ACTIONS (Handlers)
-  // =====================================================
   const handleSort = (column) => {
     if (sortColumn === column) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
@@ -229,14 +282,19 @@ export function useLogsFilter(dailyLogs = []) {
     sortedLogs,
     uniqueActions,
     hasActiveFilters,
-    filterDateStart, setFilterDateStart,
-    filterDateEnd, setFilterDateEnd,
-    filterUser, setFilterUser,
-    filterAction, setFilterAction,
-    filterSearch, setFilterSearch,
+    filterDateStart,
+    setFilterDateStart,
+    filterDateEnd,
+    setFilterDateEnd,
+    filterUser,
+    setFilterUser,
+    filterAction,
+    setFilterAction,
+    filterSearch,
+    setFilterSearch,
     sortColumn,
     sortDirection,
     handleSort,
-    clearAllFilters
+    clearAllFilters,
   };
 }

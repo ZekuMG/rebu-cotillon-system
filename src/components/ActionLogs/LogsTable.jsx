@@ -102,7 +102,7 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
 
     if (!d) return <span className="text-slate-400 italic text-[10px]">Sin detalles</span>;
     if (typeof d === 'string') {
-      try { d = JSON.parse(d); } catch(e) { return <span className="text-slate-600 text-[10px]">{d}</span>; }
+      try { d = JSON.parse(d); } catch { return <span className="text-slate-600 text-[10px]">{d}</span>; }
     }
 
     switch (action) {
@@ -425,7 +425,6 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
       case 'Categoría': {
         const isCreate = d.type === 'create';
         const isDelete = d.type === 'delete';
-        const isEdit = d.type === 'edit';
         return (
           <div className={s.sr}>
             {d.id && <><span className={`${s.b} ${c.ba}`}>#{d.id}</span><div className={s.ss}></div></>}
@@ -438,7 +437,7 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
       }
 
       case 'Actualización Masiva':
-      case 'Edición Masiva Categorías':
+      case 'Edición Masiva Categorías': {
         const affectedCount = d.count || (d.details && d.details.length) || (d.changes && d.changes.length) || 0;
         return (
           <div className={s.sr}>
@@ -448,6 +447,7 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
             {getLogReasonUI(log)}
           </div>
         );
+      }
 
       case 'Horario Modificado':
         return (

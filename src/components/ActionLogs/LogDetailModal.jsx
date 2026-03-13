@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import LogDetailRenderer from './LogDetailRenderer';
-import { getDetailTitle, getDetailIcon, getDetailColor } from './logHelpers';
+import { getDetailIcon, getDetailColor } from './logHelpers';
 import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
 

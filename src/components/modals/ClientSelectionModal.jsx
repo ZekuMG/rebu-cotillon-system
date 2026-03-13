@@ -15,8 +15,6 @@ import {
 import { formatNumber } from '../../utils/helpers';
 
 export const ClientSelectionModal = ({ isOpen, onClose, onSelectClient, clients = [], addClient, onCancelFlow }) => {
-  if (!isOpen) return null;
-
   // Pasos del flujo: 'check-is-member' -> 'search' | 'check-want-join' -> 'create'
   const [step, setStep] = useState('check-is-member');
   const [searchTerm, setSearchTerm] = useState('');
@@ -59,6 +57,8 @@ const handleCreate = async (e) => {
       }
     }
   };
+
+  if (!isOpen) return null;
   
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[80] p-4 backdrop-blur-sm animate-in fade-in duration-200">

@@ -51,7 +51,7 @@ export const BarcodeNotFoundModal = ({ isOpen, scannedCode, onClose, onAddProduc
   );
 };
 
-export const BarcodeDuplicateModal = ({ isOpen, existingProduct, onClose, onKeepExisting, onReplaceBarcode }) => {
+export const BarcodeDuplicateModal = ({ isOpen, existingProduct, onClose: _onClose, onKeepExisting, onReplaceBarcode }) => {
   if (!isOpen || !existingProduct) return null;
 
   return (

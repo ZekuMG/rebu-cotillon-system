@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
 // src/components/ActionLogs/LogDetailRenderer.jsx
 import React, { useState } from 'react';
 import { ArrowRight, CheckCircle, Edit3, Plus, Save, AlertTriangle, FileText, Download } from 'lucide-react';

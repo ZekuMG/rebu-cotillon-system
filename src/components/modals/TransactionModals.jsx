@@ -12,7 +12,6 @@ import {
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../../data';
 // ♻️ FIX: Importamos FancyPrice
-import { formatCurrency } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
 
 export const EditTransactionModal = ({

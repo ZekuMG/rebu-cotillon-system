@@ -7,7 +7,7 @@ import {
   History,
   LogOut,
   FileText,
-  Gift, // Usaremos Gift para Marketing y Extras
+  Settings2,
   FileBarChart,
   Percent,
   Users // ✅ Ícono de Socios restaurado
@@ -89,6 +89,12 @@ export default function Sidebar({
           icon={Users}
           label="Socios"
         />
+          <SidebarButton
+            onClick={() => setActiveTab('extras')}
+            isActive={activeTab === 'extras'}
+            icon={Settings2}
+            label="Extras"
+          />
       </nav>
 
       <SidebarButton
@@ -137,12 +143,6 @@ export default function Sidebar({
               <FileText size={14} /> Registro de Acciones
             </button>
             {/* ✨ BOTÓN UNIFICADO */}
-            <button
-              onClick={() => { setActiveTab('extras'); setShowAdminMenu(false); }}
-              className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2"
-            >
-              <Gift size={14} /> Extras
-            </button>
             <button
               onClick={() => { setActiveTab('bulk-editor'); setShowAdminMenu(false); }}
               className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2 border-t border-slate-50"

@@ -90,7 +90,7 @@ export const extractRealNote = (log) => {
   let d = log.details;
   
   if (typeof d === 'string') {
-    try { d = JSON.parse(d); } catch(e) { d = {}; }
+    try { d = JSON.parse(d); } catch { d = {}; }
   } else if (!d) {
     d = {};
   }

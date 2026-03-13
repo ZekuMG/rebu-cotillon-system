@@ -39,6 +39,8 @@ export default function useDashboardData({
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
     const currentDay = now.getDate();
+    const annualStart = new Date(currentYear, currentMonth - 11, 1);
+    annualStart.setHours(0, 0, 0, 0);
     
     const todayNum = (currentYear * 10000) + ((currentMonth + 1) * 100) + currentDay;
     
@@ -60,6 +62,7 @@ export default function useDashboardData({
       if (globalFilter === 'day') return compNum === todayNum;
       if (globalFilter === 'week') return compNum >= weekAgoNum && compNum <= todayNum;
       if (globalFilter === 'month') return compNum >= monthAgoNum && compNum <= todayNum;
+      if (globalFilter === 'year') return dateObj >= annualStart && dateObj <= now;
       return false;
     };
   }, [globalFilter]);
@@ -163,6 +166,45 @@ export default function useDashboardData({
         if (range) { range.sales += tx.total; range.count += 1; range.transactions.push(tx); }
       });
       return ranges.map(r => ({ ...r, isCurrent: currentHour >= r.start && currentHour < r.end }));
+    }
+
+    if (globalFilter === 'year') {
+      const daysMap = new Map();
+      const now = new Date();
+
+      for (let i = 364; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+        const isMonthStart = d.getDate() === 1 || i === 364;
+
+        daysMap.set(key, {
+          label: isMonthStart ? d.toLocaleDateString('es-AR', { month: 'short' }).replace('.', '') : '',
+          shortLabel: d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' }),
+          monthName: d.toLocaleDateString('es-AR', { month: 'long' }),
+          dayNum: d.getDate(),
+          year: d.getFullYear(),
+          sales: 0,
+          count: 0,
+          isToday: i === 0,
+          isCurrent: i === 0,
+          isMonthStart,
+          transactions: [],
+        });
+      }
+
+      filteredData.forEach(tx => {
+        if (!tx.date) return;
+        const key = `${tx.date.getFullYear()}-${tx.date.getMonth()}-${tx.date.getDate()}`;
+        if (daysMap.has(key)) {
+          const entry = daysMap.get(key);
+          entry.sales += tx.total;
+          entry.count += 1;
+          entry.transactions.push(tx);
+        }
+      });
+
+      return Array.from(daysMap.values());
     }
 
     const daysMap = new Map();
@@ -294,6 +336,7 @@ export default function useDashboardData({
       case 'day': return 'Sin ventas hoy';
       case 'week': return 'Sin ventas esta semana';
       case 'month': return 'Sin ventas en los últimos 30 días';
+      case 'year': return 'Sin ventas en los últimos 12 meses';
       default: return 'Sin datos';
     }
   };
@@ -313,3 +356,4 @@ export default function useDashboardData({
     filteredExpenses,  
   };
 }
+

@@ -6,7 +6,7 @@
 ATENCIÓN IA: Este documento contiene el contexto absoluto, la arquitectura, los paradigmas de UI/UX y las soluciones a bugs históricos del proyecto. DEBES leer detenidamente las secciones de "Reglas Críticas" y "Manejo de Estados" antes de proponer modificaciones estructurales o de interfaces.
 
 Última actualización: Marzo 2026
-Versión: 0.9.0 (Unificación Modular "Extras" y Blindaje Vite/Electron)
+Versión: 0.6.9 (Unificación Modular "Extras" y Blindaje Vite/Electron)
 
 --------------------------------------------------------------------------------
 1. STACK TECNOLÓGICO
@@ -102,7 +102,7 @@ Solución ("Sabueso"): Se creó la función `extractRealNote(log)` en `LogsTable
 - Restricción de CORS en Electron: Electron requiere que el cliente de Supabase asuma un origen válido local. En `supabase/client.js` se forzó el `detectSessionInUrl: false` y fetch custom headers para evitar rechazos de red.
 
 --------------------------------------------------------------------------------
-10. ESTRUCTURA DE ARCHIVOS OFICIAL
+10. INFORMACION DE ESTRUCTURA DE ARCHIVOS LOCAL
 --------------------------------------------------------------------------------
 src/
 ├── components/
@@ -139,3 +139,91 @@ src/
 > npm run build           (Compila la aplicación estática en Vite)
 > npm run electron:dev    (Lanza solo Electron asumiendo que el build ya se hizo)
 > npm run electron:build  (Empaqueta el ejecutable nativo para Windows/Mac)
+
+
+
+
+
+```
+Punto de Venta Rebu - Release
+├─ electron-main.cjs
+├─ eslint.config.js
+├─ icon.ico
+├─ index.html
+├─ package-lock.json
+├─ package.json
+├─ public
+│  ├─ favicon.svg
+│  └─ icons.svg
+├─ README.md
+├─ src
+│  ├─ App.css
+│  ├─ App.jsx
+│  ├─ assets
+│  │  ├─ logo-rebu.jpg
+│  │  ├─ react.svg
+│  │  └─ vite.svg
+│  ├─ components
+│  │  ├─ ActionLogs
+│  │  │  ├─ LogDetailModal.jsx
+│  │  │  ├─ LogDetailRenderer.jsx
+│  │  │  ├─ logHelpers.js
+│  │  │  ├─ LogsControls.jsx
+│  │  │  └─ LogsTable.jsx
+│  │  ├─ AppModals.jsx
+│  │  ├─ dashboard
+│  │  │  ├─ DashboardControls.jsx
+│  │  │  ├─ ExpirationAlert.jsx
+│  │  │  ├─ index.js
+│  │  │  ├─ KpiCards.jsx
+│  │  │  ├─ LowStockAlert.jsx
+│  │  │  ├─ PaymentBreakdown.jsx
+│  │  │  ├─ SalesChart.jsx
+│  │  │  └─ TopRanking.jsx
+│  │  ├─ ExportPdfLayout.jsx
+│  │  ├─ FancyPrice.jsx
+│  │  ├─ modals
+│  │  │  ├─ BarcodeModals.jsx
+│  │  │  ├─ CashModals.jsx
+│  │  │  ├─ ClientSelectionModal.jsx
+│  │  │  ├─ DailyReportModal.jsx
+│  │  │  ├─ ExpenseModal.jsx
+│  │  │  ├─ HistoryModals.jsx
+│  │  │  ├─ NotificationModal.jsx
+│  │  │  ├─ ProductModals.jsx
+│  │  │  ├─ RedemptionModal.jsx
+│  │  │  ├─ SaleModals.jsx
+│  │  │  └─ TransactionModals.jsx
+│  │  ├─ ProductImage.jsx
+│  │  ├─ Sidebar.jsx
+│  │  └─ TicketPrintLayout.jsx
+│  ├─ data
+│  │  ├─ seedHelpers.js
+│  │  └─ seedTransactions.js
+│  ├─ data.js
+│  ├─ hooks
+│  │  ├─ useBarcodeScanner.js
+│  │  ├─ useClients.js
+│  │  ├─ useDashboardData.js
+│  │  └─ useLogsFilter.js
+│  ├─ index.css
+│  ├─ main.jsx
+│  ├─ supabase
+│  │  └─ client.js
+│  ├─ utils
+│  │  ├─ actionMap.js
+│  │  ├─ helpers.js
+│  │  └─ storage.js
+│  └─ views
+│     ├─ BulkEditorView.jsx
+│     ├─ ClientsView.jsx
+│     ├─ DashboardView.jsx
+│     ├─ ExtrasView.jsx
+│     ├─ HistoryView.jsx
+│     ├─ InventoryView.jsx
+│     ├─ LogsView.jsx
+│     ├─ POSView.jsx
+│     └─ ReportsHistoryView.jsx
+└─ vite.config.js
+
+```

@@ -52,13 +52,13 @@ export const actionMatchesFilter = (logAction, filterAction) => {
  */
 export const ACTION_GROUPS = [
   { label: '💰 Caja',       actions: ['Apertura de Caja', 'Cierre de Caja', 'Cierre Automático'] },
-  { label: '🛒 Ventas',     actions: ['Venta Realizada', 'Venta Anulada', 'Venta Modificada'] },
+  { label: '🛒 Ventas',     actions: ['Venta Realizada', 'Venta Anulada', 'Venta Restaurada', 'Venta Modificada', 'Venta Eliminada'] },
   { label: '📉 Gastos',     actions: ['Nuevo Gasto'] },
   { label: '📦 Productos',  actions: ['Alta de Producto', 'Edición Producto', 'Baja Producto', 'Producto Duplicado'] },
   { label: '👤 Socios',     actions: ['Nuevo Socio', 'Edición de Socio', 'Edición de Puntos', 'Baja de Socio'] },
   { label: '🎁 Premios',    actions: ['Nuevo Premio', 'Editar Premio', 'Eliminar Premio'] },
   { label: '🏷️ Categorías', actions: ['Categoría', 'Actualización Masiva', 'Edición Masiva Categorías'] },
-  { label: '⚙️ Sistema',    actions: ['Login', 'Horario Modificado', 'Sistema Iniciado', 'Borrado Permanente'] },
+  { label: '⚙️ Sistema',    actions: ['Login', 'Horario Modificado', 'Sistema Iniciado'] },
 ];
 
 /**
