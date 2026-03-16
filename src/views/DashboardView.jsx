@@ -25,8 +25,8 @@ const DEFAULT_TOP_ORDER = ['sales', 'revenue', 'net', 'opening', 'average', 'exp
 
 export default function DashboardView({
   openingBalance,
-  totalSales,
-  salesCount,
+  totalSales: _totalSales,
+  salesCount: _salesCount,
   currentUser,
   setTempOpeningBalance,
   setIsOpeningBalanceModalOpen,
@@ -194,7 +194,7 @@ export default function DashboardView({
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="text-[9px] font-bold text-blue-600 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded uppercase tracking-wider">
-                    {{ day: 'Hoy', week: 'Semana', month: 'Mes' }[globalFilter]}
+                    {{ day: 'Hoy', week: 'Semana', month: 'Mes', year: 'Año' }[globalFilter]}
                   </span>
                   <button 
                     onClick={() => onNavigate && onNavigate('history')}
@@ -293,7 +293,7 @@ export default function DashboardView({
                     ) : (
                       <div className="flex flex-col items-center justify-center py-8 opacity-50 h-full">
                         <Clock size={32} className="mb-2 text-slate-300" />
-                        <p className="text-xs font-bold text-slate-400 text-center">{{ day: 'Sin movimientos hoy', week: 'Sin movimientos esta semana', month: 'Sin movimientos este mes' }[globalFilter]}</p>
+                        <p className="text-xs font-bold text-slate-400 text-center">{{ day: 'Sin movimientos hoy', week: 'Sin movimientos esta semana', month: 'Sin movimientos este mes', year: 'Sin movimientos este año' }[globalFilter]}</p>
                       </div>
                     )}
                   </div>
@@ -385,13 +385,6 @@ export default function DashboardView({
         {topWidgetOrder.map((widgetKey, index) => (
           <div
             key={widgetKey}
-            draggable={isAdmin}
-            onDragStart={(e) => {
-              if (!isAdmin) return;
-              setDraggedTopItem(widgetKey);
-              e.dataTransfer.effectAllowed = 'move';
-            }}
-            onDragEnd={() => setDraggedTopItem(null)} 
             onDragOver={(e) => {
               e.preventDefault();
               if (!isAdmin || draggedTopItem === widgetKey) return;
@@ -410,6 +403,21 @@ export default function DashboardView({
             className={`transition-all duration-200 ${draggedTopItem === widgetKey ? 'opacity-40 scale-95' : 'opacity-100'}`}
           >
             <div className="group relative h-full">
+              {isAdmin && (
+                <div
+                  draggable
+                  onDragStart={(e) => {
+                    setDraggedTopItem(widgetKey);
+                    e.dataTransfer.effectAllowed = 'move';
+                  }}
+                  onDragEnd={() => setDraggedTopItem(null)}
+                  className="absolute inset-x-0 top-0 z-20 h-6 cursor-grab active:cursor-grabbing"
+                  aria-label="Reordenar metrica"
+                  title="Arrastrar desde el cabezal"
+                >
+                  <div className="pointer-events-none mx-auto mt-2 h-1.5 w-12 rounded-full bg-slate-200/70 opacity-0 transition duration-150 group-hover:opacity-100 group-hover:bg-slate-300/80" />
+                </div>
+              )}
               <KpiCard
                 widgetKey={widgetKey}
                 kpiStats={kpiStats}
@@ -429,36 +437,49 @@ export default function DashboardView({
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {widgetOrder.map((widgetKey, index) => (
-          <div
-            key={widgetKey}
-            draggable={isAdmin}
-            onDragStart={(e) => {
-              if (!isAdmin) return;
-              setDraggedItem(widgetKey);
-              e.dataTransfer.effectAllowed = 'move';
-            }}
-            onDragEnd={() => setDraggedItem(null)} 
-            onDragOver={(e) => {
-              e.preventDefault();
-              if (!isAdmin || draggedItem === widgetKey) return;
-              const currentIdx = widgetOrder.indexOf(draggedItem);
-              if (currentIdx !== -1 && currentIdx !== index) {
-                const newOrder = [...widgetOrder];
-                newOrder.splice(currentIdx, 1);
-                newOrder.splice(index, 0, draggedItem);
-                setWidgetOrder(newOrder);
-              }
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDraggedItem(null);
-            }}
-            className={`transition-all duration-200 h-full ${draggedItem === widgetKey ? 'opacity-40 scale-95 border-dashed border-2 border-slate-300 rounded-xl' : ''}`}
-          >
-            <div className="group relative h-full">
-              {renderWidget(widgetKey)}
-            </div>
-          </div>
+          (() => {
+            const isExpandedAnnualChart = widgetKey === 'chart' && globalFilter === 'year';
+            return (
+              <div
+                key={widgetKey}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (!isAdmin || draggedItem === widgetKey) return;
+                  const currentIdx = widgetOrder.indexOf(draggedItem);
+                  if (currentIdx !== -1 && currentIdx !== index) {
+                    const newOrder = [...widgetOrder];
+                    newOrder.splice(currentIdx, 1);
+                    newOrder.splice(index, 0, draggedItem);
+                    setWidgetOrder(newOrder);
+                  }
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDraggedItem(null);
+                }}
+                className={`h-full transition-all duration-200 ${isExpandedAnnualChart ? 'lg:col-span-2' : ''} ${draggedItem === widgetKey ? 'rounded-xl border-2 border-dashed border-slate-300 opacity-40 scale-95' : ''}`}
+              >
+                <div className="group relative h-full">
+                  {isAdmin && (
+                    <div
+                      draggable
+                      onDragStart={(e) => {
+                        setDraggedItem(widgetKey);
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      onDragEnd={() => setDraggedItem(null)}
+                      className="absolute inset-x-0 top-0 z-20 h-7 cursor-grab active:cursor-grabbing"
+                      aria-label="Reordenar widget"
+                      title="Arrastrar desde el cabezal"
+                    >
+                      <div className="pointer-events-none mx-auto mt-2 h-1.5 w-14 rounded-full bg-slate-200/70 opacity-0 transition duration-150 group-hover:opacity-100 group-hover:bg-slate-300/80" />
+                    </div>
+                  )}
+                  {renderWidget(widgetKey)}
+                </div>
+              </div>
+            );
+          })()
         ))}
       </div>
     </div>

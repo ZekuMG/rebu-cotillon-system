@@ -97,10 +97,11 @@ export default function InventoryView({
   // ✨ LÓGICA DE ORDENAMIENTO APLICADA SOBRE LOS FILTRADOS
   const sortedInventory = [...filteredInventory].sort((a, b) => {
     switch (sortBy) {
-      case 'recent':
+      case 'recent': {
         const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
         const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
         return dateB - dateA; // Ordena de más nuevo a más viejo
+      }
       case 'price-desc':
         return (Number(b.price) || 0) - (Number(a.price) || 0);
       case 'price-asc':

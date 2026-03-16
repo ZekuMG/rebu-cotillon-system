@@ -8,7 +8,6 @@ import {
   AlertTriangle,
   Lock,
 } from 'lucide-react';
-import { formatCurrency } from '../../utils/helpers';
 // ✨ NUEVO: Importamos el componente global
 import { FancyPrice } from '../FancyPrice';
 
@@ -52,7 +51,7 @@ export const OpeningBalanceModal = ({ isOpen, onClose, tempOpeningBalance, setTe
   );
 };
 
-export const ClosingTimeModal = ({ isOpen, onClose, closingTime, setClosingTime, onSave }) => {
+export const ClosingTimeModal = ({ isOpen, onClose: _onClose, closingTime, setClosingTime, onSave }) => {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">

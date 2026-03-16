@@ -42,9 +42,9 @@ export default function HistoryView({
   onDeleteTransaction,
   onEditTransaction,
   onRestoreTransaction,
-  setTransactions,
-  setDailyLogs,
-  showNotification,
+  setTransactions: _setTransactions,
+  setDailyLogs: _setDailyLogs,
+  showNotification: _showNotification,
   onViewTicket,
 }) {
   // Estados de filtros
@@ -67,16 +67,48 @@ export default function HistoryView({
     const txList = [];
     const activeIds = new Set((transactions || []).map(t => String(t.id)));
     const voidedIds = new Set();
-    const permanentlyDeletedIds = new Set(); // ✨ Rastreador de purgas
+    const permanentlyDeletedIds = new Set();
+    const permanentlyDeletedLogs = new Map();
     
     (dailyLogs || []).forEach(log => {
       if (log.action === 'Venta Anulada' && log.details?.id) {
         voidedIds.add(String(log.details.id));
       }
       // ✨ FIX: Actualizamos el nombre a "Venta Eliminada"
-      if ((log.action === 'Borrado Permanente' || log.action === 'Venta Eliminada') && log.details?.transactionId) {
-        permanentlyDeletedIds.add(String(log.details.transactionId));
+      const deletedTxId = log.details?.transactionId || log.details?.id;
+      if ((log.action === 'Borrado Permanente' || log.action === 'Venta Eliminada') && deletedTxId) {
+        const normalizedDeletedTxId = String(deletedTxId);
+        permanentlyDeletedIds.add(normalizedDeletedTxId);
+        permanentlyDeletedLogs.set(normalizedDeletedTxId, log);
       }
+    });
+
+    permanentlyDeletedLogs.forEach((log, txId) => {
+      const logDate = normalizeDate(log.date);
+      if (!logDate) return;
+
+      const safeTotal = Number(log.details?.total) || getVentaTotal(log.details) || 0;
+
+      txList.push({
+        id: txId,
+        date: log.date,
+        timestamp: log.timestamp,
+        fullDate: `${log.date}, ${log.timestamp || '00:00'}:00`,
+        user: log.user,
+        items: log.details?.items || [],
+        payment: log.details?.payment || 'N/A',
+        installments: log.details?.installments || 0,
+        total: safeTotal,
+        client: log.details?.client || log.details?.memberName || null,
+        memberNumber: log.details?.memberNumber || log.details?.client?.memberNumber || null,
+        pointsEarned: log.details?.pointsEarned || 0,
+        pointsSpent: log.details?.pointsSpent || 0,
+        status: 'deleted',
+        isHistoric: true,
+        sortDate: logDate,
+        isTest: log.isTest,
+        isRestored: false,
+      });
     });
 
     (dailyLogs || []).forEach((log) => {
@@ -244,7 +276,7 @@ export default function HistoryView({
 
 
   const stats = useMemo(() => {
-    const validTx = filteredTransactions.filter((tx) => tx.status !== 'voided');
+    const validTx = filteredTransactions.filter((tx) => tx.status !== 'voided' && tx.status !== 'deleted');
     return {
       count: validTx.length,
       total: validTx.reduce((sum, tx) => sum + (Number(tx.total) || 0), 0),
@@ -276,7 +308,7 @@ export default function HistoryView({
   // RENDER
   // =====================================================
   return (
-    <div className="bg-white rounded-xl shadow-sm border overflow-hidden h-full flex flex-col">
+    <div className="bg-white rounded-xl shadow-sm border overflow-hidden h-full min-h-0 flex flex-col">
       {/* HEADER Y FILTROS */}
       <div className="p-4 border-b bg-slate-50 shrink-0 space-y-4">
         {/* Fila 1: Título y Stats */}
@@ -359,7 +391,7 @@ export default function HistoryView({
       </div>
 
       {/* TABLA PRINCIPAL */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 min-h-0 overflow-auto">
         <table className="w-full text-xs">
           <thead className="bg-[#f8fafc] text-slate-500 uppercase text-[9px] tracking-wider font-bold sticky top-0 z-10 border-b border-slate-200 shadow-sm">
             <tr>
@@ -377,6 +409,7 @@ export default function HistoryView({
           <tbody className="divide-y divide-slate-100">
             {filteredTransactions.map((tx, index) => {
               const isVoided = tx.status === 'voided';
+              const isDeleted = tx.status === 'deleted';
               const isHistoric = tx.isHistoric;
               const isRestored = tx.isRestored;
               const restoredAt = tx.restoredAt;
@@ -402,12 +435,13 @@ export default function HistoryView({
                   key={`${tx.id}-${index}`}
                   className={`transition-all duration-150 ${
                     isVoided ? 'bg-[#fef2f2] hover:bg-[#fee2e2]' 
+                             : isDeleted ? 'bg-[#fff7ed] hover:bg-[#ffedd5]'
                              : isHistoric ? 'bg-slate-50/30 hover:bg-slate-50' 
                              : 'hover:bg-[#f0f9ff]'
                   }`}
                 >
                   <td className="px-4 py-3 align-middle">
-                    <p className={`font-mono font-bold text-[11px] ${isVoided ? 'text-red-800 line-through' : 'text-slate-800'}`}>
+                    <p className={`font-mono font-bold text-[11px] ${isVoided ? 'text-red-800 line-through' : isDeleted ? 'text-orange-800 line-through' : 'text-slate-800'}`}>
                       #{String(tx.id).padStart(6, '0')}
                     </p>
                     <p className="text-[10px] text-slate-400 font-medium mt-0.5 flex flex-wrap items-center gap-1.5">
@@ -418,8 +452,13 @@ export default function HistoryView({
                         ANULADO
                       </span>
                     )}
+                    {isDeleted && (
+                      <span className="text-[8.5px] font-black tracking-widest text-orange-700 uppercase bg-orange-100 px-1.5 py-0.5 rounded mt-1.5 inline-block border border-orange-200">
+                        ELIMINADO
+                      </span>
+                    )}
                     {/* ✨ MEDALLA DE RESTAURADO CON HORA */}
-                    {!isVoided && isRestored && (
+                    {!isVoided && !isDeleted && isRestored && (
                       <div className="mt-1.5 flex flex-col items-start gap-0.5">
                         <span className="text-[8.5px] font-black tracking-widest text-emerald-600 uppercase bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">
                           RESTAURADO
@@ -435,7 +474,7 @@ export default function HistoryView({
                   
                   <td className="px-4 py-3 align-middle">
                     <span className={`px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider ${
-                        isVoided ? 'bg-red-200 text-red-800' : tx.user === 'Dueño' ? 'bg-[#eef2ff] text-indigo-600 border border-indigo-100' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                        isVoided ? 'bg-red-200 text-red-800' : isDeleted ? 'bg-orange-100 text-orange-700 border border-orange-200' : tx.user === 'Due�o' ? 'bg-[#eef2ff] text-indigo-600 border border-indigo-100' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
                       }`}
                     >
                       {tx.user || 'Desconocido'}
@@ -443,10 +482,10 @@ export default function HistoryView({
                   </td>
 
                   <td className="px-4 py-3 align-middle">
-                    <div className={`flex items-center gap-1.5 flex-wrap ${isVoided ? 'opacity-50' : ''}`}>
+                    <div className={`flex items-center gap-1.5 flex-wrap ${isVoided || isDeleted ? 'opacity-50' : ''}`}>
                       {clientName ? (
                         <>
-                          <span className={`text-[11px] font-bold ${isVoided ? 'text-red-800 line-through' : 'text-slate-700'}`}>
+                          <span className={`text-[11px] font-bold ${isVoided ? 'text-red-800 line-through' : isDeleted ? 'text-orange-800 line-through' : 'text-slate-700'}`}>
                             {clientName}
                           </span>
                           {memberNum && memberNum !== '---' && (
@@ -464,7 +503,7 @@ export default function HistoryView({
                   </td>
 
                   <td className="px-4 py-3 align-middle">
-                    <div className={`max-h-20 overflow-y-auto custom-scrollbar pr-1 ${isVoided ? 'opacity-50' : ''}`}>
+                    <div className={`max-h-20 overflow-y-auto custom-scrollbar pr-1 ${isVoided || isDeleted ? 'opacity-50' : ''}`}>
                       {(tx.items || []).slice(0, 3).map((i, idx) => {
                         const qty = i.qty || i.quantity || 0;
                         const isWeight = i.product_type === 'weight' || i.isWeight || (qty >= 20 && i.price < 50);
@@ -490,6 +529,7 @@ export default function HistoryView({
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className={`px-2 py-1 rounded-md text-[10px] font-bold ${
                           isVoided ? 'bg-red-100 text-red-600 border border-red-200'
+                                   : isDeleted ? 'bg-orange-100 text-orange-700 border border-orange-200'
                                    : tx.payment === 'Efectivo' ? 'bg-[#dcfce7] text-[#15803d] border border-[#bbf7d0]'
                                    : tx.payment === 'MercadoPago' ? 'bg-[#dbeafe] text-[#1d4ed8] border border-[#bfdbfe]'
                                    : tx.payment === 'Debito' ? 'bg-purple-100 text-purple-700 border border-purple-200'
@@ -501,7 +541,7 @@ export default function HistoryView({
                       
                       {tx.payment === 'Credito' && tx.installments > 0 && (
                         <span className={`text-[8.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${
-                          isVoided ? 'text-red-500 bg-red-50 border border-red-100' : 'text-slate-500 bg-white shadow-sm border border-slate-200'
+                          isVoided ? 'text-red-500 bg-red-50 border border-red-100' : isDeleted ? 'text-orange-600 bg-orange-50 border border-orange-100' : 'text-slate-500 bg-white shadow-sm border border-slate-200'
                         }`}>
                           {tx.installments} {tx.installments === 1 ? 'Cuota' : 'Cuotas'}
                         </span>
@@ -510,7 +550,7 @@ export default function HistoryView({
                   </td>
 
                   <td className="px-4 py-3 text-right align-middle">
-                    <span className={`font-black text-sm ${isVoided ? 'text-red-400 line-through' : 'text-slate-800'}`}>
+                    <span className={`font-black text-sm ${isVoided ? 'text-red-400 line-through' : isDeleted ? 'text-orange-400 line-through' : 'text-slate-800'}`}>
                       <FancyPrice amount={Number(tx.total) || 0} />
                     </span>
                   </td>
@@ -530,7 +570,7 @@ export default function HistoryView({
                         </button>
 
                         {/* Botones Modificar/Anular (solo si NO está anulada) */}
-                        {!isVoided && (
+                        {!isVoided && !isDeleted && (
                           <>
                             <button onClick={() => onEditTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-amber-50 hover:text-amber-600 hover:border-amber-300 transition-all shadow-sm group" title="Modificar Pedido">
                               <Edit2 size={13} className="group-hover:scale-110 transition-transform" />

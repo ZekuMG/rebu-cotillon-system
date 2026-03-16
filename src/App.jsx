@@ -15,6 +15,7 @@ import { supabase } from './supabase/client';
 import { uploadProductImage, deleteProductImage } from './utils/storage';
 import { formatDateAR, formatTimeAR, formatTimeFullAR, isTestRecord } from './utils/helpers';
 import {
+  mapBudgetRecords,
   mapCashClosureRecord,
   mapCashClosureRecords,
   mapCategoryRecords,
@@ -23,11 +24,13 @@ import {
   mapLogRecords,
   mapMemberRecords,
   mapOfferRecords,
+  mapOrderRecords,
   mapRegisterState,
   mapRewardRecords,
   mapSaleRecords,
   safeCloudData,
 } from './utils/cloudMappers';
+import { buildBudgetExportConfig, buildExportItemsFromSnapshot, deriveOrderStatus } from './utils/budgetHelpers';
 
 import { USERS } from './data';
 import Sidebar from './components/Sidebar';
@@ -42,6 +45,7 @@ import LogsView from './views/LogsView';
 import ExtrasView from './views/ExtrasView';
 import ReportsHistoryView from './views/ReportsHistoryView';
 import BulkEditorView from './views/BulkEditorView';
+import OrdersView from './views/OrdersView';
 
 // Modales y Componentes de Impresión
 import {
@@ -86,6 +90,72 @@ function PersistentTabPanel({ tab, activeTab, className = '', children }) {
   );
 }
 
+const extractSchemaMissingColumn = (error) => {
+  const errorText = [error?.message, error?.details, error?.hint].filter(Boolean).join(' ');
+  const patterns = [
+    /Could not find the '([^']+)' column/i,
+    /column ["`]?([a-z0-9_]+)["`]? does not exist/i,
+    /record ["`]?[^"'`]+["`]? has no field ["`]?([a-z0-9_]+)["`]?/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = errorText.match(pattern);
+    if (match?.[1]) return match[1];
+  }
+
+  return null;
+};
+
+const getCloudErrorMessage = (error, fallback = 'Error de sincronizacion con la nube.') => {
+  const errorText = [error?.message, error?.details, error?.hint].filter(Boolean).join(' ');
+
+  if (/Could not find the table 'public\.budgets' in the schema cache/i.test(errorText)) {
+    return 'Falta crear la tabla budgets en Supabase. Ejecuta el schema de pedidos y presupuestos.';
+  }
+
+  if (/Could not find the table 'public\.orders' in the schema cache/i.test(errorText)) {
+    return 'Falta crear la tabla orders en Supabase. Ejecuta el schema de pedidos y presupuestos.';
+  }
+
+  return error?.message || error?.details || error?.hint || fallback;
+};
+
+const insertWithSchemaFallback = async (table, payload) => {
+  let safePayload = { ...payload };
+
+  while (true) {
+    const { data, error } = await supabase.from(table).insert([safePayload]).select().single();
+    if (!error) return { data, payload: safePayload };
+
+    const missingColumn = extractSchemaMissingColumn(error);
+    if (!missingColumn || !(missingColumn in safePayload)) {
+      throw error;
+    }
+
+    const nextPayload = { ...safePayload };
+    delete nextPayload[missingColumn];
+    safePayload = nextPayload;
+  }
+};
+
+const updateWithSchemaFallback = async (table, id, payload) => {
+  let safePayload = { ...payload };
+
+  while (true) {
+    const { data, error } = await supabase.from(table).update(safePayload).eq('id', id).select().single();
+    if (!error) return { data, payload: safePayload };
+
+    const missingColumn = extractSchemaMissingColumn(error);
+    if (!missingColumn || !(missingColumn in safePayload)) {
+      throw error;
+    }
+
+    const nextPayload = { ...safePayload };
+    delete nextPayload[missingColumn];
+    safePayload = nextPayload;
+  }
+};
+
 export default function PartySupplyApp() {
   
   const [isCloudLoading, setIsCloudLoading] = useState(true);
@@ -101,6 +171,8 @@ export default function PartySupplyApp() {
   const [members, setMembers] = useState([]);
   const [pastClosures, setPastClosures] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  const [budgets, setBudgets] = useState([]);
+  const [orders, setOrders] = useState([]);
   const [offers, setOffers] = useState([]); // ✨ NUEVO ESTADO: Ofertas
 
   const [openingBalance, setOpeningBalance] = useState(0);
@@ -137,6 +209,8 @@ export default function PartySupplyApp() {
         catResult,
         rewardsResult,
         registerResult,
+        budgetsResult,
+        ordersResult,
         offersResult // ✨ NUEVA QUERY
       ] = await Promise.allSettled([
         supabase.from('products').select('*').eq('is_active', true).order('title').limit(10000),
@@ -148,6 +222,8 @@ export default function PartySupplyApp() {
         supabase.from('categories').select('*').order('name').limit(5000),
         supabase.from('rewards').select('*').order('points_cost', { ascending: true }).limit(5000),
         supabase.from('register_state').select('*').eq('id', 1).maybeSingle(),
+        supabase.from('budgets').select('*').eq('is_active', true).order('created_at', { ascending: false }).limit(10000),
+        supabase.from('orders').select('*').eq('is_active', true).order('created_at', { ascending: false }).limit(10000),
         supabase.from('offers').select('*').eq('is_active', true).order('created_at', { ascending: false }) // ✨ Cargar Ofertas
       ]);
 
@@ -178,6 +254,10 @@ export default function PartySupplyApp() {
 
       const rewardsData = safeCloudData(rewardsResult, 'premios');
       if (rewardsData) setRewards(mapRewardRecords(rewardsData));
+      const budgetsData = safeCloudData(budgetsResult, 'presupuestos');
+      if (budgetsData) setBudgets(mapBudgetRecords(budgetsData));
+      const ordersData = safeCloudData(ordersResult, 'pedidos');
+      if (ordersData) setOrders(mapOrderRecords(ordersData));
 
       // ✨ Procesar Ofertas
       const offersData = safeCloudData(offersResult, 'ofertas');
@@ -538,6 +618,285 @@ export default function PartySupplyApp() {
       showNotification('error', 'Error', 'No se pudo fijar el producto.');
       return null;
     }
+  };
+
+  const handleCreateBudget = async (budgetData) => {
+    try {
+      const payload = {
+        member_id: budgetData.memberId || null,
+        customer_name: budgetData.customerName || '',
+        customer_phone: budgetData.customerPhone || '',
+        customer_note: budgetData.customerNote || '',
+        document_title: budgetData.documentTitle || 'PRESUPUESTO',
+        event_label: budgetData.eventLabel || '',
+        items_snapshot: budgetData.itemsSnapshot || [],
+        total_amount: Number(budgetData.totalAmount || 0),
+        is_active: true,
+      };
+
+      const { data } = await insertWithSchemaFallback('budgets', payload);
+
+      const newBudget = mapBudgetRecords([data])[0];
+      setBudgets((prev) => [newBudget, ...prev]);
+      addLog(
+        'Presupuesto Creado',
+        {
+          id: newBudget.id,
+          customerName: newBudget.customerName,
+          memberId: newBudget.memberId,
+          totalAmount: newBudget.totalAmount,
+          itemCount: newBudget.itemsSnapshot.length,
+        },
+        newBudget.eventLabel || 'Gestión de pedidos'
+      );
+      showNotification('success', 'Presupuesto Creado', 'Se guardó correctamente en Pedidos.');
+      return newBudget;
+    } catch (error) {
+      console.error('Error creando presupuesto:', error);
+      showNotification('error', 'Error', `No se pudo guardar el presupuesto. ${getCloudErrorMessage(error)}`);
+      throw error;
+    }
+  };
+
+  const handleUpdateBudget = async (id, budgetData) => {
+    try {
+      const payload = {
+        member_id: budgetData.memberId || null,
+        customer_name: budgetData.customerName || '',
+        customer_phone: budgetData.customerPhone || '',
+        customer_note: budgetData.customerNote || '',
+        document_title: budgetData.documentTitle || 'PRESUPUESTO',
+        event_label: budgetData.eventLabel || '',
+        items_snapshot: budgetData.itemsSnapshot || [],
+        total_amount: Number(budgetData.totalAmount || 0),
+      };
+
+      const { data } = await updateWithSchemaFallback('budgets', id, payload);
+
+      setBudgets((prev) =>
+        prev.map((budget) => (budget.id === id ? mapBudgetRecords([data])[0] : budget))
+      );
+
+      addLog(
+        'Presupuesto Editado',
+        {
+          id,
+          customerName: budgetData.customerName,
+          totalAmount: Number(budgetData.totalAmount || 0),
+          itemCount: (budgetData.itemsSnapshot || []).length,
+        },
+        budgetData.eventLabel || 'Gestión de pedidos'
+      );
+      showNotification('success', 'Presupuesto Actualizado', 'Los cambios se guardaron.');
+    } catch (error) {
+      console.error('Error actualizando presupuesto:', error);
+      showNotification('error', 'Error', `No se pudo actualizar el presupuesto. ${getCloudErrorMessage(error)}`);
+      throw error;
+    }
+  };
+
+  const handleDeleteBudget = async (budgetRecord) => {
+    try {
+      const { data } = await updateWithSchemaFallback('budgets', budgetRecord.id, {
+        is_active: false,
+      });
+
+      const deletedBudget = mapBudgetRecords([data])[0];
+      setBudgets((prev) => prev.filter((budget) => budget.id !== budgetRecord.id));
+
+      addLog(
+        'Presupuesto Eliminado',
+        {
+          id: budgetRecord.id,
+          customerName: deletedBudget?.customerName || budgetRecord.customerName,
+          memberId: deletedBudget?.memberId ?? budgetRecord.memberId ?? null,
+          totalAmount: Number(deletedBudget?.totalAmount ?? budgetRecord.totalAmount ?? 0),
+          itemCount: (deletedBudget?.itemsSnapshot || budgetRecord.itemsSnapshot || []).length,
+        },
+        deletedBudget?.eventLabel || budgetRecord.eventLabel || 'Gestión de pedidos'
+      );
+      showNotification('success', 'Presupuesto Eliminado', 'El presupuesto fue eliminado de Pedidos.');
+    } catch (error) {
+      console.error('Error eliminando presupuesto:', error);
+      showNotification('error', 'Error', `No se pudo eliminar el presupuesto. ${getCloudErrorMessage(error)}`);
+      throw error;
+    }
+  };
+
+  const handleConvertBudgetToOrder = async (budgetRecord, { pickupDate, depositAmount }) => {
+    try {
+      const existingLinkedOrder = orders.find(
+        (order) => String(order.budgetId) === String(budgetRecord.id) && order.isActive !== false
+      );
+      if (existingLinkedOrder) {
+        showNotification('warning', 'Pedido Existente', 'Ese presupuesto ya tiene un pedido vinculado.');
+        return existingLinkedOrder;
+      }
+
+      const totalAmount = Number(budgetRecord.totalAmount || 0);
+      const initialPayment = Math.min(Math.max(Number(depositAmount || 0), 0), totalAmount);
+      const remainingAmount = Math.max(totalAmount - initialPayment, 0);
+      const status = deriveOrderStatus({ paidTotal: initialPayment, totalAmount });
+
+      const payload = {
+        budget_id: budgetRecord.id,
+        member_id: budgetRecord.memberId || null,
+        customer_name: budgetRecord.customerName || '',
+        customer_phone: budgetRecord.customerPhone || '',
+        customer_note: budgetRecord.customerNote || '',
+        document_title: budgetRecord.documentTitle || 'PEDIDO',
+        event_label: budgetRecord.eventLabel || '',
+        items_snapshot: budgetRecord.itemsSnapshot || [],
+        total_amount: totalAmount,
+        deposit_amount: initialPayment,
+        paid_total: initialPayment,
+        remaining_amount: remainingAmount,
+        pickup_date: pickupDate,
+        status,
+        is_active: true,
+      };
+
+      const { data } = await insertWithSchemaFallback('orders', payload);
+
+      const newOrder = mapOrderRecords([data])[0];
+      setOrders((prev) => [newOrder, ...prev]);
+      addLog(
+        'Pedido Creado',
+        {
+          id: newOrder.id,
+          budgetId: budgetRecord.id,
+          customerName: newOrder.customerName,
+          totalAmount: newOrder.totalAmount,
+          depositAmount: newOrder.depositAmount,
+          pickupDate: newOrder.pickupDate,
+        },
+        budgetRecord.eventLabel || 'Conversión desde presupuesto'
+      );
+      showNotification('success', 'Pedido Creado', 'El presupuesto se convirtió en pedido.');
+      return newOrder;
+    } catch (error) {
+      console.error('Error convirtiendo presupuesto:', error);
+      showNotification('error', 'Error', `No se pudo convertir el presupuesto en pedido. ${getCloudErrorMessage(error)}`);
+      throw error;
+    }
+  };
+
+  const handleRegisterOrderPayment = async (orderRecord, paymentAmount) => {
+    try {
+      const nextPaidTotal = Math.min(
+        Number(orderRecord.totalAmount || 0),
+        Number(orderRecord.paidTotal || 0) + Number(paymentAmount || 0)
+      );
+      const nextRemaining = Math.max(Number(orderRecord.totalAmount || 0) - nextPaidTotal, 0);
+      const status = deriveOrderStatus({
+        paidTotal: nextPaidTotal,
+        totalAmount: Number(orderRecord.totalAmount || 0),
+        currentStatus: orderRecord.status,
+      });
+
+      const payload = {
+        paid_total: nextPaidTotal,
+        remaining_amount: nextRemaining,
+        status,
+      };
+
+      const { data } = await updateWithSchemaFallback('orders', orderRecord.id, payload);
+
+      setOrders((prev) =>
+        prev.map((order) => (order.id === orderRecord.id ? mapOrderRecords([data])[0] : order))
+      );
+
+      addLog(
+        'Pago Pedido',
+        {
+          id: orderRecord.id,
+          customerName: orderRecord.customerName,
+          amount: Number(paymentAmount || 0),
+          paidTotal: nextPaidTotal,
+          remainingAmount: nextRemaining,
+        },
+        'Cobro manual en Pedidos'
+      );
+      showNotification('success', 'Pago Registrado', 'El pedido fue actualizado.');
+    } catch (error) {
+      console.error('Error registrando pago de pedido:', error);
+      showNotification('error', 'Error', `No se pudo registrar el pago. ${getCloudErrorMessage(error)}`);
+      throw error;
+    }
+  };
+
+  const handleMarkOrderRetired = async (orderRecord) => {
+    try {
+      const { data } = await updateWithSchemaFallback('orders', orderRecord.id, { status: 'Retirado' });
+
+      setOrders((prev) =>
+        prev.map((order) => (order.id === orderRecord.id ? mapOrderRecords([data])[0] : order))
+      );
+
+      addLog(
+        'Pedido Retirado',
+        {
+          id: orderRecord.id,
+          customerName: orderRecord.customerName,
+          totalAmount: orderRecord.totalAmount,
+        },
+        'Entrega finalizada'
+      );
+      showNotification('success', 'Pedido Retirado', 'El pedido quedó marcado como entregado.');
+    } catch (error) {
+      console.error('Error marcando pedido retirado:', error);
+      showNotification('error', 'Error', `No se pudo marcar el pedido como retirado. ${getCloudErrorMessage(error)}`);
+      throw error;
+    }
+  };
+
+  const handleCancelOrder = async (orderRecord, { keepDeposit }) => {
+    try {
+      const currentDeposit = Number(orderRecord.depositAmount || 0);
+      const currentPaid = Number(orderRecord.paidTotal || 0);
+      const retainedDeposit = keepDeposit ? Math.min(currentDeposit, currentPaid || currentDeposit) : 0;
+      const refundedAmount = Math.max(currentPaid - retainedDeposit, 0);
+
+      const { data } = await updateWithSchemaFallback('orders', orderRecord.id, {
+        status: 'Cancelado',
+        deposit_amount: retainedDeposit,
+        paid_total: retainedDeposit,
+        remaining_amount: 0,
+      });
+
+      setOrders((prev) =>
+        prev.map((order) => (order.id === orderRecord.id ? mapOrderRecords([data])[0] : order))
+      );
+
+      addLog(
+        'Pedido Cancelado',
+        {
+          id: orderRecord.id,
+          customerName: orderRecord.customerName,
+          keepDeposit: Boolean(keepDeposit),
+          retainedDeposit,
+          refundedAmount,
+          totalAmount: Number(orderRecord.totalAmount || 0),
+        },
+        keepDeposit ? 'Se retuvo la seña' : 'Se devolvió la seña'
+      );
+      showNotification(
+        'success',
+        'Pedido Cancelado',
+        keepDeposit ? 'El pedido fue cancelado y la seña quedó retenida.' : 'El pedido fue cancelado y la seña fue devuelta.'
+      );
+    } catch (error) {
+      console.error('Error cancelando pedido:', error);
+      showNotification('error', 'Error', `No se pudo cancelar el pedido. ${getCloudErrorMessage(error)}`);
+      throw error;
+    }
+  };
+
+  const handlePrintOrderRecord = (record) => {
+    handleExportProducts(
+      buildBudgetExportConfig(record),
+      buildExportItemsFromSnapshot(record.itemsSnapshot || [])
+    );
   };
 
   // ==========================================
@@ -2275,7 +2634,20 @@ export default function PartySupplyApp() {
          pointsEarned: tx.pointsEarned || 0,
          pointsSpent: tx.pointsSpent || 0,
          pointsChange: pointsChange,
-         itemsRestored: tx.items.map(i => ({ title: i.title, quantity: i.qty || i.quantity }))
+         itemsRestored: tx.items.map(i => ({ title: i.title, quantity: i.qty || i.quantity })),
+         itemsSnapshot: tx.items.map(i => ({
+           id: i.id,
+           productId: i.productId || i.id,
+           title: i.title,
+           quantity: i.qty || i.quantity,
+           price: i.price,
+           isReward: !!i.isReward,
+           product_type: i.product_type || 'quantity',
+           isCustom: !!i.isCustom,
+           isCombo: !!i.isCombo,
+           category: i.category || null,
+           categories: Array.isArray(i.categories) ? i.categories : null
+         }))
       };
       
       addLog('Venta Restaurada', logDetails, 'Restauración manual desde el historial');
@@ -2613,6 +2985,7 @@ export default function PartySupplyApp() {
     'inventory',
     'pos',
     'clients',
+    'orders',
     'history',
     'reports',
     'logs',
@@ -2691,7 +3064,7 @@ export default function PartySupplyApp() {
             <div className="flex items-center gap-3">
               <div className="pl-1">
                 <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
-                  {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', history: 'Historial de Ventas', reports: 'Reportes de Caja', logs: 'Registro de Acciones', extras: 'Gestion de Extras', 'bulk-editor': 'Productos' }[activeTab] || activeTab}
+                  {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', orders: 'Pedidos', history: 'Historial de Ventas', reports: 'Reportes de Caja', logs: 'Registro de Acciones', extras: 'Gestion de Extras', 'bulk-editor': 'Productos' }[activeTab] || activeTab}
                 </h2>
                 <div className="-mt-0.5 flex items-center gap-2 text-[12px] font-bold text-slate-500">
                   <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>
@@ -2729,6 +3102,7 @@ export default function PartySupplyApp() {
             <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} /></PersistentTabPanel>
             <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{currentUser?.role === 'admin' ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">El Dueño debe abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} offers={offers} />)}</PersistentTabPanel>
             <PersistentTabPanel tab="clients" activeTab={activeTab} className="h-full min-h-0"><ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={() => {}} /></PersistentTabPanel>
+            <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onDeleteBudget={handleDeleteBudget} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
             <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} members={members} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setDailyLogs} /></PersistentTabPanel>
             {currentUser?.role === 'admin' && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members}/></PersistentTabPanel>)}
             {currentUser?.role === 'admin' && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} /></PersistentTabPanel>)}

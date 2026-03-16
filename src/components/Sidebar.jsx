@@ -7,6 +7,7 @@ import {
   History,
   LogOut,
   FileText,
+  ClipboardList,
   Settings2,
   FileBarChart,
   Percent,
@@ -88,6 +89,12 @@ export default function Sidebar({
           isActive={activeTab === 'clients'}
           icon={Users}
           label="Socios"
+        />
+        <SidebarButton
+          onClick={() => setActiveTab('orders')}
+          isActive={activeTab === 'orders'}
+          icon={ClipboardList}
+          label="Pedidos"
         />
           <SidebarButton
             onClick={() => setActiveTab('extras')}

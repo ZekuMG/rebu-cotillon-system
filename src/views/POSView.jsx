@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Search,
   ShoppingCart,
@@ -27,8 +27,9 @@ import {
 } from 'lucide-react';
 import Swal from 'sweetalert2'; // ✨ Para las alertas inteligentes
 import { PAYMENT_METHODS } from '../data';
-import { formatNumber, formatWeight, getPricePerKg } from '../utils/helpers';
+import { formatWeight } from '../utils/helpers';
 import { FancyPrice } from '../components/FancyPrice';
+import { normalizeLegacyOffer } from '../utils/offerHelpers';
 
 const isProductExpired = (dateString) => {
   if (!dateString) return false;
@@ -265,6 +266,8 @@ export default function POSView({
   const [isCustomModalOpen, setIsCustomModalOpen] = useState(false);
   const [isOffersDrawerOpen, setIsOffersDrawerOpen] = useState(false); // ✨ Modal de combos
 
+  const [isDiscountDrawerOpen, setIsDiscountDrawerOpen] = useState(false);
+  const [customDiscountPercent, setCustomDiscountPercent] = useState('');
   const [visibleCount, setVisibleCount] = useState(40);
 
   useEffect(() => {
@@ -305,7 +308,169 @@ export default function POSView({
   };
 
   // ✨ AGREGAR OFERTA AL CARRITO
+  const getDiscountBaseTotal = () =>
+    cart.reduce((acc, item) => {
+      if (item.isDiscount) return acc;
+      return acc + (Number(item.price) || 0) * (Number(item.quantity) || 0);
+    }, 0);
+
+  const parseOfferNumericValue = (value) => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    if (typeof value !== 'string') return Number(value) || 0;
+
+    const trimmedValue = value.trim();
+    if (!trimmedValue) return 0;
+
+    const normalizedValue =
+      trimmedValue.includes(',') && trimmedValue.includes('.')
+        ? trimmedValue.replace(/\./g, '').replace(',', '.')
+        : trimmedValue.replace(',', '.');
+
+    return Number(normalizedValue) || 0;
+  };
+
+  const handleApplyManualDiscount = (percentageValue) => {
+    const percentage = Number(percentageValue);
+    const baseTotal = getDiscountBaseTotal();
+
+    if (!percentage || percentage <= 0 || baseTotal <= 0) return;
+
+    const discountAmount = Math.round((baseTotal * percentage) / 100);
+    if (discountAmount <= 0) return;
+
+    addToCart({
+      id: `desc_manual_${percentage}_${Date.now()}`,
+      title: `Descuento manual ${percentage}%`,
+      price: -discountAmount,
+      quantity: 1,
+      isCustom: true,
+      isDiscount: true,
+      product_type: 'quantity',
+      description: `${percentage}% sobre el pedido actual`,
+      stock: 999999
+    }, 1);
+
+    setCustomDiscountPercent('');
+    setIsDiscountDrawerOpen(false);
+  };
+
+  const handleApplyOfferDiscount = (offer) => {
+    const canonical = offer?.canonical || normalizeLegacyOffer(offer, productsByCategory, inventory);
+    const baseTotal = getDiscountBaseTotal();
+    const offerId = offer?.id ?? canonical?.couponCode ?? offer?.name;
+    const configuredDiscountValue = parseOfferNumericValue(canonical?.discountValue ?? offer?.discountValue ?? 0);
+
+    if (baseTotal <= 0) return { ok: false, reason: 'no_base' };
+    if (
+      offerId &&
+      cart.some((item) => item.isDiscount && String(item.originalOfferId) === String(offerId))
+    ) {
+      return { ok: false, reason: 'duplicate' };
+    }
+
+    const rawDiscount =
+      canonical.discountMode === 'percentage'
+        ? Math.round((baseTotal * configuredDiscountValue) / 100)
+        : configuredDiscountValue;
+
+    const discountAmount = Math.min(baseTotal, rawDiscount);
+    if (discountAmount <= 0) return { ok: false, reason: 'invalid' };
+
+    const discountLabel =
+      canonical.benefitType === 'coupon'
+        ? `Cupón ${canonical.couponCode || offer.name}`
+        : `Descuento ${offer.name}`;
+
+    addToCart({
+      id: `desc_offer_${offerId}_${Date.now()}`,
+      title: discountLabel,
+      price: -discountAmount,
+      quantity: 1,
+      isCustom: true,
+      isDiscount: true,
+      originalOfferId: offerId,
+      product_type: 'quantity',
+      description:
+        canonical.discountMode === 'percentage'
+          ? `${offer.name} (${configuredDiscountValue}% sobre el pedido)`
+          : `${offer.name} (-$${discountAmount.toLocaleString('es-AR')})`,
+      stock: 999999
+    }, 1);
+
+    setPosSearch('');
+    setIsDiscountDrawerOpen(false);
+    return { ok: true };
+  };
+
+  const handleApplySearchOffer = (offer) => {
+    if (offer.canonical.benefitType === 'combo' || offer.applyTo === 'Seleccion') {
+      handleAddComboToCart(offer);
+      return;
+    }
+
+    const result = handleApplyOfferDiscount(offer);
+    if (!result.ok) {
+      Swal.fire({
+        title: 'No se pudo aplicar',
+        text:
+          result.reason === 'no_base'
+            ? 'Primero agrega productos al pedido para usar descuentos o cupones.'
+            : result.reason === 'duplicate'
+            ? 'Ese descuento o cupon ya fue aplicado al pedido actual.'
+            : 'Ese descuento o cupon no tiene un valor valido.',
+        icon: 'warning',
+        confirmButtonColor: '#059669',
+      });
+    }
+  };
+
+  const getComboAvailability = (offer) => {
+    const requiredByProduct = (offer?.productsIncluded || []).reduce((acc, product) => {
+      const productId = String(product.id);
+      acc[productId] = {
+        product,
+        requiredQty: (acc[productId]?.requiredQty || 0) + 1,
+      };
+      return acc;
+    }, {});
+
+    const lines = Object.values(requiredByProduct).map(({ product, requiredQty }) => {
+      const inventoryProduct = (inventory || []).find((item) => String(item.id) === String(product.id));
+      const remainingStock = inventoryProduct
+        ? Math.max(0, getEffectiveStock(inventoryProduct.id, Number(inventoryProduct.stock) || 0))
+        : 0;
+
+      return {
+        ...product,
+        requiredQty,
+        remainingStock,
+        hasStock: remainingStock >= requiredQty,
+      };
+    });
+
+    const availableBundles = lines.length > 0
+      ? Math.min(...lines.map((line) => Math.floor(line.remainingStock / line.requiredQty)))
+      : 0;
+
+    return {
+      lines,
+      availableBundles: Number.isFinite(availableBundles) ? Math.max(0, availableBundles) : 0,
+      isAvailable: lines.length > 0 && lines.every((line) => line.hasStock),
+    };
+  };
+
   const handleAddComboToCart = (offer) => {
+    const availability = getComboAvailability(offer);
+    if (!availability.isAvailable) {
+      Swal.fire({
+        title: 'Combo sin stock suficiente',
+        text: 'Uno o mas productos del combo no tienen stock disponible para venderlo.',
+        icon: 'warning',
+        confirmButtonColor: '#7c3aed',
+      });
+      return;
+    }
+
     const comboId = `combo_${Date.now()}`;
     const comboItem = {
       id: comboId,
@@ -493,24 +658,26 @@ export default function POSView({
     onOpenClientModal();
   };
 
-  const filteredProducts = (inventory || []).filter((product) => {
+  const filteredProducts = useMemo(() => {
     const searchString = (posSearch || '').toLowerCase().trim();
     const searchWords = searchString ? searchString.split(/\s+/) : [];
 
-    const matchesSearch = searchWords.length === 0 || searchWords.every(word =>
-      (product.title || '').toLowerCase().includes(word) ||
-      String(product.id).toLowerCase().includes(word) ||
-      (product.barcode && String(product.barcode).toLowerCase().includes(word))
-    );
+    return (inventory || []).filter((product) => {
+      const matchesSearch = searchWords.length === 0 || searchWords.every(word =>
+        (product.title || '').toLowerCase().includes(word) ||
+        String(product.id).toLowerCase().includes(word) ||
+        (product.barcode && String(product.barcode).toLowerCase().includes(word))
+      );
 
-    const matchesCategory =
-      selectedCategory === 'Todas' ||
-      (Array.isArray(product.categories)
-        ? product.categories.includes(selectedCategory)
-        : product.category === selectedCategory);
-        
-    return matchesSearch && matchesCategory;
-  });
+      const matchesCategory =
+        selectedCategory === 'Todas' ||
+        (Array.isArray(product.categories)
+          ? product.categories.includes(selectedCategory)
+          : product.category === selectedCategory);
+
+      return matchesSearch && matchesCategory;
+    });
+  }, [inventory, posSearch, selectedCategory]);
 
   const handleScroll = (e) => {
     const { scrollTop, clientHeight, scrollHeight } = e.target;
@@ -521,40 +688,120 @@ export default function POSView({
     }
   };
 
-  const displayedProducts = filteredProducts.slice(0, visibleCount);
-  const selectableOffers = offers.filter(o => o.applyTo === 'Seleccion'); // Solo mostramos combos/kits armados
+  const displayedProducts = useMemo(
+    () => filteredProducts.slice(0, visibleCount),
+    [filteredProducts, visibleCount]
+  );
+  const productsByCategory = useMemo(
+    () =>
+      (categories || []).reduce((acc, categoryName) => {
+        acc[categoryName] = (inventory || []).filter((product) =>
+          Array.isArray(product.categories)
+            ? product.categories.includes(categoryName)
+            : product.category === categoryName
+        );
+        return acc;
+      }, {}),
+    [categories, inventory]
+  );
+  const normalizedPosOffers = useMemo(
+    () =>
+      (offers || []).map((offer) => {
+        const canonical = normalizeLegacyOffer(offer, productsByCategory, inventory);
+        return {
+          ...offer,
+          canonical,
+          couponCode: canonical.couponCode || '',
+        };
+      }),
+    [offers, productsByCategory, inventory]
+  );
+  const selectableOffers = useMemo(
+    () => offers.filter((offer) => offer.applyTo === 'Seleccion'),
+    [offers]
+  );
+  const selectableDiscountOffers = useMemo(
+    () =>
+      normalizedPosOffers.filter((offer) =>
+        offer.canonical.benefitType === 'coupon' ||
+        (offer.canonical.benefitType === 'discount' &&
+          (offer.canonical.scopeMode === 'all_products' || (offer.productsIncluded || []).length === 0))
+      ),
+    [normalizedPosOffers]
+  );
+  const matchingPosOffers = useMemo(() => {
+    const search = posSearch.trim().toLowerCase();
+    if (!search) return [];
+
+    return normalizedPosOffers.filter((offer) =>
+      offer.name.toLowerCase().includes(search) ||
+      offer.couponCode.toLowerCase().includes(search)
+    );
+  }, [normalizedPosOffers, posSearch]);
+
+  const handlePosSearchKeyDown = (e) => {
+    if (e.key !== 'Enter') return;
+
+    const search = posSearch.trim().toLowerCase();
+    if (!search) return;
+
+    const exactMatch = normalizedPosOffers.find((offer) =>
+      offer.name.toLowerCase() === search || offer.couponCode.toLowerCase() === search
+    );
+
+    if (!exactMatch) return;
+
+    e.preventDefault();
+    handleApplySearchOffer(exactMatch);
+  };
 
   const subtotal = cart.reduce((t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
   const total = calculateTotal();
   const pointsToEarn = Math.floor(Math.max(0, total) / 500);
+  const discountBaseTotal = getDiscountBaseTotal();
 
   return (
     <div className="flex h-full overflow-hidden bg-slate-100 relative">
       
       {/* COLUMNA IZQUIERDA: CATÁLOGO */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
         
         {/* Header POS */}
-        <div className="p-4 bg-white border-b shrink-0 flex gap-3 items-center z-30 relative">
+        <div className="p-3 bg-white border-b shrink-0 flex gap-2.5 items-center z-30 relative">
           
           {/* ✨ BOTÓN DE OFERTAS */}
-          {selectableOffers.length > 0 && (
-            <button 
-              onClick={() => setIsOffersDrawerOpen(true)}
-              className="bg-violet-100 hover:bg-violet-200 text-violet-700 border border-violet-200 px-3 py-3 rounded-xl font-black flex items-center gap-2 shadow-sm transition-colors shrink-0"
-              title="Ver Combos y Ofertas"
+          <div className="flex items-center gap-2 shrink-0">
+            {selectableOffers.length > 0 && (
+              <button 
+                onClick={() => setIsOffersDrawerOpen(true)}
+                className="bg-violet-100 hover:bg-violet-200 text-violet-700 border border-violet-200 px-2.5 py-2.5 rounded-xl font-black flex items-center gap-1.5 shadow-sm transition-colors"
+                title="Ver Combos y Ofertas"
+              >
+                <TicketPercent size={20} />
+                <span className="hidden md:inline uppercase text-xs tracking-wider">Combos</span>
+              </button>
+            )}
+            <button
+              onClick={() => setIsDiscountDrawerOpen(true)}
+              disabled={discountBaseTotal <= 0}
+              className={`px-2.5 py-2.5 rounded-xl font-black flex items-center gap-1.5 shadow-sm border transition-colors ${
+                discountBaseTotal > 0
+                  ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-700 border-emerald-200'
+                  : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+              }`}
+              title={discountBaseTotal > 0 ? 'Aplicar descuento manual' : 'Agrega productos para habilitar descuentos'}
             >
               <TicketPercent size={20} />
-              <span className="hidden md:inline uppercase text-xs tracking-wider">Combos</span>
+              <span className="hidden md:inline uppercase text-xs tracking-wider">Descuentos</span>
             </button>
-          )}
+          </div>
 
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-            <input type="text" placeholder="Buscar producto o escanear..." className="w-full pl-10 pr-4 py-3 border rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-fuchsia-500 outline-none transition-all font-medium" value={posSearch} onChange={(e) => setPosSearch(e.target.value)} autoFocus />
+            <input type="text" placeholder="Buscar producto, oferta o cupon..." className="w-full pl-10 pr-3 py-2.5 border rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-fuchsia-500 outline-none transition-all font-medium text-sm" value={posSearch} onChange={(e) => setPosSearch(e.target.value)} onKeyDown={handlePosSearchKeyDown} autoFocus />
           </div>
-          <div className="w-40 relative hidden sm:block">
-            <select className="w-full px-3 py-3 border rounded-xl bg-slate-50 font-medium outline-none focus:ring-2 focus:ring-fuchsia-500 appearance-none cursor-pointer" value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)}>
+          <div className="w-36 relative hidden sm:block">
+            <select className="w-full px-3 py-2.5 border rounded-xl bg-slate-50 font-medium text-sm outline-none focus:ring-2 focus:ring-fuchsia-500 appearance-none cursor-pointer" value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)}>
               <option value="Todas">Categorías</option>
               {categories.map((c) => (<option key={c} value={c}>{c}</option>))}
             </select>
@@ -563,7 +810,7 @@ export default function POSView({
           <div className="flex items-center gap-2">
             {posViewMode === 'grid' && (
               <div className="relative">
-                <button onClick={() => setShowGridMenu(!showGridMenu)} className={`p-3 rounded-xl border transition-all ${showGridMenu ? 'bg-slate-100 ring-2 ring-slate-200' : 'bg-white hover:bg-slate-50'}`}><SlidersHorizontal size={20} className="text-slate-600" /></button>
+                <button onClick={() => setShowGridMenu(!showGridMenu)} className={`p-2.5 rounded-xl border transition-all ${showGridMenu ? 'bg-slate-100 ring-2 ring-slate-200' : 'bg-white hover:bg-slate-50'}`}><SlidersHorizontal size={18} className="text-slate-600" /></button>
                 {showGridMenu && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowGridMenu(false)}></div>
@@ -575,26 +822,69 @@ export default function POSView({
                 )}
               </div>
             )}
-            <div className="flex bg-slate-100 p-1 rounded-xl border h-[46px] items-center">
-              <button onClick={() => setPosViewMode('grid')} className={`p-2 rounded-lg transition-all h-full flex items-center ${posViewMode === 'grid' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><LayoutGrid size={20} /></button>
-              <button onClick={() => setPosViewMode('list')} className={`p-2 rounded-lg transition-all h-full flex items-center ${posViewMode === 'list' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><List size={20} /></button>
+            <div className="flex bg-slate-100 p-1 rounded-xl border h-[42px] items-center">
+              <button onClick={() => setPosViewMode('grid')} className={`p-2 rounded-lg transition-all h-full flex items-center ${posViewMode === 'grid' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><LayoutGrid size={18} /></button>
+              <button onClick={() => setPosViewMode('list')} className={`p-2 rounded-lg transition-all h-full flex items-center ${posViewMode === 'list' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><List size={18} /></button>
             </div>
           </div>
         </div>
 
         {/* Grid / Lista de Productos con onScroll */}
-        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-slate-100/50" onScroll={handleScroll}>
+        <div className="flex-1 overflow-y-auto p-3 custom-scrollbar bg-slate-100/50" onScroll={handleScroll}>
+          {matchingPosOffers.length > 0 && (
+            <div className="mb-4 space-y-2">
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-600">Coincidencias en ofertas y descuentos</p>
+              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                {matchingPosOffers.map((offer) => (
+                  <button
+                    key={`match-${offer.id}`}
+                    type="button"
+                    onClick={() => handleApplySearchOffer(offer)}
+                    className={`rounded-xl border px-2.5 py-2.5 text-left shadow-sm transition-all ${
+                      offer.canonical.benefitType === 'combo'
+                        ? 'border-violet-200 bg-violet-50 hover:bg-violet-100'
+                        : 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-[13px] font-black text-slate-900">{offer.name}</p>
+                        <p className="mt-1 text-[11px] font-medium text-slate-500">
+                          {offer.canonical.benefitType === 'coupon'
+                            ? `Código: ${offer.couponCode || 'SIN-CODIGO'}`
+                            : offer.canonical.benefitType === 'discount'
+                            ? 'Descuento manual'
+                            : 'Combo disponible'}
+                        </p>
+                      </div>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${
+                        offer.canonical.benefitType === 'combo'
+                          ? 'bg-violet-100 text-violet-700'
+                          : 'bg-emerald-100 text-emerald-700'
+                      }`}>
+                        {offer.canonical.benefitType === 'combo'
+                          ? 'Combo'
+                          : offer.canonical.discountMode === 'percentage'
+                          ? `${Number(offer.canonical.discountValue || offer.discountValue || 0)}%`
+                          : 'Cupón'}
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           
           {posViewMode === 'grid' ? (
-            <div className="grid gap-3 transition-all duration-300" style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}>
+            <div className="grid gap-2.5 transition-all duration-300" style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}>
               
               {/* TARJETA: ARTÍCULO PERSONALIZADO (GRILLA) */}
               <button
                 onClick={() => setIsCustomModalOpen(true)}
-                className="group bg-fuchsia-50 border-2 border-dashed border-fuchsia-300 rounded-xl overflow-hidden shadow-sm hover:shadow-md hover:bg-fuchsia-100 hover:border-fuchsia-400 transition-all text-center flex flex-col items-center justify-center min-h-[140px] active:scale-[0.98]"
+                className="group bg-fuchsia-50 border-2 border-dashed border-fuchsia-300 rounded-xl overflow-hidden shadow-sm hover:shadow-md hover:bg-fuchsia-100 hover:border-fuchsia-400 transition-all text-center flex flex-col items-center justify-center min-h-[124px] active:scale-[0.98]"
               >
-                <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm mb-2 text-fuchsia-500 group-hover:scale-110 transition-transform">
-                  <Wand2 size={24} />
+                <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm mb-2 text-fuchsia-500 group-hover:scale-110 transition-transform">
+                  <Wand2 size={20} />
                 </div>
                 <span className={`font-bold text-fuchsia-700 leading-snug px-2 ${gridColumns > 6 ? 'text-[11px]' : 'text-sm'}`}>Artículo Libre</span>
                 <span className={`text-fuchsia-500 mt-1 ${gridColumns > 6 ? 'text-[9px]' : 'text-[10px]'}`}>Precio manual</span>
@@ -631,19 +921,19 @@ export default function POSView({
                         </div>
                       )}
                     </div>
-                    <div className={`flex flex-col flex-1 w-full z-20 bg-white ${gridColumns > 6 ? 'p-2' : 'p-3'}`}>
-                      <h3 className={`font-bold leading-snug mb-1 line-clamp-2 ${gridColumns > 6 ? 'text-[11px]' : 'text-sm'} ${expired ? 'text-red-700' : 'text-slate-800'}`}>
+                    <div className={`flex flex-col flex-1 w-full z-20 bg-white ${gridColumns > 6 ? 'p-2' : 'p-2.5'}`}>
+                      <h3 className={`font-bold leading-snug mb-0.5 line-clamp-2 ${gridColumns > 6 ? 'text-[10px]' : 'text-[13px]'} ${expired ? 'text-red-700' : 'text-slate-800'}`}>
                         {product.title}
                       </h3>
-                      <div className="mt-auto pt-2 flex items-end justify-between">
-                        <span className={`font-bold text-fuchsia-600 ${gridColumns > 6 ? 'text-sm' : 'text-lg'}`}>
+                      <div className="mt-auto pt-1.5 flex items-end justify-between">
+                        <span className={`font-bold text-fuchsia-600 ${gridColumns > 6 ? 'text-[13px]' : 'text-base'}`}>
                           {isWeight ? (
                             <><FancyPrice amount={product.price * 1000} /><span className="text-[10px] font-medium text-fuchsia-400">/kg</span></>
                           ) : (
                             <><FancyPrice amount={product.price} /></>
                           )}
                         </span>
-                        <div className={`w-6 h-6 rounded-full ${isWeight ? 'bg-amber-500' : 'bg-slate-900'} text-white flex items-center justify-center shadow-lg transition-colors ${gridColumns > 8 || isOutOfStock ? 'hidden' : 'flex'}`}>
+                        <div className={`w-5 h-5 rounded-full ${isWeight ? 'bg-amber-500' : 'bg-slate-900'} text-white flex items-center justify-center shadow-lg transition-colors ${gridColumns > 8 || isOutOfStock ? 'hidden' : 'flex'}`}>
                           {isWeight ? <Scale size={10} /> : <Plus size={12} />}
                         </div>
                       </div>
@@ -653,23 +943,23 @@ export default function POSView({
               })}
             </div>
           ) : (
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-1.5">
               
               {/* TARJETA: ARTÍCULO PERSONALIZADO (LISTA) */}
               <button
                 onClick={() => setIsCustomModalOpen(true)}
-                className="flex items-center gap-3 p-3 bg-fuchsia-50 border-2 border-dashed border-fuchsia-300 rounded-xl shadow-sm hover:shadow-md hover:bg-fuchsia-100 transition-all text-left group active:scale-[0.99]"
+                className="flex items-center gap-2.5 p-2.5 bg-fuchsia-50 border-2 border-dashed border-fuchsia-300 rounded-xl shadow-sm hover:shadow-md hover:bg-fuchsia-100 transition-all text-left group active:scale-[0.99]"
               >
-                <div className="w-12 h-12 rounded-lg bg-white flex items-center justify-center shrink-0 border border-fuchsia-200 text-fuchsia-500 group-hover:scale-110 transition-transform">
-                   <Wand2 size={24} />
+                <div className="w-10 h-10 rounded-lg bg-white flex items-center justify-center shrink-0 border border-fuchsia-200 text-fuchsia-500 group-hover:scale-110 transition-transform">
+                   <Wand2 size={20} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <h4 className="font-bold text-fuchsia-800 text-sm">Artículo Personalizado Libre</h4>
                   <span className="text-[10px] text-fuchsia-600 font-medium">Ingresar nombre y precio de forma manual</span>
                 </div>
-                <div className="text-right flex items-center gap-4">
-                   <div className="w-8 h-8 rounded-full bg-fuchsia-200 text-fuchsia-700 flex items-center justify-center">
-                     <Plus size={16} />
+                <div className="text-right flex items-center gap-3">
+                   <div className="w-7 h-7 rounded-full bg-fuchsia-200 text-fuchsia-700 flex items-center justify-center">
+                     <Plus size={14} />
                    </div>
                 </div>
               </button>
@@ -682,8 +972,8 @@ export default function POSView({
                 const expired = isProductExpired(product.expiration_date);
 
                 return (
-                  <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`flex items-center gap-3 p-3 bg-white border rounded-xl shadow-sm hover:shadow-md transition-all text-left group ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed bg-slate-50' : 'hover:border-fuchsia-300 active:scale-[0.99]'}`}>
-                    <div className="w-12 h-12 rounded-lg bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border relative">
+                  <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`flex items-center gap-2.5 p-2.5 bg-white border rounded-xl shadow-sm hover:shadow-md transition-all text-left group ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed bg-slate-50' : 'hover:border-fuchsia-300 active:scale-[0.99]'}`}>
+                    <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border relative">
                       {product.image ? (<img src={product.image} alt="" className="w-full h-full object-cover" />) : (<div className="w-full h-full flex items-center justify-center bg-slate-200 text-[8px] font-bold text-slate-500 p-1 text-center leading-none">{product.title.slice(0, 8)}..</div>)}
                       {isWeight && <div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-1 py-0.5 z-20"><Scale size={8} className="text-white" /></div>}
                       
@@ -700,16 +990,16 @@ export default function POSView({
                       </h4>
                       {isWeight && <span className="text-[10px] text-amber-600 font-bold">Producto por peso</span>}
                     </div>
-                    <div className="text-right flex items-center gap-4">
-                      <div className="w-20 text-right">
-                        <p className="font-bold text-lg text-fuchsia-600">
+                    <div className="text-right flex items-center gap-3">
+                      <div className="w-[74px] text-right">
+                        <p className="font-bold text-base text-fuchsia-600">
                           <FancyPrice amount={isWeight ? product.price * 1000 : product.price} />
                           {isWeight && <span className="text-[10px] font-medium">/kg</span>}
                         </p>
                       </div>
                       {!isOutOfStock && (
-                        <div className={`w-8 h-8 rounded-full ${isWeight ? 'bg-amber-100 text-amber-600 group-hover:bg-amber-500' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-900'} group-hover:text-white flex items-center justify-center transition-colors`}>
-                          {isWeight ? <Scale size={14} /> : <Plus size={16} />}
+                        <div className={`w-7 h-7 rounded-full ${isWeight ? 'bg-amber-100 text-amber-600 group-hover:bg-amber-500' : 'bg-slate-100 text-slate-600 group-hover:bg-slate-900'} group-hover:text-white flex items-center justify-center transition-colors`}>
+                          {isWeight ? <Scale size={13} /> : <Plus size={14} />}
                         </div>
                       )}
                     </div>
@@ -729,10 +1019,10 @@ export default function POSView({
       </div>
 
       {/* COLUMNA DERECHA: CARRITO */}
-      <div className="w-[380px] bg-white border-l flex flex-col shadow-2xl z-20 shrink-0">
+      <div className="w-[360px] bg-white border-l flex flex-col min-h-0 shadow-2xl z-20 shrink-0">
         
-        <div className="p-5 border-b bg-white flex justify-between items-center">
-          <h2 className="font-bold text-lg text-slate-800 flex items-center gap-2">
+        <div className="p-4 border-b bg-white flex justify-between items-center">
+          <h2 className="font-bold text-base text-slate-800 flex items-center gap-2">
             <ShoppingCart size={20} className="text-fuchsia-600" /> Pedido Actual
           </h2>
           <span className="bg-fuchsia-100 text-fuchsia-700 text-xs font-bold px-2 py-1 rounded-full">
@@ -740,7 +1030,7 @@ export default function POSView({
           </span>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-300">
               <ShoppingCart size={64} className="mb-4 opacity-50" />
@@ -757,8 +1047,8 @@ export default function POSView({
               const expired = isProductExpired(item.expiration_date);
 
               return (
-                <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`flex gap-3 p-3 rounded-xl border shadow-sm transition-colors group ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : isDiscount ? 'bg-emerald-50/50 border-emerald-200' : isCustom ? 'bg-indigo-50/40 border-indigo-100' : isCombo ? 'bg-violet-50/50 border-violet-200' : 'bg-white hover:border-fuchsia-200'}`}>
-                  <div className={`w-14 h-14 rounded-lg overflow-hidden shrink-0 border relative flex items-center justify-center ${isCombo ? 'bg-violet-100' : isDiscount ? 'bg-emerald-100' : 'bg-slate-50'}`}>
+                <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`flex gap-2.5 p-2.5 rounded-xl border shadow-sm transition-colors group ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : isDiscount ? 'bg-emerald-50/50 border-emerald-200' : isCustom ? 'bg-indigo-50/40 border-indigo-100' : isCombo ? 'bg-violet-50/50 border-violet-200' : 'bg-white hover:border-fuchsia-200'}`}>
+                  <div className={`w-12 h-12 rounded-lg overflow-hidden shrink-0 border relative flex items-center justify-center ${isCombo ? 'bg-violet-100' : isDiscount ? 'bg-emerald-100' : 'bg-slate-50'}`}>
                     {item.image ? (
                       <img src={item.image} alt="" className="w-full h-full object-cover" />
                     ) : (
@@ -777,7 +1067,7 @@ export default function POSView({
                   
                   <div className="flex-1 min-w-0 flex flex-col justify-between">
                     <div className="flex justify-between items-start gap-2">
-                      <h4 className={`font-bold text-sm line-clamp-2 leading-tight ${item.isReward ? 'text-fuchsia-700' : isDiscount ? 'text-emerald-700' : isCustom ? 'text-indigo-800' : isCombo ? 'text-violet-800' : expired ? 'text-red-700' : 'text-slate-800'}`}>
+                      <h4 className={`font-bold text-[13px] line-clamp-2 leading-tight ${item.isReward ? 'text-fuchsia-700' : isDiscount ? 'text-emerald-700' : isCustom ? 'text-indigo-800' : isCombo ? 'text-violet-800' : expired ? 'text-red-700' : 'text-slate-800'}`}>
                         {item.isReward && <Gift size={12} className="inline mr-1 text-fuchsia-500" />}
                         {item.title}
                         {expired && <AlertTriangle size={12} className="inline ml-1 text-red-500" title="¡Producto Vencido!" />}
@@ -802,13 +1092,13 @@ export default function POSView({
                           )}
                         </div>
                       ) : (
-                        <div className="flex items-center gap-2 bg-slate-50 rounded-lg p-0.5 border">
+                        <div className="flex items-center gap-1.5 bg-slate-50 rounded-lg p-0.5 border">
                           <button onClick={() => updateCartItemQty(item.id, item.quantity - 1)} className="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:text-red-500 disabled:opacity-50" disabled={item.quantity <= 1 || item.isReward || isDiscount}><Minus size={12} /></button>
                           <span className="text-xs font-bold w-4 text-center">{item.quantity}</span>
                           <button onClick={() => updateCartItemQty(item.id, item.quantity + 1)} className="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:text-green-500 disabled:opacity-50" disabled={item.isReward || isCombo || isDiscount}><Plus size={12} /></button>
                         </div>
                       )}
-                      <p className={`font-bold ${item.isReward ? 'text-fuchsia-600' : isDiscount ? 'text-emerald-600' : isCombo ? 'text-violet-700' : 'text-slate-800'}`}>
+                      <p className={`font-bold text-sm ${item.isReward ? 'text-fuchsia-600' : isDiscount ? 'text-emerald-600' : isCombo ? 'text-violet-700' : 'text-slate-800'}`}>
                         {item.isReward ? 'GRATIS' : isDiscount ? <span className="text-emerald-600 font-black">-${Math.abs(item.price * item.quantity).toLocaleString('es-AR')}</span> : <FancyPrice amount={item.price * item.quantity} />}
                       </p>
                     </div>
@@ -820,9 +1110,9 @@ export default function POSView({
         </div>
 
         {/* Footer */}
-        <div className="p-5 bg-slate-50 border-t space-y-4">
+        <div className="p-4 bg-slate-50 border-t space-y-3">
           {/* Cliente */}
-          <div className={`bg-white border rounded-xl p-3 shadow-sm transition-colors ${selectedClient ? (selectedClient.id === 0 ? 'border-slate-300' : 'border-fuchsia-200 bg-fuchsia-50/30') : 'border-slate-200'}`}>
+          <div className={`bg-white border rounded-xl p-2.5 shadow-sm transition-colors ${selectedClient ? (selectedClient.id === 0 ? 'border-slate-300' : 'border-fuchsia-200 bg-fuchsia-50/30') : 'border-slate-200'}`}>
             <div className="flex justify-between items-center mb-2">
               <span className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1">
                 {selectedClient ? <UserCheck size={12} /> : <User size={12} />} Socio
@@ -856,7 +1146,7 @@ export default function POSView({
             {PAYMENT_METHODS.map((method) => {
               const isSelected = selectedPayment === method.id;
               return (
-                <button key={method.id} onClick={() => setSelectedPayment(method.id)} className={`flex flex-col items-center justify-center p-2 rounded-lg border transition-all text-[10px] font-bold h-16 ${isSelected ? 'bg-slate-800 text-white border-slate-800 shadow-md transform scale-105' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300 hover:bg-slate-100'}`}>
+                <button key={method.id} onClick={() => setSelectedPayment(method.id)} className={`flex flex-col items-center justify-center p-2 rounded-lg border transition-all text-[10px] font-bold h-14 ${isSelected ? 'bg-slate-800 text-white border-slate-800 shadow-md transform scale-105' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300 hover:bg-slate-100'}`}>
                   {method.id === 'Efectivo' && <Banknote size={18} className="mb-1" />}
                   {method.id === 'MercadoPago' && <Smartphone size={18} className="mb-1" />}
                   {(method.id === 'Debito' || method.id === 'Credito') && <CreditCard size={18} className="mb-1" />}
@@ -883,11 +1173,11 @@ export default function POSView({
             {selectedPayment === 'Credito' && (<div className="flex justify-between text-xs text-amber-600 font-bold"><span>Recargo (10%)</span><span>+<FancyPrice amount={subtotal * 0.1} /></span></div>)}
             <div className="flex justify-between items-end pt-2">
               <span className="text-sm font-bold text-slate-800 uppercase">Total a Pagar</span>
-              <span className="text-3xl font-black text-slate-900"><FancyPrice amount={total} /></span>
+              <span className="text-[28px] font-black text-slate-900"><FancyPrice amount={total} /></span>
             </div>
           </div>
 
-          <button onClick={handlePreCheckout} disabled={cart.length === 0} className="w-full py-4 bg-gradient-to-r from-slate-900 to-slate-800 hover:from-black hover:to-slate-900 text-white rounded-xl font-bold text-lg shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 group">
+          <button onClick={handlePreCheckout} disabled={cart.length === 0} className="w-full py-3.5 bg-gradient-to-r from-slate-900 to-slate-800 hover:from-black hover:to-slate-900 text-white rounded-xl font-bold text-base shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 group">
             <CheckCircle className="group-hover:scale-110 transition-transform" />
             {cart.length === 0 ? 'CARRITO VACÍO' : 'COBRAR'}
           </button>
@@ -943,12 +1233,20 @@ export default function POSView({
             </div>
             
             <div className="flex-1 overflow-y-auto p-4 bg-slate-50 custom-scrollbar space-y-3">
-              {selectableOffers.map(offer => (
-                <div key={offer.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col">
+              {selectableOffers.map((offer) => {
+                const availability = getComboAvailability(offer);
+
+                return (
+                <div key={offer.id} className={`rounded-xl p-4 shadow-sm flex flex-col border ${availability.isAvailable ? 'bg-white border-slate-200' : 'bg-red-50/30 border-red-200'}`}>
                    <div className="flex justify-between items-start mb-2">
                      <div>
                        <span className="bg-violet-100 text-violet-700 text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider">{offer.type}</span>
                        <h3 className="font-bold text-slate-800 text-base mt-1">{offer.name}</h3>
+                       <p className={`mt-1 text-[11px] font-bold ${availability.isAvailable ? 'text-slate-500' : 'text-red-600'}`}>
+                         {availability.isAvailable
+                           ? `${availability.availableBundles} combos disponibles`
+                           : 'Sin stock suficiente para vender este combo'}
+                       </p>
                      </div>
                      <span className="font-black text-emerald-600 text-lg">${Number(offer.offerPrice).toLocaleString('es-AR')}</span>
                    </div>
@@ -956,20 +1254,158 @@ export default function POSView({
                    <div className="mt-2 pt-2 border-t border-slate-100 mb-4">
                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Incluye:</p>
                      <ul className="text-xs text-slate-600 font-medium space-y-1">
-                       {offer.productsIncluded.map((p, i) => (
-                         <li key={i} className="flex items-start gap-1"><span className="text-violet-400 mt-0.5">•</span> {p.title}</li>
-                       ))}
-                     </ul>
-                   </div>
+                        {availability.lines.map((line) => (
+                          <li key={`${offer.id}-${line.id}`} className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 px-2 py-1.5">
+                            <div className="flex min-w-0 items-start gap-1">
+                              <span className="text-violet-400 mt-0.5">*</span>
+                              <span className="truncate">{line.title}</span>
+                            </div>
+                            <div className="shrink-0 text-right">
+                              <p className="text-[10px] font-black text-slate-600">x{line.requiredQty}</p>
+                              <p className={`text-[10px] font-bold ${line.hasStock ? 'text-slate-400' : 'text-red-500'}`}>
+                                Stock: {line.remainingStock}
+                              </p>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
 
-                   <button 
-                     onClick={() => handleAddComboToCart(offer)}
-                     className="w-full mt-auto py-2.5 bg-violet-50 text-violet-700 font-bold text-sm rounded-lg border border-violet-200 hover:bg-violet-600 hover:text-white hover:border-violet-600 transition-colors flex justify-center items-center gap-2"
-                   >
-                     <Plus size={16} /> Agregar al Pedido
-                   </button>
+                    <button 
+                      onClick={() => handleAddComboToCart(offer)}
+                      disabled={!availability.isAvailable}
+                      className={`w-full mt-auto py-2.5 font-bold text-sm rounded-lg border transition-colors flex justify-center items-center gap-2 ${
+                        availability.isAvailable
+                          ? 'bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-600 hover:text-white hover:border-violet-600'
+                          : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                      }`}
+                    >
+                      <Plus size={16} /> {availability.isAvailable ? 'Agregar al Pedido' : 'Sin stock'}
+                    </button>
                 </div>
-              ))}
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+
+      {isDiscountDrawerOpen && (
+        <>
+          <div
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm z-[60] transition-opacity"
+            onClick={() => setIsDiscountDrawerOpen(false)}
+          ></div>
+          <div className="absolute top-0 left-0 h-full w-[380px] max-w-full bg-white shadow-2xl z-[61] flex flex-col animate-in slide-in-from-left duration-300">
+            <div className="p-4 bg-emerald-700 text-white flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-2">
+                <TicketPercent size={20} />
+                <div>
+                  <h2 className="font-bold text-lg">Descuentos</h2>
+                  <p className="text-[11px] text-emerald-100">Aplicados sobre el pedido actual</p>
+                </div>
+              </div>
+              <button onClick={() => setIsDiscountDrawerOpen(false)} className="text-emerald-200 hover:text-white bg-emerald-800/50 p-1.5 rounded-lg"><X size={20}/></button>
+            </div>
+
+            <div className="p-4 border-b bg-emerald-50/70 shrink-0">
+              <div className="rounded-xl border border-emerald-200 bg-white px-4 py-3 shadow-sm">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Base para descuento</p>
+                <p className="text-2xl font-black text-slate-900"><FancyPrice amount={discountBaseTotal} /></p>
+                <p className="text-[11px] text-slate-500">No incluye descuentos ya aplicados.</p>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 bg-slate-50 custom-scrollbar space-y-4">
+              {selectableDiscountOffers.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Ofertas y cupones guardados</p>
+                  <div className="space-y-2">
+                    {selectableDiscountOffers.map((offer) => (
+                      <button
+                        key={`drawer-${offer.id}`}
+                        onClick={() => handleApplyOfferDiscount(offer)}
+                        disabled={discountBaseTotal <= 0}
+                        className="w-full rounded-xl border border-emerald-200 bg-white p-4 text-left shadow-sm transition-colors hover:border-emerald-400 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-black text-slate-900">{offer.name}</p>
+                            <p className="mt-1 text-[11px] text-slate-500">
+                              {offer.canonical.benefitType === 'coupon'
+                                ? `Código ${offer.couponCode || 'SIN-CODIGO'}`
+                                : offer.canonical.discountMode === 'percentage'
+                                ? `${Number(offer.canonical.discountValue || offer.discountValue || 0)}% sobre el pedido`
+                                : `${Number(offer.canonical.discountValue || offer.discountValue || 0)} de descuento fijo`}
+                            </p>
+                          </div>
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black uppercase text-emerald-700">
+                            {offer.canonical.benefitType === 'coupon' ? 'Cupón' : 'Descuento'}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Accesos rápidos</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {[5, 10, 15, 20].map((percent) => {
+                    const amount = Math.round((discountBaseTotal * percent) / 100);
+                    return (
+                      <button
+                        key={percent}
+                        onClick={() => handleApplyManualDiscount(percent)}
+                        disabled={discountBaseTotal <= 0}
+                        className="rounded-xl border border-emerald-200 bg-white p-4 text-left shadow-sm hover:border-emerald-400 hover:bg-emerald-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-lg font-black text-emerald-700">{percent}%</span>
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-700">Manual</span>
+                        </div>
+                        <p className="mt-2 text-xs font-bold text-slate-700">Descuenta <FancyPrice amount={amount} /></p>
+                        <p className="mt-1 text-[11px] text-slate-500">Aplicar ahora al carrito.</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+                <div>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Descuento personalizado</p>
+                  <p className="text-[11px] text-slate-500 mt-1">Ingresá un porcentaje manual, por ejemplo 10%.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type="number"
+                      min="1"
+                      max="100"
+                      step="1"
+                      value={customDiscountPercent}
+                      onChange={(e) => setCustomDiscountPercent(e.target.value)}
+                      placeholder="10"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-3 pr-8 text-sm font-bold outline-none transition-all focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-black text-slate-400">%</span>
+                  </div>
+                  <button
+                    onClick={() => handleApplyManualDiscount(customDiscountPercent)}
+                    disabled={discountBaseTotal <= 0 || !Number(customDiscountPercent)}
+                    className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    Aplicar
+                  </button>
+                </div>
+                {Number(customDiscountPercent) > 0 && (
+                  <p className="text-xs font-bold text-emerald-700">
+                    Descuento estimado: <FancyPrice amount={Math.round((discountBaseTotal * Number(customDiscountPercent)) / 100)} />
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         </>

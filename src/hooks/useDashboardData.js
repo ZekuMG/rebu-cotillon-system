@@ -34,6 +34,16 @@ export default function useDashboardData({
     return product ? (Number(product.purchasePrice) || 0) : 0;
   };
 
+  const getTransactionNet = (tx) => {
+    let cost = 0;
+    (tx.items || []).forEach(item => {
+      const qty = Number(item.qty) || Number(item.quantity) || 0;
+      const pCost = getProductCost(item.id || item.productId);
+      cost += pCost * qty;
+    });
+    return (Number(tx.total) || 0) - cost;
+  };
+
   const isInRange = useMemo(() => {
     const now = new Date();
     const currentYear = now.getFullYear();
@@ -153,17 +163,22 @@ export default function useDashboardData({
   const chartData = useMemo(() => {
     if (globalFilter === 'day') {
       const ranges = [
-        { label: '9-12', start: 9, end: 12, sales: 0, count: 0, transactions: [] },
-        { label: '12-14', start: 12, end: 14, sales: 0, count: 0, transactions: [] },
-        { label: '14-17', start: 14, end: 17, sales: 0, count: 0, transactions: [] },
-        { label: '17-21', start: 17, end: 21, sales: 0, count: 0, transactions: [] },
-        { label: '21+', start: 21, end: 24, sales: 0, count: 0, transactions: [] },
+        { label: '9-12', start: 9, end: 12, sales: 0, net: 0, count: 0, transactions: [] },
+        { label: '12-14', start: 12, end: 14, sales: 0, net: 0, count: 0, transactions: [] },
+        { label: '14-17', start: 14, end: 17, sales: 0, net: 0, count: 0, transactions: [] },
+        { label: '17-21', start: 17, end: 21, sales: 0, net: 0, count: 0, transactions: [] },
+        { label: '21+', start: 21, end: 24, sales: 0, net: 0, count: 0, transactions: [] },
       ];
       filteredData.forEach(tx => {
         if (!tx.time) return;
         const hour = parseInt(tx.time.split(':')[0], 10);
         const range = ranges.find(r => hour >= r.start && hour < r.end);
-        if (range) { range.sales += tx.total; range.count += 1; range.transactions.push(tx); }
+        if (range) {
+          range.sales += tx.total;
+          range.net += getTransactionNet(tx);
+          range.count += 1;
+          range.transactions.push(tx);
+        }
       });
       return ranges.map(r => ({ ...r, isCurrent: currentHour >= r.start && currentHour < r.end }));
     }
@@ -185,6 +200,7 @@ export default function useDashboardData({
           dayNum: d.getDate(),
           year: d.getFullYear(),
           sales: 0,
+          net: 0,
           count: 0,
           isToday: i === 0,
           isCurrent: i === 0,
@@ -199,6 +215,7 @@ export default function useDashboardData({
         if (daysMap.has(key)) {
           const entry = daysMap.get(key);
           entry.sales += tx.total;
+          entry.net += getTransactionNet(tx);
           entry.count += 1;
           entry.transactions.push(tx);
         }
@@ -222,6 +239,7 @@ export default function useDashboardData({
         dayNum: d.getDate(),
         monthName: d.toLocaleDateString('es-AR', { month: 'short' }),
         sales: 0, 
+        net: 0,
         count: 0, 
         dateStr: dateStr, 
         isToday: i === 0,
@@ -235,14 +253,15 @@ export default function useDashboardData({
       const key = `${tx.date.getDate()}/${tx.date.getMonth() + 1}`;
       if (daysMap.has(key)) { 
         const entry = daysMap.get(key); 
-        entry.sales += tx.total; 
+        entry.sales += tx.total;
+        entry.net += getTransactionNet(tx);
         entry.count += 1; 
         entry.transactions.push(tx); 
       }
     });
 
     return Array.from(daysMap.values());
-  }, [globalFilter, filteredData, currentHour]);
+  }, [globalFilter, filteredData, currentHour, inventory]);
 
   const maxSales = useMemo(() => {
     const max = Math.max(...chartData.map(d => d.sales)); return max > 0 ? max : 1;
@@ -255,6 +274,20 @@ export default function useDashboardData({
     });
   }, [filteredData]);
 
+  const isLegacyWeightLikeItem = (item, liveProduct) => {
+    if (liveProduct) return liveProduct.product_type === 'weight';
+    if (item?.product_type === 'weight' || item?.isWeight) return true;
+
+    const qty = Number(item?.qty ?? item?.quantity ?? 0);
+    const price = Number(item?.price ?? 0);
+    const rawId = String(item?.id || item?.productId || '');
+    const rawTitle = String(item?.title || '').trim();
+    const isCustomLike = item?.isCustom || rawId.startsWith('custom_') || rawTitle.startsWith('*');
+    const hasLegacyQuantityMarker = !item?.product_type || item?.product_type === 'quantity';
+
+    return hasLegacyQuantityMarker && !item?.isCombo && !item?.isDiscount && isCustomLike && qty >= 20 && price > 0 && price < 50;
+  };
+
   const rankingStats = useMemo(() => {
     const statsMap = {};
 
@@ -264,7 +297,7 @@ export default function useDashboardData({
         const revenue = (Number(item.price) || 0) * qty;
         
         const liveProduct = inventory ? inventory.find(p => p.id === (item.id || item.productId)) : null;
-        const isWeightItem = liveProduct ? liveProduct.product_type === 'weight' : item.product_type === 'weight';
+        const isWeightItem = isLegacyWeightLikeItem(item, liveProduct);
 
         let keys = [];
 

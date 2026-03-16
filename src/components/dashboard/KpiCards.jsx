@@ -19,6 +19,7 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
   const getPeriodText = (prefix) => {
     if (globalFilter === 'day') return `${prefix} del Dia`;
     if (globalFilter === 'week') return `${prefix} Semanal`;
+    if (globalFilter === 'year') return `${prefix} Anual`;
     return `${prefix} Mensual`;
   };
 

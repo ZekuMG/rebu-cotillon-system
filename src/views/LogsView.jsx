@@ -33,7 +33,7 @@ export default function LogsView({ dailyLogs, onUpdateLogNote, onReprintPdf }) {
     return dailyLogs.map(log => {
       let finalDetails = log.details;
       if (typeof finalDetails === 'string') {
-        try { finalDetails = JSON.parse(finalDetails); } catch (e) {}
+        try { finalDetails = JSON.parse(finalDetails); } catch { finalDetails = log.details; }
       }
       
       const realDate = log.created_at || log.createdAt || new Date().toISOString();

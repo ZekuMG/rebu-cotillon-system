@@ -6,6 +6,12 @@ const MODIFIED_SALE_ACTIONS = new Set([
   'Modificación de Pedido',
 ]);
 
+const SALE_ITEM_SNAPSHOT_ACTIONS = new Set([
+  'Venta Realizada',
+  'Modificación Pedido',
+  'Venta Restaurada',
+]);
+
 export const safeCloudData = (result, tableName) => {
   if (result.status === 'fulfilled' && !result.value.error) {
     return result.value.data || [];
@@ -60,27 +66,113 @@ export const mapLogRecords = (logs = []) =>
 const mapSaleItemRecord = (item) => ({
   id: item.product_id,
   title: item.product_title,
-  qty: item.quantity,
-  price: item.price,
-  isReward: item.is_reward,
+  qty: Number(item.quantity ?? 0),
+  price: Number(item.price ?? 0),
+  isReward: Boolean(item.is_reward),
   productId: item.product_id,
+  product_type: item.product_type || null,
 });
 
 const mapRecoveredSaleItem = (item) => ({
-  id: item.id || item.productId,
-  title: item.title || item.name || 'Producto Recuperado',
-  qty: Number(item.quantity || item.qty || 1),
-  price: Number(item.price || 0),
-  isReward: item.isReward || false,
-  productId: item.productId || item.id,
+  id: item.id || item.productId || item.product_id || null,
+  title: item.title || item.product_title || item.name || 'Producto Recuperado',
+  qty: Number(item.quantity ?? item.qty ?? 1),
+  price: Number(item.price ?? 0),
+  isReward: Boolean(item.isReward ?? item.is_reward ?? false),
+  productId: item.productId || item.id || item.product_id || null,
+  product_type: item.product_type || null,
+  isCustom: Boolean(item.isCustom ?? item.is_custom ?? false),
+  isCombo: Boolean(item.isCombo ?? item.is_combo ?? false),
+  category: item.category || null,
+  categories: Array.isArray(item.categories) ? item.categories : null,
 });
 
-const findSaleRecoveryLog = (logs, saleId) =>
-  logs.find(
-    (log) =>
-      (log.action === 'Venta Realizada' || log.action === 'Modificación Pedido') &&
-      String(log.details?.transactionId) === String(saleId)
-  );
+const getSaleSnapshotItems = (log) => {
+  if (!log?.details || typeof log.details !== 'object') return [];
+  const snapshot = log.details.itemsSnapshot || log.details.items || log.details.itemsRestored || [];
+  return Array.isArray(snapshot) ? snapshot : [];
+};
+
+const getSaleSnapshotScore = (items = []) => {
+  if (!Array.isArray(items) || items.length === 0) return 0;
+
+  let score = 1;
+  if (items.some((item) => item?.product_type)) score += 4;
+  if (items.some((item) => item?.isCustom || item?.isCombo || item?.isReward || item?.productId || item?.product_id || item?.id)) score += 2;
+  if (items.some((item) => item?.price !== undefined)) score += 1;
+
+  return score;
+};
+
+const enrichSaleItemsWithSnapshot = (items = [], snapshotItems = []) => {
+  if (!Array.isArray(snapshotItems) || snapshotItems.length === 0) return items;
+
+  const normalizedSnapshotItems = snapshotItems.map(mapRecoveredSaleItem);
+  const usedIndexes = new Set();
+
+  return items.map((item, itemIndex) => {
+    let matchedSnapshotIndex = normalizedSnapshotItems.findIndex((snapshotItem, snapshotIndex) => {
+      if (usedIndexes.has(snapshotIndex)) return false;
+
+      const sameProductId =
+        snapshotItem.productId &&
+        item.productId &&
+        String(snapshotItem.productId) === String(item.productId);
+      const sameId =
+        snapshotItem.id &&
+        item.id &&
+        String(snapshotItem.id) === String(item.id);
+      const sameTitle =
+        snapshotItem.title &&
+        item.title &&
+        String(snapshotItem.title) === String(item.title);
+      const sameQty = Number(snapshotItem.qty ?? 0) === Number(item.qty ?? 0);
+      const samePrice = Number(snapshotItem.price ?? 0) === Number(item.price ?? 0);
+
+      return sameProductId || sameId || (sameTitle && sameQty && samePrice) || (sameTitle && !item.productId);
+    });
+
+    if (matchedSnapshotIndex === -1 && normalizedSnapshotItems[itemIndex] && !usedIndexes.has(itemIndex)) {
+      matchedSnapshotIndex = itemIndex;
+    }
+
+    if (matchedSnapshotIndex === -1) return item;
+
+    usedIndexes.add(matchedSnapshotIndex);
+    const snapshotItem = normalizedSnapshotItems[matchedSnapshotIndex];
+
+    return {
+      ...item,
+      id: item.id || snapshotItem.id,
+      title: item.title || snapshotItem.title,
+      qty: item.qty ?? snapshotItem.qty,
+      price: item.price ?? snapshotItem.price,
+      isReward: item.isReward ?? snapshotItem.isReward,
+      productId: item.productId || snapshotItem.productId,
+      product_type: item.product_type || snapshotItem.product_type || null,
+      isCustom: item.isCustom ?? snapshotItem.isCustom,
+      isCombo: item.isCombo ?? snapshotItem.isCombo,
+      category: item.category || snapshotItem.category || null,
+      categories: item.categories || snapshotItem.categories || null,
+    };
+  });
+};
+
+const findSaleSnapshotLog = (logs, saleId) =>
+  logs.reduce((bestLog, log) => {
+    const isCandidate =
+      SALE_ITEM_SNAPSHOT_ACTIONS.has(log.action) &&
+      String(log.details?.transactionId) === String(saleId);
+
+    if (!isCandidate) return bestLog;
+
+    if (!bestLog) return log;
+
+    const currentScore = getSaleSnapshotScore(getSaleSnapshotItems(log));
+    const bestScore = getSaleSnapshotScore(getSaleSnapshotItems(bestLog));
+
+    return currentScore > bestScore ? log : bestLog;
+  }, null);
 
 const findSaleRestoreLog = (logs, saleId) =>
   logs.find(
@@ -91,14 +183,14 @@ const findSaleRestoreLog = (logs, saleId) =>
 
 export const mapSaleRecords = (sales = [], parsedLogs = []) =>
   sales.map((sale) => {
+    const snapshotLog = findSaleSnapshotLog(parsedLogs, sale.id);
+    const snapshotItems = getSaleSnapshotItems(snapshotLog);
     let items = (sale.sale_items || []).map(mapSaleItemRecord);
 
     if (items.length === 0 && Number(sale.total) > 0) {
-      const recoveryLog = findSaleRecoveryLog(parsedLogs, sale.id);
-      if (recoveryLog) {
-        const recoveredItems = recoveryLog.details?.items || recoveryLog.details?.itemsSnapshot || [];
-        items = recoveredItems.map(mapRecoveredSaleItem);
-      }
+      items = snapshotItems.map(mapRecoveredSaleItem);
+    } else if (snapshotItems.length > 0) {
+      items = enrichSaleItemsWithSnapshot(items, snapshotItems);
     }
 
     const restoreLog = findSaleRestoreLog(parsedLogs, sale.id);
@@ -195,6 +287,45 @@ export const mapOfferRecords = (offers = []) =>
     offerPrice: Number(offer.offer_price),
     profitMargin: Number(offer.profit_margin),
     createdBy: offer.created_by,
+  }));
+
+export const mapBudgetRecords = (budgets = []) =>
+  budgets.map((budget) => ({
+    id: budget.id,
+    memberId: budget.member_id,
+    customerName: budget.customer_name || '',
+    customerPhone: budget.customer_phone || '',
+    customerNote: budget.customer_note || '',
+    documentTitle: budget.document_title || 'PRESUPUESTO',
+    eventLabel: budget.event_label || '',
+    itemsSnapshot: budget.items_snapshot || [],
+    totalAmount: Number(budget.total_amount || 0),
+    createdAt: budget.created_at,
+    isActive: budget.is_active !== false,
+    type: 'budget',
+    status: 'Presupuesto',
+  }));
+
+export const mapOrderRecords = (orders = []) =>
+  orders.map((order) => ({
+    id: order.id,
+    budgetId: order.budget_id,
+    memberId: order.member_id,
+    customerName: order.customer_name || '',
+    customerPhone: order.customer_phone || '',
+    customerNote: order.customer_note || '',
+    documentTitle: order.document_title || 'PEDIDO',
+    eventLabel: order.event_label || '',
+    itemsSnapshot: order.items_snapshot || [],
+    totalAmount: Number(order.total_amount || 0),
+    depositAmount: Number(order.deposit_amount || 0),
+    paidTotal: Number(order.paid_total || 0),
+    remainingAmount: Number(order.remaining_amount || 0),
+    pickupDate: order.pickup_date || null,
+    status: order.status || 'Pendiente',
+    createdAt: order.created_at,
+    isActive: order.is_active !== false,
+    type: 'order',
   }));
 
 export const mapRegisterState = (registerState) => {

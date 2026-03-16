@@ -11,7 +11,7 @@ export const PaymentBreakdown = ({ paymentStats, totalGross, globalFilter }) => 
     <div className="bg-white p-5 rounded-xl shadow-sm border h-full">
       <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-4">
         <DollarSign size={18} className="text-green-500" />
-        Pagos ({globalFilter === 'day' ? 'Hoy' : globalFilter === 'week' ? 'Semana' : 'Mes'})
+        Pagos ({globalFilter === 'day' ? 'Hoy' : globalFilter === 'week' ? 'Semana' : globalFilter === 'year' ? 'Año' : 'Mes'})
       </h3>
       <div className="space-y-3">
         {paymentStats.map((m) => {

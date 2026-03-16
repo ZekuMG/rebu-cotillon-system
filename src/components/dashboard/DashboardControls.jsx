@@ -4,6 +4,7 @@
 import React from 'react';
 import {
   Calendar,
+  CalendarDays,
   CalendarRange,
   Clock,
   Save,
@@ -16,6 +17,7 @@ export const GlobalTimeSwitch = ({ globalFilter, setGlobalFilter }) => (
       { id: 'day', label: 'Diario', Icon: Clock },
       { id: 'week', label: 'Semanal', Icon: Calendar },
       { id: 'month', label: 'Mensual', Icon: CalendarRange },
+      { id: 'year', label: 'Anual', Icon: CalendarDays },
     ].map((opt) => (
       <button
         key={opt.id}
