@@ -1121,6 +1121,9 @@ export default function PartySupplyApp() {
 
   const handleUpdateMemberWithLog = async (id, updates) => {
     try {
+      // Buscar miembro anterior para comparar cambios
+      const oldMember = members.find(m => m.id === id) || {};
+      
       const dbUpdates = {};
       if (updates.name !== undefined) dbUpdates.name = updates.name;
       
@@ -1134,9 +1137,43 @@ export default function PartySupplyApp() {
       const { error } = await supabase.from('clients').update(dbUpdates).eq('id', id);
       if (error) throw error;
       
-      setMembers(members.map(m => m.id === id ? { ...m, ...updates } : m));
+      // 🔧 Normalizar updates: convertir points a número antes de actualizar estado
+      const normalizedUpdates = { ...updates, points: Number(updates.points) || 0 };
+      setMembers(members.map(m => m.id === id ? { ...m, ...normalizedUpdates } : m));
       
-      addLog('Edición de Socio', { id, updates }, updates.extraInfo || 'Actualización de datos');
+      // 🔍 MEJORADO: Detectar cambios específicos para el log
+      const pointsDelta = normalizedUpdates.points !== undefined ? Number(normalizedUpdates.points) - Number(oldMember.points || 0) : 0;
+      const changes = [];
+      
+      if (normalizedUpdates.name && normalizedUpdates.name !== oldMember.name) {
+        changes.push({ field: 'Nombre', old: oldMember.name, new: normalizedUpdates.name });
+      }
+      if (normalizedUpdates.dni !== undefined && normalizedUpdates.dni !== oldMember.dni) {
+        changes.push({ field: 'DNI', old: oldMember.dni || '--', new: normalizedUpdates.dni || '--' });
+      }
+      if (normalizedUpdates.phone !== undefined && normalizedUpdates.phone !== oldMember.phone) {
+        changes.push({ field: 'Teléfono', old: oldMember.phone || '--', new: normalizedUpdates.phone || '--' });
+      }
+      if (normalizedUpdates.email !== undefined && normalizedUpdates.email !== oldMember.email) {
+        changes.push({ field: 'Email', old: oldMember.email || '--', new: normalizedUpdates.email || '--' });
+      }
+      if (pointsDelta !== 0) {
+        changes.push({ field: 'Puntos', old: Number(oldMember.points || 0), new: Number(normalizedUpdates.points || 0), isPrice: false });
+      }
+      
+      const logReason = pointsDelta !== 0 
+        ? `Ajuste de puntos: ${Number(oldMember.points || 0)} → ${Number(normalizedUpdates.points || 0)}`
+        : (normalizedUpdates.extraInfo || (changes.length > 0 ? changes.map(c => c.field).join(', ') : 'Actualización de datos'));
+      
+      addLog('Edición de Socio', { 
+        name: oldMember.name,
+        number: oldMember.memberNumber,
+        id: oldMember.id,
+        oldPoints: Number(oldMember.points || 0),
+        newPoints: Number(normalizedUpdates.points || 0),
+        pointsDelta,
+        changes: changes.length > 0 ? changes : undefined 
+      }, logReason);
       
       showNotification('success', 'Socio Actualizado', 'Cambios guardados.');
     } catch (e) { 
