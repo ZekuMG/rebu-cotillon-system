@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { ArrowRight, CheckCircle, Edit3, Plus, Save, AlertTriangle, FileText, Download } from 'lucide-react';
 import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
+import { HintIcon } from '../HintIcon';
 import { extractRealNote } from './logHelpers';
 
 // ════════════════════════════════════════════
@@ -751,26 +752,39 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
     case 'Baja de Socio': {
       const isNew = action === 'Nuevo Socio';
       const isDelete = action === 'Baja de Socio';
-      const memberName = details.name || details.member || null;
-      const memberNumber = details.number ? String(details.number).padStart(4, '0') : null;
+      const isEdit = !isNew && !isDelete;
+      
+      // 🔧 BUSCAR EN MÚLTIPLES CAPAS: ¿Está en details directamente o dentro de details.updates?
+      const dataSource = details.updates || details;
+      const memberName = details.name || details.member || details.memberName || dataSource.name || dataSource.memberName || null;
+      const memberNumber = details.number || details.memberNumber || details.member_number || dataSource.memberNumber || dataSource.number || null;
+      const displayNumber = memberNumber ? String(memberNumber).padStart(4, '0') : null;
 
       return (
         <div className="space-y-4">
           <Card icon="👤" title={isNew ? 'Ficha del Nuevo Socio' : isDelete ? 'Datos del Socio Eliminado' : 'Datos del Socio'}>
-            {memberName && (
+            {/* 🔧 BUSCAR NOMBRE EN MÚLTIPLES FUENTES */}
+            {memberName ? (
               <Item label="Nombre">
                 <span className={isDelete ? 'line-through text-[#94a3b8]' : ''}>{memberName}</span>
               </Item>
-            )}
-            {memberNumber && (
-              <Item label="Número">
-                <Badge color="slate">#{memberNumber}</Badge>
-              </Item>
-            )}
-            {details.dni && <Item label="DNI" value={details.dni} />}
-            {details.email && <Item label="Email" value={details.email} />}
-            {details.phone && <Item label="Teléfono" value={details.phone} />}
+            ) : null}
             
+            {/* 🔧 BUSCAR NÚMERO EN MÚLTIPLES FUENTES */}
+            {displayNumber ? (
+              <Item label="Número">
+                <Badge color="slate">#{displayNumber}</Badge>
+              </Item>
+            ) : null}
+            
+            {/* 🔧 CAMPOS OPCIONALES */}
+            {(details.dni || dataSource.dni) && <Item label="DNI" value={details.dni || dataSource.dni} />}
+            {(details.email || dataSource.email) && <Item label="Email" value={details.email || dataSource.email} />}
+            {(details.phone || dataSource.phone) && <Item label="Teléfono" value={details.phone || dataSource.phone} />}
+            {(details.extraInfo || dataSource.extraInfo) && <Item label="Notas" value={details.extraInfo || dataSource.extraInfo} />}
+            {(details.address || dataSource.address) && <Item label="Dirección" value={details.address || dataSource.address} />}
+            
+            {/* 🔧 DATOS ESPECÍFICOS POR TIPO DE ACCIÓN */}
             {isDelete && details.points !== undefined && (
                <Item label="Puntos Perdidos">
                   <span className="text-[#dc2626] font-bold">{formatNumber(details.points)} pts</span>
@@ -779,19 +793,130 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
             {isDelete && details.salesCount !== undefined && (
                <Item label="Compras Históricas" value={`${details.salesCount} operations`} />
             )}
-
             {isNew && details.initialPoints !== undefined && (
               <Item label="Puntos Iniciales">
                 <span className="text-[#059669] font-bold">{formatNumber(details.initialPoints || 0)} pts</span>
               </Item>
             )}
-
             {isNew && (
               <Item label="Fecha de Registro">
                  <span className="font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded text-[10px]">
                     {log.date} · {log.timestamp} hs
                  </span>
               </Item>
+            )}
+            
+            {/* 🔄 CONTEXTO RETROACTIVO: Mostrar puntos antes/después O solo el nuevo si es antiguo */}
+            {isEdit && (
+              (() => {
+                // Buscar en ambas capas: directamente o dentro de dataSource
+                const oldPts = details.oldPoints !== undefined ? details.oldPoints : (dataSource.oldPoints !== undefined ? dataSource.oldPoints : undefined);
+                const newPts = details.newPoints !== undefined ? details.newPoints : (dataSource.newPoints !== undefined ? dataSource.newPoints : undefined);
+                const currentPoints = dataSource.points !== undefined ? dataSource.points : (details.points !== undefined ? details.points : undefined);
+                
+                // Si tiene ambos valores: mostrar cambio
+                if (oldPts !== undefined && newPts !== undefined && Number(oldPts) !== Number(newPts)) {
+                  return (
+                    <Item label="Puntos Ajustados">
+                      <div className="flex items-center gap-2 justify-end">
+                        <span className="text-red-500 line-through text-sm">{formatNumber(oldPts)}</span>
+                        <span className="text-slate-400 text-xs">→</span>
+                        <span className="text-green-600 font-bold text-sm">{formatNumber(newPts)}</span>
+                      </div>
+                    </Item>
+                  );
+                }
+                
+                // Si solo tiene el nuevo valor (logs muy antiguos): mostrar mensaje de datos incompletos
+                if (currentPoints !== undefined && (oldPts === undefined || newPts === undefined)) {
+                  return (
+                    <Item label="Puntos">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-slate-500 italic text-xs">⚠️ Sin historial de cambios</span>
+                        <HintIcon 
+                          hint="Este es un registro antiguo. Los datos originales del cambio no están disponibles." 
+                          size={13}
+                          position="right"
+                          inline
+                        />
+                      </div>
+                    </Item>
+                  );
+                }
+                
+                return null;
+              })()
+            )}
+            
+            {/* 🐛 DEBUG: Si no hay datos básicos, mostrar estructura completa */}
+            {!memberName && !displayNumber && (
+              <div className="space-y-2">
+                {/* Debug de lo que vino de Supabase */}
+                <div className="bg-amber-50 border border-amber-200 rounded-[9px] p-3 text-[8px] font-mono text-amber-700 max-h-[250px] overflow-auto">
+                  <div className="font-bold text-amber-800 mb-1.5">🔍 RAW (desde Supabase):</div>
+                  {log._rawSupabaseDetails && typeof log._rawSupabaseDetails === 'object' ? (
+                    Object.entries(log._rawSupabaseDetails).length > 0 ? (
+                      <div>
+                        {Object.entries(log._rawSupabaseDetails).map(([key, value]) => {
+                          let displayVal = value;
+                          let isNestedObj = false;
+                          if (typeof value === 'object' && value !== null) {
+                            isNestedObj = true;
+                            displayVal = JSON.stringify(value, null, 1).substring(0, 50);
+                          } else {
+                            displayVal = String(value).substring(0, 60);
+                          }
+                          return (
+                            <div key={key} className="py-0.5 border-b border-amber-200 last:border-0">
+                              <span className="text-amber-600 font-bold">{key}:</span>
+                              {isNestedObj ? (
+                                <div className="ml-3 text-amber-700 italic bg-amber-100 p-1 rounded mt-0.5 text-[7px] max-h-[60px] overflow-auto">
+                                  {displayVal}...
+                                </div>
+                              ) : (
+                                <span className="text-amber-900"> {displayVal}</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="text-amber-600 italic">Objeto vacío {'{}'}</div>
+                    )
+                  ) : (
+                    <div className="text-amber-600">
+                      {typeof log._rawSupabaseDetails} - {String(log._rawSupabaseDetails).substring(0, 40)}
+                    </div>
+                  )}
+                </div>
+                
+                {/* Debug después del retrofit */}
+                <div className="bg-slate-50 border border-slate-200 rounded-[9px] p-3 text-[8px] font-mono text-slate-600 max-h-[250px] overflow-auto">
+                  <div className="font-bold text-slate-700 mb-1.5">↪️ RETROFIT (después del procesamiento):</div>
+                  {Object.entries(details).map(([key, value]) => {
+                    let displayVal = value;
+                    let isNestedObj = false;
+                    if (typeof value === 'object' && value !== null) {
+                      isNestedObj = true;
+                      displayVal = JSON.stringify(value, null, 1).substring(0, 50);
+                    } else {
+                      displayVal = String(value).substring(0, 60);
+                    }
+                    return (
+                      <div key={key} className="py-0.5 border-b border-slate-200 last:border-0">
+                        <span className="text-slate-500 font-bold">{key}:</span>
+                        {isNestedObj ? (
+                          <div className="ml-3 text-slate-600 italic bg-slate-100 p-1 rounded mt-0.5 text-[7px] max-h-[60px] overflow-auto">
+                            {displayVal}...
+                          </div>
+                        ) : (
+                          <span className="text-slate-700"> {displayVal}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             )}
           </Card>
 
@@ -803,6 +928,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
                   field={change.field}
                   oldVal={change.old || '—'}
                   newVal={change.new || '—'}
+                  isPrice={change.isPrice === true}
                 />
               ))}
             </Card>

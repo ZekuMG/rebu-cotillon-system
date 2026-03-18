@@ -35,6 +35,11 @@ Para mantener la coherencia visual en toda la aplicación, se DEBEN respetar est
 2. Scrollbars Ocultas: Todo contenedor horizontal (`overflow-x-auto`) debe llevar la clase Tailwind `[&::-webkit-scrollbar]:hidden` y el estilo inline `style={{ scrollbarWidth: 'none' }}` para evitar que Windows inyecte barras grises feas.
 3. Empty States: Si un array de datos está vacío, se debe mostrar un contenedor gris (`bg-slate-50`), con borde punteado (`border-dashed`), un icono grande de Lucide en el centro dentro de un círculo blanco, y un texto descriptivo.
 4. Tipografía Financiera: Todo precio o número importante usa la fuente `font-black` y componentes como `<FancyPrice />` para separar los miles.
+5. HintIcon - Iconos de Ayuda: Componente reutilizable en `src/components/HintIcon.jsx`. Muestra un icono de interrogación gris claro que, al pasar el mouse, despliega un tooltip flotante centrado en pantalla. Ideal para instrucciones contextuales y explicaciones de campos complejos. No ocupa espacio físico y se superpone sobre toda la interfaz.
+   - Ubicación: `src/components/HintIcon.jsx`
+   - Uso: `<HintIcon hint="Tu mensaje de ayuda aquí" size={13} />`
+   - Props: hint (string), size (number, default 16), className (string)
+   - Ejemplo: Colocado junto a "Sin historial de cambios" en LogDetailRenderer para explicar registros antiguos.
 
 --------------------------------------------------------------------------------
 4. MODELO DE DATOS Y CONVERSIÓN "CANTIDAD VS PESO"

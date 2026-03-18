@@ -69,7 +69,24 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
       // SOCIOS 
       case 'Nuevo Socio': return d.number ? `#${String(d.number).padStart(4, '0')}` : '';
       case 'Baja de Socio': return d.number ? `#${String(d.number).padStart(4, '0')}` : (d.id ? `ID: ${d.id}` : '');
-      case 'Edición de Socio': return d.number ? `#${String(d.number).padStart(4, '0')}` : '';
+      case 'Edición de Socio': {
+        // Mostrar número del socio o cambio de puntos
+        if (d.number) return `#${String(d.number).padStart(4, '0')}`;
+        // Si hay cambios de puntos, mostrarlos
+        if (d.oldPoints !== undefined && d.newPoints !== undefined) {
+          const delta = Number(d.newPoints) - Number(d.oldPoints);
+          return delta !== 0 ? `${delta > 0 ? '+' : ''}${formatNumber(delta)} pts` : '';
+        }
+        // Si hay array de changes, buscar puntos
+        if (d.changes && Array.isArray(d.changes)) {
+          const ptsChange = d.changes.find(c => c.field === 'Puntos');
+          if (ptsChange) {
+            const delta = Number(ptsChange.new) - Number(ptsChange.old);
+            return `${delta > 0 ? '+' : ''}${formatNumber(delta)} pts`;
+          }
+        }
+        return '';
+      }
       case 'Edición de Puntos': {
         const pts = d.pointsChange || d;
         return pts.diff !== undefined ? `${pts.diff > 0 ? '+' : ''}${formatNumber(pts.diff)} pts` : '';

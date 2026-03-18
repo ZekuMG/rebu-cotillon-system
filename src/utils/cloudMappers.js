@@ -44,10 +44,21 @@ export const mapMemberRecords = (clients = []) =>
 export const mapLogRecords = (logs = []) =>
   logs.map((log) => {
     const action = MODIFIED_SALE_ACTIONS.has(log.action) ? 'Modificación Pedido' : log.action;
+    
+    // 🔧 PARSE details si viene como JSON string desde Supabase
+    let details = log.details;
+    if (typeof details === 'string') {
+      try {
+        details = JSON.parse(details);
+      } catch (e) {
+        // Si falla el parse, mantener como string
+      }
+    }
+    
     const mappedLog = {
       id: log.id,
       action,
-      details: log.details,
+      details,
       user: log.user,
       reason: log.reason,
       date: formatDateAR(new Date(log.created_at)),

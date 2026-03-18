@@ -26,21 +26,176 @@ export default function LogsView({ dailyLogs, onUpdateLogNote, onReprintPdf }) {
   };
 
   // ===========================================================================
-  // 1. ADAPTADOR DE DATOS
+  // 1. ADAPTADOR DE DATOS CON MAPEO RETROACTIVO
   // ===========================================================================
+  
+  // 🔄 Función retroactiva MEJORADA: Transforma logs antiguos a nueva estructura
+  const retrofitLogDetails = (log) => {
+    if (log.action !== 'Edición de Socio') return log.details;
+    
+    let details = log.details;
+    if (!details || typeof details !== 'object') return details;
+    
+    // ✅ Si ya tiene la estructura nueva, retornar como está
+    if (details.changes && Array.isArray(details.changes) && details.changes.length > 0) {
+      return details;
+    }
+    
+    // 🔧 MAPEO RETROACTIVO: Reconstruir `changes` preservando TODO
+    const changes = [];
+    
+    // ═══════════════════════════════════════════════════════════════
+    // PASO 0: PRESERVAR ABSOLUTAMENTE TODO del objeto original
+    // ═══════════════════════════════════════════════════════════════
+    const result = {
+      ...details // Copia de todos los campos
+    };
+    
+    // 🔍 NUEVO: Si los datos están dentro de "updates", fusionarlos
+    if (details.updates && typeof details.updates === 'object') {
+      result.name = result.name || details.updates.name;
+      result.memberName = result.memberName || details.updates.memberName;
+      result.number = result.number || details.updates.memberNumber || details.updates.number;
+      result.memberNumber = result.memberNumber || details.updates.memberNumber;
+      result.dni = result.dni || details.updates.dni;
+      result.phone = result.phone || details.updates.phone;
+      result.email = result.email || details.updates.email;
+      result.extraInfo = result.extraInfo || details.updates.extraInfo;
+      result.address = result.address || details.updates.address;
+      
+      // 🔍 IMPORTANTE: Buscar también oldPoints/newPoints dentro de updates
+      result.oldPoints = result.oldPoints !== undefined ? result.oldPoints : (details.updates.oldPoints !== undefined ? details.updates.oldPoints : undefined);
+      result.newPoints = result.newPoints !== undefined ? result.newPoints : (details.updates.newPoints !== undefined ? details.updates.newPoints : undefined);
+      result.pointsDelta = result.pointsDelta !== undefined ? result.pointsDelta : details.updates.pointsDelta;
+      
+      // 🔍 Y también extraer cambios si estaban en updates
+      if (!result.changes && details.updates.changes) {
+        result.changes = details.updates.changes;
+      }
+      if (!result.changedFields && details.updates.changedFields) {
+        result.changedFields = details.updates.changedFields;
+      }
+    }
+    
+    console.log('🔍 [RETROFIT] Log:', log.id, 'Details:', details, 'Result:', result);
+    
+    // Normalizar campos de identidad (intentar rellenar desde múltiples fuentes)
+    if (!result.name && (details.member || details.memberName || details.newName)) {
+      result.name = details.member || details.memberName || details.newName;
+    }
+    if (!result.number && (details.memberNumber || details.member_number)) {
+      result.number = details.memberNumber || details.member_number;
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // PASO 1: DETECTAR CAMBIOS EN PUNTOS
+    // ═══════════════════════════════════════════════════════════════
+    const hasOldPoints = result.oldPoints !== undefined && result.oldPoints !== null;
+    const hasNewPoints = result.newPoints !== undefined && result.newPoints !== null;
+    const pointsChanged = hasOldPoints && hasNewPoints && Number(result.oldPoints) !== Number(result.newPoints);
+    
+    if (pointsChanged) {
+      changes.push({
+        field: 'Puntos',
+        old: Number(result.oldPoints),
+        new: Number(result.newPoints),
+        isPrice: false
+      });
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // PASO 2: DETECTAR CAMBIOS EN OTROS CAMPOS
+    // ═══════════════════════════════════════════════════════════════
+    if (details.oldName && details.newName && details.oldName !== details.newName) {
+      changes.push({ field: 'Nombre', old: details.oldName, new: details.newName });
+    }
+    if (details.oldDni && details.newDni && details.oldDni !== details.newDni) {
+      changes.push({ field: 'DNI', old: details.oldDni || '--', new: details.newDni || '--' });
+    }
+    if (details.oldPhone && details.newPhone && details.oldPhone !== details.newPhone) {
+      changes.push({ field: 'Teléfono', old: details.oldPhone || '--', new: details.newPhone || '--' });
+    }
+    if (details.oldEmail && details.newEmail && details.oldEmail !== details.newEmail) {
+      changes.push({ field: 'Email', old: details.oldEmail || '--', new: details.newEmail || '--' });
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // PASO 3: DETECTAR DESDE changedFields (formato muy antiguo)
+    // ═══════════════════════════════════════════════════════════════
+    if (details.changedFields && Array.isArray(details.changedFields) && details.changedFields.length > 0) {
+      details.changedFields.forEach(fieldStr => {
+        const match = fieldStr.match(/^(.*?)\s*\(([+-]?\d+)\)$/);
+        if (match) {
+          const fieldName = match[1].trim();
+          const delta = parseInt(match[2]);
+          
+          if (fieldName === 'Puntos' && hasOldPoints && !changes.some(c => c.field === 'Puntos')) {
+            const oldPts = Number(result.oldPoints);
+            const newPts = oldPts + delta;
+            changes.push({
+              field: 'Puntos',
+              old: oldPts,
+              new: newPts,
+              isPrice: false
+            });
+          }
+        }
+      });
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // PASO 4: DETECTAR DESDE pointsDelta
+    // ═══════════════════════════════════════════════════════════════
+    if (
+      result.pointsDelta !== undefined && 
+      result.pointsDelta !== 0 &&
+      hasOldPoints &&
+      !changes.some(c => c.field === 'Puntos')
+    ) {
+      const oldPts = Number(result.oldPoints);
+      const newPts = oldPts + Number(result.pointsDelta);
+      changes.push({
+        field: 'Puntos',
+        old: oldPts,
+        new: newPts,
+        isPrice: false
+      });
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // PASO 5: AGREGAR CHANGES SI EXISTEN
+    // ═══════════════════════════════════════════════════════════════
+    if (changes.length > 0) {
+      result.changes = changes;
+    }
+    
+    return result;
+  };
+
   const processedLogs = useMemo(() => {
     if (!dailyLogs) return [];
     return dailyLogs.map(log => {
       let finalDetails = log.details;
+      const rawSupabaseDetails = log.details; // 🔍 Guardar original de Supabase
+      
+      // ✅ Parsear details si viene como JSON string
       if (typeof finalDetails === 'string') {
-        try { finalDetails = JSON.parse(finalDetails); } catch { finalDetails = log.details; }
+        try { 
+          finalDetails = JSON.parse(finalDetails); 
+        } catch { 
+          finalDetails = log.details; 
+        }
       }
+      
+      // 🔄 Aplicar mapeo retroactivo para logs antiguos
+      finalDetails = retrofitLogDetails({ ...log, details: finalDetails });
       
       const realDate = log.created_at || log.createdAt || new Date().toISOString();
 
       return { 
         ...log, 
         details: finalDetails,
+        _rawSupabaseDetails: rawSupabaseDetails, // 🔍 Para debug
         rawCreatedAt: realDate,
         displayCreatedAt: formatFullDate(realDate)
       };
