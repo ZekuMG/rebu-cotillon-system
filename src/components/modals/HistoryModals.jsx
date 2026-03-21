@@ -107,6 +107,16 @@ export const TransactionDetailModal = ({
                   {transaction.installments} Cuotas
                 </span>
               )}
+              {transaction.payment === 'Efectivo' && (
+                <div className="mt-1.5 space-y-0.5">
+                  <p className="text-[9px] font-bold text-emerald-600">
+                    Recibido: <FancyPrice amount={Number(transaction.cashReceived || transaction.total || 0)} />
+                  </p>
+                  <p className="text-[9px] font-bold text-emerald-600">
+                    Devolución: <FancyPrice amount={Number(transaction.cashChange || 0)} />
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
@@ -178,6 +188,12 @@ export const TransactionDetailModal = ({
                 const rawQty = item.qty || item.quantity;
                 const qty = Number(rawQty) || 0;
                 const price = Number(item.price) || 0;
+                const comboIncludedItems = item.isCombo && Array.isArray(item.productsIncluded)
+                  ? item.productsIncluded.map((includedItem) => ({
+                      ...includedItem,
+                      appliedQuantity: Number(includedItem.quantity || includedItem.qty || 1) * qty,
+                    }))
+                  : [];
                 
                 const isWeight = item.product_type === 'weight' || item.isWeight || (qty >= 20 && price < 50);
 
@@ -191,8 +207,23 @@ export const TransactionDetailModal = ({
                         <span className="font-bold text-slate-600 bg-white border border-slate-200 shadow-sm px-1.5 py-0.5 rounded">
                           {formatNumber(qty)}{isWeight ? 'g' : ' u.'}
                         </span>
-                        x <FancyPrice amount={price} /> c/u
+                        x <FancyPrice amount={price} /> {isWeight ? '/Kg' : 'c/u'}
                       </p>
+                      {comboIncludedItems.length > 0 && (
+                        <div className="mt-2 rounded-lg border border-violet-100 bg-violet-50/70 px-2.5 py-2">
+                          {comboIncludedItems.map((includedItem, includedIndex) => {
+                            const includedIsWeight = includedItem.product_type === 'weight';
+                            return (
+                              <div key={`${idx}-${includedIndex}`} className="flex items-center gap-2 text-[10px] text-violet-700">
+                                <span className="font-bold rounded bg-white/80 px-1.5 py-0.5 border border-violet-100 whitespace-nowrap">
+                                  {formatNumber(includedItem.appliedQuantity)}{includedIsWeight ? 'g' : ' u.'}
+                                </span>
+                                <span className="truncate">{includedItem.title}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                     <p className={`font-black text-sm ${isVoided ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
                       <FancyPrice amount={qty * price} />

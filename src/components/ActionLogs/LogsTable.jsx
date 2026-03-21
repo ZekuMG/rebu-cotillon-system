@@ -1,4 +1,5 @@
 // src/components/ActionLogs/LogsTable.jsx
+/* eslint-disable no-unused-vars */
 import React from 'react';
 import {
   ChevronsUpDown,
@@ -7,7 +8,7 @@ import {
   Eye,
   Search
 } from 'lucide-react';
-import { formatNumber } from '../../utils/helpers';
+import { formatCurrency, formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
 import { extractRealNote } from './logHelpers'; // ✨ NUEVA IMPORTACIÓN
 
@@ -20,6 +21,9 @@ const getTransactionId = (details) => {
   }
   return id;
 };
+
+const getSharedRecordId = (details = {}) => details.sharedRecordId || details.budgetId || details.orderId || details.id || null;
+const formatEntityCode = (_prefix, id) => (id ? `ID-${String(id).slice(0, 8).toUpperCase()}` : null);
 
 const getFormattedPayment = (payStr, instNum) => {
   if (typeof payStr !== 'string') return 'Efectivo';
@@ -105,11 +109,85 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
       try { d = JSON.parse(d); } catch { return <span className="text-slate-600 text-[10px]">{d}</span>; }
     }
 
+    if (action === 'Cupón Creado' || action === 'Cupón Editado' || action === 'Cupón Eliminado') {
+      const isDelete = action === 'Cupón Eliminado';
+      const isEdit = action === 'Cupón Editado';
+      return (
+        <div className={s.sr}>
+          <span className={`${s.b} ${isDelete ? c.br : c.bg}`}>🎟 {isDelete ? 'Eliminado' : isEdit ? 'Editado' : 'Creado'}</span>
+          <div className={s.ss}></div>
+          <span style={{ fontSize: '10px', fontWeight: 700, color: isDelete ? '#94a3b8' : '#334155', textDecoration: isDelete ? 'line-through' : 'none' }}>{d.name}</span>
+          <div className={s.ss}></div>
+          <span className={`${s.b} ${c.bg}`}>Cupón</span>
+          {getLogReasonUI(log)}
+        </div>
+      );
+    }
+
+    if (action === 'Presupuesto Editado') {
+      return (
+        <div className={s.sr}>
+          <span className={`${s.b} ${c.bb}`}>🧾 Editado</span>
+          {d.id && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{formatEntityCode('PRES', getSharedRecordId(d))}</span></>}
+          <div className={s.ss}></div>
+          <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.customerName || 'Sin cliente'}</span>
+          {d.totalAmount !== undefined && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}><FancyPrice amount={d.totalAmount || 0} /></span></>}
+          {d.itemCount !== undefined && <><div className={s.ss}></div><span className={s.se}>{formatNumber(d.itemCount)} items</span></>}
+          {getLogReasonUI(log)}
+        </div>
+      );
+    }
+
+    if (action === 'Pedido Creado') {
+      return (
+        <div className={s.sr}>
+          <span className={`${s.b} ${c.bb}`}>📦 Pedido</span>
+          {getSharedRecordId(d) && <><div className={s.ss}></div><span className={`${s.b} ${c.bb}`}>{formatEntityCode('PED', getSharedRecordId(d))}</span></>}
+          <div className={s.ss}></div>
+          <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.customerName || 'Sin cliente'}</span>
+          {d.totalAmount !== undefined && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}><FancyPrice amount={d.totalAmount || 0} /></span></>}
+          {d.depositAmount > 0 && <><div className={s.ss}></div><span className={s.se}>Seña: {formatCurrency(d.depositAmount || 0)}</span></>}
+          {getLogReasonUI(log)}
+        </div>
+      );
+    }
+
+    if (action === 'Pago Pedido') {
+      return (
+        <div className={s.sr}>
+          <span className={`${s.b} ${c.bg}`}>💸 Pago</span>
+          {getSharedRecordId(d) && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{formatEntityCode('PED', getSharedRecordId(d))}</span></>}
+          {d.saleId && <><div className={s.ss}></div><span className={`${s.b} ${c.bg}`}>VTA-{String(d.saleId).slice(0, 8).toUpperCase()}</span></>}
+          <div className={s.ss}></div>
+          <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.customerName || 'Sin cliente'}</span>
+          {d.amount !== undefined && <><div className={s.ss}></div><span className={`${s.b} ${c.bg}`}>+<FancyPrice amount={d.amount || 0} /></span></>}
+          {d.remainingAmount !== undefined && <><div className={s.ss}></div><span className={s.se}>Restante: {formatCurrency(d.remainingAmount || 0)}</span></>}
+          {getLogReasonUI(log)}
+        </div>
+      );
+    }
+
+    if (action === 'Pedido Retirado') {
+      return (
+        <div className={s.sr}>
+          <span className={`${s.b} ${c.bg}`}>✅ Retirado</span>
+          {getSharedRecordId(d) && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{formatEntityCode('PED', getSharedRecordId(d))}</span></>}
+          <div className={s.ss}></div>
+          <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.customerName || 'Sin cliente'}</span>
+          {d.totalAmount !== undefined && <><div className={s.ss}></div><span className={s.se}><FancyPrice amount={d.totalAmount || 0} /></span></>}
+          {getLogReasonUI(log)}
+        </div>
+      );
+    }
+
     switch (action) {
 
       case 'Oferta Creada':
-      case 'Oferta Editada': {
-        const isEdit = action === 'Oferta Editada';
+      case 'Oferta Editada':
+      case 'Cupón Creado':
+      case 'Cupón Editado': {
+        const isEdit = action === 'Oferta Editada' || action === 'Cupón Editado';
+        const isCoupon = action === 'Cupón Creado' || action === 'Cupón Editado';
         return (
           <div className={s.sr}>
             <span className={`${s.b} ${c.bv}`}>🎫 {isEdit ? 'Editada' : 'Creada'}</span>
@@ -117,7 +195,7 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
             <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name}</span>
             <div className={s.ss}></div>
             <span className={`${s.b} ${c.bs}`}>{d.type}</span>
-            {d.offerPrice > 0 && <><div className={s.ss}></div><span className={s.se}>$<FancyPrice amount={d.offerPrice} /></span></>}
+            {d.offerPrice > 0 && <><div className={s.ss}></div><span className={s.se}><FancyPrice amount={d.offerPrice} /></span></>}
             {getLogReasonUI(log)}
           </div>
         );
@@ -157,6 +235,60 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
                <><span className={s.se}>🎉 {config.clientEvent}</span><div className={s.ss}></div></>
             )}
             <span className={`${s.b} ${c.bs}`}>{itemsCount} ítems</span>
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
+      case 'Presupuesto Editado': {
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bb}`}>🧾 Editado</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.customerName || 'Sin cliente'}</span>
+            {d.totalAmount !== undefined && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}><FancyPrice amount={d.totalAmount || 0} /></span></>}
+            {d.itemCount !== undefined && <><div className={s.ss}></div><span className={s.se}>{formatNumber(d.itemCount)} items</span></>}
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
+      case 'Pedido Creado': {
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bb}`}>📦 Pedido</span>
+            {getSharedRecordId(d) && <><div className={s.ss}></div><span className={`${s.b} ${c.bb}`}>{formatEntityCode('PED', getSharedRecordId(d))}</span></>}
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.customerName || 'Sin cliente'}</span>
+            {d.totalAmount !== undefined && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}><FancyPrice amount={d.totalAmount || 0} /></span></>}
+            {d.depositAmount > 0 && <><div className={s.ss}></div><span className={s.se}>Seña: {formatCurrency(d.depositAmount || 0)}</span></>}
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
+      case 'Pago Pedido': {
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bg}`}>💸 Pago</span>
+            {getSharedRecordId(d) && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{formatEntityCode('PED', getSharedRecordId(d))}</span></>}
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.customerName || 'Sin cliente'}</span>
+            {d.amount !== undefined && <><div className={s.ss}></div><span className={`${s.b} ${c.bg}`}>+<FancyPrice amount={d.amount || 0} /></span></>}
+            {d.remainingAmount !== undefined && <><div className={s.ss}></div><span className={s.se}>Restante: {formatCurrency(d.remainingAmount || 0)}</span></>}
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
+      case 'Pedido Retirado': {
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bg}`}>✅ Retirado</span>
+            {getSharedRecordId(d) && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{formatEntityCode('PED', getSharedRecordId(d))}</span></>}
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.customerName || 'Sin cliente'}</span>
+            {d.totalAmount !== undefined && <><div className={s.ss}></div><span className={s.se}><FancyPrice amount={d.totalAmount || 0} /></span></>}
             {getLogReasonUI(log)}
           </div>
         );

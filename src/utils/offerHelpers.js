@@ -45,6 +45,11 @@ function parseLegacyPercentageValue(rawValue) {
   return Number.isFinite(parsedValue) && parsedValue > 0 ? parsedValue : null;
 }
 
+function parseNumericPercentageValue(rawValue) {
+  const parsedValue = Number(rawValue);
+  return Number.isFinite(parsedValue) && parsedValue > 0 && parsedValue <= 100 ? parsedValue : null;
+}
+
 export const defaultCanonicalOfferForm = {
   name: '',
   benefitType: 'free',
@@ -246,7 +251,9 @@ export function normalizeLegacyOffer(offer = {}, productsByCategory = {}, invent
   }
 
   if (offer.type === 'Descuento Unidad' || offer.type === 'Descuento Total') {
-    const storedPercentage = parseLegacyPercentageValue(offer.profitMargin);
+    const storedPercentage =
+      parseLegacyPercentageValue(offer.profitMargin) ??
+      (Number(offer.itemsCount) === -1 ? parseNumericPercentageValue(offer.profitMargin) : null);
     return {
       ...base,
       benefitType: 'discount',
@@ -256,6 +263,11 @@ export function normalizeLegacyOffer(offer = {}, productsByCategory = {}, invent
   }
 
   if (offer.type === 'Cupon' || String(offer.applyTo || '').startsWith('Cupon:')) {
+    const storedPercentage =
+      parseLegacyPercentageValue(offer.profitMargin) ??
+      (Number(offer.itemsCount) === 2
+        ? parseNumericPercentageValue(offer.profitMargin) ?? parseNumericPercentageValue(offer.discountValue)
+        : null);
     return {
       ...base,
       benefitType: 'coupon',
@@ -265,7 +277,8 @@ export function normalizeLegacyOffer(offer = {}, productsByCategory = {}, invent
       couponCode: String(offer.applyTo || '').startsWith('Cupon:')
         ? String(offer.applyTo).slice('Cupon:'.length)
         : '',
-      discountMode: Number(offer.itemsCount) === 2 ? 'percentage' : 'total',
+      discountMode: storedPercentage !== null ? 'percentage' : Number(offer.itemsCount) === 2 ? 'percentage' : 'total',
+      discountValue: storedPercentage !== null ? storedPercentage : base.discountValue,
     };
   }
 
@@ -313,10 +326,12 @@ export function buildLegacyOfferPayload(offerForm, productsByCategory = {}, inve
           offerForm.scopeMode === 'products' && selectedProducts.length <= 1
             ? 'Descuento Unidad'
             : 'Descuento Total';
+        payload.itemsCount = -1;
         payload.discountValue = percentage;
-        payload.profitMargin = `${LEGACY_PERCENTAGE_PREFIX}${percentage}`;
+        payload.profitMargin = percentage;
       } else {
         payload.type = offerForm.discountMode === 'total' ? 'Descuento Total' : 'Descuento Unidad';
+        payload.itemsCount = 0;
         payload.profitMargin = '';
       }
       break;
@@ -325,6 +340,10 @@ export function buildLegacyOfferPayload(offerForm, productsByCategory = {}, inve
       payload.applyTo = `Cupon:${String(offerForm.couponCode || '').trim().toUpperCase()}`;
       payload.productsIncluded = [];
       payload.itemsCount = offerForm.discountMode === 'percentage' ? 2 : 1;
+      payload.profitMargin =
+        offerForm.discountMode === 'percentage'
+          ? Number(offerForm.discountValue) || 0
+          : '';
       break;
     case 'wholesale':
       payload.type = 'Mayorista';

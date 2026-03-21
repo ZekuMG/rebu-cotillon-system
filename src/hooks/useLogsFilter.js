@@ -1,5 +1,21 @@
 import { useDeferredValue, useMemo, useState } from 'react';
 
+const isCouponDetails = (details) => {
+  if (!details || typeof details !== 'object') return false;
+
+  return (
+    String(details.type || '').toLowerCase() === 'cupon' ||
+    String(details.applyTo || '').startsWith('Cupon:')
+  );
+};
+
+const getCouponActionFromOfferAction = (action) => {
+  if (action === 'Oferta Creada' || action === 'Cupón Creado') return 'Cupón Creado';
+  if (action === 'Oferta Editada' || action === 'Cupón Editado') return 'Cupón Editado';
+  if (action === 'Oferta Eliminada' || action === 'Cupón Eliminado') return 'Cupón Eliminado';
+  return action;
+};
+
 const normalizeAction = (action) => {
   const actionMap = {
     'Nueva Venta': 'Venta Realizada',
@@ -24,6 +40,20 @@ const detectActionType = (log) => {
     'Edición Producto',
     'Venta Eliminada',
     'Venta Restaurada',
+    'Presupuesto Creado',
+    'Presupuesto Editado',
+    'Presupuesto Eliminado',
+    'Pedido Creado',
+    'Pago Pedido',
+    'Pedido Retirado',
+    'Pedido Cancelado',
+    'Pedido Eliminado',
+    'Oferta Creada',
+    'Oferta Editada',
+    'Oferta Eliminada',
+    'Cupón Creado',
+    'Cupón Editado',
+    'Cupón Eliminado',
     'Nuevo Socio',
     'Edición de Puntos',
     'Edición de Socio',
@@ -33,8 +63,13 @@ const detectActionType = (log) => {
     'Cierre Automático',
   ];
 
-  if (explicitActions.includes(action)) return action;
   if (!details || typeof details === 'string') return action;
+
+  if (isCouponDetails(details)) {
+    return getCouponActionFromOfferAction(action);
+  }
+
+  if (explicitActions.includes(action)) return action;
 
   if (
     (typeof details.product === 'string' || details.title || details.name) &&

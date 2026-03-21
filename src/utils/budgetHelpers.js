@@ -1,4 +1,4 @@
-import { formatWeight } from './helpers';
+import { formatDateAR, formatTimeAR, formatWeight } from './helpers';
 
 export const DEFAULT_BUDGET_CLIENT_COLUMNS = {
   showQty: true,
@@ -101,6 +101,20 @@ export const buildBudgetExportConfig = (record) => ({
   clientName: record.customerName || '',
   clientPhone: record.customerPhone || '',
   clientEvent: record.eventLabel || '',
+  createdAtLabel: record.type === 'order' ? 'Pedido hecho el' : 'Presupuesto hecho el',
+  createdAtDisplay: record.createdAt ? `${formatDateAR(record.createdAt)} - ${formatTimeAR(record.createdAt)} hs` : '',
+  pickupDateLabel: 'Fecha de retiro',
+  pickupDate: record.pickupDate ? formatDateAR(`${record.pickupDate}T12:00:00`) : '',
+  financialSummary: {
+    totalAmount: Number(record.totalAmount || 0),
+    depositAmount: Number(record.depositAmount || 0),
+    paidTotal: Number(record.paidTotal || 0),
+    additionalPaid: Math.max(Number(record.paidTotal || 0) - Number(record.depositAmount || 0), 0),
+    remainingAmount:
+      record.remainingAmount !== undefined && record.remainingAmount !== null
+        ? Number(record.remainingAmount || 0)
+        : Math.max(Number(record.totalAmount || 0) - Number(record.paidTotal || 0), 0),
+  },
   clientColumns: DEFAULT_BUDGET_CLIENT_COLUMNS,
   columns: { cost: false, price: true, newPrice: false, stock: false },
 });

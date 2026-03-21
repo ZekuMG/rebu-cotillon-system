@@ -40,6 +40,15 @@ export const ExportPdfLayout = ({ data }) => {
   if (clientCols.showSubtotal) activeColsCount++;
 
   const displayTitle = (config.documentTitle || 'PRESUPUESTO').toUpperCase();
+  const summary = config.financialSummary || null;
+  const hasOrderSummary = Boolean(
+    summary && (
+      Number(summary.depositAmount || 0) > 0 ||
+      Number(summary.additionalPaid || 0) > 0 ||
+      Number(summary.paidTotal || 0) > 0 ||
+      Number(summary.remainingAmount || 0) > 0
+    )
+  );
 
   return (
     <div className="bg-white text-black w-full max-w-[210mm] mx-auto text-sm print:p-0 print:max-w-none relative min-h-screen overflow-hidden">
@@ -80,9 +89,9 @@ export const ExportPdfLayout = ({ data }) => {
                       </span>
                     </div>
                     <div className="flex flex-col w-[150px]">
-                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-[2px]">Fecha y Hora</span>
+                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-[2px]">{config.createdAtLabel || 'Fecha y Hora'}</span>
                       <span className="text-[13px] leading-tight font-black text-slate-800 border-b border-slate-300 min-h-[17px]">
-                        {date} - {time} hs
+                        {config.createdAtDisplay || `${date} - ${time} hs`}
                       </span>
                     </div>
                   </div>
@@ -101,6 +110,16 @@ export const ExportPdfLayout = ({ data }) => {
                       </span>
                     </div>
                   </div>
+                  {(config.pickupDate || '').trim() !== '' && (
+                    <div className="flex gap-4">
+                      <div className="flex flex-col flex-1">
+                        <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-[2px]">{config.pickupDateLabel || 'Fecha de retiro'}</span>
+                        <span className="text-[13px] leading-tight font-black text-slate-800 border-b border-slate-300 min-h-[17px]">
+                          {config.pickupDate}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -198,14 +217,58 @@ export const ExportPdfLayout = ({ data }) => {
                   </React.Fragment>
                 ))}
                 {clientCols.showTotal && (
-                  <tr className="border-t-2 border-slate-800 font-black text-lg bg-slate-50 break-inside-avoid" style={{ WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}>
-                    <td colSpan={Math.max(1, activeColsCount - 1)} className="text-right py-3 px-3 uppercase tracking-widest text-sm">
-                      TOTAL PRESUPUESTO:
-                    </td>
-                    <td className="text-right py-3 px-3 text-emerald-600">
-                      {formatCurrency(total)}
-                    </td>
-                  </tr>
+                  <>
+                    <tr className="border-t-2 border-slate-800 font-black text-lg bg-slate-50 break-inside-avoid" style={{ WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}>
+                      <td colSpan={Math.max(1, activeColsCount - 1)} className="text-right py-3 px-3 uppercase tracking-widest text-sm">
+                        {displayTitle === 'PEDIDO' ? 'TOTAL PEDIDO:' : 'TOTAL PRESUPUESTO:'}
+                      </td>
+                      <td className="text-right py-3 px-3 text-emerald-600">
+                        {formatCurrency(summary?.totalAmount ?? total)}
+                      </td>
+                    </tr>
+                    {hasOrderSummary && (
+                      <>
+                        {Number(summary.depositAmount || 0) > 0 && (
+                          <tr className="border-b border-slate-100 break-inside-avoid">
+                            <td colSpan={Math.max(1, activeColsCount - 1)} className="text-right py-2 px-3 uppercase tracking-widest text-[11px] font-bold text-slate-500">
+                              Seña:
+                            </td>
+                            <td className="text-right py-2 px-3 text-[13px] font-black text-sky-600">
+                              -{formatCurrency(summary.depositAmount)}
+                            </td>
+                          </tr>
+                        )}
+                        {Number(summary.additionalPaid || 0) > 0 && (
+                          <tr className="border-b border-slate-100 break-inside-avoid">
+                            <td colSpan={Math.max(1, activeColsCount - 1)} className="text-right py-2 px-3 uppercase tracking-widest text-[11px] font-bold text-slate-500">
+                              Abonado:
+                            </td>
+                            <td className="text-right py-2 px-3 text-[13px] font-black text-indigo-600">
+                              -{formatCurrency(summary.additionalPaid)}
+                            </td>
+                          </tr>
+                        )}
+                        {Number(summary.paidTotal || 0) > 0 && (
+                          <tr className="border-b border-slate-100 break-inside-avoid bg-slate-50/70" style={{ WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}>
+                            <td colSpan={Math.max(1, activeColsCount - 1)} className="text-right py-2 px-3 uppercase tracking-widest text-[11px] font-bold text-slate-600">
+                              Total abonado:
+                            </td>
+                            <td className="text-right py-2 px-3 text-[13px] font-black text-slate-800">
+                              {formatCurrency(summary.paidTotal)}
+                            </td>
+                          </tr>
+                        )}
+                        <tr className="border-t border-slate-200 break-inside-avoid">
+                          <td colSpan={Math.max(1, activeColsCount - 1)} className="text-right py-2.5 px-3 uppercase tracking-widest text-[11px] font-black text-amber-700">
+                            Restante:
+                          </td>
+                          <td className="text-right py-2.5 px-3 text-[15px] font-black text-amber-700">
+                            {formatCurrency(summary.remainingAmount || 0)}
+                          </td>
+                        </tr>
+                      </>
+                    )}
+                  </>
                 )}
               </tbody>
             </table>

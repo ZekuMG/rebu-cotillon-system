@@ -89,6 +89,58 @@ export default function ClientsView({
     return memberTx[0].date;
   };
 
+  const extractCouponCodeFromItem = (item) => {
+    const title = String(item?.title || '');
+    const description = String(item?.description || '');
+    const couponMatch =
+      title.match(/cup[oó]n\s+([a-z0-9_-]+)/i) ||
+      description.match(/cup[oó]n\s+([a-z0-9_-]+)/i);
+
+    return couponMatch ? String(couponMatch[1]).trim().toUpperCase() : '';
+  };
+
+  const getMemberCoupons = (member) => {
+    if (!member) return [];
+
+    return transactions
+      .filter((tx) =>
+        tx.status !== 'voided' &&
+        tx.client &&
+        (String(tx.client.id) === String(member.id) || String(tx.client.memberNumber) === String(member.memberNumber))
+      )
+      .flatMap((tx) =>
+        (tx.items || [])
+          .map((item) => {
+            const code = extractCouponCodeFromItem(item);
+            if (!code) return null;
+
+            return {
+              id: `${tx.id}-${code}`,
+              code,
+              date: tx.date || '--/--/--',
+              time: tx.time || tx.timestamp || '--:--',
+              orderId: tx.id,
+              amount: Math.abs(Number(item.price || 0) * Number(item.qty || item.quantity || 1)),
+              title: item.title || 'Cupón',
+            };
+          })
+          .filter(Boolean)
+      )
+      .sort((a, b) => {
+        const parseDateTime = (dStr, tStr) => {
+          if (!dStr || dStr === '--/--/--') return 0;
+          if (dStr.includes('/')) {
+            const [day, month, year] = dStr.split('/');
+            const fullYear = year.length === 2 ? `20${year}` : year;
+            const timePart = tStr ? tStr.split(' ')[0] : '00:00:00';
+            return new Date(`${fullYear}-${month}-${day}T${timePart}`).getTime();
+          }
+          return new Date(dStr).getTime();
+        };
+        return parseDateTime(b.date, b.time) - parseDateTime(a.date, a.time);
+      });
+  };
+
   const getMemberHistory = (member) => {
     if (!member) return [];
     
@@ -184,6 +236,16 @@ export default function ClientsView({
 
     return result;
   }, [members, searchTerm, sortBy, transactions]);
+
+  const visibleMembersCount = useMemo(() => {
+    const isSearchTest = searchTerm.toLowerCase().includes('test');
+    return (Array.isArray(members) ? members : []).filter((member) => {
+      if (!member) return false;
+      const isTest = isTestRecord(member);
+      if (isTest && !isSearchTest) return false;
+      return true;
+    }).length;
+  }, [members, searchTerm]);
 
   const openCreateModal = () => {
     setModalMode('create');
@@ -293,22 +355,32 @@ export default function ClientsView({
   };
 
   return (
-    <div className="h-full min-h-0 flex flex-col relative overflow-hidden bg-slate-50 p-6">
+    <div className="h-full min-h-0 flex flex-col relative overflow-hidden bg-slate-50 p-4">
       
       {/* HEADER COMPACTO */}
-      <div className="bg-white p-2.5 rounded-xl shadow-sm border border-slate-200 mb-4 flex flex-wrap items-center justify-between gap-3 shrink-0 z-10">
+      <div className="bg-white p-2 rounded-lg shadow-sm border border-slate-200 mb-3 flex flex-wrap items-center justify-between gap-2 shrink-0 z-10">
         
-        <div className="flex items-center flex-1 min-w-0">
+        <div className="flex items-center flex-1 min-w-0 gap-2">
           
           <div className="relative flex-1 max-w-2xl">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
             <input
               type="text"
               placeholder="Buscar por Nombre, N° Socio, DNI, Email..."
-              className="w-full rounded-lg border border-slate-200 pl-9 pr-3 py-1.5 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm font-bold transition-all"
+              className="w-full rounded-md border border-slate-200 pl-9 pr-3 py-1.5 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm font-bold transition-all"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
+          </div>
+
+          <div className="inline-flex h-[34px] items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-3 shadow-sm shrink-0">
+            <span className="text-xs font-black uppercase tracking-[0.06em] leading-none text-slate-500">Socios</span>
+            <span className="text-sm font-black leading-none text-slate-700">
+              {sortedMembers.length}
+              {sortedMembers.length !== visibleMembersCount && (
+                <span className="font-semibold text-slate-400"> / {visibleMembersCount}</span>
+              )}
+            </span>
           </div>
         </div>
         
@@ -319,7 +391,7 @@ export default function ClientsView({
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
-              className="pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-white text-xs font-bold text-slate-600 outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 cursor-pointer appearance-none shadow-sm transition-all"
+              className="pl-8 pr-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-xs font-bold text-slate-600 outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 cursor-pointer appearance-none shadow-sm transition-all"
             >
               <optgroup label="Fechas">
                 <option value="date_added_desc">Más Nuevos</option>
@@ -365,12 +437,12 @@ export default function ClientsView({
         <table className="w-full text-left">
           <thead className="bg-gray-50/50 border-b border-gray-100 sticky top-0 z-10 backdrop-blur-sm">
             <tr>
-              <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider text-center">N° Socio</th>
-              <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider">Nombre</th>
-              <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider">Contacto</th>
-              <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider hidden lg:table-cell">Actividad</th>
-              <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider text-center">Puntos</th>
-              <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider text-center">Acciones</th>
+                <th className="px-4 py-3 font-bold text-gray-500 text-xs uppercase tracking-wider text-center">N° Socio</th>
+                <th className="px-4 py-3 font-bold text-gray-500 text-xs uppercase tracking-wider">Nombre</th>
+                <th className="px-4 py-3 font-bold text-gray-500 text-xs uppercase tracking-wider">Contacto</th>
+                <th className="px-4 py-3 font-bold text-gray-500 text-xs uppercase tracking-wider hidden lg:table-cell">Actividad</th>
+                <th className="px-4 py-3 font-bold text-gray-500 text-xs uppercase tracking-wider text-center">Puntos</th>
+                <th className="px-4 py-3 font-bold text-gray-500 text-xs uppercase tracking-wider text-center">Acciones</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -380,28 +452,28 @@ export default function ClientsView({
 
                 return (
                   <tr key={member.id} className="hover:bg-blue-50/30 transition-colors group">
-                    <td className="p-4 text-center">
-                      <span className="font-mono text-sm font-bold text-slate-600 bg-slate-100 px-2 py-1 rounded-md border border-slate-200">
-                        #{String(member.memberNumber || '0').padStart(4, '0')}
-                      </span>
-                    </td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-100 to-blue-200 text-blue-700 flex items-center justify-center font-bold shadow-sm text-sm border border-white shrink-0">
-                          {(member.name || '?').charAt(0).toUpperCase()}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="font-bold text-gray-900 truncate">{member.name || 'Sin Nombre'}</p>
-                          {member.extraInfo && <p className="text-xs text-gray-400 truncate max-w-[200px]">{member.extraInfo}</p>}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <div className="space-y-1">
-                        {member.dni && (
-                          <div className="flex items-center gap-1.5 text-xs text-gray-600" title="DNI">
-                            <CreditCard size={12} className="text-gray-400" />
-                            <span>{member.dni}</span>
+                        <td className="px-4 py-3 text-center">
+                          <span className="font-mono text-sm font-bold text-slate-600 bg-slate-100 px-2 py-1 rounded-md border border-slate-200">
+                            #{String(member.memberNumber || '0').padStart(4, '0')}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className="h-9 w-9 rounded-full bg-gradient-to-br from-blue-100 to-blue-200 text-blue-700 flex items-center justify-center font-bold shadow-sm text-sm border border-white shrink-0">
+                              {(member.name || '?').charAt(0).toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-bold text-gray-900 truncate">{member.name || 'Sin Nombre'}</p>
+                              {member.extraInfo && <p className="text-xs text-gray-400 truncate max-w-[200px]">{member.extraInfo}</p>}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="space-y-0.5">
+                            {member.dni && (
+                              <div className="flex items-center gap-1.5 text-xs text-gray-600" title="DNI">
+                                <CreditCard size={12} className="text-gray-400" />
+                                <span>{member.dni}</span>
                           </div>
                         )}
                         {member.phone && (
@@ -419,14 +491,14 @@ export default function ClientsView({
                         {!member.dni && !member.phone && !member.email && (
                           <span className="text-xs text-gray-300 italic">Sin datos</span>
                         )}
-                      </div>
-                    </td>
-                    
-                    <td className="p-4 hidden lg:table-cell">
-                      <div className="flex flex-col gap-1.5">
-                        <div className="flex items-center gap-1.5 text-xs text-slate-500" title="Fecha de Adición">
-                          <CalendarDays size={13} className="text-slate-400" />
-                          <span>Socio desde: <span className="font-medium text-slate-700">{formatShortDate(member.created_at || member.createdAt)}</span></span>
+                          </div>
+                        </td>
+                        
+                        <td className="px-4 py-3 hidden lg:table-cell">
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-1.5 text-xs text-slate-500" title="Fecha de Adición">
+                              <CalendarDays size={13} className="text-slate-400" />
+                              <span>Socio desde: <span className="font-medium text-slate-700">{formatShortDate(member.created_at || member.createdAt)}</span></span>
                         </div>
                         <div className="flex items-center gap-1.5 text-xs text-slate-500" title="Última Compra">
                           <Clock size={13} className="text-slate-400" />
@@ -436,22 +508,22 @@ export default function ClientsView({
                             <span className="font-medium text-slate-400 italic">No registra compras</span>
                           )}
                         </div>
-                      </div>
-                    </td>
+                          </div>
+                        </td>
 
-                    <td className="p-4 text-center">
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700 border border-blue-200">
-                        <Trophy size={12} />
-                        {formatNumber(member.points || 0)} pts
-                      </span>
-                    </td>
-                    <td className="p-4 text-center">
-                      <div className="flex items-center justify-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => setSelectedMember(member)} className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Ver Detalles e Historial"><History size={18} /></button>
-                        <button onClick={() => openEditModal(member)} className="p-2 text-gray-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Editar Socio"><Edit2 size={18} /></button>
-                        <button onClick={() => handleDeleteRequest(member)} className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Eliminar Socio"><Trash2 size={18} /></button>
-                      </div>
-                    </td>
+                        <td className="px-4 py-3 text-center">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-700 border border-blue-200">
+                            <Trophy size={12} />
+                            {formatNumber(member.points || 0)} pts
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <div className="flex items-center justify-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                            <button onClick={() => setSelectedMember(member)} className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Ver Detalles e Historial"><History size={16} /></button>
+                            <button onClick={() => openEditModal(member)} className="p-1.5 text-gray-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Editar Socio"><Edit2 size={16} /></button>
+                            <button onClick={() => handleDeleteRequest(member)} className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Eliminar Socio"><Trash2 size={16} /></button>
+                          </div>
+                        </td>
                   </tr>
                 );
               })
@@ -557,6 +629,43 @@ export default function ClientsView({
                   >
                     <Printer size={20} /> Imprimir Ticket de Puntos
                   </button>
+
+                  <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-sm uppercase tracking-wider">
+                    <FileText size={16} className="text-emerald-600" />
+                    Códigos y Cupones Usados
+                  </h3>
+
+                  <div className="space-y-3 mb-6">
+                    {getMemberCoupons(selectedMember).length > 0 ? (
+                      getMemberCoupons(selectedMember).map((coupon) => (
+                        <div key={coupon.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-bold text-emerald-700 truncate">{coupon.code}</p>
+                              <p className="mt-1 text-xs font-medium text-slate-500 truncate">{coupon.title}</p>
+                              <p className="mt-1 text-xs text-gray-400">
+                                {coupon.date} • {String(coupon.time).replace(/hs/ig, '').trim().slice(0, 5)} hs
+                              </p>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Descuento aplicado</p>
+                              <p className="mt-1 text-sm font-black text-emerald-600"><FancyPrice amount={coupon.amount} /></p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleViewOrderDetails(coupon.orderId)}
+                            className="mt-3 w-full py-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded flex items-center justify-center gap-2 transition-colors"
+                          >
+                            <FileText size={12} /> Ver venta donde se usó
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-8 text-gray-400 bg-white rounded-xl border border-dashed border-gray-200">
+                        <p className="text-sm">No registra códigos o cupones utilizados</p>
+                      </div>
+                    )}
+                  </div>
 
                   <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-sm uppercase tracking-wider">
                     <History size={16} className="text-blue-600" />

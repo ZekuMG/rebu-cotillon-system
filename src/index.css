@@ -118,6 +118,20 @@ body {
   margin: 0;
 }
 
+/* Oculta barras de scroll visuales sin deshabilitar el desplazamiento */
+.custom-scrollbar,
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.custom-scrollbar::-webkit-scrollbar,
+.scrollbar-hide::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
 #root {
   width: 100%;
   max-width: 100%;

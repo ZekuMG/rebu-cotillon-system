@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CalendarRange,
   FileText,
@@ -78,17 +78,63 @@ export default function BudgetBuilderModal({
   const [selectedCategory, setSelectedCategory] = useState('Todas');
   const [memberSearch, setMemberSearch] = useState('');
   const [catalogLimit, setCatalogLimit] = useState(ITEMS_STEP);
+  const initialRecordKey = initialRecord?.id ? `edit-${initialRecord.id}` : 'new';
+  const draftStorageKey = `rebu-budget-builder-${initialRecordKey}`;
+  const initialDraftRef = useRef({ key: '', draft: { config: DEFAULT_BUDGET_CONFIG, items: [] } });
+
+  if (initialDraftRef.current.key !== initialRecordKey) {
+    initialDraftRef.current = {
+      key: initialRecordKey,
+      draft: buildDraftFromRecord(initialRecord, members),
+    };
+  }
 
   useEffect(() => {
     if (!isOpen) return;
-    const draft = buildDraftFromRecord(initialRecord, members);
+    try {
+      const storedDraft = window.localStorage.getItem(draftStorageKey);
+      if (storedDraft) {
+        const parsedDraft = JSON.parse(storedDraft);
+        setDraftConfig({ ...DEFAULT_BUDGET_CONFIG, ...(parsedDraft?.config || {}) });
+        setDraftItems(Array.isArray(parsedDraft?.items) ? hydrateBudgetSnapshot(parsedDraft.items) : []);
+        setProductSearch(parsedDraft?.ui?.productSearch || '');
+        setSelectedCategory(parsedDraft?.ui?.selectedCategory || 'Todas');
+        setMemberSearch(parsedDraft?.ui?.memberSearch || '');
+        setCatalogLimit(ITEMS_STEP);
+        return;
+      }
+    } catch (error) {
+      console.warn('No se pudo restaurar el borrador del presupuesto:', error);
+    }
+
+    const draft = initialDraftRef.current.draft;
     setDraftConfig(draft.config);
     setDraftItems(draft.items);
     setProductSearch('');
     setSelectedCategory('Todas');
     setMemberSearch('');
     setCatalogLimit(ITEMS_STEP);
-  }, [isOpen, initialRecord, members]);
+  }, [isOpen, draftStorageKey]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    try {
+      window.localStorage.setItem(
+        draftStorageKey,
+        JSON.stringify({
+          config: draftConfig,
+          items: buildBudgetSnapshot(draftItems),
+          ui: {
+            productSearch,
+            selectedCategory,
+            memberSearch,
+          },
+        })
+      );
+    } catch (error) {
+      console.warn('No se pudo persistir el borrador del presupuesto:', error);
+    }
+  }, [isOpen, draftConfig, draftItems, productSearch, selectedCategory, memberSearch, draftStorageKey]);
 
   useEffect(() => {
     setCatalogLimit(ITEMS_STEP);
@@ -139,8 +185,10 @@ export default function BudgetBuilderModal({
 
   const budgetTotal = calculateBudgetTotal(draftItems);
   const fieldShellClass =
-    'rounded-[18px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(248,250,252,0.98)_0%,rgba(241,245,249,0.96)_100%)] px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)]';
-  const panelShellClass = 'rounded-[20px] border border-slate-200 bg-slate-50/80 p-2.5';
+    'rounded-[16px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(241,245,249,0.94)_0%,rgba(236,242,248,0.96)_100%)] px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.68)]';
+  const panelShellClass = 'rounded-[18px] border border-slate-200 bg-slate-50/85 p-2';
+  const fieldInputClass =
+    'w-full bg-transparent text-[13px] font-medium text-slate-700 outline-none placeholder:text-slate-400';
 
   const handleCatalogScroll = (e) => {
     const { scrollTop, clientHeight, scrollHeight } = e.target;
@@ -287,23 +335,29 @@ export default function BudgetBuilderModal({
       itemsSnapshot: buildBudgetSnapshot(cleanItems),
       totalAmount: calculateBudgetTotal(cleanItems),
     });
+
+    try {
+      window.localStorage.removeItem(draftStorageKey);
+    } catch (error) {
+      console.warn('No se pudo limpiar el borrador guardado:', error);
+    }
   };
 
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-[80] bg-slate-950/70 backdrop-blur-sm p-2.5 sm:p-3">
-      <div className="mx-auto flex h-full max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-[24px] border border-slate-200 bg-slate-50 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-200 bg-white px-3.5 py-2.5">
+      <div className="mx-auto flex h-full max-h-[94vh] w-full max-w-[94rem] flex-col overflow-hidden rounded-[22px] border border-slate-200 bg-slate-50 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-100 text-indigo-700">
-              <FileText size={16} />
+            <div className="flex h-8 w-8 items-center justify-center rounded-[12px] bg-indigo-100 text-indigo-700">
+              <FileText size={15} />
             </div>
             <div>
-              <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-800">
+              <h2 className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-800">
                 {initialRecord ? 'Editar presupuesto' : 'Crear presupuesto'}
               </h2>
-              <p className="text-[11px] font-medium text-slate-500">
+              <p className="text-[10px] font-medium text-slate-500">
                 Armá el presupuesto, definí el cliente y congelá el detalle del pedido.
               </p>
             </div>
@@ -317,10 +371,10 @@ export default function BudgetBuilderModal({
           </button>
         </div>
 
-        <div className="grid min-h-0 flex-1 gap-0 lg:grid-cols-[0.95fr_1.05fr]">
+        <div className="grid min-h-0 flex-1 gap-0 overflow-x-hidden lg:grid-cols-[0.92fr_1.08fr]">
           <div className="min-h-0 border-b border-slate-200 bg-white lg:border-b-0 lg:border-r">
             <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-slate-200 px-3.5 py-2.5">
+              <div className="border-b border-slate-200 px-3 py-2">
                 <div className={`flex items-center gap-2 ${fieldShellClass}`}>
                   <Search size={14} className="text-slate-400" />
                   <input
@@ -328,13 +382,13 @@ export default function BudgetBuilderModal({
                     value={productSearch}
                     onChange={(e) => setProductSearch(e.target.value)}
                     placeholder="Buscar producto..."
-                    className="w-full bg-transparent text-sm font-medium outline-none placeholder:text-slate-400"
+                    className={fieldInputClass}
                   />
                 </div>
                 <select
                   value={selectedCategory}
                   onChange={(e) => setSelectedCategory(e.target.value)}
-                  className={`mt-2 w-full text-sm font-semibold text-slate-700 outline-none ${fieldShellClass}`}
+                  className={`mt-2 w-full text-[13px] font-semibold text-slate-700 outline-none ${fieldShellClass}`}
                 >
                   <option value="Todas">Todas las categorias</option>
                   {(categories || []).map((category) => (
@@ -345,26 +399,26 @@ export default function BudgetBuilderModal({
                 </select>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2.5 scrollbar-hide" onScroll={handleCatalogScroll}>
-                <div className="grid gap-2 sm:grid-cols-2">
+              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 scrollbar-hide" onScroll={handleCatalogScroll}>
+                <div className="grid gap-1.5 sm:grid-cols-2">
                   {visibleInventory.map((product) => (
                     <button
                       key={`${product.id}-catalog`}
                       type="button"
                       onClick={() => addProductToDraft(product)}
-                      className="rounded-[18px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(248,250,252,0.9)_0%,rgba(241,245,249,0.82)_100%)] px-3 py-2.5 text-left transition hover:border-indigo-300 hover:bg-indigo-50"
+                      className="rounded-[16px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(248,250,252,0.9)_0%,rgba(241,245,249,0.82)_100%)] px-2.5 py-2 text-left transition hover:border-indigo-300 hover:bg-indigo-50"
                     >
                       <div className="min-w-0">
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-black text-slate-800">{product.title}</p>
-                          <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                          <p className="truncate text-[13px] font-black text-slate-800">{product.title}</p>
+                          <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
                             {getProductCategory(product)}
                           </p>
                         </div>
                       </div>
-                      <div className="mt-3 flex items-center justify-between gap-2 text-xs">
+                      <div className="mt-2 flex items-center justify-between gap-2 text-xs">
                         <div className="flex min-w-0 items-center gap-2">
-                          <div className="h-8 w-8 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                          <div className="h-7 w-7 overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
                             {product.image ? (
                               <img src={product.image} alt={product.title} className="h-full w-full object-cover" />
                             ) : (
@@ -373,11 +427,11 @@ export default function BudgetBuilderModal({
                               </div>
                             )}
                           </div>
-                          <span className="rounded-full bg-white px-2 py-1 font-bold text-slate-500">
+                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500">
                             {product.product_type === 'weight' ? formatWeight(product.stock) : `${product.stock || 0} u.`}
                           </span>
                         </div>
-                        <span className="font-black text-indigo-700">
+                        <span className="text-[13px] font-black text-indigo-700">
                           <FancyPrice amount={product.product_type === 'weight' ? (Number(product.price) || 0) * 1000 : product.price} />
                         </span>
                       </div>
@@ -390,8 +444,8 @@ export default function BudgetBuilderModal({
 
           <div className="min-h-0 bg-slate-50">
             <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-slate-200 bg-slate-50 px-3.5 py-2.5">
-                <div className="grid gap-2.5 xl:grid-cols-[1fr_1.2fr]">
+              <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="grid gap-2 xl:grid-cols-[0.98fr_1.02fr]">
                   <div className={panelShellClass}>
                     <div className="flex items-center gap-2">
                       <button
@@ -421,7 +475,7 @@ export default function BudgetBuilderModal({
                     </div>
 
                     {draftConfig.customerMode === 'member' ? (
-                      <div className="mt-3">
+                      <div className="mt-2.5">
                         <div className={`flex items-center gap-2 ${fieldShellClass}`}>
                           <Search size={14} className="text-slate-400" />
                           <input
@@ -429,30 +483,30 @@ export default function BudgetBuilderModal({
                             value={memberSearch}
                             onChange={(e) => setMemberSearch(e.target.value)}
                             placeholder="Buscar socio..."
-                            className="w-full bg-transparent text-sm font-medium outline-none placeholder:text-slate-400"
+                            className={fieldInputClass}
                           />
                         </div>
-                        <div className="mt-2 max-h-40 overflow-y-auto rounded-[18px] border border-slate-200/80 bg-slate-100/80 p-1.5 scrollbar-hide">
+                        <div className="mt-2 max-h-36 overflow-y-auto overflow-x-hidden rounded-[16px] border border-slate-200/80 bg-slate-100/80 p-1.5 scrollbar-hide">
                           {filteredMembers.slice(0, 8).map((member) => (
                             <button
                               key={member.id}
                               type="button"
                               onClick={() => selectMember(member)}
-                              className={`mb-1 w-full rounded-xl px-3 py-2 text-left transition ${
+                              className={`mb-1 w-full rounded-[12px] px-2.5 py-1.5 text-left transition ${
                                 String(draftConfig.memberId) === String(member.id)
                                   ? 'bg-indigo-600 text-white'
                                   : 'bg-white text-slate-700 hover:bg-indigo-50'
                               }`}
                             >
-                              <p className="text-sm font-black">{member.name}</p>
-                              <p className={`text-[11px] font-semibold ${String(draftConfig.memberId) === String(member.id) ? 'text-indigo-100' : 'text-slate-400'}`}>
+                              <p className="text-[13px] font-black">{member.name}</p>
+                              <p className={`text-[10px] font-semibold ${String(draftConfig.memberId) === String(member.id) ? 'text-indigo-100' : 'text-slate-400'}`}>
                                 #{member.memberNumber || '---'} {member.phone ? `· ${member.phone}` : ''}
                               </p>
                             </button>
                           ))}
                         </div>
                         {selectedMember && (
-                          <div className="mt-2 rounded-[18px] border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700">
+                          <div className="mt-2 rounded-[16px] border border-indigo-200 bg-indigo-50/90 px-2.5 py-1.5 text-[11px] font-semibold text-indigo-700">
                             Socio vinculado: {selectedMember.name}
                           </div>
                         )}
@@ -468,7 +522,7 @@ export default function BudgetBuilderModal({
                             type="text"
                             value={draftConfig.customerName}
                             onChange={(e) => setDraftConfig((prev) => ({ ...prev, customerName: e.target.value }))}
-                            className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none"
+                            className={fieldInputClass}
                           />
                         </label>
                         <label className={fieldShellClass}>
@@ -480,7 +534,7 @@ export default function BudgetBuilderModal({
                             type="text"
                             value={draftConfig.customerPhone}
                             onChange={(e) => setDraftConfig((prev) => ({ ...prev, customerPhone: e.target.value }))}
-                            className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none"
+                            className={fieldInputClass}
                           />
                         </label>
                         <label className={fieldShellClass}>
@@ -492,7 +546,7 @@ export default function BudgetBuilderModal({
                             rows="2"
                             value={draftConfig.customerNote}
                             onChange={(e) => setDraftConfig((prev) => ({ ...prev, customerNote: e.target.value }))}
-                            className="w-full resize-none bg-transparent text-sm font-medium text-slate-700 outline-none"
+                            className={`${fieldInputClass} resize-none`}
                           />
                         </label>
                       </div>
@@ -510,7 +564,7 @@ export default function BudgetBuilderModal({
                           type="text"
                           value={draftConfig.documentTitle}
                           onChange={(e) => setDraftConfig((prev) => ({ ...prev, documentTitle: e.target.value.toUpperCase() }))}
-                          className="w-full bg-transparent text-sm font-black uppercase text-slate-700 outline-none"
+                          className="w-full bg-transparent text-[13px] font-black uppercase text-slate-700 outline-none"
                         />
                       </label>
                       <label className={fieldShellClass}>
@@ -522,16 +576,16 @@ export default function BudgetBuilderModal({
                           type="text"
                           value={draftConfig.eventLabel}
                           onChange={(e) => setDraftConfig((prev) => ({ ...prev, eventLabel: e.target.value }))}
-                          className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none"
+                          className={fieldInputClass}
                         />
                       </label>
                     </div>
 
-                    <div className="mt-2.5 rounded-[18px] border border-emerald-200 bg-emerald-50 px-3 py-2.5">
+                    <div className="mt-2 rounded-[16px] border border-emerald-200 bg-emerald-50 px-2.5 py-1.5">
                       <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">
                         Total congelado
                       </p>
-                      <p className="mt-1 text-[26px] font-black leading-none text-emerald-700">
+                      <p className="mt-0.5 text-[20px] font-black leading-none text-emerald-700">
                         <FancyPrice amount={budgetTotal} />
                       </p>
                     </div>
@@ -539,32 +593,32 @@ export default function BudgetBuilderModal({
                 </div>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-3.5 py-2.5 scrollbar-hide">
-                <div className="mb-2.5 flex items-center justify-between">
+              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-2 scrollbar-hide">
+                <div className="mb-2 flex items-center justify-between">
                   <div>
-                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
                       Detalle del presupuesto
                     </p>
-                    <p className="text-[11px] font-medium text-slate-400">
+                    <p className="text-[10px] font-medium text-slate-400">
                       {draftItems.length} item(s) preparados para el documento.
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={addManualItem}
-                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 transition hover:border-slate-300 hover:text-slate-800"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100/90 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600 transition hover:border-slate-300 hover:bg-slate-200/80 hover:text-slate-800"
                   >
                     <Plus size={12} />
                     Item manual
                   </button>
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {draftItems.map((item) => {
                     const subtotal = calculateBudgetLineSubtotal(item);
                     return (
-                      <div key={item.id} className="rounded-[18px] border border-slate-200/80 bg-white/85 px-2.5 py-2.5 shadow-sm">
-                        <div className="grid gap-2 xl:grid-cols-[1.5fr_120px_140px_120px_38px]">
+                      <div key={item.id} className="overflow-hidden rounded-[16px] border border-slate-200/80 bg-white/85 px-2 py-2 shadow-sm">
+                        <div className="grid min-w-0 gap-1.5 sm:grid-cols-[minmax(0,1.45fr)_84px_104px_96px_34px]">
                           <label className={fieldShellClass}>
                             <span className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
                               <Package size={11} />
@@ -574,7 +628,7 @@ export default function BudgetBuilderModal({
                               type="text"
                               value={item.title}
                               onChange={(e) => updateDraftItem(item.id, 'title', e.target.value)}
-                              className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none"
+                              className={fieldInputClass}
                             />
                           </label>
 
@@ -588,13 +642,13 @@ export default function BudgetBuilderModal({
                               step="1"
                               value={item.qty}
                               onChange={(e) => updateDraftItem(item.id, 'qty', e.target.value)}
-                              className="w-full bg-transparent text-sm font-black text-slate-700 outline-none"
+                              className="w-full bg-transparent text-[13px] font-black text-slate-700 outline-none"
                             />
                           </label>
 
                           <label className={fieldShellClass}>
                             <span className="mb-1 block text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
-                              Precio unitario
+                              {item.product_type === 'weight' ? 'Precio por peso' : 'Precio unitario'}
                             </span>
                             <input
                               type="number"
@@ -602,18 +656,18 @@ export default function BudgetBuilderModal({
                               step="0.01"
                               value={item.newPrice}
                               onChange={(e) => updateDraftItem(item.id, 'newPrice', e.target.value)}
-                              className="w-full bg-transparent text-sm font-black text-slate-700 outline-none"
+                              className="w-full bg-transparent text-[13px] font-black text-slate-700 outline-none"
                             />
                           </label>
 
-                          <div className="rounded-[18px] border border-emerald-200 bg-emerald-50 px-3 py-2">
+                          <div className="rounded-[16px] border border-emerald-200 bg-emerald-50 px-2.5 py-1.5">
                             <span className="mb-1 block text-[10px] font-black uppercase tracking-[0.12em] text-emerald-500">
                               Subtotal
                             </span>
-                            <span className="text-sm font-black text-emerald-700">
+                            <span className="text-[13px] font-black text-emerald-700">
                               {formatCurrency(subtotal)}
                             </span>
-                            <div className="mt-1 text-[10px] font-semibold text-emerald-600">
+                            <div className="mt-0.5 text-[9px] font-semibold text-emerald-600">
                               {formatBudgetItemQuantity(item)}
                             </div>
                           </div>
@@ -621,7 +675,7 @@ export default function BudgetBuilderModal({
                           <button
                             type="button"
                             onClick={() => removeDraftItem(item.id)}
-                            className="flex h-full items-center justify-center rounded-[18px] border border-red-200 bg-red-50 text-red-600 transition hover:bg-red-100"
+                            className="flex h-full min-h-[52px] items-center justify-center rounded-[14px] border border-red-200 bg-red-50 text-red-600 transition hover:bg-red-100"
                           >
                             <Trash2 size={15} />
                           </button>
@@ -631,8 +685,8 @@ export default function BudgetBuilderModal({
                   })}
 
                   {draftItems.length === 0 && (
-                    <div className="rounded-[20px] border border-dashed border-slate-300 bg-white px-4 py-10 text-center">
-                      <p className="text-sm font-bold text-slate-500">
+                    <div className="rounded-[18px] border border-dashed border-slate-300 bg-slate-100/80 px-4 py-8 text-center">
+                      <p className="text-[13px] font-bold text-slate-500">
                         Agregá productos desde el catálogo para empezar el presupuesto.
                       </p>
                     </div>
@@ -640,13 +694,13 @@ export default function BudgetBuilderModal({
                 </div>
               </div>
 
-              <div className="border-t border-slate-200 bg-white px-3.5 py-2.5">
+              <div className="border-t border-slate-200 bg-white px-3 py-2">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">
                       Total del documento
                     </p>
-                    <p className="text-[26px] font-black leading-none text-slate-800">
+                    <p className="text-[22px] font-black leading-none text-slate-800">
                       <FancyPrice amount={budgetTotal} />
                     </p>
                   </div>
@@ -654,7 +708,7 @@ export default function BudgetBuilderModal({
                     <button
                       type="button"
                       onClick={onClose}
-                      className="rounded-[18px] border border-slate-200 bg-white px-4 py-2 text-[13px] font-bold text-slate-600 transition hover:bg-slate-100"
+                      className="rounded-[16px] border border-slate-200 bg-slate-100/90 px-3.5 py-1.5 text-[12px] font-bold text-slate-600 transition hover:bg-slate-200/80"
                     >
                       Cancelar
                     </button>
@@ -662,7 +716,7 @@ export default function BudgetBuilderModal({
                       type="button"
                       onClick={handleSubmit}
                       disabled={isSaving}
-                      className="rounded-[18px] bg-slate-900 px-4 py-2 text-[13px] font-black text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="rounded-[16px] bg-indigo-600 px-3.5 py-1.5 text-[12px] font-black text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {isSaving ? 'Guardando...' : initialRecord ? 'Guardar cambios' : 'Guardar presupuesto'}
                     </button>

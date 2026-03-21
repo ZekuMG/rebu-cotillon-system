@@ -42,6 +42,9 @@ const getClientDisplay = (details) => {
   return `${cName} ${cNum && cNum !== '---' ? '#' + String(cNum).padStart(4, '0') : ''}`.trim();
 };
 
+const getSharedRecordId = (details = {}) => details.sharedRecordId || details.budgetId || details.orderId || details.id || null;
+const formatEntityCode = (_prefix, id) => (id ? `ID-${String(id).slice(0, 8).toUpperCase()}` : null);
+
 // ════════════════════════════════════════════
 //  SUB-COMPONENTES REUTILIZABLES
 // ════════════════════════════════════════════
@@ -75,6 +78,22 @@ const ProductItem = ({ qty, name, totalAmount, isWeight }) => (
     <span className="font-bold text-slate-800 whitespace-nowrap">
       {totalAmount === 'GRATIS' ? 'GRATIS' : <FancyPrice amount={totalAmount} />}
     </span>
+  </div>
+);
+
+const StockChangeItem = ({ title, quantitySold, beforeStock, afterStock, isWeight }) => (
+  <div className="flex justify-between items-center px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1]">
+    <div className="min-w-0 pr-3">
+      <div className="font-bold text-slate-800 truncate">{title}</div>
+      <div className="text-[10px] text-slate-500 font-medium">
+        Vendidos: {formatNumber(quantitySold)}{isWeight ? 'g' : ' uds'}
+      </div>
+    </div>
+    <div className="flex items-center gap-2 shrink-0">
+      <span className="text-[10px] font-medium text-red-500">{formatNumber(beforeStock)}{isWeight ? 'g' : ''}</span>
+      <span className="text-[10px] text-slate-400">→</span>
+      <span className="text-[10px] font-bold text-emerald-600">{formatNumber(afterStock)}{isWeight ? 'g' : ''}</span>
+    </div>
   </div>
 );
 
@@ -163,6 +182,104 @@ const MemberImpactCard = ({ clientDisplay, pointsChange, pointsEarned, pointsSpe
           </div>
         </div>
       ) : null}
+    </Card>
+  );
+};
+
+const RecordLinksCard = ({ orderId, budgetId, saleId, transactionId, sharedRecordId }) => {
+  const mainRecordId = sharedRecordId || budgetId || orderId || null;
+  const links = [
+    { label: 'ID compartido', value: formatEntityCode('ID', mainRecordId) },
+    { label: 'Pedido', value: orderId ? formatEntityCode('PED', mainRecordId) : null },
+    { label: 'Presupuesto', value: budgetId ? formatEntityCode('PRES', mainRecordId) : null },
+    { label: 'Venta', value: saleId ? `VTA-${String(saleId).slice(0, 8).toUpperCase()}` : null },
+    { label: 'Transacción', value: transactionId ? `#${transactionId}` : null },
+  ].filter((item) => item.value);
+
+  if (links.length === 0) return null;
+
+  return (
+    <Card icon="🪪" title="IDs vinculados">
+      {links.map((link) => (
+        <Item key={`${link.label}-${link.value}`} label={link.label} value={link.value} />
+      ))}
+    </Card>
+  );
+};
+
+const OrderClientCard = ({ details, memberLabel }) => {
+  const hasClientData = details.customerName || details.customerPhone || details.customerNote || details.memberId || details.eventLabel || details.documentTitle;
+  if (!hasClientData) return null;
+
+  return (
+    <Card icon="👤" title="Cliente y contexto">
+      {details.customerName && <Item label="Cliente" value={details.customerName} />}
+      {details.customerPhone && <Item label="Teléfono" value={details.customerPhone} />}
+      {details.memberId && <Item label="Socio" value={memberLabel || `ID ${details.memberId}`} />}
+      {details.eventLabel && <Item label="Evento" value={details.eventLabel} />}
+      {details.documentTitle && <Item label="Documento" value={details.documentTitle} />}
+      {details.customerNote && <Item label="Nota" value={details.customerNote} className="items-start" />}
+    </Card>
+  );
+};
+
+const OrderItemsCard = ({ items = [], title = 'Productos del pedido' }) => {
+  if (!items.length) return null;
+  return (
+    <Card icon="📦" title={title}>
+      {items.map((item, idx) => {
+        const quantity = Number(item.quantity || item.qty || 0) || 0;
+        const unitPrice = Number(item.unitPrice || item.price || 0) || 0;
+        const subtotal = item.subtotal != null
+          ? Number(item.subtotal || 0)
+          : unitPrice * ((item.product_type === 'weight' ? quantity / 1000 : quantity) || 0);
+
+        return (
+          <div key={`${item.productId || item.id || item.title || 'item'}-${idx}`} className="rounded-[9px] border border-[#eaecf1] bg-[#f4f6f9] px-3 py-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate text-[11px] font-bold text-slate-800">{item.title || item.name || 'Producto'}</span>
+              <span className="text-[11px] font-bold text-slate-800"><FancyPrice amount={subtotal} /></span>
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-medium text-slate-500">
+              <span>{item.product_type === 'weight' ? `${formatNumber(quantity)}g` : `${formatNumber(quantity)} uds`}</span>
+              <span>Unitario: {unitPrice ? <FancyPrice amount={unitPrice} /> : '$0,00'}</span>
+              {item.productId && <span>ID #{item.productId}</span>}
+            </div>
+          </div>
+        );
+      })}
+    </Card>
+  );
+};
+
+const resolveOrderDetailItems = (details, preferPrevious = false) => {
+  if (!details || typeof details !== 'object') return [];
+
+  const primary = preferPrevious
+    ? details.previousItemsSnapshot || details.previous_items_snapshot || []
+    : details.itemsSnapshot || details.items_snapshot || details.items || details.products || [];
+
+  if (Array.isArray(primary) && primary.length > 0) return primary;
+
+  const snapshotItems = details.snapshot?.items || details.snapshot?.products || [];
+  if (Array.isArray(snapshotItems) && snapshotItems.length > 0) return snapshotItems;
+
+  return [];
+};
+
+const ChangesCard = ({ changes = [] }) => {
+  if (!changes.length) return null;
+  return (
+    <Card icon="🧾" title="Cambios aplicados">
+      {changes.map((change, idx) => (
+        <ChangeRow
+          key={`${change.field || 'change'}-${idx}`}
+          field={change.field || 'Cambio'}
+          oldVal={change.old}
+          newVal={change.new}
+          isPrice={Boolean(change.isPrice)}
+        />
+      ))}
     </Card>
   );
 };
@@ -281,12 +398,327 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
     return clean;
   };
 
+  const getLoggedOfferPercentage = (offerDetails) => {
+    const rawDiscountMode = String(
+      offerDetails?.discountMode || offerDetails?.discount_mode || ''
+    ).toLowerCase();
+    const rawProfitMargin = String(offerDetails?.profitMargin || offerDetails?.profit_margin || '');
+    const numericDiscountValue = Number(offerDetails?.discountValue || 0);
+    const numericProfitMargin = Number(offerDetails?.profitMargin ?? offerDetails?.profit_margin);
+    const normalizedType = String(offerDetails?.type || '').toLowerCase();
+    const itemsCount = Number((offerDetails?.itemsCount ?? offerDetails?.items_count) || 0);
+
+    if (rawDiscountMode === 'percentage') {
+      return Number.isFinite(numericDiscountValue) && numericDiscountValue > 0 ? numericDiscountValue : null;
+    }
+
+    if (rawProfitMargin.startsWith('PERCENTAGE:')) {
+      const parsedValue = Number(rawProfitMargin.slice('PERCENTAGE:'.length));
+      return Number.isFinite(parsedValue) && parsedValue > 0 ? parsedValue : null;
+    }
+
+    if (
+      Number.isFinite(numericProfitMargin) &&
+      numericProfitMargin > 0 &&
+      numericProfitMargin <= 100 &&
+      (normalizedType === 'cupon' || itemsCount === -1)
+    ) {
+      return numericProfitMargin;
+    }
+
+    if (
+      normalizedType === 'cupon' &&
+      itemsCount === 2
+    ) {
+      return Number.isFinite(numericDiscountValue) && numericDiscountValue > 0 ? numericDiscountValue : null;
+    }
+
+    if (
+      (normalizedType === 'descuento total' || normalizedType === 'descuento unidad') &&
+      itemsCount === -1
+    ) {
+      return Number.isFinite(numericDiscountValue) && numericDiscountValue > 0 ? numericDiscountValue : null;
+    }
+
+    return null;
+  };
+
+  const renderLoggedOfferDiscount = (offerDetails, toneClass = 'text-red-500') => {
+    const percentageValue = getLoggedOfferPercentage(offerDetails);
+
+    if (percentageValue !== null) {
+      return <span className={`${toneClass} font-bold`}>{percentageValue}%</span>;
+    }
+
+    const fixedDiscount = Number(offerDetails?.discountValue || 0);
+    if (fixedDiscount > 0) {
+      return <span className={`${toneClass} font-bold`}>-<FancyPrice amount={fixedDiscount} /></span>;
+    }
+
+    return null;
+  };
+
+  const renderCouponLog = (mode) => {
+    const isDeleted = mode === 'delete';
+    const isEdited = mode === 'edit';
+    const couponPercentage = getLoggedOfferPercentage(details);
+    const couponDiscountNode = renderLoggedOfferDiscount(details, 'text-[#059669]');
+
+    return (
+      <div className="space-y-4">
+        <Card icon="🎟" title={isDeleted ? 'Datos del Cupón Eliminado' : 'Datos del Cupón'}>
+          <Item label="Nombre" value={details.name} />
+          <Item label="Tipo">
+            <Badge color={isDeleted ? 'red' : 'green'}>Cupón</Badge>
+          </Item>
+          {details.applyTo && String(details.applyTo).startsWith('Cupon:') && (
+            <Item label="Código" value={String(details.applyTo).slice('Cupon:'.length)} />
+          )}
+          {details.offerPrice > 0 && (
+            <Item label="Valor del Cupón">
+              <span className="text-[#059669] font-bold"><FancyPrice amount={details.offerPrice} /></span>
+            </Item>
+          )}
+          {couponDiscountNode && (
+            <Item label={couponPercentage !== null ? 'Descuento Porcentual' : 'Descuento Directo'}>
+              {couponDiscountNode}
+            </Item>
+          )}
+        </Card>
+
+        {isEdited && (
+          <Card icon="🔄" title="Modificaciones Principales">
+            {details.oldPrice !== details.newPrice ? (
+              <ChangeRow field="Valor / Descuento" oldVal={details.oldPrice || 0} newVal={details.newPrice || 0} isPrice={true} />
+            ) : (
+              <Item label="Precios" value="Sin cambios" />
+            )}
+          </Card>
+        )}
+
+        <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+      </div>
+    );
+  };
+
+  if (action === 'Presupuesto Editado') {
+    const currentItems = resolveOrderDetailItems(details);
+    const previousItems = resolveOrderDetailItems(details, true);
+    return (
+      <div className="space-y-4">
+        <RecordLinksCard budgetId={details.id} sharedRecordId={details.sharedRecordId || details.id} />
+        <OrderClientCard details={details} memberLabel={clientDisplay} />
+        <Card icon="🧾" title="Presupuesto Actualizado">
+          <Item label="Cliente" value={details.customerName || 'Sin cliente'} />
+          {details.totalAmount !== undefined && (
+            <Item label="Total">
+              <span className="text-[#4338ca] font-bold"><FancyPrice amount={details.totalAmount || 0} /></span>
+            </Item>
+          )}
+          {details.itemCount !== undefined && (
+            <Item label="Artículos">
+              <Badge color="indigo">{formatNumber(details.itemCount || 0)} items</Badge>
+            </Item>
+          )}
+        </Card>
+        <ChangesCard changes={details.changes || []} />
+        <OrderItemsCard items={currentItems} title="Productos actuales" />
+        <OrderItemsCard items={previousItems} title="Productos anteriores" />
+        <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+      </div>
+    );
+  }
+
+  if (action === 'Presupuesto Creado') {
+    const currentItems = resolveOrderDetailItems(details);
+    return (
+      <div className="space-y-4">
+        <RecordLinksCard budgetId={details.id} sharedRecordId={details.sharedRecordId || details.id} />
+        <OrderClientCard details={details} memberLabel={clientDisplay} />
+        <Card icon="🧾" title="Presupuesto Generado">
+          <Item label="Cliente" value={details.customerName || 'Sin cliente'} />
+          {details.totalAmount !== undefined && <Item label="Total" value={<FancyPrice amount={details.totalAmount || 0} />} />}
+          {details.itemCount !== undefined && (
+            <Item label="Artículos">
+              <Badge color="indigo">{formatNumber(details.itemCount || 0)} items</Badge>
+            </Item>
+          )}
+        </Card>
+        <OrderItemsCard items={currentItems} title="Productos seleccionados" />
+        <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+      </div>
+    );
+  }
+
+  if (action === 'Pedido Creado') {
+    const orderItems = resolveOrderDetailItems(details);
+    return (
+      <div className="space-y-4">
+        <RecordLinksCard orderId={details.id} budgetId={details.budgetId} sharedRecordId={getSharedRecordId(details)} saleId={details.saleId} transactionId={details.transactionId} />
+        <OrderClientCard details={details} memberLabel={clientDisplay} />
+        <Card icon="📦" title="Pedido Generado">
+          <Item label="Cliente" value={details.customerName || 'Sin cliente'} />
+          {details.totalAmount !== undefined && (
+            <Item label="Total">
+              <span className="font-bold text-slate-800"><FancyPrice amount={details.totalAmount || 0} /></span>
+            </Item>
+          )}
+          {details.depositAmount > 0 && (
+            <Item label="Seña inicial">
+              <span className="text-[#059669] font-bold"><FancyPrice amount={details.depositAmount || 0} /></span>
+            </Item>
+          )}
+          {details.paidTotal !== undefined && <Item label="Abonado" value={<FancyPrice amount={details.paidTotal || 0} />} />}
+          {details.remainingAmount !== undefined && <Item label="Restante" value={<FancyPrice amount={details.remainingAmount || 0} />} />}
+          {details.pickupDate && <Item label="Fecha de retiro" value={details.pickupDate} />}
+        </Card>
+        <OrderItemsCard items={orderItems} title="Productos seleccionados" />
+        {(details.stockChanges || []).length > 0 && (
+          <Card icon="📦" title="Stock aplicado al concretar">
+            {(details.stockChanges || []).map((change, idx) => (
+              <StockChangeItem
+                key={`${change.productId || change.title || 'stock-order'}-${idx}`}
+                title={change.title || 'Producto'}
+                quantitySold={change.quantitySold || 0}
+                beforeStock={change.stockBefore || 0}
+                afterStock={change.stockAfter || 0}
+                isWeight={change.product_type === 'weight'}
+              />
+            ))}
+          </Card>
+        )}
+        <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+      </div>
+    );
+  }
+
+  if (action === 'Pago Pedido') {
+    const paymentItems = resolveOrderDetailItems(details);
+    return (
+      <div className="space-y-4">
+        <RecordLinksCard orderId={details.id} budgetId={details.budgetId} sharedRecordId={getSharedRecordId(details)} saleId={details.saleId} transactionId={details.transactionId} />
+        <OrderClientCard details={details} memberLabel={clientDisplay} />
+        <Card icon="💸" title="Pago Registrado">
+          <Item label="Cliente" value={details.customerName || 'Sin cliente'} />
+          {details.amount !== undefined && (
+            <Item label="Monto registrado">
+              <span className="text-[#059669] font-bold">+<FancyPrice amount={details.amount || 0} /></span>
+            </Item>
+          )}
+          {details.paidTotal !== undefined && <Item label="Total abonado" value={<FancyPrice amount={details.paidTotal || 0} />} />}
+          {details.remainingAmount !== undefined && <Item label="Restante" value={<FancyPrice amount={details.remainingAmount || 0} />} />}
+          {details.pickupDate && <Item label="Fecha de retiro" value={details.pickupDate} />}
+        </Card>
+        <OrderItemsCard items={paymentItems} title="Productos del pedido" />
+        {(details.stockChanges || []).length > 0 && (
+          <Card icon="📦" title="Stock aplicado al completar">
+            {(details.stockChanges || []).map((change, idx) => (
+              <StockChangeItem
+                key={`${change.productId || change.title || 'stock-payment'}-${idx}`}
+                title={change.title || 'Producto'}
+                quantitySold={change.quantitySold || 0}
+                beforeStock={change.stockBefore || 0}
+                afterStock={change.stockAfter || 0}
+                isWeight={change.product_type === 'weight'}
+              />
+            ))}
+          </Card>
+        )}
+        <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+      </div>
+    );
+  }
+
+  if (action === 'Pedido Retirado') {
+    const retiredItems = resolveOrderDetailItems(details);
+    return (
+      <div className="space-y-4">
+        <RecordLinksCard orderId={details.id} budgetId={details.budgetId} sharedRecordId={getSharedRecordId(details)} saleId={details.saleId} transactionId={details.transactionId} />
+        <OrderClientCard details={details} memberLabel={clientDisplay} />
+        <Card icon="✅" title="Pedido Entregado">
+          <Item label="Cliente" value={details.customerName || 'Sin cliente'} />
+          {details.totalAmount !== undefined && <Item label="Total" value={<FancyPrice amount={details.totalAmount || 0} />} />}
+          {details.paidTotal !== undefined && <Item label="Abonado" value={<FancyPrice amount={details.paidTotal || 0} />} />}
+          {details.pickupDate && <Item label="Fecha de retiro" value={details.pickupDate} />}
+        </Card>
+        <OrderItemsCard items={retiredItems} title="Productos del pedido" />
+        <WarnCard isSuccess={true}>Pedido marcado como retirado y entregado al cliente.</WarnCard>
+        <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+      </div>
+    );
+  }
+
+  if (action === 'Venta Realizada' && (details.orderId || details.budgetId)) {
+    const items = details.items || [];
+    const stockChanges = details.stockChanges || [];
+    return (
+      <div className="space-y-4">
+        <RecordLinksCard orderId={details.orderId} budgetId={details.budgetId} sharedRecordId={getSharedRecordId(details)} saleId={details.transactionId} transactionId={details.transactionId} />
+        <OrderClientCard details={details} memberLabel={clientDisplay} />
+        <Card icon="🛒" title="Productos">
+          {items.map((item, idx) => {
+            const q = item.quantity || item.qty || 0;
+            const isWeight = item.product_type === 'weight' || item.isWeight || (q >= 20 && item.price < 50);
+            const totalMonto = item.isReward ? 'GRATIS' : (item.price || 0) * q;
+            return (
+              <ProductItem
+                key={idx}
+                qty={q}
+                name={item.title || item.name || 'Producto'}
+                totalAmount={totalMonto}
+                isWeight={isWeight}
+              />
+            );
+          })}
+        </Card>
+        {stockChanges.length > 0 && (
+          <Card icon="📦" title="Impacto en el Stock">
+            {stockChanges.map((change, idx) => (
+              <StockChangeItem
+                key={`${change.productId || change.title || 'stock-sale'}-${idx}`}
+                title={change.title || 'Producto'}
+                quantitySold={change.quantitySold || 0}
+                beforeStock={change.stockBefore || 0}
+                afterStock={change.stockAfter || 0}
+                isWeight={change.product_type === 'weight'}
+              />
+            ))}
+          </Card>
+        )}
+        <Card icon="💳" title="Pago">
+          <Item label="Método de pago" value={getFormattedPayment(details.payment, details.installments)} />
+        </Card>
+        <MemberImpactCard
+          clientDisplay={clientDisplay}
+          pointsChange={details.pointsChange}
+          pointsEarned={details.pointsEarned}
+          pointsSpent={details.pointsSpent}
+        />
+        <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+      </div>
+    );
+  }
+
   switch (action) {
+
+    case 'Cupón Creado':
+      return renderCouponLog('create');
+
+    case 'Cupón Editado':
+      return renderCouponLog('edit');
+
+    case 'Cupón Eliminado':
+      return renderCouponLog('delete');
 
     // ==============================================
     // CASOS: OFERTAS Y COMBOS
     // ==============================================
     case 'Oferta Creada': {
+      const offerPercentage = getLoggedOfferPercentage(details);
+      const offerDiscountNode = renderLoggedOfferDiscount(details, 'text-red-500');
+      if (offerPercentage !== null) {
+        details.itemsCount = 0;
+      }
       return (
         <div className="space-y-4">
           <Card icon="🎫" title="Datos de la Oferta">
@@ -302,9 +734,9 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
                 <span className="text-[#059669] font-bold"><FancyPrice amount={details.offerPrice} /></span>
               </Item>
             )}
-            {details.discountValue > 0 && (
-              <Item label="Descuento Directo">
-                <span className="text-red-500 font-bold">-$<FancyPrice amount={details.discountValue} /></span>
+            {offerDiscountNode && (
+              <Item label={offerPercentage !== null ? 'Descuento Porcentual' : 'Descuento Directo'}>
+                {offerDiscountNode}
               </Item>
             )}
           </Card>
@@ -327,6 +759,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
     }
 
     case 'Oferta Editada': {
+      const offerPercentage = getLoggedOfferPercentage(details);
       return (
         <div className="space-y-4">
           <Card icon="🎫" title="Datos de la Oferta">
@@ -334,13 +767,14 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
             <Item label="Tipo">
               <Badge color="violet">{details.type}</Badge>
             </Item>
+            {offerPercentage !== null && <Item label="Descuento Porcentual" value={`${offerPercentage}%`} />}
           </Card>
 
           <Card icon="🔄" title="Modificaciones Principales">
-            {details.oldPrice !== details.newPrice ? (
+            {offerPercentage === null && details.oldPrice !== details.newPrice ? (
               <ChangeRow field="Precio / Descuento" oldVal={details.oldPrice || 0} newVal={details.newPrice || 0} isPrice={true} />
             ) : (
-              <Item label="Precios" value="Sin cambios" />
+              <Item label={offerPercentage !== null ? 'Porcentaje' : 'Precios'} value={offerPercentage !== null ? `${offerPercentage}%` : 'Sin cambios'} />
             )}
             
             {details.changedCount && (
@@ -448,6 +882,95 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
 
     // ==============================================
 
+    case 'Presupuesto Editado':
+      return (
+        <div className="space-y-4">
+          <Card icon="🧾" title="Presupuesto Actualizado">
+            <Item label="Cliente" value={details.customerName || 'Sin cliente'} />
+            {details.id && <Item label="ID" value={formatEntityCode('ID', getSharedRecordId(details))} />}
+            {details.totalAmount !== undefined && (
+              <Item label="Total">
+                <span className="text-[#4338ca] font-bold"><FancyPrice amount={details.totalAmount || 0} /></span>
+              </Item>
+            )}
+            {details.itemCount !== undefined && (
+              <Item label="Artículos">
+                <Badge color="indigo">{formatNumber(details.itemCount || 0)} items</Badge>
+              </Item>
+            )}
+          </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+
+    case 'Pedido Creado':
+      return (
+        <div className="space-y-4">
+          <Card icon="📦" title="Pedido Generado">
+            {details.id && <Item label="Pedido" value={formatEntityCode('PED', getSharedRecordId(details))} />}
+            {details.budgetId && <Item label="Presupuesto origen" value={formatEntityCode('PRES', getSharedRecordId(details))} />}
+            <Item label="Cliente" value={details.customerName || 'Sin cliente'} />
+            {details.totalAmount !== undefined && (
+              <Item label="Total">
+                <span className="font-bold text-slate-800"><FancyPrice amount={details.totalAmount || 0} /></span>
+              </Item>
+            )}
+            {details.depositAmount > 0 && (
+              <Item label="Seña inicial">
+                <span className="text-[#059669] font-bold"><FancyPrice amount={details.depositAmount || 0} /></span>
+              </Item>
+            )}
+            {details.pickupDate && <Item label="Fecha de retiro" value={details.pickupDate} />}
+          </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+
+    case 'Pago Pedido':
+      return (
+        <div className="space-y-4">
+          <Card icon="💸" title="Pago Registrado">
+            {details.id && <Item label="Pedido" value={formatEntityCode('PED', getSharedRecordId(details))} />}
+            <Item label="Cliente" value={details.customerName || 'Sin cliente'} />
+            {details.amount !== undefined && (
+              <Item label="Monto registrado">
+                <span className="text-[#059669] font-bold">+<FancyPrice amount={details.amount || 0} /></span>
+              </Item>
+            )}
+            {details.paidTotal !== undefined && (
+              <Item label="Total abonado">
+                <span className="font-bold text-slate-800"><FancyPrice amount={details.paidTotal || 0} /></span>
+              </Item>
+            )}
+            {details.remainingAmount !== undefined && (
+              <Item label="Restante">
+                <span className="text-[#b45309] font-bold"><FancyPrice amount={details.remainingAmount || 0} /></span>
+              </Item>
+            )}
+          </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+
+    case 'Pedido Retirado':
+      return (
+        <div className="space-y-4">
+          <Card icon="✅" title="Pedido Entregado">
+            {details.id && <Item label="Pedido" value={formatEntityCode('PED', getSharedRecordId(details))} />}
+            <Item label="Cliente" value={details.customerName || 'Sin cliente'} />
+            {details.totalAmount !== undefined && (
+              <Item label="Total">
+                <span className="font-bold text-slate-800"><FancyPrice amount={details.totalAmount || 0} /></span>
+              </Item>
+            )}
+          </Card>
+          <WarnCard isSuccess={true}>Pedido marcado como retirado y entregado al cliente.</WarnCard>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+
+    // ==============================================
+
     case 'Apertura de Caja':
       return (
         <div className="space-y-4">
@@ -510,6 +1033,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
 
     case 'Venta Realizada': {
       const items = details.items || [];
+      const stockChanges = details.stockChanges || [];
       return (
         <div className="space-y-4">
           <Card icon="🛒" title="Productos">
@@ -529,6 +1053,21 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
               );
             })}
           </Card>
+
+          {stockChanges.length > 0 && (
+            <Card icon="📦" title="Impacto en el Stock">
+              {stockChanges.map((change, idx) => (
+                <StockChangeItem
+                  key={`${change.productId || change.title || 'stock'}-${idx}`}
+                  title={change.title || 'Producto'}
+                  quantitySold={change.quantitySold || 0}
+                  beforeStock={change.stockBefore || 0}
+                  afterStock={change.stockAfter || 0}
+                  isWeight={change.product_type === 'weight'}
+                />
+              ))}
+            </Card>
+          )}
 
           <Card icon="💳" title="Pago">
             <Item label="Método de pago" value={getFormattedPayment(details.payment, details.installments)} />
@@ -1254,7 +1793,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
           </Card>
 
           {items.length > 0 && (
-            <Card icon="📦" title="Productos Purgados">
+            <Card icon="📦" title="Productos del Registro Eliminado">
               {items.map((item, idx) => (
                 <div key={idx} className="flex justify-between items-center px-3 py-2 bg-[#f8fafc] rounded-[9px] text-[11px] border border-[#e2e8f0]">
                   <span className="text-[#64748b] font-medium flex items-center">
@@ -1282,7 +1821,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
           )}
           
           <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
-          <WarnCard>⚠ Este registro y todos sus rastros fueron purgados de la base de datos permanentemente.</WarnCard>
+          <WarnCard>⚠ La transacción fue eliminada del historial operativo, pero el Registro de Acciones conserva toda la trazabilidad.</WarnCard>
         </div>
       );
     }

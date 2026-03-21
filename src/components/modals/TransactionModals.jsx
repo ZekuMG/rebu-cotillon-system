@@ -20,6 +20,21 @@ export const EditTransactionModal = ({
   editReason, setEditReason, onSave
 }) => {
   const searchInputRef = useRef(null);
+  const safeTotal = Number(transaction?.total || 0);
+  const cashReceivedAmount = (() => {
+    if (!transaction || transaction.payment !== 'Efectivo') return 0;
+    if (transaction.cashReceived === '' || transaction.cashReceived === null || transaction.cashReceived === undefined) {
+      return safeTotal;
+    }
+    const parsed = Number(transaction.cashReceived);
+    return Number.isFinite(parsed) ? parsed : safeTotal;
+  })();
+  const cashChangeAmount = transaction?.payment === 'Efectivo'
+    ? Math.max(0, cashReceivedAmount - safeTotal)
+    : 0;
+  const cashMissingAmount = transaction?.payment === 'Efectivo'
+    ? Math.max(0, safeTotal - cashReceivedAmount)
+    : 0;
 
   // Auto-focus en el buscador para que la pistola láser funcione directo
   useEffect(() => {
@@ -78,7 +93,13 @@ export const EditTransactionModal = ({
         product_type: product.product_type || 'quantity'
       });
     }
-    setEditingTransaction({ ...transaction, items: newItems, total: recalculateTotal(newItems, transaction.payment) });
+    const nextTotal = recalculateTotal(newItems, transaction.payment);
+    setEditingTransaction({
+      ...transaction,
+      items: newItems,
+      total: nextTotal,
+      cashChange: transaction.payment === 'Efectivo' ? Math.max(0, cashReceivedAmount - nextTotal) : 0,
+    });
     setTransactionSearch('');
   };
 
@@ -86,16 +107,37 @@ export const EditTransactionModal = ({
     const newItems = [...transaction.items];
     const numValue = value === '' ? '' : Number(value);
     newItems[index] = { ...newItems[index], [field]: numValue };
-    setEditingTransaction({ ...transaction, items: newItems, total: recalculateTotal(newItems, transaction.payment) });
+    const nextTotal = recalculateTotal(newItems, transaction.payment);
+    setEditingTransaction({
+      ...transaction,
+      items: newItems,
+      total: nextTotal,
+      cashChange: transaction.payment === 'Efectivo' ? Math.max(0, cashReceivedAmount - nextTotal) : 0,
+    });
   };
 
   const handleRemoveLocalItem = (index) => {
     const newItems = transaction.items.filter((_, i) => i !== index);
-    setEditingTransaction({ ...transaction, items: newItems, total: recalculateTotal(newItems, transaction.payment) });
+    const nextTotal = recalculateTotal(newItems, transaction.payment);
+    setEditingTransaction({
+      ...transaction,
+      items: newItems,
+      total: nextTotal,
+      cashChange: transaction.payment === 'Efectivo' ? Math.max(0, cashReceivedAmount - nextTotal) : 0,
+    });
   };
 
   const handlePaymentChangeLocal = (payment) => {
-    setEditingTransaction({ ...transaction, payment, installments: payment === 'Credito' ? 1 : 0, total: recalculateTotal(transaction.items, payment) });
+    const nextTotal = recalculateTotal(transaction.items, payment);
+    const nextCashReceived = payment === 'Efectivo' ? (cashReceivedAmount || nextTotal) : 0;
+    setEditingTransaction({
+      ...transaction,
+      payment,
+      installments: payment === 'Credito' ? 1 : 0,
+      total: nextTotal,
+      cashReceived: nextCashReceived,
+      cashChange: payment === 'Efectivo' ? Math.max(0, nextCashReceived - nextTotal) : 0,
+    });
   };
 
   return (
@@ -253,12 +295,76 @@ export const EditTransactionModal = ({
             </div>
           )}
 
+          {transaction.payment === 'Efectivo' && (
+            <div className="mb-4 rounded-xl border border-emerald-100 bg-emerald-50/80 p-3">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-emerald-800 flex items-center gap-1">
+                  <AlertTriangle size={14} /> Cobro en efectivo
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setEditingTransaction({
+                    ...transaction,
+                    cashReceived: Number(transaction.total || 0),
+                    cashChange: 0,
+                  })}
+                  className="rounded-lg border border-emerald-200 bg-white px-2.5 py-1 text-[10px] font-bold text-emerald-700 transition-colors hover:bg-emerald-100"
+                >
+                  Pago completo
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-emerald-700 uppercase tracking-wide block mb-1">Monto recibido</label>
+                  <div className="relative">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-emerald-500 font-bold text-xs">$</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      className="w-full rounded-lg border border-emerald-200 bg-white pl-5 pr-2 py-2 text-sm font-bold text-slate-800 outline-none focus:ring-2 focus:ring-emerald-500"
+                      value={transaction.cashReceived ?? ''}
+                      onChange={(e) => {
+                        const rawValue = e.target.value;
+                        const nextCashReceived = rawValue === '' ? '' : Number(rawValue);
+                        setEditingTransaction({
+                          ...transaction,
+                          cashReceived: nextCashReceived,
+                          cashChange: rawValue === ''
+                            ? 0
+                            : Math.max(0, Number(nextCashReceived || 0) - Number(transaction.total || 0)),
+                        });
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Producto</p>
+                  <p className="mt-1 text-sm font-black text-slate-800"><FancyPrice amount={transaction.total} /></p>
+                </div>
+
+                <div className="rounded-lg border border-emerald-200 bg-white px-3 py-2">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-600">Devolución</p>
+                  <p className="mt-1 text-sm font-black text-slate-800"><FancyPrice amount={cashChangeAmount} /></p>
+                </div>
+              </div>
+
+              {cashMissingAmount > 0 && (
+                <p className="mt-3 text-[11px] font-bold text-amber-700">
+                  Faltan <FancyPrice amount={cashMissingAmount} /> para completar el pago.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="mb-4">
             <label className="text-[10px] font-bold text-amber-600 uppercase tracking-wide block mb-1 flex items-center gap-1"><FileText size={12} /> Motivo / Nota de la modificación (Opcional)</label>
             <textarea className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-amber-50 focus:ring-2 focus:ring-amber-500 outline-none text-amber-900" rows="2" placeholder="Ej: Me equivoqué en el precio, el cliente sumó un producto..." value={editReason} onChange={(e) => setEditReason(e.target.value)}></textarea>
           </div>
 
-          <button type="submit" disabled={transaction.items.length === 0} className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-md disabled:bg-slate-300 disabled:cursor-not-allowed">
+          <button type="submit" disabled={transaction.items.length === 0 || (transaction.payment === 'Efectivo' && cashMissingAmount > 0)} className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-md disabled:bg-slate-300 disabled:cursor-not-allowed">
             Guardar y Aplicar Cambios
           </button>
         </form>

@@ -50,7 +50,7 @@ export const mapLogRecords = (logs = []) =>
     if (typeof details === 'string') {
       try {
         details = JSON.parse(details);
-      } catch (e) {
+      } catch {
         // Si falla el parse, mantener como string
       }
     }
@@ -211,6 +211,8 @@ export const mapSaleRecords = (sales = [], parsedLogs = []) =>
       time: formatTimeFullAR(new Date(sale.created_at)),
       total: sale.total,
       payment: sale.payment_method,
+      cashReceived: Number(sale.cash_received ?? snapshotLog?.details?.cashReceived ?? 0),
+      cashChange: Number(sale.cash_change ?? snapshotLog?.details?.cashChange ?? 0),
       installments: sale.installments,
       items,
       client: sale.clients
@@ -296,7 +298,10 @@ export const mapOfferRecords = (offers = []) =>
     itemsCount: Number(offer.items_count),
     discountValue: Number(offer.discount_value),
     offerPrice: Number(offer.offer_price),
-    profitMargin: Number(offer.profit_margin),
+    profitMargin:
+      typeof offer.profit_margin === 'string'
+        ? offer.profit_margin
+        : Number(offer.profit_margin || 0),
     createdBy: offer.created_by,
   }));
 

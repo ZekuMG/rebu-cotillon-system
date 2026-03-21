@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Search,
   ShoppingCart,
@@ -255,9 +255,11 @@ export default function POSView({
   selectedCategory, setSelectedCategory, posViewMode, setPosViewMode,
   gridColumns, setGridColumns, selectedClient, setSelectedClient,
   onOpenClientModal, onOpenRedemptionModal,
+  transactions = [],
   offers = [] // ✨ Recibimos las ofertas
 }) {
   const [showGridMenu, setShowGridMenu] = useState(false);
+  const cashReceivedInputRef = useRef(null);
   const [showClientCheckModal, setShowClientCheckModal] = useState(false);
   const [weightModalProduct, setWeightModalProduct] = useState(null);
   const [editingWeightItemId, setEditingWeightItemId] = useState(null);
@@ -269,10 +271,70 @@ export default function POSView({
   const [isDiscountDrawerOpen, setIsDiscountDrawerOpen] = useState(false);
   const [customDiscountPercent, setCustomDiscountPercent] = useState('');
   const [visibleCount, setVisibleCount] = useState(40);
+  const [cashPaymentMode, setCashPaymentMode] = useState('full');
+  const [cashReceivedInput, setCashReceivedInput] = useState('');
 
   useEffect(() => {
     setVisibleCount(40);
   }, [posSearch, selectedCategory]);
+
+  useEffect(() => {
+    if (selectedPayment === 'Efectivo') {
+      setCashPaymentMode('custom');
+      setCashReceivedInput('');
+      setTimeout(() => cashReceivedInputRef.current?.focus(), 0);
+      return;
+    }
+
+    if (selectedPayment !== 'Efectivo') {
+      setCashPaymentMode('full');
+      setCashReceivedInput('');
+    }
+  }, [selectedPayment]);
+
+  useEffect(() => {
+    if (cart.length === 0 && selectedPayment === 'Efectivo') {
+      setCashPaymentMode('custom');
+      setCashReceivedInput('');
+    }
+  }, [cart.length, selectedPayment]);
+
+  const extractCouponCodeFromItem = (item) => {
+    const title = String(item?.title || '');
+    const description = String(item?.description || '');
+    const couponMatch =
+      title.match(/cup[oó]n\s+([a-z0-9_-]+)/i) ||
+      description.match(/cup[oó]n\s+([a-z0-9_-]+)/i);
+
+    return couponMatch ? String(couponMatch[1]).trim().toUpperCase() : '';
+  };
+
+  const selectedClientUsedCoupons = useMemo(() => {
+    if (!selectedClient || selectedClient.id === 'guest') return new Set();
+
+    if (Array.isArray(selectedClient.usedCoupons) && selectedClient.usedCoupons.length > 0) {
+      return new Set(selectedClient.usedCoupons.map((code) => String(code).trim().toUpperCase()).filter(Boolean));
+    }
+
+    const memberId = String(selectedClient.id || '');
+    const memberNumber = String(selectedClient.memberNumber || '');
+
+    const usedCodes = (transactions || []).flatMap((tx) => {
+      if (tx.status === 'voided' || !tx.client) return [];
+
+      const sameClient =
+        String(tx.client?.id || '') === memberId ||
+        String(tx.client?.memberNumber || '') === memberNumber;
+
+      if (!sameClient) return [];
+
+      return (tx.items || [])
+        .map((item) => extractCouponCodeFromItem(item))
+        .filter(Boolean);
+    });
+
+    return new Set(usedCodes);
+  }, [selectedClient, transactions]);
 
   const getEffectiveStock = (productId, originalStock) => {
     // Si el item es custom, combo, o de descuento, NO revisamos contra el stock original
@@ -359,8 +421,12 @@ export default function POSView({
     const baseTotal = getDiscountBaseTotal();
     const offerId = offer?.id ?? canonical?.couponCode ?? offer?.name;
     const configuredDiscountValue = parseOfferNumericValue(canonical?.discountValue ?? offer?.discountValue ?? 0);
+    const couponCode = String(canonical?.couponCode || '').trim().toUpperCase();
 
     if (baseTotal <= 0) return { ok: false, reason: 'no_base' };
+    if (canonical?.benefitType === 'coupon' && couponCode && selectedClientUsedCoupons.has(couponCode)) {
+      return { ok: false, reason: 'used_before', couponCode };
+    }
     if (
       offerId &&
       cart.some((item) => item.isDiscount && String(item.originalOfferId) === String(offerId))
@@ -409,19 +475,23 @@ export default function POSView({
     }
 
     const result = handleApplyOfferDiscount(offer);
-    if (!result.ok) {
-      Swal.fire({
-        title: 'No se pudo aplicar',
-        text:
-          result.reason === 'no_base'
-            ? 'Primero agrega productos al pedido para usar descuentos o cupones.'
-            : result.reason === 'duplicate'
-            ? 'Ese descuento o cupon ya fue aplicado al pedido actual.'
-            : 'Ese descuento o cupon no tiene un valor valido.',
-        icon: 'warning',
-        confirmButtonColor: '#059669',
-      });
-    }
+    if (!result.ok) showOfferApplyError(result);
+  };
+
+  const showOfferApplyError = (result) => {
+    Swal.fire({
+      title: 'No se pudo aplicar',
+      text:
+        result.reason === 'no_base'
+          ? 'Primero agrega productos al pedido para usar descuentos o cupones.'
+          : result.reason === 'used_before'
+          ? `El codigo ${result.couponCode || 'del cupon'} ya fue utilizado anteriormente por este socio.`
+          : result.reason === 'duplicate'
+          ? 'Ese descuento o cupon ya fue aplicado al pedido actual.'
+          : 'Ese descuento o cupon no tiene un valor valido.',
+      icon: 'warning',
+      confirmButtonColor: '#059669',
+    });
   };
 
   const getComboAvailability = (offer) => {
@@ -635,10 +705,17 @@ export default function POSView({
   };
 
   const proceedToCheckoutFlow = () => {
+    if (selectedPayment === 'Efectivo' && cashPaymentMode === 'custom' && cashReceivedInput.trim() !== '' && cashReceivedAmount < total) {
+      Swal.fire('Monto insuficiente', 'El monto recibido en efectivo debe cubrir el total de la compra.', 'warning');
+      return;
+    }
     if (cart.length > 0 && !selectedClient) {
       setShowClientCheckModal(true);
     } else {
-      handleCheckout();
+      handleCheckout({
+        cashReceived: selectedPayment === 'Efectivo' ? cashReceivedAmount : null,
+        cashChange: selectedPayment === 'Efectivo' ? cashChangeAmount : 0,
+      });
     }
   };
 
@@ -757,6 +834,16 @@ export default function POSView({
 
   const subtotal = cart.reduce((t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
   const total = calculateTotal();
+  const hasTypedCashAmount = cashReceivedInput.trim() !== '';
+  const cashReceivedAmount = selectedPayment === 'Efectivo'
+    ? (cashPaymentMode === 'full' || !hasTypedCashAmount ? total : Number(cashReceivedInput || 0))
+    : total;
+  const cashChangeAmount = selectedPayment === 'Efectivo'
+    ? Math.max(0, cashReceivedAmount - total)
+    : 0;
+  const cashMissingAmount = selectedPayment === 'Efectivo' && cashPaymentMode === 'custom'
+    ? (hasTypedCashAmount ? Math.max(0, total - cashReceivedAmount) : 0)
+    : 0;
   const pointsToEarn = Math.floor(Math.max(0, total) / 500);
   const discountBaseTotal = getDiscountBaseTotal();
 
@@ -1094,7 +1181,18 @@ export default function POSView({
                       ) : (
                         <div className="flex items-center gap-1.5 bg-slate-50 rounded-lg p-0.5 border">
                           <button onClick={() => updateCartItemQty(item.id, item.quantity - 1)} className="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:text-red-500 disabled:opacity-50" disabled={item.quantity <= 1 || item.isReward || isDiscount}><Minus size={12} /></button>
-                          <span className="text-xs font-bold w-4 text-center">{item.quantity}</span>
+                          <input
+                            type="number"
+                            min="1"
+                            max={Math.max(1, Number(item.stock) || 1)}
+                            value={item.quantity}
+                            onChange={(e) => {
+                              if (e.target.value === '') return;
+                              updateCartItemQty(item.id, e.target.value);
+                            }}
+                            className="h-6 w-12 rounded bg-white px-1 text-center text-xs font-bold text-slate-700 outline-none"
+                            disabled={item.isReward || isCombo || isDiscount}
+                          />
                           <button onClick={() => updateCartItemQty(item.id, item.quantity + 1)} className="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:text-green-500 disabled:opacity-50" disabled={item.isReward || isCombo || isDiscount}><Plus size={12} /></button>
                         </div>
                       )}
@@ -1168,16 +1266,89 @@ export default function POSView({
             </div>
           )}
 
+          {selectedPayment === 'Efectivo' && (
+            <div className="space-y-2 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 animate-in fade-in slide-in-from-bottom-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-emerald-800">Cobro en efectivo</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => { setCashPaymentMode('full'); setCashReceivedInput(''); }}
+                    className={`rounded-lg px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.1em] transition ${
+                      cashPaymentMode === 'full'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                    }`}
+                  >
+                    Pago completo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCashPaymentMode('custom')}
+                    className={`rounded-lg px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.1em] transition ${
+                      cashPaymentMode === 'custom'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                    }`}
+                  >
+                    Monto específico
+                  </button>
+                </div>
+              </div>
+
+              {cashPaymentMode === 'custom' && (
+                <div className="rounded-lg border border-emerald-200 bg-white px-3 py-2">
+                  <label className="block text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">
+                    Monto recibido
+                  </label>
+                  <input
+                    ref={cashReceivedInputRef}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={cashReceivedInput}
+                    onChange={(e) => setCashReceivedInput(e.target.value)}
+                    placeholder="Ej: 4000"
+                    className="mt-1 w-full bg-transparent text-base font-black text-slate-800 outline-none"
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div className="rounded-lg border border-emerald-200 bg-white px-3 py-2">
+                  <p className="font-bold uppercase tracking-[0.1em] text-emerald-600">Recibido</p>
+                  <p className="mt-1 text-sm font-black text-slate-800"><FancyPrice amount={cashReceivedAmount} /></p>
+                </div>
+                <div className="rounded-lg border border-emerald-200 bg-white px-3 py-2">
+                  <p className="font-bold uppercase tracking-[0.1em] text-emerald-600">Devolución</p>
+                  <p className="mt-1 text-sm font-black text-slate-800"><FancyPrice amount={cashChangeAmount} /></p>
+                </div>
+              </div>
+
+              {cashPaymentMode === 'custom' && hasTypedCashAmount && cashMissingAmount > 0 && (
+                <p className="text-[11px] font-bold text-rose-600">
+                  Faltan <FancyPrice amount={cashMissingAmount} /> para completar el pago.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="space-y-1 pt-2 border-t border-slate-200">
             <div className="flex justify-between text-xs text-slate-500"><span>Subtotal</span><span><FancyPrice amount={subtotal} /></span></div>
             {selectedPayment === 'Credito' && (<div className="flex justify-between text-xs text-amber-600 font-bold"><span>Recargo (10%)</span><span>+<FancyPrice amount={subtotal * 0.1} /></span></div>)}
+            {selectedPayment === 'Efectivo' && (
+              <>
+                <div className="flex justify-between text-xs text-slate-500"><span>Efectivo recibido</span><span><FancyPrice amount={cashReceivedAmount} /></span></div>
+                <div className="flex justify-between text-xs font-bold text-emerald-600"><span>Devolución</span><span><FancyPrice amount={cashChangeAmount} /></span></div>
+              </>
+            )}
             <div className="flex justify-between items-end pt-2">
               <span className="text-sm font-bold text-slate-800 uppercase">Total a Pagar</span>
               <span className="text-[28px] font-black text-slate-900"><FancyPrice amount={total} /></span>
             </div>
           </div>
 
-          <button onClick={handlePreCheckout} disabled={cart.length === 0} className="w-full py-3.5 bg-gradient-to-r from-slate-900 to-slate-800 hover:from-black hover:to-slate-900 text-white rounded-xl font-bold text-base shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 group">
+          <button onClick={handlePreCheckout} disabled={cart.length === 0 || (selectedPayment === 'Efectivo' && cashPaymentMode === 'custom' && hasTypedCashAmount && cashMissingAmount > 0)} className="w-full py-3.5 bg-gradient-to-r from-slate-900 to-slate-800 hover:from-black hover:to-slate-900 text-white rounded-xl font-bold text-base shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 group">
             <CheckCircle className="group-hover:scale-110 transition-transform" />
             {cart.length === 0 ? 'CARRITO VACÍO' : 'COBRAR'}
           </button>
@@ -1324,7 +1495,10 @@ export default function POSView({
                     {selectableDiscountOffers.map((offer) => (
                       <button
                         key={`drawer-${offer.id}`}
-                        onClick={() => handleApplyOfferDiscount(offer)}
+                        onClick={() => {
+                          const result = handleApplyOfferDiscount(offer);
+                          if (!result.ok) showOfferApplyError(result);
+                        }}
                         disabled={discountBaseTotal <= 0}
                         className="w-full rounded-xl border border-emerald-200 bg-white p-4 text-left shadow-sm transition-colors hover:border-emerald-400 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
                       >

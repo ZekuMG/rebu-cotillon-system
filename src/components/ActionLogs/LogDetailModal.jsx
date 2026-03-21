@@ -107,6 +107,14 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
         const clientName = d.snapshot?.config?.clientName;
         return isClient ? (clientName || 'Presupuesto Cliente') : 'Reporte Interno';
       }
+      case 'Presupuesto Editado': return d.totalAmount != null ? <FancyPrice amount={d.totalAmount} /> : 'Presupuesto';
+      case 'Pedido Creado': return d.totalAmount != null ? <FancyPrice amount={d.totalAmount} /> : 'Pedido';
+      case 'Pago Pedido': return d.amount != null ? <FancyPrice amount={d.amount} /> : 'Pago';
+      case 'Pedido Retirado': return d.totalAmount != null ? <FancyPrice amount={d.totalAmount} /> : 'Pedido';
+      // CUPONES
+      case 'Cupón Creado':
+      case 'Cupón Editado':
+      case 'Cupón Eliminado': return 'Cupón';
       // OFERTAS
       case 'Oferta Creada':
       case 'Oferta Editada':
@@ -155,6 +163,14 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
       case 'Venta Modificada': return `Ajuste en Transacción #${getTransactionId(d) || 'S/N'}`;
       // EXPORTACIÓN PDF
       case 'Exportación PDF': return d.config?.isForClient ? (d.config?.clientName || 'Presupuesto Cliente') : 'Reporte Interno';
+      case 'Presupuesto Editado': return d.customerName || 'Presupuesto actualizado';
+      case 'Pedido Creado': return d.customerName || 'Pedido generado';
+      case 'Pago Pedido': return d.customerName || 'Pago registrado';
+      case 'Pedido Retirado': return d.customerName || 'Pedido entregado';
+      // CUPONES
+      case 'Cupón Creado':
+      case 'Cupón Editado':
+      case 'Cupón Eliminado': return d.name || 'Registro de Cupón';
       // OFERTAS
       case 'Oferta Creada':
       case 'Oferta Editada':

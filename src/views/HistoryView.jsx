@@ -1,7 +1,7 @@
 // src/views/HistoryView.jsx
-// ♻️ REFACTOR: Interfaz de Historial Consolidada y Optimizada (Filtros, Celdas Inline, UI Premium)
+// â™»ï¸ REFACTOR: Interfaz de Historial Consolidada y Optimizada (Filtros, Celdas Inline, UI Premium)
 
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   History,
   Trash2,
@@ -33,6 +33,8 @@ const formatDisplayDate = (dateString) => {
   return dateString;
 };
 
+const HISTORY_PAGE_SIZE = 50;
+
 export default function HistoryView({
   transactions,
   dailyLogs,
@@ -47,6 +49,15 @@ export default function HistoryView({
   showNotification: _showNotification,
   onViewTicket,
 }) {
+  const getComboIncludedItems = (item) => {
+    if (!item?.isCombo || !Array.isArray(item.productsIncluded) || item.productsIncluded.length === 0) return [];
+    const comboQty = Number(item.quantity || item.qty || 1);
+    return item.productsIncluded.map((includedItem) => ({
+      ...includedItem,
+      appliedQuantity: Number(includedItem.quantity || includedItem.qty || 1) * comboQty,
+    }));
+  };
+
   // Estados de filtros
   const [viewMode, setViewMode] = useState('all');
   const [filterDateStart, setFilterDateStart] = useState('');
@@ -56,12 +67,13 @@ export default function HistoryView({
   const [filterCategory, setFilterCategory] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState('desc');
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Modal de detalle
   const [selectedTx, setSelectedTx] = useState(null);
 
   // =====================================================
-  // TRANSACCIONES HISTÓRICAS (desde logs)
+  // TRANSACCIONES HISTÃ“RICAS (desde logs)
   // =====================================================
   const historicTransactions = useMemo(() => {
     const txList = [];
@@ -74,7 +86,7 @@ export default function HistoryView({
       if (log.action === 'Venta Anulada' && log.details?.id) {
         voidedIds.add(String(log.details.id));
       }
-      // ✨ FIX: Actualizamos el nombre a "Venta Eliminada"
+      // âœ¨ FIX: Actualizamos el nombre a "Venta Eliminada"
       const deletedTxId = log.details?.transactionId || log.details?.id;
       if ((log.action === 'Borrado Permanente' || log.action === 'Venta Eliminada') && deletedTxId) {
         const normalizedDeletedTxId = String(deletedTxId);
@@ -97,6 +109,8 @@ export default function HistoryView({
         user: log.user,
         items: log.details?.items || [],
         payment: log.details?.payment || 'N/A',
+        cashReceived: Number(log.details?.cashReceived || 0),
+        cashChange: Number(log.details?.cashChange || 0),
         installments: log.details?.installments || 0,
         total: safeTotal,
         client: log.details?.client || log.details?.memberName || null,
@@ -115,7 +129,7 @@ export default function HistoryView({
       if (isVentaLog(log) && log.details) {
         const txId = String(log.details.transactionId || log.id);
         
-        // ✨ FIX: Si está en la lista de borrados permanentes, NO la dibujamos en el historial
+        // âœ¨ FIX: Si estÃ¡ en la lista de borrados permanentes, NO la dibujamos en el historial
         if (activeIds.has(txId) || permanentlyDeletedIds.has(txId)) return;
 
         const logDate = normalizeDate(log.date);
@@ -130,12 +144,14 @@ export default function HistoryView({
                 user: log.user,
                 items: log.details.items || [],
                 payment: log.details.payment || 'N/A',
+                cashReceived: Number(log.details?.cashReceived || 0),
+                cashChange: Number(log.details?.cashChange || 0),
                 installments: log.details.installments || 0,
                 total: safeTotal,
                 client: log.details.client || log.details.memberName || null,
                 memberNumber: log.details.client?.memberNumber || log.details.memberNumber || null,
                 
-                // ✨ FIX: AHORA SÍ RESCATAMOS LOS PUNTOS DEL FANTASMA
+                // âœ¨ FIX: AHORA SÃ RESCATAMOS LOS PUNTOS DEL FANTASMA
                 pointsEarned: log.details.pointsEarned || 0,
                 pointsSpent: log.details.pointsSpent || 0,
                 
@@ -143,7 +159,7 @@ export default function HistoryView({
                 isHistoric: true,
                 sortDate: logDate, 
                 isTest: log.isTest,
-                isRestored: false // Generalmente los anulados históricos no están restaurados
+                isRestored: false // Generalmente los anulados histÃ³ricos no estÃ¡n restaurados
             });
         }
       }
@@ -158,17 +174,30 @@ export default function HistoryView({
     return (transactions || []).map((tx) => {
       const logDate = normalizeDate(tx.date);
       let resolvedUser = tx.user;
+      let resolvedItems = tx.items;
+      const creationLog = (dailyLogs || []).find(log => 
+        (log.action === 'Venta Realizada' && String(log.details?.transactionId) === String(tx.id))
+      );
       
       if (!resolvedUser || resolvedUser === 'Desconocido') {
-          const creationLog = (dailyLogs || []).find(log => 
-              (log.action === 'Venta Realizada' && String(log.details?.transactionId) === String(tx.id))
-          );
           if (creationLog) resolvedUser = creationLog.user;
       }
+
+      if (creationLog?.details?.items?.length) {
+        resolvedItems = creationLog.details.items;
+      }
+
+      const resolvedCashReceived =
+        Number(tx.cashReceived || 0) || Number(creationLog?.details?.cashReceived || 0);
+      const resolvedCashChange =
+        Number(tx.cashChange || 0) || Number(creationLog?.details?.cashChange || 0);
 
       return {
         ...tx,
         user: resolvedUser || 'Desconocido',
+        items: resolvedItems,
+        cashReceived: resolvedCashReceived,
+        cashChange: resolvedCashChange,
         isHistoric: false,
         sortDate: logDate || new Date(), 
       };
@@ -191,7 +220,7 @@ export default function HistoryView({
       }
     });
 
-    // 2. LÓGICA DE VISTA: HOY vs HISTORIAL
+    // 2. LÃ“GICA DE VISTA: HOY vs HISTORIAL
     if (viewMode === 'today') {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -224,11 +253,11 @@ export default function HistoryView({
       txList = txList.filter((tx) => tx.sortDate <= endDate);
     }
 
-    // 4. RESTO DE FILTROS BÁSICOS
+    // 4. RESTO DE FILTROS BÃSICOS
     if (filterPayment) txList = txList.filter((tx) => tx.payment === filterPayment);
     if (filterUser) txList = txList.filter((tx) => tx.user === filterUser);
     
-    // 5. FILTRO DE CATEGORÍA 
+    // 5. FILTRO DE CATEGORÃA 
     if (filterCategory) {
       txList = txList.filter((tx) =>
         (tx.items || []).some((item) => {
@@ -241,7 +270,7 @@ export default function HistoryView({
       );
     }
 
-    // 6. BÚSQUEDA GENERAL
+    // 6. BÃšSQUEDA GENERAL
     if (searchQuery.trim() && !isSearchingTest) {
       const query = searchQuery.toLowerCase().trim();
       txList = txList.filter((tx) => {
@@ -303,6 +332,29 @@ export default function HistoryView({
   };
 
   const hasActiveFilters = filterDateStart || filterDateEnd || filterPayment || filterUser || filterCategory || searchQuery;
+  const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / HISTORY_PAGE_SIZE));
+  const pageStart = filteredTransactions.length === 0 ? 0 : (currentPage - 1) * HISTORY_PAGE_SIZE + 1;
+  const pageEnd = Math.min(currentPage * HISTORY_PAGE_SIZE, filteredTransactions.length);
+  const visiblePageNumbers = useMemo(() => {
+    if (totalPages <= 3) return Array.from({ length: totalPages }, (_, index) => index + 1);
+    if (currentPage <= 2) return [1, 2, 3];
+    if (currentPage >= totalPages - 1) return [totalPages - 2, totalPages - 1, totalPages];
+    return [currentPage - 1, currentPage, currentPage + 1];
+  }, [currentPage, totalPages]);
+  const paginatedTransactions = useMemo(() => {
+    const startIndex = (currentPage - 1) * HISTORY_PAGE_SIZE;
+    return filteredTransactions.slice(startIndex, startIndex + HISTORY_PAGE_SIZE);
+  }, [filteredTransactions, currentPage]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [viewMode, filterDateStart, filterDateEnd, filterPayment, filterUser, filterCategory, searchQuery, sortOrder]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   // =====================================================
   // RENDER
@@ -311,7 +363,7 @@ export default function HistoryView({
     <div className="bg-white rounded-xl shadow-sm border overflow-hidden h-full min-h-0 flex flex-col">
       {/* HEADER Y FILTROS */}
       <div className="p-4 border-b bg-slate-50 shrink-0 space-y-4">
-        {/* Fila 1: Título y Stats */}
+        {/* Fila 1: TÃ­tulo y Stats */}
         <div className="flex flex-wrap justify-between items-center gap-2">
           <div className="flex items-center gap-3">
             <div className="bg-blue-100 p-1.5 rounded-lg text-blue-600">
@@ -319,7 +371,7 @@ export default function HistoryView({
             </div>
             <h3 className="font-bold text-slate-800 text-sm">Registro de Ventas</h3>
             <span className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1 rounded-lg font-bold shadow-sm ml-2 flex items-center gap-1">
-              {stats.count} ventas válidas • 
+              Total de ventas: {stats.count} °
               <span className="text-blue-600"><FancyPrice amount={stats.total} /></span>
             </span>
           </div>
@@ -330,7 +382,7 @@ export default function HistoryView({
               </button>
             )}
             <button onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')} className="flex items-center gap-1 px-3 py-1.5 text-[10px] font-bold text-slate-600 bg-white hover:bg-slate-100 rounded-lg border border-slate-200 shadow-sm transition-colors" title="Invertir Orden">
-              <ArrowUpDown size={12} /> {sortOrder === 'desc' ? 'Más recientes' : 'Más antiguas'}
+              <ArrowUpDown size={12} /> {sortOrder === 'desc' ? 'MÃ¡s recientes' : 'MÃ¡s antiguas'}
             </button>
           </div>
         </div>
@@ -361,7 +413,7 @@ export default function HistoryView({
           <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-sm">
             <Calendar size={12} className="text-slate-400" />
             <input type="date" className="text-[10px] bg-transparent outline-none font-medium text-slate-600 cursor-pointer" value={filterDateStart} onChange={(e) => setFilterDateStart(e.target.value)} title="Desde"/>
-            <span className="text-[10px] text-slate-300">—</span>
+            <span className="text-[10px] text-slate-300">â€”</span>
             <input type="date" className="text-[10px] bg-transparent outline-none font-medium text-slate-600 cursor-pointer" value={filterDateEnd} onChange={(e) => setFilterDateEnd(e.target.value)} title="Hasta"/>
           </div>
 
@@ -370,19 +422,19 @@ export default function HistoryView({
             <div className="relative">
                <Filter size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                <select className="pl-7 pr-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white appearance-none cursor-pointer" value={filterPayment} onChange={(e) => setFilterPayment(e.target.value)}>
-                 <option value="">Método de Pago</option>
+                 <option value="">MÃ©todo de Pago</option>
                  {PAYMENT_METHODS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
                </select>
             </div>
             
             <select className="px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer" value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
-              <option value="">Todas las Categorías</option>
+              <option value="">Todas las CategorÃ­as</option>
               {categoriesList.map((c) => (<option key={c} value={c}>{c}</option>))}
             </select>
 
             <select className="px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer" value={filterUser} onChange={(e) => setFilterUser(e.target.value)}>
               <option value="">Todos los Usuarios</option>
-              <option value="Dueño">Dueño</option>
+              <option value="DueÃ±o">DueÃ±o</option>
               <option value="Vendedor">Vendedor</option>
             </select>
           </div>
@@ -407,7 +459,7 @@ export default function HistoryView({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {filteredTransactions.map((tx, index) => {
+            {paginatedTransactions.map((tx, index) => {
               const isVoided = tx.status === 'voided';
               const isDeleted = tx.status === 'deleted';
               const isHistoric = tx.isHistoric;
@@ -457,7 +509,7 @@ export default function HistoryView({
                         ELIMINADO
                       </span>
                     )}
-                    {/* ✨ MEDALLA DE RESTAURADO CON HORA */}
+                    {/* âœ¨ MEDALLA DE RESTAURADO CON HORA */}
                     {!isVoided && !isDeleted && isRestored && (
                       <div className="mt-1.5 flex flex-col items-start gap-0.5">
                         <span className="text-[8.5px] font-black tracking-widest text-emerald-600 uppercase bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">
@@ -474,7 +526,7 @@ export default function HistoryView({
                   
                   <td className="px-4 py-3 align-middle">
                     <span className={`px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider ${
-                        isVoided ? 'bg-red-200 text-red-800' : isDeleted ? 'bg-orange-100 text-orange-700 border border-orange-200' : tx.user === 'Due�o' ? 'bg-[#eef2ff] text-indigo-600 border border-indigo-100' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                        isVoided ? 'bg-red-200 text-red-800' : isDeleted ? 'bg-orange-100 text-orange-700 border border-orange-200' : tx.user === 'Dueño' ? 'bg-[#eef2ff] text-indigo-600 border border-indigo-100' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
                       }`}
                     >
                       {tx.user || 'Desconocido'}
@@ -507,19 +559,37 @@ export default function HistoryView({
                       {(tx.items || []).slice(0, 3).map((i, idx) => {
                         const qty = i.qty || i.quantity || 0;
                         const isWeight = i.product_type === 'weight' || i.isWeight || (qty >= 20 && i.price < 50);
+                        const comboIncludedItems = getComboIncludedItems(i);
                         
                         return (
-                          <div key={idx} className="text-slate-600 text-[10px] mb-1 flex items-start gap-1.5">
+                          <div key={idx} className="text-slate-600 text-[10px] mb-1.5 flex items-start gap-1.5">
                             <span className="font-bold bg-white border border-slate-200 shadow-sm px-1 py-0.5 rounded text-[9px] text-slate-700 whitespace-nowrap">
                               {qty}{isWeight ? 'g' : 'x'}
                             </span>
-                            <span className="truncate flex-1 pt-0.5 font-medium" title={i.title}>{i.title}</span>
+                            <div className="min-w-0 flex-1 pt-0.5">
+                              <span className="truncate block font-medium" title={i.title}>{i.title}</span>
+                              {comboIncludedItems.length > 0 && (
+                                <div className="mt-1 rounded-md border border-violet-100 bg-violet-50/70 px-2 py-1.5">
+                                  {comboIncludedItems.map((includedItem, includedIndex) => {
+                                    const includedIsWeight = includedItem.product_type === 'weight';
+                                    return (
+                                      <div key={`${idx}-${includedIndex}`} className="flex items-center gap-1.5 text-[9px] text-violet-700">
+                                        <span className="font-bold rounded bg-white/80 px-1 py-0.5 border border-violet-100 whitespace-nowrap">
+                                          {includedItem.appliedQuantity}{includedIsWeight ? 'g' : 'x'}
+                                        </span>
+                                        <span className="truncate">{includedItem.title}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
                           </div>
                         );
                       })}
                       {(tx.items || []).length > 3 && (
                         <span className="text-[9px] text-slate-400 font-medium italic mt-1 inline-block bg-slate-50 px-2 py-0.5 rounded-full border border-slate-100">
-                          +{tx.items.length - 3} productos más
+                          +{tx.items.length - 3} productos mÃ¡s
                         </span>
                       )}
                     </div>
@@ -547,6 +617,11 @@ export default function HistoryView({
                         </span>
                       )}
                     </div>
+                    {tx.payment === 'Efectivo' && Number(tx.cashChange || 0) > 0 && (
+                      <p className="mt-1 text-[10px] font-bold text-emerald-600">
+                        Devolución: <FancyPrice amount={Number(tx.cashChange || 0)} />
+                      </p>
+                    )}
                   </td>
 
                   <td className="px-4 py-3 text-right align-middle">
@@ -559,17 +634,17 @@ export default function HistoryView({
                     <td className="px-4 py-3 align-middle">
                       <div className="flex items-center justify-center gap-1.5">
                         
-                        {/* Botón Ver Detalles */}
+                        {/* BotÃ³n Ver Detalles */}
                         <button onClick={() => setSelectedTx(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-300 transition-all shadow-sm group" title="Ver Detalles">
                           <Eye size={14} className="group-hover:scale-110 transition-transform" />
                         </button>
                         
-                        {/* Botón Ver Ticket */}
+                        {/* BotÃ³n Ver Ticket */}
                         <button onClick={() => onViewTicket(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 hover:border-slate-300 transition-all shadow-sm group" title="Ver Ticket">
                           <FileText size={14} className="group-hover:scale-110 transition-transform" />
                         </button>
 
-                        {/* Botones Modificar/Anular (solo si NO está anulada) */}
+                        {/* Botones Modificar/Anular (solo si NO estÃ¡ anulada) */}
                         {!isVoided && !isDeleted && (
                           <>
                             <button onClick={() => onEditTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-amber-50 hover:text-amber-600 hover:border-amber-300 transition-all shadow-sm group" title="Modificar Pedido">
@@ -582,10 +657,10 @@ export default function HistoryView({
                           </>
                         )}
                         
-                        {/* Botones Restaurar/Eliminar (solo si SÍ está anulada) */}
+                        {/* Botones Restaurar/Eliminar (solo si SÃ estÃ¡ anulada) */}
                         {isVoided && (
                           <>
-                            {/* ✨ NUEVO BOTÓN: Restaurar Venta */}
+                            {/* âœ¨ NUEVO BOTÃ“N: Restaurar Venta */}
                             <button onClick={() => onRestoreTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-emerald-500 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-300 transition-all shadow-sm group" title="Restaurar Venta (Recuperar)">
                               <RotateCcw size={14} className="group-hover:-rotate-45 transition-transform" />
                             </button>
@@ -616,6 +691,53 @@ export default function HistoryView({
           </tbody>
         </table>
       </div>
+
+      {filteredTransactions.length > 0 && (
+        <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-[11px] font-semibold text-slate-500">
+              Mostrando <span className="font-black text-slate-700">{pageStart}</span> a <span className="font-black text-slate-700">{pageEnd}</span> de <span className="font-black text-slate-700">{filteredTransactions.length}</span> registros
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={currentPage === 1}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Anterior
+              </button>
+              <div className="flex items-center gap-1.5">
+                {visiblePageNumbers.map((pageNumber) => (
+                  <button
+                    key={pageNumber}
+                    type="button"
+                    onClick={() => setCurrentPage(pageNumber)}
+                    className={`min-w-[34px] rounded-lg border px-2.5 py-1.5 text-[11px] font-black transition ${
+                      pageNumber === currentPage
+                        ? 'border-blue-200 bg-blue-50 text-blue-700'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {pageNumber}
+                  </button>
+                ))}
+              </div>
+              <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-black text-slate-700">
+                Página {currentPage} de {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={currentPage === totalPages}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Siguiente
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal de Detalle */}
       <TransactionDetailModal

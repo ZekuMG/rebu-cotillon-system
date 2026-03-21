@@ -30,7 +30,8 @@ import {
   mapSaleRecords,
   safeCloudData,
 } from './utils/cloudMappers';
-import { buildBudgetExportConfig, buildExportItemsFromSnapshot, deriveOrderStatus } from './utils/budgetHelpers';
+import { buildBudgetExportConfig, buildExportItemsFromSnapshot, deriveOrderStatus, hydrateBudgetSnapshot } from './utils/budgetHelpers';
+import { buildLegacyOfferPayload } from './utils/offerHelpers';
 
 import { USERS } from './data';
 import Sidebar from './components/Sidebar';
@@ -520,25 +521,29 @@ export default function PartySupplyApp() {
 
     setTimeout(async () => {
       try {
-        // Obtenemos Electron evadiendo bloqueos de Vite
-        const electronReq = window.require || window['require'];
-        
+        const electronReq =
+          window.require ||
+          window['require'] ||
+          globalThis.require ||
+          globalThis['require'];
+
         if (electronReq) {
           const ipc = electronReq('electron').ipcRenderer;
           const result = await ipc.invoke('save-as-pdf', `${safeName}.pdf`);
-          
+
           if (result.success) {
             showNotification('success', 'PDF Guardado', `Guardado en: ${result.filePath}`);
           } else if (!result.canceled) {
             Swal.fire('Error', 'No se pudo guardar el PDF: ' + result.error, 'error');
           }
         } else {
-          // SI NO DETECTA ELECTRON, NO IMPRIME NADA PARA PROTEGER LA TICKETERA
-          Swal.fire('Atención', 'No se detectó el motor de escritorio (Electron). Guardado de PDF deshabilitado en navegador web para proteger la ticketera térmica.', 'warning');
+          window.print();
+          showNotification('info', 'Vista de impresión abierta', 'No se detectó Electron; usá “Guardar como PDF” desde el diálogo del navegador.');
         }
       } catch (e) {
         console.error('Error IPC:', e);
-        Swal.fire('Error de Comunicación', 'Falló la conexión con Windows: ' + e.message, 'error');
+        window.print();
+        showNotification('info', 'Vista de impresión abierta', 'Falló la conexión con Windows; usá “Guardar como PDF” desde el diálogo del navegador.');
       }
       
       setTimeout(() => setExportPdfData(null), 500);
@@ -560,8 +565,12 @@ export default function PartySupplyApp() {
 
     setTimeout(async () => {
       try {
-        const electronReq = window.require || window['require'];
-        
+        const electronReq =
+          window.require ||
+          window['require'] ||
+          globalThis.require ||
+          globalThis['require'];
+
         if (electronReq) {
           const ipc = electronReq('electron').ipcRenderer;
           const result = await ipc.invoke('save-as-pdf', `${safeName}.pdf`);
@@ -572,11 +581,13 @@ export default function PartySupplyApp() {
             Swal.fire('Error', 'No se pudo guardar el PDF: ' + result.error, 'error');
           }
         } else {
-          Swal.fire('Atención', 'No se detectó el motor de escritorio (Electron). Guardado de PDF deshabilitado en navegador web para proteger la ticketera térmica.', 'warning');
+          window.print();
+          showNotification('info', 'Vista de impresión abierta', 'No se detectó Electron; usá “Guardar como PDF” desde el diálogo del navegador.');
         }
       } catch (e) {
         console.error('Error IPC:', e);
-        Swal.fire('Error de Comunicación', 'Falló la conexión con Windows: ' + e.message, 'error');
+        window.print();
+        showNotification('info', 'Vista de impresión abierta', 'Falló la conexión con Windows; usá “Guardar como PDF” desde el diálogo del navegador.');
       }
       
       setTimeout(() => setExportPdfData(null), 500);
@@ -642,10 +653,16 @@ export default function PartySupplyApp() {
         'Presupuesto Creado',
         {
           id: newBudget.id,
+          sharedRecordId: newBudget.id,
           customerName: newBudget.customerName,
           memberId: newBudget.memberId,
+          customerPhone: newBudget.customerPhone || '',
+          customerNote: newBudget.customerNote || '',
+          eventLabel: newBudget.eventLabel || '',
+          documentTitle: newBudget.documentTitle || 'PRESUPUESTO',
           totalAmount: newBudget.totalAmount,
           itemCount: newBudget.itemsSnapshot.length,
+          itemsSnapshot: buildOrderLogItems(newBudget.itemsSnapshot || []),
         },
         newBudget.eventLabel || 'Gestión de pedidos'
       );
@@ -660,6 +677,7 @@ export default function PartySupplyApp() {
 
   const handleUpdateBudget = async (id, budgetData) => {
     try {
+      const previousBudget = budgets.find((budget) => String(budget.id) === String(id)) || null;
       const payload = {
         member_id: budgetData.memberId || null,
         customer_name: budgetData.customerName || '',
@@ -672,18 +690,28 @@ export default function PartySupplyApp() {
       };
 
       const { data } = await updateWithSchemaFallback('budgets', id, payload);
+      const updatedBudget = mapBudgetRecords([data])[0];
 
       setBudgets((prev) =>
-        prev.map((budget) => (budget.id === id ? mapBudgetRecords([data])[0] : budget))
+        prev.map((budget) => (budget.id === id ? updatedBudget : budget))
       );
 
       addLog(
         'Presupuesto Editado',
         {
           id,
-          customerName: budgetData.customerName,
-          totalAmount: Number(budgetData.totalAmount || 0),
-          itemCount: (budgetData.itemsSnapshot || []).length,
+          sharedRecordId: id,
+          customerName: updatedBudget.customerName,
+          memberId: updatedBudget.memberId,
+          customerPhone: updatedBudget.customerPhone || '',
+          customerNote: updatedBudget.customerNote || '',
+          eventLabel: updatedBudget.eventLabel || '',
+          documentTitle: updatedBudget.documentTitle || 'PRESUPUESTO',
+          totalAmount: Number(updatedBudget.totalAmount || 0),
+          itemCount: (updatedBudget.itemsSnapshot || []).length,
+          itemsSnapshot: buildOrderLogItems(updatedBudget.itemsSnapshot || []),
+          previousItemsSnapshot: buildOrderLogItems(previousBudget?.itemsSnapshot || []),
+          changes: buildBudgetChanges(previousBudget, updatedBudget),
         },
         budgetData.eventLabel || 'Gestión de pedidos'
       );
@@ -708,6 +736,7 @@ export default function PartySupplyApp() {
         'Presupuesto Eliminado',
         {
           id: budgetRecord.id,
+          sharedRecordId: budgetRecord.id,
           customerName: deletedBudget?.customerName || budgetRecord.customerName,
           memberId: deletedBudget?.memberId ?? budgetRecord.memberId ?? null,
           totalAmount: Number(deletedBudget?.totalAmount ?? budgetRecord.totalAmount ?? 0),
@@ -721,6 +750,268 @@ export default function PartySupplyApp() {
       showNotification('error', 'Error', `No se pudo eliminar el presupuesto. ${getCloudErrorMessage(error)}`);
       throw error;
     }
+  };
+
+  const getOrderCheckoutItems = (orderRecord) =>
+    hydrateBudgetSnapshot(orderRecord.itemsSnapshot || []).map((item) => ({
+      ...item,
+      productId: item.productId ?? null,
+      qty: Number(item.qty || item.quantity || 0) || 0,
+      newPrice: Number(item.newPrice || item.unit_price || item.price || 0) || 0,
+      isTemporary: Boolean(item.isTemporary || item.is_custom || !item.productId),
+      product_type: item.product_type || 'quantity',
+    }));
+
+  const buildOrderRequiredStock = (items = []) =>
+    items.reduce((acc, item) => {
+      if (!item.productId || item.isTemporary) return acc;
+      const nextQty = Number(item.qty || item.quantity || 0) || 0;
+      if (nextQty <= 0) return acc;
+      acc[String(item.productId)] = (acc[String(item.productId)] || 0) + nextQty;
+      return acc;
+    }, {});
+
+  const getOrderStockIssues = (orderRecord) => {
+    const items = getOrderCheckoutItems(orderRecord);
+    const requiredStock = buildOrderRequiredStock(items);
+    const stockIssues = Object.entries(requiredStock)
+      .map(([id, requiredQty]) => {
+        const product = inventory.find((entry) => String(entry.id) === String(id));
+        if (!product) return `Producto #${id} (ya no existe en inventario)`;
+        if (Number(product.stock || 0) < Number(requiredQty || 0)) {
+          return `${product.title} (faltan ${Number(requiredQty || 0) - Number(product.stock || 0)})`;
+        }
+        return null;
+      })
+      .filter(Boolean);
+
+    return {
+      items,
+      requiredStock,
+      stockIssues,
+    };
+  };
+
+  const buildOrderLogItems = (itemsSnapshot = []) =>
+    hydrateBudgetSnapshot(itemsSnapshot).map((item) => ({
+      id: item.productId || item.id || null,
+      productId: item.productId || null,
+      title: item.title,
+      category: item.category || null,
+      quantity: Number(item.qty || 0),
+      qty: Number(item.qty || 0),
+      unitPrice: Number(item.newPrice || 0),
+      price: Number(item.newPrice || 0),
+      subtotal: Number(item.newPrice || 0) * (item.product_type === 'weight' ? Number(item.qty || 0) / 1000 : Number(item.qty || 0)),
+      product_type: item.product_type || 'quantity',
+      isCustom: Boolean(item.isTemporary),
+    }));
+
+  const buildBudgetChanges = (previousRecord, nextRecord) => {
+    if (!previousRecord) return [];
+
+    const prevItems = previousRecord.itemsSnapshot || [];
+    const nextItems = nextRecord.itemsSnapshot || [];
+    const changes = [];
+
+    const pushChange = (field, oldValue, newValue, extra = {}) => {
+      if (oldValue === newValue) return;
+      changes.push({ field, old: oldValue, new: newValue, ...extra });
+    };
+
+    pushChange('Cliente', previousRecord.customerName || '', nextRecord.customerName || '');
+    pushChange('Teléfono', previousRecord.customerPhone || '', nextRecord.customerPhone || '');
+    pushChange('Nota', previousRecord.customerNote || '', nextRecord.customerNote || '');
+    pushChange('Evento', previousRecord.eventLabel || '', nextRecord.eventLabel || '');
+    pushChange('Documento', previousRecord.documentTitle || '', nextRecord.documentTitle || '');
+    pushChange('Total', Number(previousRecord.totalAmount || 0), Number(nextRecord.totalAmount || 0), { isPrice: true });
+    pushChange('Items', prevItems.length, nextItems.length);
+
+    return changes;
+  };
+
+  const handleFinalizePaidOrder = async (orderRecord) => {
+    const alreadyLogged = dailyLogs.some(
+      (log) =>
+        log.action === 'Venta Realizada' &&
+        String(log.details?.orderId) === String(orderRecord.id)
+    );
+    if (alreadyLogged) return null;
+
+    const { items, requiredStock, stockIssues } = getOrderStockIssues(orderRecord);
+    if (stockIssues.length > 0) {
+      throw new Error(`No hay stock suficiente para completar el pedido: ${stockIssues.join(', ')}`);
+    }
+
+    const totalAmount = Number(orderRecord.totalAmount || 0);
+    const clientId = orderRecord.memberId || null;
+    const pointsEarned = clientId ? Math.floor(totalAmount / 500) : 0;
+    const pointsSpent = 0;
+
+    const { data: sale, error: saleErr } = await supabase
+      .from('sales')
+      .insert({
+        total: totalAmount,
+        payment_method: 'Pedido',
+        installments: 0,
+        client_id: clientId,
+        points_earned: clientId ? pointsEarned : 0,
+        points_spent: 0,
+        user_name: currentUser.name,
+      })
+      .select()
+      .single();
+
+    if (saleErr) throw saleErr;
+
+    const itemsPayload = items.map((item) => ({
+      sale_id: sale.id,
+      product_id: item.isTemporary ? null : item.productId,
+      product_title: item.title,
+      quantity: item.qty,
+      price: item.newPrice,
+      is_reward: false,
+    }));
+
+    const { error: saleItemsErr } = await supabase.from('sale_items').insert(itemsPayload);
+    if (saleItemsErr) throw saleItemsErr;
+
+    const stockChanges = Object.entries(requiredStock)
+      .map(([id, qtyToDeduct]) => {
+        const product = inventory.find((entry) => String(entry.id) === String(id));
+        if (!product) return null;
+        const stockBefore = Number(product.stock || 0);
+        return {
+          productId: product.id,
+          title: product.title,
+          product_type: product.product_type || 'quantity',
+          quantitySold: Number(qtyToDeduct || 0),
+          stockBefore,
+          stockAfter: stockBefore - Number(qtyToDeduct || 0),
+        };
+      })
+      .filter(Boolean);
+
+    for (const [id, qtyToDeduct] of Object.entries(requiredStock)) {
+      const product = inventory.find((entry) => String(entry.id) === String(id));
+      if (product) {
+        await supabase
+          .from('products')
+          .update({ stock: Number(product.stock || 0) - Number(qtyToDeduct || 0) })
+          .eq('id', id);
+      }
+    }
+
+    let updatedClientForHistory = null;
+    let pointsChange = null;
+    if (clientId) {
+      const linkedMember = members.find((member) => String(member.id) === String(clientId));
+      if (linkedMember) {
+        const previousPoints = Number(linkedMember.points || 0);
+        const newPoints = previousPoints + pointsEarned;
+        pointsChange = { previous: previousPoints, new: newPoints, diff: newPoints - previousPoints };
+        await supabase.from('clients').update({ points: newPoints }).eq('id', clientId);
+        updatedClientForHistory = { ...linkedMember, points: newPoints, currentPoints: newPoints };
+        setMembers((prev) =>
+          prev.map((member) =>
+            String(member.id) === String(clientId) ? { ...member, points: newPoints, currentPoints: newPoints } : member
+          )
+        );
+      }
+    }
+
+    setInventory((prev) =>
+      prev.map((product) => {
+        const qtyToDeduct = requiredStock[String(product.id)];
+        return qtyToDeduct ? { ...product, stock: Number(product.stock || 0) - Number(qtyToDeduct || 0) } : product;
+      })
+    );
+
+    const now = new Date();
+    const historyItems = items.map((item) => ({
+      id: item.productId || item.id,
+      productId: item.productId || null,
+      title: item.title,
+      quantity: item.qty,
+      qty: item.qty,
+      price: item.newPrice,
+      isReward: false,
+      product_type: item.product_type || 'quantity',
+      isCustom: Boolean(item.isTemporary),
+      isCombo: false,
+      category: item.category || null,
+    }));
+
+    const fallbackClientName = orderRecord.customerName || 'Cliente';
+    const fallbackPhone = orderRecord.customerPhone || '';
+    const txClient = clientId
+      ? updatedClientForHistory || members.find((member) => String(member.id) === String(clientId)) || null
+      : fallbackClientName
+        ? { id: 'guest', name: fallbackClientName, phone: fallbackPhone }
+        : null;
+
+    const tx = {
+      id: sale.id,
+      date: formatDateAR(now),
+      time: formatTimeFullAR(now),
+      user: currentUser.name,
+      total: totalAmount,
+      payment: 'Pedido',
+      installments: 0,
+      items: historyItems,
+      status: 'completed',
+      client: txClient,
+      pointsEarned: clientId ? pointsEarned : 0,
+      pointsSpent,
+      orderId: orderRecord.id,
+      budgetId: orderRecord.budgetId || null,
+    };
+    tx.stockChanges = stockChanges;
+
+    tx.isTest = isTestRecord(tx);
+    setTransactions((prev) => [tx, ...prev]);
+
+    const logItems = historyItems.map((item) => ({
+      id: item.id,
+      title: item.title,
+      quantity: item.quantity,
+      price: item.price,
+      isReward: false,
+      product_type: item.product_type || 'quantity',
+      isCustom: Boolean(item.isCustom),
+      isCombo: false,
+      isDiscount: false,
+      productsIncluded: [],
+    }));
+
+    await addLog(
+      'Venta Realizada',
+      {
+        transactionId: tx.id,
+        orderId: orderRecord.id,
+        budgetId: orderRecord.budgetId || null,
+        sharedRecordId: orderRecord.budgetId || orderRecord.id,
+        documentTitle: orderRecord.documentTitle || 'PEDIDO',
+        eventLabel: orderRecord.eventLabel || '',
+        customerName: orderRecord.customerName || fallbackClientName || '',
+        customerPhone: orderRecord.customerPhone || fallbackPhone || '',
+        customerNote: orderRecord.customerNote || '',
+        memberId: clientId || null,
+        total: totalAmount,
+        items: logItems,
+        payment: 'Pedido',
+        installments: 0,
+        client: clientId ? (txClient?.name || fallbackClientName || null) : null,
+        memberNumber: clientId ? (txClient?.memberNumber || null) : null,
+        pointsEarned: clientId ? pointsEarned : 0,
+        pointsSpent,
+        pointsChange,
+        stockChanges,
+      },
+      'Cobro total desde Pedidos'
+    );
+
+    return tx;
   };
 
   const handleConvertBudgetToOrder = async (budgetRecord, { pickupDate, depositAmount }) => {
@@ -737,6 +1028,14 @@ export default function PartySupplyApp() {
       const initialPayment = Math.min(Math.max(Number(depositAmount || 0), 0), totalAmount);
       const remainingAmount = Math.max(totalAmount - initialPayment, 0);
       const status = deriveOrderStatus({ paidTotal: initialPayment, totalAmount });
+
+      if (initialPayment >= totalAmount) {
+        const { stockIssues } = getOrderStockIssues(budgetRecord);
+        if (stockIssues.length > 0) {
+          showNotification('error', 'Stock Insuficiente', `No se puede marcar como pagado: ${stockIssues.join(', ')}`);
+          return null;
+        }
+      }
 
       const payload = {
         budget_id: budgetRecord.id,
@@ -760,15 +1059,34 @@ export default function PartySupplyApp() {
 
       const newOrder = mapOrderRecords([data])[0];
       setOrders((prev) => [newOrder, ...prev]);
+      let finalizedSale = null;
+
+      if (initialPayment >= totalAmount && totalAmount > 0) {
+        finalizedSale = await handleFinalizePaidOrder(newOrder);
+      }
+
       addLog(
         'Pedido Creado',
         {
           id: newOrder.id,
           budgetId: budgetRecord.id,
+          sharedRecordId: budgetRecord.id || newOrder.id,
+          saleId: finalizedSale?.id || null,
+          transactionId: finalizedSale?.id || null,
+          memberId: newOrder.memberId || null,
           customerName: newOrder.customerName,
+          customerPhone: newOrder.customerPhone || '',
+          customerNote: newOrder.customerNote || '',
+          eventLabel: newOrder.eventLabel || '',
+          documentTitle: newOrder.documentTitle || 'PEDIDO',
+          itemsSnapshot: buildOrderLogItems(newOrder.itemsSnapshot || []),
+          itemCount: (newOrder.itemsSnapshot || []).length,
           totalAmount: newOrder.totalAmount,
           depositAmount: newOrder.depositAmount,
+          paidTotal: newOrder.paidTotal,
+          remainingAmount: newOrder.remainingAmount,
           pickupDate: newOrder.pickupDate,
+          stockChanges: finalizedSale?.stockChanges || [],
         },
         budgetRecord.eventLabel || 'Conversión desde presupuesto'
       );
@@ -783,6 +1101,18 @@ export default function PartySupplyApp() {
 
   const handleRegisterOrderPayment = async (orderRecord, paymentAmount) => {
     try {
+      const isCrossingToFullyPaid =
+        Number(orderRecord.paidTotal || 0) < Number(orderRecord.totalAmount || 0) &&
+        Number(orderRecord.paidTotal || 0) + Number(paymentAmount || 0) >= Number(orderRecord.totalAmount || 0);
+
+      if (isCrossingToFullyPaid) {
+        const { stockIssues } = getOrderStockIssues(orderRecord);
+        if (stockIssues.length > 0) {
+          showNotification('error', 'Stock Insuficiente', `No se puede completar el pedido: ${stockIssues.join(', ')}`);
+          return;
+        }
+      }
+
       const nextPaidTotal = Math.min(
         Number(orderRecord.totalAmount || 0),
         Number(orderRecord.paidTotal || 0) + Number(paymentAmount || 0)
@@ -806,14 +1136,33 @@ export default function PartySupplyApp() {
         prev.map((order) => (order.id === orderRecord.id ? mapOrderRecords([data])[0] : order))
       );
 
+      const updatedOrder = mapOrderRecords([data])[0];
+      let finalizedSale = null;
+
+      if (isCrossingToFullyPaid && Number(updatedOrder.totalAmount || 0) > 0) {
+        finalizedSale = await handleFinalizePaidOrder(updatedOrder);
+      }
+
       addLog(
         'Pago Pedido',
         {
           id: orderRecord.id,
-          customerName: orderRecord.customerName,
+          budgetId: updatedOrder.budgetId || null,
+          sharedRecordId: updatedOrder.budgetId || orderRecord.id,
+          saleId: finalizedSale?.id || null,
+          transactionId: finalizedSale?.id || null,
+          customerName: updatedOrder.customerName,
+          customerPhone: updatedOrder.customerPhone || '',
+          customerNote: updatedOrder.customerNote || '',
+          eventLabel: updatedOrder.eventLabel || '',
+          documentTitle: updatedOrder.documentTitle || 'PEDIDO',
+          totalAmount: Number(updatedOrder.totalAmount || 0),
           amount: Number(paymentAmount || 0),
           paidTotal: nextPaidTotal,
           remainingAmount: nextRemaining,
+          pickupDate: updatedOrder.pickupDate || null,
+          itemsSnapshot: buildOrderLogItems(updatedOrder.itemsSnapshot || []),
+          stockChanges: finalizedSale?.stockChanges || [],
         },
         'Cobro manual en Pedidos'
       );
@@ -828,17 +1177,28 @@ export default function PartySupplyApp() {
   const handleMarkOrderRetired = async (orderRecord) => {
     try {
       const { data } = await updateWithSchemaFallback('orders', orderRecord.id, { status: 'Retirado' });
+      const retiredOrder = mapOrderRecords([data])[0];
 
       setOrders((prev) =>
-        prev.map((order) => (order.id === orderRecord.id ? mapOrderRecords([data])[0] : order))
+        prev.map((order) => (order.id === orderRecord.id ? retiredOrder : order))
       );
 
       addLog(
         'Pedido Retirado',
         {
           id: orderRecord.id,
-          customerName: orderRecord.customerName,
-          totalAmount: orderRecord.totalAmount,
+          budgetId: retiredOrder.budgetId || null,
+          sharedRecordId: retiredOrder.budgetId || orderRecord.id,
+          customerName: retiredOrder.customerName,
+          customerPhone: retiredOrder.customerPhone || '',
+          customerNote: retiredOrder.customerNote || '',
+          eventLabel: retiredOrder.eventLabel || '',
+          documentTitle: retiredOrder.documentTitle || 'PEDIDO',
+          totalAmount: retiredOrder.totalAmount,
+          paidTotal: retiredOrder.paidTotal,
+          remainingAmount: retiredOrder.remainingAmount,
+          pickupDate: retiredOrder.pickupDate || null,
+          itemsSnapshot: buildOrderLogItems(retiredOrder.itemsSnapshot || []),
         },
         'Entrega finalizada'
       );
@@ -892,6 +1252,36 @@ export default function PartySupplyApp() {
     }
   };
 
+  const handleDeleteOrder = async (orderRecord) => {
+    try {
+      const { data } = await updateWithSchemaFallback('orders', orderRecord.id, {
+        is_active: false,
+      });
+
+      const deletedOrder = mapOrderRecords([data])[0];
+      setOrders((prev) => prev.filter((order) => order.id !== orderRecord.id));
+
+      addLog(
+        'Pedido Eliminado',
+        {
+          id: orderRecord.id,
+          budgetId: deletedOrder?.budgetId ?? orderRecord.budgetId ?? null,
+          customerName: deletedOrder?.customerName || orderRecord.customerName,
+          totalAmount: Number(deletedOrder?.totalAmount ?? orderRecord.totalAmount ?? 0),
+          paidTotal: Number(deletedOrder?.paidTotal ?? orderRecord.paidTotal ?? 0),
+          status: deletedOrder?.status || orderRecord.status,
+        },
+        deletedOrder?.eventLabel || orderRecord.eventLabel || 'Gestión de pedidos'
+      );
+
+      showNotification('success', 'Pedido Eliminado', 'El pedido fue eliminado de Pedidos.');
+    } catch (error) {
+      console.error('Error eliminando pedido:', error);
+      showNotification('error', 'Error', `No se pudo eliminar el pedido. ${getCloudErrorMessage(error)}`);
+      throw error;
+    }
+  };
+
   const handlePrintOrderRecord = (record) => {
     handleExportProducts(
       buildBudgetExportConfig(record),
@@ -902,6 +1292,66 @@ export default function PartySupplyApp() {
   // ==========================================
   // ✨ HANDLERS DE OFERTAS
   // ==========================================
+  const normalizeOfferProfitMargin = (value) => {
+    if (typeof value === 'string' && value.startsWith('PERCENTAGE:')) {
+      const parsedPercentage = Number(value.slice('PERCENTAGE:'.length));
+      return Number.isFinite(parsedPercentage) ? parsedPercentage : 0;
+    }
+
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) ? numericValue : 0;
+  };
+
+  const getLoggedOfferDiscountMode = (offerLike = {}) => {
+    const rawProfitMargin = String(offerLike.profitMargin || '');
+    if (rawProfitMargin.startsWith('PERCENTAGE:')) {
+      return 'percentage';
+    }
+
+    const rawMode = String(offerLike.discountMode || '').toLowerCase();
+    if (rawMode === 'percentage' || rawMode === 'total' || rawMode === 'unit') {
+      return rawMode;
+    }
+
+    if (String(offerLike.type || '').toLowerCase() === 'cupon') {
+      return Number(offerLike.itemsCount || 0) === 2 ? 'percentage' : 'total';
+    }
+
+    if (
+      (offerLike.type === 'Descuento Total' || offerLike.type === 'Descuento Unidad') &&
+      Number(offerLike.itemsCount || 0) === -1
+    ) {
+      return 'percentage';
+    }
+
+    if (offerLike.type === 'Descuento Total') return 'total';
+    if (offerLike.type === 'Descuento Unidad') return 'unit';
+
+    return '';
+  };
+
+  const normalizeOfferForPersistence = (offerLike = {}) => {
+    if (offerLike && offerLike.benefitType) {
+      const productsByCategory = (categories || []).reduce((acc, categoryName) => {
+        acc[categoryName] = (inventory || []).filter((product) => product.category === categoryName);
+        return acc;
+      }, {});
+
+      return buildLegacyOfferPayload(offerLike, productsByCategory, inventory || []);
+    }
+
+    return {
+      name: String(offerLike.name || '').trim(),
+      type: offerLike.type || '',
+      applyTo: offerLike.applyTo || '',
+      productsIncluded: Array.isArray(offerLike.productsIncluded) ? offerLike.productsIncluded : [],
+      itemsCount: Number(offerLike.itemsCount) || 0,
+      discountValue: Number(offerLike.discountValue) || 0,
+      offerPrice: Number(offerLike.offerPrice) || 0,
+      profitMargin: normalizeOfferProfitMargin(offerLike.profitMargin),
+    };
+  };
+
   const handleAddOffer = async (offerData) => {
     try {
       const payload = {
@@ -912,7 +1362,7 @@ export default function PartySupplyApp() {
         items_count: Number(offerData.itemsCount) || 0,
         discount_value: Number(offerData.discountValue) || 0,
         offer_price: Number(offerData.offerPrice) || 0,
-        profit_margin: Number(offerData.profitMargin) || 0,
+        profit_margin: normalizeOfferProfitMargin(offerData.profitMargin),
         created_by: currentUser?.name || 'Sistema'
       };
 
@@ -942,7 +1392,8 @@ export default function PartySupplyApp() {
         itemsCount: newOffer.itemsCount,
         discountValue: newOffer.discountValue,
         offerPrice: newOffer.offerPrice,
-        profitMargin: newOffer.profitMargin
+        profitMargin: newOffer.profitMargin,
+        discountMode: getLoggedOfferDiscountMode(newOffer)
       });
       
       showNotification('success', 'Oferta Creada', 'La oferta se guardó en el catálogo.');
@@ -954,44 +1405,53 @@ export default function PartySupplyApp() {
 
   const handleUpdateOffer = async (id, updatedData) => {
     try {
-      const oldOffer = offers.find(o => o.id === id);
+      const oldOffer = offers.find(o => o.id === id) || {};
+      const normalizedUpdatedData = normalizeOfferForPersistence(updatedData);
+      const safeProductsIncluded = Array.isArray(normalizedUpdatedData.productsIncluded)
+        ? normalizedUpdatedData.productsIncluded
+        : [];
 
       const payload = {
-        name: updatedData.name,
-        type: updatedData.type,
-        apply_to: updatedData.applyTo,
-        products_included: updatedData.productsIncluded || [],
-        items_count: Number(updatedData.itemsCount) || 0,
-        discount_value: Number(updatedData.discountValue) || 0,
-        offer_price: Number(updatedData.offerPrice) || 0,
-        profit_margin: Number(updatedData.profitMargin) || 0
+        name: normalizedUpdatedData.name,
+        type: normalizedUpdatedData.type,
+        apply_to: normalizedUpdatedData.applyTo,
+        products_included: safeProductsIncluded,
+        items_count: Number(normalizedUpdatedData.itemsCount) || 0,
+        discount_value: Number(normalizedUpdatedData.discountValue) || 0,
+        offer_price: Number(normalizedUpdatedData.offerPrice) || 0,
+        profit_margin: normalizeOfferProfitMargin(normalizedUpdatedData.profitMargin)
       };
 
       const { error } = await supabase.from('offers').update(payload).eq('id', id);
       if (error) throw error;
 
-      setOffers(offers.map(o => o.id === id ? { ...o, ...updatedData } : o));
+      setOffers(offers.map(o => o.id === id ? { ...o, ...normalizedUpdatedData } : o));
       
       addLog('Oferta Editada', {
         id,
-        name: updatedData.name,
-        type: updatedData.type,
-        applyTo: updatedData.applyTo,
-        productsIncluded: updatedData.productsIncluded.map(p => p.title),
-        itemsCount: updatedData.itemsCount,
-        discountValue: updatedData.discountValue,
-        offerPrice: updatedData.offerPrice,
-        profitMargin: updatedData.profitMargin,
+        name: normalizedUpdatedData.name,
+        type: normalizedUpdatedData.type,
+        applyTo: normalizedUpdatedData.applyTo,
+        productsIncluded: safeProductsIncluded.map((product) =>
+          typeof product === 'string'
+            ? product
+            : product?.title || product?.name || String(product?.id || 'Producto')
+        ),
+        itemsCount: normalizedUpdatedData.itemsCount,
+        discountValue: normalizedUpdatedData.discountValue,
+        offerPrice: normalizedUpdatedData.offerPrice,
+        profitMargin: normalizedUpdatedData.profitMargin,
+        discountMode: getLoggedOfferDiscountMode(normalizedUpdatedData),
         // Comparativas para el Log
-        changedCount: updatedData.productsIncluded.length !== oldOffer.productsIncluded.length,
+        changedCount: safeProductsIncluded.length !== (oldOffer.productsIncluded || []).length,
         oldPrice: oldOffer.offerPrice,
-        newPrice: updatedData.offerPrice
+        newPrice: normalizedUpdatedData.offerPrice
       });
 
       showNotification('success', 'Oferta Actualizada', 'Los cambios se guardaron.');
     } catch (e) {
       console.error(e);
-      showNotification('error', 'Error', 'No se pudo actualizar la oferta.');
+      showNotification('error', 'Error', `No se pudo actualizar la oferta.${e?.message ? ` ${e.message}` : ''}`);
     }
   };
 
@@ -1030,7 +1490,10 @@ export default function PartySupplyApp() {
         type: offerToDelete.type,
         applyTo: offerToDelete.applyTo,
         itemsCount: offerToDelete.itemsCount,
+        discountValue: offerToDelete.discountValue,
         offerPrice: offerToDelete.offerPrice,
+        profitMargin: offerToDelete.profitMargin,
+        discountMode: getLoggedOfferDiscountMode(offerToDelete),
         affectedProductsCount: affectedProducts.length
       }, 'Eliminación permanente');
 
@@ -1406,12 +1869,15 @@ export default function PartySupplyApp() {
     const itemInStock = inventory.find((i) => i.id === id);
     if (!itemInStock) return;
 
-    if (qty > itemInStock.stock) {
-      showNotification('error', 'Stock Insuficiente', `Máximo disponible: ${itemInStock.stock}`);
+    const maxAvailableQty = Math.max(1, Number(itemInStock.stock) || 0);
+    const finalQty = Math.min(qty, maxAvailableQty);
+
+    if (qty > maxAvailableQty) {
+      showNotification('warning', 'Stock ajustado', `Se aplicó el máximo disponible: ${maxAvailableQty}`);
       return;
     }
     
-    setCart(cart.map((c) => (c.id === id ? { ...c, quantity: qty } : c)));
+    setCart(cart.map((c) => (c.id === id ? { ...c, quantity: finalQty } : c)));
   };
   
   const removeFromCart = (id) => setCart(cart.filter((c) => c.id !== id));
@@ -1569,6 +2035,15 @@ export default function PartySupplyApp() {
       qty: Number(i.qty || i.quantity) || 0,
       price: Number(i.price) || 0,
     }));
+    const safeTotal = Number(safeTx.total || 0);
+    const existingCashReceived = Number(safeTx.cashReceived ?? safeTx.cash_received);
+    const normalizedCashReceived = Number.isFinite(existingCashReceived) && existingCashReceived > 0
+      ? existingCashReceived
+      : safeTotal;
+    safeTx.cashReceived = safeTx.payment === 'Efectivo' ? normalizedCashReceived : 0;
+    safeTx.cashChange = safeTx.payment === 'Efectivo'
+      ? Math.max(0, safeTx.cashReceived - safeTotal)
+      : 0;
     setEditingTransaction(safeTx);
     setTransactionSearch('');
     setEditReason('');
@@ -2205,7 +2680,6 @@ export default function PartySupplyApp() {
   const handleRedeemReward = (reward) => {
     if (!posSelectedClient) {
       showNotification('error', 'Error', 'No hay cliente seleccionado para el canje.');
-      return;
     }
     const rewardItem = {
       id: reward.id, 
@@ -2221,8 +2695,50 @@ export default function PartySupplyApp() {
     showNotification('success', 'Premio Aplicado', 'El descuento se ha agregado al carrito.');
   };
 
-  const handleCheckout = async () => {
+  const extractCouponCodeFromSaleItem = (item) => {
+    const title = String(item?.title || '');
+    const description = String(item?.description || '');
+    const couponMatch =
+      title.match(/cup[oó]n\s+([a-z0-9_-]+)/i) ||
+      description.match(/cup[oó]n\s+([a-z0-9_-]+)/i);
+
+    return couponMatch ? String(couponMatch[1]).trim().toUpperCase() : '';
+  };
+
+  const enrichClientWithCouponUsage = (client) => {
+    if (!client || client.id === 'guest') return client;
+
+    const memberId = String(client.id || '');
+    const memberNumber = String(client.memberNumber || '');
+
+    const usedCoupons = (transactions || []).flatMap((tx) => {
+      if (tx.status === 'voided' || !tx.client) return [];
+
+      const sameClient =
+        String(tx.client?.id || '') === memberId ||
+        String(tx.client?.memberNumber || '') === memberNumber;
+
+      if (!sameClient) return [];
+
+      return (tx.items || [])
+        .map((item) => extractCouponCodeFromSaleItem(item))
+        .filter(Boolean);
+    });
+
+    return {
+      ...client,
+      usedCoupons: Array.from(new Set(usedCoupons)),
+    };
+  };
+
+  const handleCheckout = async (checkoutOptions = {}) => {
     const total = calculateTotal();
+    const cashReceived = selectedPayment === 'Efectivo'
+      ? Number(checkoutOptions.cashReceived ?? total)
+      : null;
+    const cashChange = selectedPayment === 'Efectivo'
+      ? Math.max(0, Number(checkoutOptions.cashChange ?? 0))
+      : 0;
     
     // ✨ MAGIA: Agrupamos todo el stock requerido (productos sueltos + los que están adentro de combos)
     const requiredStock = {};
@@ -2262,12 +2778,19 @@ export default function PartySupplyApp() {
       const pointsSpent = cart.reduce((acc, i) => acc + (i.isReward ? i.pointsCost : 0), 0);
       const clientId = posSelectedClient?.id && posSelectedClient.id !== 'guest' ? posSelectedClient.id : null;
 
-      const { data: sale, error: saleErr } = await supabase.from('sales').insert({
-          total, payment_method: selectedPayment, installments, client_id: clientId,
-          points_earned: clientId ? pointsEarned : 0, points_spent: pointsSpent,
-          user_name: currentUser.name 
-        }).select().single();
-        if (saleErr) throw saleErr;
+      const salePayload = {
+        total,
+        payment_method: selectedPayment,
+        installments,
+        client_id: clientId,
+        points_earned: clientId ? pointsEarned : 0,
+        points_spent: pointsSpent,
+        user_name: currentUser.name,
+        cash_received: cashReceived,
+        cash_change: cashChange,
+      };
+      const { data: sale, error: saleErr } = await insertWithSchemaFallback('sales', salePayload);
+      if (saleErr) throw saleErr;
 
       const itemsPayload = cart.map(i => ({
           sale_id: sale.id, 
@@ -2279,6 +2802,23 @@ export default function PartySupplyApp() {
           is_reward: !!i.isReward
         }));
         await supabase.from('sale_items').insert(itemsPayload);
+
+      const stockChanges = Object.entries(requiredStock)
+        .map(([id, qtyToDeduct]) => {
+          const product = inventory.find((p) => String(p.id) === String(id));
+          if (!product) return null;
+
+          const beforeStock = Number(product.stock || 0);
+          return {
+            productId: product.id,
+            title: product.title,
+            product_type: product.product_type || 'quantity',
+            quantitySold: Number(qtyToDeduct || 0),
+            stockBefore: beforeStock,
+            stockAfter: beforeStock - Number(qtyToDeduct || 0),
+          };
+        })
+        .filter(Boolean);
 
       // ✨ Descontamos stock usando el mapa que agrupamos al principio
       for (const [id, qtyToDeduct] of Object.entries(requiredStock)) {
@@ -2316,6 +2856,8 @@ export default function PartySupplyApp() {
         total,
         payment: selectedPayment,
         installments: selectedPayment === 'Credito' ? installments : 0,
+        cashReceived,
+        cashChange,
         items: cart,
         status: 'completed',
         client: updatedClientForTicket || posSelectedClient, 
@@ -2327,9 +2869,21 @@ export default function PartySupplyApp() {
       setTransactions([tx, ...transactions]);
 
       const logItems = cart.map(item => ({
-        id: item.id, title: item.title, quantity: item.quantity, price: item.price,
-        isReward: item.isReward || false, product_type: item.product_type || 'quantity',
-        isCustom: item.isCustom || false, isCombo: item.isCombo || false // ✨ Guardamos flag en log
+        id: item.id,
+        title: item.title,
+        quantity: item.quantity,
+        price: item.price,
+        isReward: item.isReward || false,
+        product_type: item.product_type || 'quantity',
+        isCustom: item.isCustom || false,
+        isCombo: item.isCombo || false,
+        isDiscount: item.isDiscount || false,
+        productsIncluded: (item.productsIncluded || []).map((includedItem) => ({
+          id: includedItem.id,
+          title: includedItem.title,
+          quantity: Number(includedItem.quantity || includedItem.qty || 1),
+          product_type: includedItem.product_type || 'quantity',
+        })),
       }));
 
       const isGuest = !posSelectedClient || posSelectedClient.id === 'guest';
@@ -2338,11 +2892,14 @@ export default function PartySupplyApp() {
         transactionId: tx.id, total: total, items: logItems,
         payment: selectedPayment, 
         installments: selectedPayment === 'Credito' ? installments : 0,
+        cashReceived,
+        cashChange,
         client: isGuest ? null : posSelectedClient.name,
         memberNumber: isGuest ? null : posSelectedClient.memberNumber,
         pointsEarned: clientId ? pointsEarned : 0,
         pointsSpent: pointsSpent,
-        pointsChange: pointsChange 
+        pointsChange: pointsChange,
+        stockChanges,
       }, 'Venta regular');
       
       setSaleSuccessModal(tx);
@@ -2372,21 +2929,9 @@ export default function PartySupplyApp() {
       if (tx.status === 'voided') {
         Swal.fire({ title: 'Borrando...', text: 'Eliminando registro permanentemente...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
         
-        // 🎯 EL FRANCOTIRADOR: Identificamos la Venta Realizada original (y sus restauraciones).
-        const logsToDelete = dailyLogs.filter(l => 
-          ['Venta Realizada', 'Venta Restaurada', 'Modificación Pedido', 'Venta Modificada'].includes(l.action) &&
-          (String(l.details?.transactionId) === String(tx.id) || String(l.details?.id) === String(tx.id) || String(l.details?.oldTransactionId) === String(tx.id))
-        ).map(l => l.id);
-
-        // Disparamos a la base de datos para borrar SOLO los registros de origen
-        if (logsToDelete.length > 0) {
-          const { error: delLogsErr } = await supabase.from('logs').delete().in('id', logsToDelete);
-          if (delLogsErr) console.warn("Error borrando logs antiguos:", delLogsErr);
-        }
-
-        // Limpiamos nuestra vista local en tiempo real para que desaparezca el "fantasma"
+        // Limpiamos la vista local de transacciones para que desaparezca el registro operativo,
+        // pero mantenemos intacta la trazabilidad del Registro de Acciones.
         setTransactions(prev => prev.filter(t => String(t.id) !== String(tx.id)));
-        setDailyLogs(prev => prev.filter(l => !logsToDelete.includes(l.id)));
         
         const clientName = tx.client?.name || (typeof tx.client === 'string' ? tx.client : null);
         const clientNum = tx.client?.memberNumber || tx.memberNumber || null;
@@ -2409,7 +2954,7 @@ export default function PartySupplyApp() {
         setTransactionToRefund(null);
         setRefundReason('');
         Swal.close();
-        showNotification('success', 'Registro Borrado', 'La transacción original fue purgada con éxito.');
+        showNotification('success', 'Registro Borrado', 'La transacción fue eliminada del historial operativo y su trazabilidad quedó registrada.');
         return; 
       }
 
@@ -2777,11 +3322,16 @@ export default function PartySupplyApp() {
     if (!editingTransaction) return;
     const subtotal = editingTransaction.items.reduce((acc, item) => acc + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
     const newTotal = newPayment === 'Credito' ? subtotal * 1.1 : subtotal;
+    const nextCashReceived = newPayment === 'Efectivo'
+      ? Number(editingTransaction.cashReceived || newTotal)
+      : 0;
     setEditingTransaction({
       ...editingTransaction,
       payment: newPayment,
       total: newTotal,
       installments: newPayment === 'Credito' ? 1 : 0,
+      cashReceived: nextCashReceived,
+      cashChange: newPayment === 'Efectivo' ? Math.max(0, nextCashReceived - newTotal) : 0,
     });
   };
 
@@ -2792,6 +3342,18 @@ export default function PartySupplyApp() {
     const originalTx = transactions.find((t) => t.id === editingTransaction.id);
     if (!originalTx) return;
 
+    const safeCashReceived = editingTransaction.payment === 'Efectivo'
+      ? Number(editingTransaction.cashReceived ?? editingTransaction.total ?? 0)
+      : 0;
+    const safeCashChange = editingTransaction.payment === 'Efectivo'
+      ? Math.max(0, safeCashReceived - Number(editingTransaction.total || 0))
+      : 0;
+
+    if (editingTransaction.payment === 'Efectivo' && safeCashReceived < Number(editingTransaction.total || 0)) {
+      showNotification('warning', 'Monto insuficiente', 'El monto recibido en efectivo debe cubrir el total luego de la modificación.');
+      return;
+    }
+
     try {
       Swal.fire({ title: 'Guardando cambios...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
@@ -2801,6 +3363,12 @@ export default function PartySupplyApp() {
       if (originalTx.payment !== editingTransaction.payment) changes.payment = { old: originalTx.payment, new: editingTransaction.payment };
       if (Number(originalTx.installments || 0) !== Number(editingTransaction.installments || 0)) {
         changes.installments = { old: Number(originalTx.installments || 0), new: Number(editingTransaction.installments || 0) };
+      }
+      if (Number(originalTx.cashReceived || 0) !== safeCashReceived) {
+        changes.cashReceived = { old: Number(originalTx.cashReceived || 0), new: safeCashReceived };
+      }
+      if (Number(originalTx.cashChange || 0) !== safeCashChange) {
+        changes.cashChange = { old: Number(originalTx.cashChange || 0), new: safeCashChange };
       }
 
       // 2. Normalización absoluta de items
@@ -2850,14 +3418,14 @@ export default function PartySupplyApp() {
       // ==========================================
       
       // A. Actualizar Venta
-      const { error: saleErr } = await supabase.from('sales').update({
+      await updateWithSchemaFallback('sales', editingTransaction.id, {
         total: editingTransaction.total,
         payment_method: editingTransaction.payment,
         installments: editingTransaction.installments || 0,
-        points_earned: pointsChange ? pointsChange.new : originalTx.pointsEarned
-      }).eq('id', editingTransaction.id);
-      
-      if (saleErr) throw new Error("Fallo en totales: " + saleErr.message);
+        points_earned: pointsChange ? pointsChange.new : originalTx.pointsEarned,
+        cash_received: safeCashReceived,
+        cash_change: safeCashChange
+      });
 
       // B. Borrar items viejos
       const { error: delErr } = await supabase.from('sale_items').delete().eq('sale_id', editingTransaction.id);
@@ -2906,7 +3474,9 @@ export default function PartySupplyApp() {
       const finalTx = {
          ...editingTransaction,
          items: finalItems, 
-         pointsEarned: pointsChange ? pointsChange.new : originalTx.pointsEarned
+         pointsEarned: pointsChange ? pointsChange.new : originalTx.pointsEarned,
+         cashReceived: safeCashReceived,
+         cashChange: safeCashChange
       };
       
       finalTx.isTest = isTestRecord(finalTx);
@@ -2924,6 +3494,8 @@ export default function PartySupplyApp() {
          transactionId: editingTransaction.id, client: cName, memberNumber: cNum,
          payment: editingTransaction.payment,
          installments: editingTransaction.installments || 0,
+         cashReceived: safeCashReceived,
+         cashChange: safeCashChange,
          changes, productChanges, itemsSnapshot: finalItems, pointsChange
       };
       addLog('Modificación Pedido', logDetails, editReason || 'Ajuste manual');
@@ -3139,7 +3711,7 @@ export default function PartySupplyApp() {
             <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} /></PersistentTabPanel>
             <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{currentUser?.role === 'admin' ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">El Dueño debe abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} offers={offers} />)}</PersistentTabPanel>
             <PersistentTabPanel tab="clients" activeTab={activeTab} className="h-full min-h-0"><ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={() => {}} /></PersistentTabPanel>
-            <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onDeleteBudget={handleDeleteBudget} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
+            <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onDeleteBudget={handleDeleteBudget} onDeleteOrder={handleDeleteOrder} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
             <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} members={members} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setDailyLogs} /></PersistentTabPanel>
             {currentUser?.role === 'admin' && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members}/></PersistentTabPanel>)}
             {currentUser?.role === 'admin' && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} /></PersistentTabPanel>)}
@@ -3211,7 +3783,7 @@ export default function PartySupplyApp() {
         <DeleteProductModal product={productToDelete} onClose={() => { setProductToDelete(null); setDeleteProductReason(''); }} reason={deleteProductReason} setReason={setDeleteProductReason} onConfirm={confirmDeleteProduct} />
         <BarcodeNotFoundModal isOpen={barcodeNotFoundModal.isOpen} scannedCode={barcodeNotFoundModal.code} onClose={() => setBarcodeNotFoundModal({ isOpen: false, code: '' })} onAddProduct={handleAddProductFromBarcode} />
         <BarcodeDuplicateModal isOpen={barcodeDuplicateModal.isOpen} existingProduct={barcodeDuplicateModal.existingProduct} onClose={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onKeepExisting={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onReplaceBarcode={handleReplaceDuplicateBarcode} />
-        <ClientSelectionModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} clients={members} addClient={handleAddMemberWithLog} onSelectClient={(client) => setPosSelectedClient(client)} onCancelFlow={() => { setPosSelectedClient({ id: 'guest', name: 'No asociado', memberNumber: '---', points: 0 }); setIsClientModalOpen(false); }} />
+        <ClientSelectionModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} clients={members} addClient={handleAddMemberWithLog} onSelectClient={(client) => setPosSelectedClient(enrichClientWithCouponUsage(client))} onCancelFlow={() => { setPosSelectedClient({ id: 'guest', name: 'No asociado', memberNumber: '---', points: 0, usedCoupons: [] }); setIsClientModalOpen(false); }} />
         <RedemptionModal isOpen={isRedemptionModalOpen} onClose={() => setIsRedemptionModalOpen(false)} client={posSelectedClient} rewards={rewards} onRedeem={handleRedeemReward} />
         <ExpenseModal isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} onSave={handleAddExpense} />
         
