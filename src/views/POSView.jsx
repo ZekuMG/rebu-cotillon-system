@@ -1106,18 +1106,18 @@ export default function POSView({
       </div>
 
       {/* COLUMNA DERECHA: CARRITO */}
-      <div className="w-[360px] bg-white border-l flex flex-col min-h-0 shadow-2xl z-20 shrink-0">
+      <div className="w-[332px] bg-white border-l flex flex-col min-h-0 shadow-2xl z-20 shrink-0">
         
-        <div className="p-4 border-b bg-white flex justify-between items-center">
-          <h2 className="font-bold text-base text-slate-800 flex items-center gap-2">
-            <ShoppingCart size={20} className="text-fuchsia-600" /> Pedido Actual
+        <div className="flex items-center justify-between border-b bg-white px-3 py-2.5">
+          <h2 className="flex items-center gap-1.5 text-[15px] font-bold text-slate-800">
+            <ShoppingCart size={18} className="text-fuchsia-600" /> Pedido Actual
           </h2>
-          <span className="bg-fuchsia-100 text-fuchsia-700 text-xs font-bold px-2 py-1 rounded-full">
+          <span className="rounded-full bg-fuchsia-100 px-1.5 py-0.5 text-[11px] font-bold text-fuchsia-700">
             {cart.reduce((acc, item) => acc + (item.product_type === 'weight' ? 1 : item.quantity), 0)} items
           </span>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
+        <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-300">
               <ShoppingCart size={64} className="mb-4 opacity-50" />
@@ -1134,17 +1134,17 @@ export default function POSView({
               const expired = isProductExpired(item.expiration_date);
 
               return (
-                <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`flex gap-2.5 p-2.5 rounded-xl border shadow-sm transition-colors group ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : isDiscount ? 'bg-emerald-50/50 border-emerald-200' : isCustom ? 'bg-indigo-50/40 border-indigo-100' : isCombo ? 'bg-violet-50/50 border-violet-200' : 'bg-white hover:border-fuchsia-200'}`}>
-                  <div className={`w-12 h-12 rounded-lg overflow-hidden shrink-0 border relative flex items-center justify-center ${isCombo ? 'bg-violet-100' : isDiscount ? 'bg-emerald-100' : 'bg-slate-50'}`}>
+                <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`group flex gap-2 rounded-lg border p-2 shadow-sm transition-colors ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : isDiscount ? 'bg-emerald-50/50 border-emerald-200' : isCustom ? 'bg-indigo-50/40 border-indigo-100' : isCombo ? 'bg-violet-50/50 border-violet-200' : 'bg-white hover:border-fuchsia-200'}`}>
+                  <div className={`relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border ${isCombo ? 'bg-violet-100' : isDiscount ? 'bg-emerald-100' : 'bg-slate-50'}`}>
                     {item.image ? (
                       <img src={item.image} alt="" className="w-full h-full object-cover" />
                     ) : (
                       isDiscount ? (
-                         <TicketPercent size={20} className="text-emerald-500" />
+                         <TicketPercent size={16} className="text-emerald-500" />
                       ) : isCustom ? (
-                         <Wand2 size={20} className="text-indigo-400" />
+                         <Wand2 size={16} className="text-indigo-400" />
                       ) : isCombo ? (
-                         <TicketPercent size={20} className="text-violet-500" />
+                         <TicketPercent size={16} className="text-violet-500" />
                       ) : (
                          <div className="w-full h-full flex items-center justify-center bg-slate-100 text-[9px] font-bold text-slate-400 text-center p-1 leading-none">{item.title.slice(0,12)}..</div>
                       )
@@ -1154,12 +1154,12 @@ export default function POSView({
                   
                   <div className="flex-1 min-w-0 flex flex-col justify-between">
                     <div className="flex justify-between items-start gap-2">
-                      <h4 className={`font-bold text-[13px] line-clamp-2 leading-tight ${item.isReward ? 'text-fuchsia-700' : isDiscount ? 'text-emerald-700' : isCustom ? 'text-indigo-800' : isCombo ? 'text-violet-800' : expired ? 'text-red-700' : 'text-slate-800'}`}>
-                        {item.isReward && <Gift size={12} className="inline mr-1 text-fuchsia-500" />}
+                      <h4 className={`line-clamp-2 text-[12px] font-bold leading-tight ${item.isReward ? 'text-fuchsia-700' : isDiscount ? 'text-emerald-700' : isCustom ? 'text-indigo-800' : isCombo ? 'text-violet-800' : expired ? 'text-red-700' : 'text-slate-800'}`}>
+                        {item.isReward && <Gift size={11} className="inline mr-1 text-fuchsia-500" />}
                         {item.title}
                         {expired && <AlertTriangle size={12} className="inline ml-1 text-red-500" title="¡Producto Vencido!" />}
                       </h4>
-                      <button onClick={() => removeFromCart(item.id)} className="text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
+                      <button onClick={() => removeFromCart(item.id)} className="text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={13} /></button>
                     </div>
                     
                     <div className="flex justify-between items-end">
@@ -1167,20 +1167,20 @@ export default function POSView({
                         <div className="flex items-center gap-1">
                           {isEditingWeight ? (
                             <div className="flex items-center gap-1">
-                              <input type="number" min="1" autoFocus className="w-16 px-2 py-1 text-xs font-bold border border-amber-300 rounded bg-white text-center outline-none focus:ring-1 focus:ring-amber-500" value={editingWeightValue} onChange={(e) => setEditingWeightValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleSaveWeightEdit(item.id); if (e.key === 'Escape') setEditingWeightItemId(null); }} onBlur={() => handleSaveWeightEdit(item.id)} />
+                              <input type="number" min="1" autoFocus className="w-14 rounded border border-amber-300 bg-white px-1.5 py-0.5 text-[11px] font-bold text-center outline-none focus:ring-1 focus:ring-amber-500" value={editingWeightValue} onChange={(e) => setEditingWeightValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleSaveWeightEdit(item.id); if (e.key === 'Escape') setEditingWeightItemId(null); }} onBlur={() => handleSaveWeightEdit(item.id)} />
                               <span className="text-[10px] text-amber-600 font-bold">g</span>
                             </div>
                           ) : (
-                            <button onClick={() => { setEditingWeightItemId(item.id); setEditingWeightValue(String(item.quantity)); }} className="flex items-center gap-1 bg-amber-100 hover:bg-amber-200 text-amber-700 px-2 py-1 rounded-lg text-xs font-bold transition-colors" title="Click para editar gramos">
-                              <Scale size={10} />
+                            <button onClick={() => { setEditingWeightItemId(item.id); setEditingWeightValue(String(item.quantity)); }} className="flex items-center gap-1 rounded-lg bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-700 transition-colors hover:bg-amber-200" title="Click para editar gramos">
+                              <Scale size={9} />
                               {formatWeight(item.quantity)}
-                              <Edit2 size={9} className="ml-0.5 opacity-50" />
+                              <Edit2 size={8} className="ml-0.5 opacity-50" />
                             </button>
                           )}
                         </div>
                       ) : (
-                        <div className="flex items-center gap-1.5 bg-slate-50 rounded-lg p-0.5 border">
-                          <button onClick={() => updateCartItemQty(item.id, item.quantity - 1)} className="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:text-red-500 disabled:opacity-50" disabled={item.quantity <= 1 || item.isReward || isDiscount}><Minus size={12} /></button>
+                        <div className="flex items-center gap-1 rounded-md border bg-slate-50 p-[2px]">
+                          <button onClick={() => updateCartItemQty(item.id, item.quantity - 1)} className="flex h-5 w-5 items-center justify-center rounded bg-white shadow-sm hover:text-red-500 disabled:opacity-50" disabled={item.quantity <= 1 || item.isReward || isDiscount}><Minus size={11} /></button>
                           <input
                             type="number"
                             min="1"
@@ -1190,13 +1190,13 @@ export default function POSView({
                               if (e.target.value === '') return;
                               updateCartItemQty(item.id, e.target.value);
                             }}
-                            className="h-6 w-12 rounded bg-white px-1 text-center text-xs font-bold text-slate-700 outline-none"
+                            className="h-5 w-11 rounded bg-white px-1 text-center text-[11px] font-bold text-slate-700 outline-none"
                             disabled={item.isReward || isCombo || isDiscount}
                           />
-                          <button onClick={() => updateCartItemQty(item.id, item.quantity + 1)} className="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:text-green-500 disabled:opacity-50" disabled={item.isReward || isCombo || isDiscount}><Plus size={12} /></button>
+                          <button onClick={() => updateCartItemQty(item.id, item.quantity + 1)} className="flex h-5 w-5 items-center justify-center rounded bg-white shadow-sm hover:text-green-500 disabled:opacity-50" disabled={item.isReward || isCombo || isDiscount}><Plus size={11} /></button>
                         </div>
                       )}
-                      <p className={`font-bold text-sm ${item.isReward ? 'text-fuchsia-600' : isDiscount ? 'text-emerald-600' : isCombo ? 'text-violet-700' : 'text-slate-800'}`}>
+                      <p className={`text-[13px] font-bold ${item.isReward ? 'text-fuchsia-600' : isDiscount ? 'text-emerald-600' : isCombo ? 'text-violet-700' : 'text-slate-800'}`}>
                         {item.isReward ? 'GRATIS' : isDiscount ? <span className="text-emerald-600 font-black">-${Math.abs(item.price * item.quantity).toLocaleString('es-AR')}</span> : <FancyPrice amount={item.price * item.quantity} />}
                       </p>
                     </div>
@@ -1208,10 +1208,10 @@ export default function POSView({
         </div>
 
         {/* Footer */}
-        <div className="p-4 bg-slate-50 border-t space-y-3">
+        <div className="space-y-2.5 border-t bg-slate-50/95 p-3">
           {/* Cliente */}
-          <div className={`bg-white border rounded-xl p-2.5 shadow-sm transition-colors ${selectedClient ? (selectedClient.id === 0 ? 'border-slate-300' : 'border-fuchsia-200 bg-fuchsia-50/30') : 'border-slate-200'}`}>
-            <div className="flex justify-between items-center mb-2">
+          <div className={`rounded-lg border bg-white p-2 shadow-sm transition-colors ${selectedClient ? (selectedClient.id === 0 ? 'border-slate-300' : 'border-fuchsia-200 bg-fuchsia-50/30') : 'border-slate-200'}`}>
+            <div className="mb-1.5 flex items-center justify-between">
               <span className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1">
                 {selectedClient ? <UserCheck size={12} /> : <User size={12} />} Socio
               </span>
@@ -1220,14 +1220,14 @@ export default function POSView({
                   {selectedClient.id !== 0 && (
                     <button onClick={onOpenRedemptionModal} className="text-[10px] bg-white border border-fuchsia-200 text-fuchsia-600 px-2 py-0.5 rounded-md font-bold hover:bg-fuchsia-50 transition-colors flex items-center gap-1"><Gift size={10} /> Canjear Puntos</button>
                   )}
-                  <button onClick={() => setSelectedClient && setSelectedClient(null)} className="text-[10px] text-red-400 font-bold hover:text-red-600 transition-colors" title="Quitar"><UserMinus size={14} /></button>
+                  <button onClick={() => setSelectedClient && setSelectedClient(null)} className="text-[10px] text-red-400 font-bold hover:text-red-600 transition-colors" title="Quitar"><UserMinus size={13} /></button>
                 </div>
               )}
             </div>
             {selectedClient ? (
               <div>
                 <div className="flex justify-between items-center">
-                   <span className="font-bold text-slate-800 text-sm">{selectedClient.id === 0 ? 'Consumidor Final' : `#${selectedClient.memberNumber} - ${selectedClient.name}`}</span>
+                   <span className="text-[13px] font-bold text-slate-800">{selectedClient.id === 0 ? 'Consumidor Final' : `#${selectedClient.memberNumber} - ${selectedClient.name}`}</span>
                    {selectedClient.id !== 0 && (<span className="bg-slate-100 text-slate-600 text-[10px] px-1.5 py-0.5 rounded font-bold">{selectedClient.points} pts</span>)}
                 </div>
                 {selectedClient.id !== 0 && (
@@ -1235,19 +1235,19 @@ export default function POSView({
                 )}
               </div>
             ) : (
-              <button onClick={onOpenClientModal} className="w-full py-2 border-2 border-dashed border-slate-300 rounded-lg text-slate-400 text-xs font-bold hover:border-fuchsia-400 hover:text-fuchsia-500 hover:bg-fuchsia-50 transition-all flex items-center justify-center gap-2"><User size={14} /> Asignar Socio / Puntos</button>
+              <button onClick={onOpenClientModal} className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-slate-300 py-1.5 text-xs font-bold text-slate-400 transition-all hover:border-fuchsia-400 hover:bg-fuchsia-50 hover:text-fuchsia-500"><User size={13} /> Asignar Socio / Puntos</button>
             )}
           </div>
 
           {/* Pago */}
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-4 gap-1.5">
             {PAYMENT_METHODS.map((method) => {
               const isSelected = selectedPayment === method.id;
               return (
-                <button key={method.id} onClick={() => setSelectedPayment(method.id)} className={`flex flex-col items-center justify-center p-2 rounded-lg border transition-all text-[10px] font-bold h-14 ${isSelected ? 'bg-slate-800 text-white border-slate-800 shadow-md transform scale-105' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300 hover:bg-slate-100'}`}>
-                  {method.id === 'Efectivo' && <Banknote size={18} className="mb-1" />}
-                  {method.id === 'MercadoPago' && <Smartphone size={18} className="mb-1" />}
-                  {(method.id === 'Debito' || method.id === 'Credito') && <CreditCard size={18} className="mb-1" />}
+                <button key={method.id} onClick={() => setSelectedPayment(method.id)} className={`flex h-12 flex-col items-center justify-center rounded-lg border p-1.5 text-[10px] font-bold transition-all ${isSelected ? 'scale-[1.03] border-slate-800 bg-slate-800 text-white shadow-md' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-100'}`}>
+                  {method.id === 'Efectivo' && <Banknote size={16} className="mb-1" />}
+                  {method.id === 'MercadoPago' && <Smartphone size={16} className="mb-1" />}
+                  {(method.id === 'Debito' || method.id === 'Credito') && <CreditCard size={16} className="mb-1" />}
                   <span className="text-center leading-tight">{method.label}</span>
                 </button>
               );
@@ -1267,14 +1267,14 @@ export default function POSView({
           )}
 
           {selectedPayment === 'Efectivo' && (
-            <div className="space-y-2 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 animate-in fade-in slide-in-from-bottom-2">
+            <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50/80 p-2.5 animate-in fade-in slide-in-from-bottom-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-bold text-emerald-800">Cobro en efectivo</span>
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() => { setCashPaymentMode('full'); setCashReceivedInput(''); }}
-                    className={`rounded-lg px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.1em] transition ${
+                    className={`rounded-lg px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] transition ${
                       cashPaymentMode === 'full'
                         ? 'bg-emerald-600 text-white'
                         : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
@@ -1285,7 +1285,7 @@ export default function POSView({
                   <button
                     type="button"
                     onClick={() => setCashPaymentMode('custom')}
-                    className={`rounded-lg px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.1em] transition ${
+                    className={`rounded-lg px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] transition ${
                       cashPaymentMode === 'custom'
                         ? 'bg-emerald-600 text-white'
                         : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
@@ -1297,7 +1297,7 @@ export default function POSView({
               </div>
 
               {cashPaymentMode === 'custom' && (
-                <div className="rounded-lg border border-emerald-200 bg-white px-3 py-2">
+                <div className="rounded-lg border border-emerald-200 bg-white px-2.5 py-2">
                   <label className="block text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">
                     Monto recibido
                   </label>
@@ -1309,17 +1309,17 @@ export default function POSView({
                     value={cashReceivedInput}
                     onChange={(e) => setCashReceivedInput(e.target.value)}
                     placeholder="Ej: 4000"
-                    className="mt-1 w-full bg-transparent text-base font-black text-slate-800 outline-none"
+                    className="mt-1 w-full bg-transparent text-[15px] font-black text-slate-800 outline-none"
                   />
                 </div>
               )}
 
               <div className="grid grid-cols-2 gap-2 text-[11px]">
-                <div className="rounded-lg border border-emerald-200 bg-white px-3 py-2">
+                <div className="rounded-lg border border-emerald-200 bg-white px-2.5 py-2">
                   <p className="font-bold uppercase tracking-[0.1em] text-emerald-600">Recibido</p>
                   <p className="mt-1 text-sm font-black text-slate-800"><FancyPrice amount={cashReceivedAmount} /></p>
                 </div>
-                <div className="rounded-lg border border-emerald-200 bg-white px-3 py-2">
+                <div className="rounded-lg border border-emerald-200 bg-white px-2.5 py-2">
                   <p className="font-bold uppercase tracking-[0.1em] text-emerald-600">Devolución</p>
                   <p className="mt-1 text-sm font-black text-slate-800"><FancyPrice amount={cashChangeAmount} /></p>
                 </div>
@@ -1333,7 +1333,7 @@ export default function POSView({
             </div>
           )}
 
-          <div className="space-y-1 pt-2 border-t border-slate-200">
+          <div className="space-y-1 border-t border-slate-200 pt-2">
             <div className="flex justify-between text-xs text-slate-500"><span>Subtotal</span><span><FancyPrice amount={subtotal} /></span></div>
             {selectedPayment === 'Credito' && (<div className="flex justify-between text-xs text-amber-600 font-bold"><span>Recargo (10%)</span><span>+<FancyPrice amount={subtotal * 0.1} /></span></div>)}
             {selectedPayment === 'Efectivo' && (
@@ -1344,11 +1344,11 @@ export default function POSView({
             )}
             <div className="flex justify-between items-end pt-2">
               <span className="text-sm font-bold text-slate-800 uppercase">Total a Pagar</span>
-              <span className="text-[28px] font-black text-slate-900"><FancyPrice amount={total} /></span>
+              <span className="text-[24px] font-black text-slate-900"><FancyPrice amount={total} /></span>
             </div>
           </div>
 
-          <button onClick={handlePreCheckout} disabled={cart.length === 0 || (selectedPayment === 'Efectivo' && cashPaymentMode === 'custom' && hasTypedCashAmount && cashMissingAmount > 0)} className="w-full py-3.5 bg-gradient-to-r from-slate-900 to-slate-800 hover:from-black hover:to-slate-900 text-white rounded-xl font-bold text-base shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 group">
+          <button onClick={handlePreCheckout} disabled={cart.length === 0 || (selectedPayment === 'Efectivo' && cashPaymentMode === 'custom' && hasTypedCashAmount && cashMissingAmount > 0)} className="group flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-slate-900 to-slate-800 py-3 text-[15px] font-bold text-white shadow-lg transition-all hover:from-black hover:to-slate-900 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50">
             <CheckCircle className="group-hover:scale-110 transition-transform" />
             {cart.length === 0 ? 'CARRITO VACÍO' : 'COBRAR'}
           </button>
