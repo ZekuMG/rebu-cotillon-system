@@ -257,7 +257,7 @@ export default function HistoryView({
     if (filterPayment) txList = txList.filter((tx) => tx.payment === filterPayment);
     if (filterUser) txList = txList.filter((tx) => tx.user === filterUser);
     
-    // 5. FILTRO DE CATEGOR?A
+    // 5. FILTRO DE CATEGORÍA
     if (filterCategory) {
       txList = txList.filter((tx) =>
         (tx.items || []).some((item) => {
@@ -422,19 +422,19 @@ export default function HistoryView({
             <div className="relative">
                <Filter size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                <select className="pl-7 pr-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white appearance-none cursor-pointer" value={filterPayment} onChange={(e) => setFilterPayment(e.target.value)}>
-                 <option value="">M?todo de Pago</option>
+                 <option value="">Método de Pago</option>
                  {PAYMENT_METHODS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
                </select>
             </div>
             
             <select className="px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer" value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
-              <option value="">Todas las Categor?as</option>
+              <option value="">Todas las Categorías</option>
               {categoriesList.map((c) => (<option key={c} value={c}>{c}</option>))}
             </select>
 
             <select className="px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer" value={filterUser} onChange={(e) => setFilterUser(e.target.value)}>
               <option value="">Todos los Usuarios</option>
-              <option value="Due?o">Due?o</option>
+              <option value="Dueño">Dueño</option>
               <option value="Vendedor">Vendedor</option>
             </select>
           </div>

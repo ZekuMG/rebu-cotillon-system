@@ -77,6 +77,28 @@ import { ExportPdfLayout } from './components/ExportPdfLayout';
 // Código de barras
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 
+const OFFLINE_CACHE_KEY = 'party_cloud_snapshot_v1';
+
+const loadOfflineSnapshot = () => {
+  try {
+    const raw = window.localStorage.getItem(OFFLINE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (error) {
+    console.error('No se pudo leer el snapshot offline:', error);
+    return null;
+  }
+};
+
+const saveOfflineSnapshot = (snapshot) => {
+  try {
+    window.localStorage.setItem(OFFLINE_CACHE_KEY, JSON.stringify(snapshot));
+  } catch (error) {
+    console.error('No se pudo guardar el snapshot offline:', error);
+  }
+};
+
 function PersistentTabPanel({ tab, activeTab, className = '', children }) {
   const cachedChildrenRef = useRef(children);
 
@@ -160,6 +182,8 @@ const updateWithSchemaFallback = async (table, id, payload) => {
 export default function PartySupplyApp() {
   
   const [isCloudLoading, setIsCloudLoading] = useState(true);
+  const [isOfflineReadOnly, setIsOfflineReadOnly] = useState(false);
+  const [offlineSnapshotAt, setOfflineSnapshotAt] = useState(null);
 
   // ==========================================
   // 1. ESTADOS DE DATOS
@@ -191,6 +215,24 @@ export default function PartySupplyApp() {
     setOpeningBalance(mappedRegisterState.openingBalance);
     setClosingTime(mappedRegisterState.closingTime);
     setRegisterOpenedAt(mappedRegisterState.registerOpenedAt);
+  };
+
+  const applyOfflineSnapshot = (snapshot) => {
+    if (!snapshot) return false;
+    setInventory(Array.isArray(snapshot.inventory) ? snapshot.inventory : []);
+    setCategories(Array.isArray(snapshot.categories) ? snapshot.categories : []);
+    setRewards(Array.isArray(snapshot.rewards) ? snapshot.rewards : []);
+    setTransactions(Array.isArray(snapshot.transactions) ? snapshot.transactions : []);
+    setDailyLogs(Array.isArray(snapshot.dailyLogs) ? snapshot.dailyLogs : []);
+    setMembers(Array.isArray(snapshot.members) ? snapshot.members : []);
+    setPastClosures(Array.isArray(snapshot.pastClosures) ? snapshot.pastClosures : []);
+    setExpenses(Array.isArray(snapshot.expenses) ? snapshot.expenses : []);
+    setBudgets(Array.isArray(snapshot.budgets) ? snapshot.budgets : []);
+    setOrders(Array.isArray(snapshot.orders) ? snapshot.orders : []);
+    setOffers(Array.isArray(snapshot.offers) ? snapshot.offers : []);
+    syncRegisterState(snapshot.registerState || null);
+    setOfflineSnapshotAt(snapshot.savedAt || null);
+    return true;
   };
 
   // ==========================================
@@ -228,11 +270,35 @@ export default function PartySupplyApp() {
         supabase.from('offers').select('*').eq('is_active', true).order('created_at', { ascending: false }) // ✨ Cargar Ofertas
       ]);
 
+      const hasCloudConnection = [
+        prodResult,
+        clientResult,
+        salesResult,
+        logsResult,
+        expResult,
+        closureResult,
+        catResult,
+        rewardsResult,
+        budgetsResult,
+        ordersResult,
+        offersResult,
+      ].some((result) => result.status === 'fulfilled' && !result.value?.error);
+
+      if (!hasCloudConnection) {
+        const cachedSnapshot = loadOfflineSnapshot();
+        if (applyOfflineSnapshot(cachedSnapshot)) {
+          setIsOfflineReadOnly(true);
+          return;
+        }
+      }
+
       const prodData = safeCloudData(prodResult, 'productos');
-      if (prodData) setInventory(mapInventoryRecords(prodData));
+      const mappedInventory = prodData ? mapInventoryRecords(prodData) : inventory;
+      if (prodData) setInventory(mappedInventory);
 
       const clientData = safeCloudData(clientResult, 'clientes');
-      if (clientData) setMembers(mapMemberRecords(clientData));
+      const mappedMembers = clientData ? mapMemberRecords(clientData) : members;
+      if (clientData) setMembers(mappedMembers);
 
       const logsData = safeCloudData(logsResult, 'logs');
       let parsedLogs = [];
@@ -240,29 +306,38 @@ export default function PartySupplyApp() {
         parsedLogs = mapLogRecords(logsData);
         setDailyLogs(parsedLogs);
       }
+      const mappedLogs = logsData ? parsedLogs : dailyLogs;
 
       const salesData = safeCloudData(salesResult, 'ventas');
-      if (salesData) setTransactions(mapSaleRecords(salesData, parsedLogs));
+      const mappedTransactions = salesData ? mapSaleRecords(salesData, parsedLogs) : transactions;
+      if (salesData) setTransactions(mappedTransactions);
 
       const expData = safeCloudData(expResult, 'gastos');
-      if (expData) setExpenses(mapExpenseRecords(expData));
+      const mappedExpenses = expData ? mapExpenseRecords(expData) : expenses;
+      if (expData) setExpenses(mappedExpenses);
 
       const closureData = safeCloudData(closureResult, 'reportes');
-      if (closureData) setPastClosures(mapCashClosureRecords(closureData));
+      const mappedClosures = closureData ? mapCashClosureRecords(closureData) : pastClosures;
+      if (closureData) setPastClosures(mappedClosures);
 
       const catData = safeCloudData(catResult, 'categorias');
-      if (catData) setCategories(mapCategoryRecords(catData));
+      const mappedCategories = catData ? mapCategoryRecords(catData) : categories;
+      if (catData) setCategories(mappedCategories);
 
       const rewardsData = safeCloudData(rewardsResult, 'premios');
-      if (rewardsData) setRewards(mapRewardRecords(rewardsData));
+      const mappedRewards = rewardsData ? mapRewardRecords(rewardsData) : rewards;
+      if (rewardsData) setRewards(mappedRewards);
       const budgetsData = safeCloudData(budgetsResult, 'presupuestos');
-      if (budgetsData) setBudgets(mapBudgetRecords(budgetsData));
+      const mappedBudgets = budgetsData ? mapBudgetRecords(budgetsData) : budgets;
+      if (budgetsData) setBudgets(mappedBudgets);
       const ordersData = safeCloudData(ordersResult, 'pedidos');
-      if (ordersData) setOrders(mapOrderRecords(ordersData));
+      const mappedOrders = ordersData ? mapOrderRecords(ordersData) : orders;
+      if (ordersData) setOrders(mappedOrders);
 
       // ✨ Procesar Ofertas
       const offersData = safeCloudData(offersResult, 'ofertas');
-      if (offersData) setOffers(mapOfferRecords(offersData));
+      const mappedOffers = offersData ? mapOfferRecords(offersData) : offers;
+      if (offersData) setOffers(mappedOffers);
 
       let registerState = null;
       if (registerResult.status === 'fulfilled' && !registerResult.value.error) {
@@ -280,6 +355,24 @@ export default function PartySupplyApp() {
       }
 
       syncRegisterState(registerState);
+      setIsOfflineReadOnly(false);
+      const nextSnapshot = {
+        savedAt: new Date().toISOString(),
+        inventory: mappedInventory,
+        categories: mappedCategories,
+        rewards: mappedRewards,
+        transactions: mappedTransactions,
+        dailyLogs: mappedLogs,
+        members: mappedMembers,
+        pastClosures: mappedClosures,
+        expenses: mappedExpenses,
+        budgets: mappedBudgets,
+        orders: mappedOrders,
+        offers: mappedOffers,
+        registerState,
+      };
+      saveOfflineSnapshot(nextSnapshot);
+      setOfflineSnapshotAt(nextSnapshot.savedAt);
 
     } catch (error) {
       console.error('Error general de conexión:', error);
@@ -328,11 +421,26 @@ export default function PartySupplyApp() {
       fetchCloudData(false); 
     };
 
+    const handleBrowserOffline = () => {
+      const cachedSnapshot = loadOfflineSnapshot();
+      if (applyOfflineSnapshot(cachedSnapshot)) {
+        setIsOfflineReadOnly(true);
+      }
+    };
+
+    const handleBrowserOnline = () => {
+      fetchCloudData(false);
+    };
+
     window.addEventListener('visibilitychange', handleReSync);
+    window.addEventListener('offline', handleBrowserOffline);
+    window.addEventListener('online', handleBrowserOnline);
 
     return () => {
       supabase.removeChannel(channel);
       window.removeEventListener('visibilitychange', handleReSync);
+      window.removeEventListener('offline', handleBrowserOffline);
+      window.removeEventListener('online', handleBrowserOnline);
     };
   }, []);
 
@@ -428,6 +536,37 @@ export default function PartySupplyApp() {
 
   const closeNotification = () => {
     setNotification(prev => ({ ...prev, isOpen: false }));
+  };
+  const blockIfOfflineReadonly = (actionLabel = 'realizar cambios') => {
+    if (!isOfflineReadOnly) return false;
+    showNotification(
+      'info',
+      'Modo sin conexión',
+      `Sin internet podés seguir consultando datos, pero no ${actionLabel}.`
+    );
+    return true;
+  };
+  const reloadClickTimeoutRef = useRef(null);
+  const handleSoftReload = () => {
+    fetchCloudData(false);
+    showNotification('info', 'Recarga suave', 'Actualizamos los datos visibles sin reiniciar la app.');
+  };
+  const handleHeaderReloadClick = () => {
+    if (reloadClickTimeoutRef.current) {
+      clearTimeout(reloadClickTimeoutRef.current);
+      reloadClickTimeoutRef.current = null;
+    }
+    reloadClickTimeoutRef.current = window.setTimeout(() => {
+      handleSoftReload();
+      reloadClickTimeoutRef.current = null;
+    }, 220);
+  };
+  const handleForceReload = () => {
+    if (reloadClickTimeoutRef.current) {
+      clearTimeout(reloadClickTimeoutRef.current);
+      reloadClickTimeoutRef.current = null;
+    }
+    window.location.reload();
   };
 
   const isTestActive = useMemo(() => {
@@ -598,6 +737,7 @@ export default function PartySupplyApp() {
 
     // ✨ NUEVO: HANDLER PARA FIJAR PRODUCTO PERSONALIZADO DESDE EL PRESUPUESTO
   const handleCreateFixedProduct = async (title, price) => {
+    if (blockIfOfflineReadonly('crear productos')) return;
     try {
       const payload = {
         title: title,
@@ -633,6 +773,7 @@ export default function PartySupplyApp() {
   };
 
   const handleCreateBudget = async (budgetData) => {
+    if (blockIfOfflineReadonly('crear presupuestos')) return;
     try {
       const payload = {
         member_id: budgetData.memberId || null,
@@ -677,6 +818,7 @@ export default function PartySupplyApp() {
   };
 
   const handleUpdateBudget = async (id, budgetData) => {
+    if (blockIfOfflineReadonly('editar presupuestos')) return;
     try {
       const previousBudget = budgets.find((budget) => String(budget.id) === String(id)) || null;
       const payload = {
@@ -725,6 +867,7 @@ export default function PartySupplyApp() {
   };
 
   const handleUpdateOrder = async (id, orderData) => {
+    if (blockIfOfflineReadonly('editar pedidos')) return;
     try {
       const previousOrder = orders.find((order) => String(order.id) === String(id)) || null;
       if (!previousOrder) {
@@ -847,6 +990,7 @@ export default function PartySupplyApp() {
   };
 
   const handleDeleteBudget = async (budgetRecord) => {
+    if (blockIfOfflineReadonly('eliminar presupuestos')) return;
     try {
       const { data } = await updateWithSchemaFallback('budgets', budgetRecord.id, {
         is_active: false,
@@ -1253,6 +1397,7 @@ export default function PartySupplyApp() {
   };
 
   const handleConvertBudgetToOrder = async (budgetRecord, { pickupDate, depositAmount }) => {
+    if (blockIfOfflineReadonly('convertir presupuestos a pedidos')) return;
     try {
       const existingLinkedOrder = orders.find(
         (order) => String(order.budgetId) === String(budgetRecord.id) && order.isActive !== false
@@ -1350,6 +1495,7 @@ export default function PartySupplyApp() {
   };
 
   const handleRegisterOrderPayment = async (orderRecord, paymentAmount) => {
+    if (blockIfOfflineReadonly('registrar pagos de pedidos')) return;
     try {
       const isFirstPayment =
         Number(orderRecord.paidTotal || 0) <= 0 &&
@@ -1441,6 +1587,7 @@ export default function PartySupplyApp() {
   };
 
   const handleMarkOrderRetired = async (orderRecord) => {
+    if (blockIfOfflineReadonly('marcar pedidos como retirados')) return;
     try {
       const { data } = await updateWithSchemaFallback('orders', orderRecord.id, { status: 'Retirado' });
       const retiredOrder = mapOrderRecords([data])[0];
@@ -1477,6 +1624,7 @@ export default function PartySupplyApp() {
   };
 
   const handleCancelOrder = async (orderRecord, { keepDeposit }) => {
+    if (blockIfOfflineReadonly('cancelar pedidos')) return;
     try {
       let restoredStockChanges = [];
       if (isOrderStockReserved(orderRecord)) {
@@ -1540,6 +1688,7 @@ export default function PartySupplyApp() {
   };
 
   const handleDeleteOrder = async (orderRecord) => {
+    if (blockIfOfflineReadonly('eliminar pedidos')) return;
     try {
       let restoredStockChanges = [];
       if (isOrderStockReserved(orderRecord)) {
@@ -1661,6 +1810,7 @@ export default function PartySupplyApp() {
   };
 
   const handleAddOffer = async (offerData) => {
+    if (blockIfOfflineReadonly('crear ofertas o descuentos')) return;
     try {
       const payload = {
         name: offerData.name,
@@ -1712,6 +1862,7 @@ export default function PartySupplyApp() {
   };
 
   const handleUpdateOffer = async (id, updatedData) => {
+    if (blockIfOfflineReadonly('editar ofertas o descuentos')) return;
     try {
       const oldOffer = offers.find(o => o.id === id) || {};
       const normalizedUpdatedData = normalizeOfferForPersistence(updatedData);
@@ -1764,6 +1915,7 @@ export default function PartySupplyApp() {
   };
 
   const handleDeleteOffer = async (id) => {
+    if (blockIfOfflineReadonly('eliminar ofertas o descuentos')) return;
     try {
       const offerToDelete = offers.find(o => o.id === id);
       if (!offerToDelete) return;
@@ -1814,6 +1966,7 @@ export default function PartySupplyApp() {
 
 
   const handleAddExpense = async (expenseData) => {
+    if (blockIfOfflineReadonly('registrar gastos')) return;
     try {
       const userTypedNote = expenseData.note || ''; 
       const safeDescription = userTypedNote || expenseData.description || 'Gasto General';
@@ -1858,6 +2011,7 @@ export default function PartySupplyApp() {
   };
 
   const handleAddMemberWithLog = async (data) => {
+    if (blockIfOfflineReadonly('crear socios')) return;
     try {
        const memberNum = Math.floor(10000 + Math.random() * 90000);
        
@@ -1891,6 +2045,7 @@ export default function PartySupplyApp() {
   };
 
   const handleUpdateMemberWithLog = async (id, updates) => {
+    if (blockIfOfflineReadonly('editar socios')) return;
     try {
       // Buscar miembro anterior para comparar cambios
       const oldMember = members.find(m => m.id === id) || {};
@@ -1958,6 +2113,7 @@ export default function PartySupplyApp() {
   };
 
   const handleDeleteMemberWithLog = async (id) => {
+    if (blockIfOfflineReadonly('eliminar socios')) return;
     try {
       const memberToDelete = members.find(m => m.id === id);
 
@@ -2371,6 +2527,7 @@ export default function PartySupplyApp() {
   };
 
   const toggleRegisterStatus = async () => {
+    if (blockIfOfflineReadonly('cambiar el estado de la caja')) return;
     if (currentUser.role !== 'admin') {
       showNotification('error', 'Acceso Denegado', 'Solo el dueño puede gestionar la caja.');
       return;
@@ -2396,6 +2553,7 @@ export default function PartySupplyApp() {
   };
 
   const executeRegisterClose = async (isAuto = false) => {
+    if (blockIfOfflineReadonly('cerrar la caja')) return;
     const closeDate = new Date();
     const cycleStart = registerOpenedAt ? new Date(registerOpenedAt) : null;
     
@@ -2600,6 +2758,7 @@ export default function PartySupplyApp() {
   const handleConfirmCloseCash = () => executeRegisterClose(false);
 
   const handleSaveOpeningBalance = async () => {
+    if (blockIfOfflineReadonly('abrir la caja')) return;
     const value = Number(tempOpeningBalance);
     if (!isNaN(value) && value >= 0 && tempClosingTime) {
       
@@ -2628,6 +2787,7 @@ export default function PartySupplyApp() {
   };
 
   const handleSaveClosingTime = async () => {
+    if (blockIfOfflineReadonly('editar el horario de cierre')) return;
     addLog('Horario Modificado', `Nueva hora de cierre: ${closingTime}`, 'Ajuste de horario');
     setIsClosingTimeModalOpen(false);
     
@@ -2640,6 +2800,7 @@ export default function PartySupplyApp() {
   };
 
   const handleAddCategoryFromView = async (name) => {
+    if (blockIfOfflineReadonly('crear categorías')) return;
     if (name && !categories.includes(name)) {
       try {
         const { error } = await supabase.from('categories').insert([{ name }]);
@@ -2657,6 +2818,7 @@ export default function PartySupplyApp() {
   };
 
   const handleDeleteCategoryFromView = async (name) => {
+    if (blockIfOfflineReadonly('eliminar categorías')) return;
     const inUse = inventory.some((p) =>
       Array.isArray(p.categories) ? p.categories.includes(name) : p.category === name
     );
@@ -2678,6 +2840,7 @@ export default function PartySupplyApp() {
   };
 
   const handleEditCategory = async (oldName, newName) => {
+    if (blockIfOfflineReadonly('editar categorías')) return;
     try {
       const { error: catError } = await supabase
         .from('categories')
@@ -2711,6 +2874,7 @@ export default function PartySupplyApp() {
   };
 
   const handleBatchUpdateProductCategory = async (changes) => {
+    if (blockIfOfflineReadonly('editar categorías de productos')) return;
     try {
       const promises = changes.map(async (change) => {
         const { productId, categoryName, action } = change;
@@ -2752,6 +2916,7 @@ export default function PartySupplyApp() {
   };
 
   const handleAddItem = async (e, overrideData = null) => {
+    if (blockIfOfflineReadonly('agregar productos al inventario')) return;
     e.preventDefault();
     const itemData = overrideData || newItem;
     
@@ -2805,6 +2970,7 @@ export default function PartySupplyApp() {
   };
 
   const saveEditProduct = async (e, overrideData = null) => {
+    if (blockIfOfflineReadonly('editar productos')) return;
     e.preventDefault();
     const productData = overrideData || editingProduct;
     if (!productData) return;
@@ -2857,6 +3023,7 @@ export default function PartySupplyApp() {
   };
 
   const handleBulkSaveSingle = async (product, editData) => {
+    if (blockIfOfflineReadonly('guardar cambios de productos')) return;
     try {
       const isWeight = product.product_type === 'weight';
       const finalPrice = isWeight ? Number(editData.price) / 1000 : Number(editData.price);
@@ -2879,6 +3046,7 @@ export default function PartySupplyApp() {
   };
 
   const handleBulkSaveMasive = async (bulkData) => {
+    if (blockIfOfflineReadonly('guardar cambios masivos')) return;
     try {
       Swal.fire({ title: 'Guardando masivamente...', text: `Actualizando ${bulkData.length} productos. Por favor espera.`, allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       
@@ -2918,6 +3086,7 @@ export default function PartySupplyApp() {
   };
 
   const confirmDeleteProduct = async (e) => {
+    if (blockIfOfflineReadonly('eliminar productos')) return;
     e.preventDefault();
     if (productToDelete) {
       try {
@@ -2943,6 +3112,7 @@ export default function PartySupplyApp() {
   };
 
   const handleDuplicateProduct = async (originalProduct) => {
+    if (blockIfOfflineReadonly('duplicar productos')) return;
     try {
       const payload = {
         title: `${originalProduct.title} (copia)`,
@@ -3041,6 +3211,7 @@ export default function PartySupplyApp() {
   };
 
   const handleCheckout = async (checkoutOptions = {}) => {
+    if (blockIfOfflineReadonly('registrar ventas')) return;
     const total = calculateTotal();
     const cashReceived = selectedPayment === 'Efectivo'
       ? Number(checkoutOptions.cashReceived ?? total)
@@ -3227,6 +3398,7 @@ export default function PartySupplyApp() {
   };
   
   const handleConfirmRefund = async (e) => {
+    if (blockIfOfflineReadonly('anular o eliminar ventas')) return;
     e.preventDefault();
     const tx = transactionToRefund;
     if (!tx) return;
@@ -3388,6 +3560,7 @@ export default function PartySupplyApp() {
   };
   
   const handleRestoreTransaction = async (tx) => {
+    if (blockIfOfflineReadonly('restaurar ventas')) return;
     const result = await Swal.fire({
       title: '¿Restaurar Venta?',
       text: 'Se volverá a registrar la venta en el sistema, ocupará su fecha original, se descontará el stock nuevamente y se le devolverán los puntos al socio. ¿Estás seguro?',
@@ -3661,6 +3834,7 @@ export default function PartySupplyApp() {
   };
 
   const handleSaveEditedTransaction = async (e) => {
+    if (blockIfOfflineReadonly('editar ventas')) return;
     e.preventDefault();
     if (!editingTransaction) return;
 
@@ -3845,6 +4019,7 @@ export default function PartySupplyApp() {
   // ✨ HANDLERS DE PREMIOS (Restaurados)
   // ==========================================
   const handleAddReward = async (rewardData) => {
+    if (blockIfOfflineReadonly('crear premios')) return;
     try {
       const payload = {
         title: rewardData.title,
@@ -3878,6 +4053,7 @@ export default function PartySupplyApp() {
   };
 
   const handleUpdateReward = async (id, updatedData) => {
+    if (blockIfOfflineReadonly('editar premios')) return;
     try {
       const payload = {
         title: updatedData.title,
@@ -3901,6 +4077,7 @@ export default function PartySupplyApp() {
   };
 
   const handleDeleteReward = async (id) => {
+    if (blockIfOfflineReadonly('eliminar premios')) return;
     try {
       const { error } = await supabase.from('rewards').delete().eq('id', id);
       if (error) throw error;
@@ -3994,7 +4171,7 @@ export default function PartySupplyApp() {
             </div>
           )}
 
-          <header className="bg-white border-b h-12 flex items-center justify-between px-5 shadow-sm z-10 shrink-0">
+          <header className="relative bg-white border-b h-12 flex items-center justify-between px-5 shadow-sm z-10 shrink-0">
             <div className="flex items-center gap-3">
               <div className="pl-1">
                 <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
@@ -4008,11 +4185,44 @@ export default function PartySupplyApp() {
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
                 <button onClick={currentUser?.role === 'admin' ? toggleRegisterStatus : undefined} className={`flex items-center gap-2 px-3 py-1.5 rounded border transition-colors ${isRegisterClosed ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'} ${currentUser?.role === 'admin' ? 'hover:opacity-80 cursor-pointer' : 'cursor-default'}`} title={currentUser?.role !== 'admin' ? 'Solo el Dueño puede cambiar el estado de la caja' : ''}><Lock size={14} /><span className="text-xs font-bold">{isRegisterClosed ? 'CAJA CERRADA' : 'CAJA ABIERTA'}</span></button>
+                <button
+                  type="button"
+                  onClick={handleHeaderReloadClick}
+                  onDoubleClick={handleForceReload}
+                  className="hidden items-center justify-center rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700"
+                  title="Click: recarga suave. Doble click: recarga completa"
+                  aria-label="Recargar programa"
+                >
+                  <RefreshCw size={14} />
+                </button>
                 {!isRegisterClosed && closingTime && (<div className="flex items-center gap-1 px-2 py-1 bg-amber-50 border border-amber-200 rounded text-amber-700"><Clock size={12} /><span className="text-[10px] font-bold">Cierre: {closingTime}</span></div>)}
               </div>
               <div className="text-right hidden sm:block"><p className="text-xs font-bold text-slate-700">{currentUser?.name}</p><span className={`text-[10px] px-2 py-0.5 rounded font-bold ${currentUser?.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>{currentUser?.role === 'admin' ? 'DUEÑO' : 'VENDEDOR'}</span></div>
             </div>
+            <button
+              type="button"
+              onClick={handleHeaderReloadClick}
+              onDoubleClick={handleForceReload}
+              className="absolute right-5 top-1/2 hidden -translate-y-1/2 items-center justify-center rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 sm:flex"
+              title="Click: recarga suave. Doble click: recarga completa"
+              aria-label="Recargar programa"
+            >
+              <RefreshCw size={14} />
+            </button>
           </header>
+          {isOfflineReadOnly && (
+            <div className="border-b border-amber-200 bg-[linear-gradient(180deg,#fffbeb_0%,#fef3c7_100%)] px-5 py-2 text-[11px] font-semibold text-amber-900 shadow-sm">
+              <span className="font-black uppercase tracking-[0.08em]">Modo sin conexión</span>
+              <span className="mx-2">·</span>
+              <span>Podés seguir consultando datos, pero no hacer cambios.</span>
+              {offlineSnapshotAt && (
+                <>
+                  <span className="mx-2">·</span>
+                  <span>Último snapshot: {formatDateAR(offlineSnapshotAt)} {formatTimeAR(offlineSnapshotAt)}</span>
+                </>
+              )}
+            </div>
+          )}
           
           <main className={mainContentClass}>
             <PersistentTabPanel tab="dashboard" activeTab={activeTab}>
