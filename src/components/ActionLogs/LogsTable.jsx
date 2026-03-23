@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { formatCurrency, formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
-import { extractRealNote } from './logHelpers'; // ✨ NUEVA IMPORTACIÓN
+import { extractRealNote, normalizeLogAction } from './logHelpers'; // ✨ NUEVA IMPORTACIÓN
 
 const getTransactionId = (details) => {
   if (!details || typeof details === 'string') return null;
@@ -101,7 +101,7 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
   };
 
   const getSummary = (log) => {
-    const action = log.action;
+    const action = normalizeLogAction(log.action);
     let d = log.details;
 
     if (!d) return <span className="text-slate-400 italic text-[10px]">Sin detalles</span>;
@@ -175,6 +175,48 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
           <div className={s.ss}></div>
           <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.customerName || 'Sin cliente'}</span>
           {d.totalAmount !== undefined && <><div className={s.ss}></div><span className={s.se}><FancyPrice amount={d.totalAmount || 0} /></span></>}
+          {getLogReasonUI(log)}
+        </div>
+      );
+    }
+
+    if (action === 'Presupuesto Eliminado') {
+      return (
+        <div className={s.sr}>
+          <span className={`${s.b} ${c.br}`}>Eliminado</span>
+          {getSharedRecordId(d) && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{formatEntityCode('PRES', getSharedRecordId(d))}</span></>}
+          <div className={s.ss}></div>
+          <span style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8', textDecoration: 'line-through' }}>{d.customerName || 'Sin cliente'}</span>
+          {d.totalAmount !== undefined && <><div className={s.ss}></div><span className={s.se}><FancyPrice amount={d.totalAmount || 0} /></span></>}
+          {d.itemCount !== undefined && <><div className={s.ss}></div><span className={s.se}>{formatNumber(d.itemCount)} items</span></>}
+          {getLogReasonUI(log)}
+        </div>
+      );
+    }
+
+    if (action === 'Pedido Cancelado') {
+      return (
+        <div className={s.sr}>
+          <span className={`${s.b} ${c.br}`}>Cancelado</span>
+          {getSharedRecordId(d) && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{formatEntityCode('PED', getSharedRecordId(d))}</span></>}
+          <div className={s.ss}></div>
+          <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.customerName || 'Sin cliente'}</span>
+          {d.refundedAmount !== undefined && <><div className={s.ss}></div><span className={s.se}>Devuelto: {formatCurrency(d.refundedAmount || 0)}</span></>}
+          {d.stockChanges?.length > 0 && <><div className={s.ss}></div><span className={s.se}>Stock restaurado</span></>}
+          {getLogReasonUI(log)}
+        </div>
+      );
+    }
+
+    if (action === 'Pedido Eliminado') {
+      return (
+        <div className={s.sr}>
+          <span className={`${s.b} ${c.br}`}>Pedido eliminado</span>
+          {getSharedRecordId(d) && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{formatEntityCode('PED', getSharedRecordId(d))}</span></>}
+          <div className={s.ss}></div>
+          <span style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8', textDecoration: 'line-through' }}>{d.customerName || 'Sin cliente'}</span>
+          {d.totalAmount !== undefined && <><div className={s.ss}></div><span className={s.se}><FancyPrice amount={d.totalAmount || 0} /></span></>}
+          {d.stockChanges?.length > 0 && <><div className={s.ss}></div><span className={s.se}>Stock restaurado</span></>}
           {getLogReasonUI(log)}
         </div>
       );
@@ -644,7 +686,8 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
         <tbody>
           {(sortedLogs || []).map((log) => {
             const userClass = log.user === 'Dueño' || log.user === 'admin' ? s.ubAdm : log.user === 'Vendedor' || log.user === 'seller' ? s.ubSel : s.ubSys;
-            const displayAction = (log.action === 'Modificación Pedido' || log.action === 'Venta Modificada') ? 'Venta Modificada' : log.action;
+            const normalizedAction = normalizeLogAction(log.action);
+            const displayAction = (normalizedAction === 'Modificación Pedido' || normalizedAction === 'Venta Modificada') ? 'Venta Modificada' : normalizedAction;
 
             return (
               <tr key={log.id} className={`${s.tr} ${selectedLogId === log.id ? s.trSelected : ''}`} onClick={() => onViewDetails(log)}>

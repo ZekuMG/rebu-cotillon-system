@@ -1,6 +1,31 @@
 // src/components/ActionLogs/logHelpers.js
 
-export const getDetailTitle = (action) => {
+const ACTION_ALIASES = {
+  'Cierre AutomÃ¡tico': 'Cierre Automático',
+  'Venta Realizada': 'Venta Realizada',
+  'Venta Anulada': 'Venta Anulada',
+  'Venta Restaurada': 'Venta Restaurada',
+  'ModificaciÃ³n Pedido': 'Modificación Pedido',
+  'EdiciÃ³n Producto': 'Edición Producto',
+  'EdiciÃ³n de Socio': 'Edición de Socio',
+  'EdiciÃ³n de Puntos': 'Edición de Puntos',
+  'CategorÃ­a': 'Categoría',
+  'ActualizaciÃ³n Masiva': 'Actualización Masiva',
+  'EdiciÃ³n Masiva CategorÃ­as': 'Edición Masiva Categorías',
+  'Inicio de SesiÃ³n': 'Inicio de Sesión',
+  'Exportaci?n PDF': 'Exportación PDF',
+  'CupÃ³n Creado': 'Cupón Creado',
+  'CupÃ³n Editado': 'Cupón Editado',
+  'CupÃ³n Eliminado': 'Cupón Eliminado',
+  'Pedido SeÃ±ado': 'Pedido Señado',
+  'SeÃ±a': 'Seña',
+};
+
+export const normalizeLogAction = (action) => ACTION_ALIASES[action] || action || '';
+
+export const getDetailTitle = (rawAction) => {
+  const action = normalizeLogAction(rawAction);
+
   const titles = {
     'Apertura de Caja': 'Reporte de Apertura',
     'Cierre de Caja': 'Reporte de Cierre',
@@ -23,7 +48,7 @@ export const getDetailTitle = (action) => {
     'Nuevo Premio': 'Alta de Premio',
     'Editar Premio': 'Edición de Premio',
     'Eliminar Premio': 'Baja de Premio',
-    Categoría: 'Gestión de Categorías',
+    'Categoría': 'Gestión de Categorías',
     'Actualización Masiva': 'Reporte de Cambios Masivos',
     'Edición Masiva Categorías': 'Reporte de Cambios Masivos',
     'Horario Modificado': 'Cambio de Horario',
@@ -35,6 +60,7 @@ export const getDetailTitle = (action) => {
     'Presupuesto Editado': 'Modificación de Presupuesto',
     'Presupuesto Eliminado': 'Baja de Presupuesto',
     'Pedido Creado': 'Nuevo Pedido',
+    'Pedido Editado': 'Modificación de Pedido',
     'Pago Pedido': 'Pago de Pedido',
     'Pedido Retirado': 'Entrega de Pedido',
     'Pedido Cancelado': 'Cancelación de Pedido',
@@ -50,7 +76,9 @@ export const getDetailTitle = (action) => {
   return titles[action] || 'Detalles del Registro';
 };
 
-export const getDetailIcon = (action) => {
+export const getDetailIcon = (rawAction) => {
+  const action = normalizeLogAction(rawAction);
+
   const icons = {
     'Venta Realizada': '🛒',
     'Venta Anulada': '❌',
@@ -64,7 +92,7 @@ export const getDetailIcon = (action) => {
     'Alta de Producto': '📦',
     'Baja Producto': '🗑️',
     'Producto Duplicado': '📋',
-    Categoría: '🏷️',
+    'Categoría': '🏷️',
     'Edición Masiva Categorías': '🏷️',
     'Actualización Masiva': '🏷️',
     'Nuevo Socio': '👤',
@@ -77,7 +105,7 @@ export const getDetailIcon = (action) => {
     'Editar Premio': '🎁',
     'Eliminar Premio': '🎁',
     Login: '🔑',
-    'Horario Modificado': '🕐',
+    'Horario Modificado': '⚙️',
     'Sistema Iniciado': '⚡',
     'Venta Eliminada': '🗑️',
     'Exportación PDF': '📄',
@@ -85,13 +113,14 @@ export const getDetailIcon = (action) => {
     'Presupuesto Editado': '🧾',
     'Presupuesto Eliminado': '🧾',
     'Pedido Creado': '📦',
+    'Pedido Editado': '📦',
     'Pago Pedido': '💸',
     'Pedido Retirado': '✅',
     'Pedido Cancelado': '⛔',
     'Pedido Eliminado': '🗑️',
-    'Cupón Creado': '🎟',
-    'Cupón Editado': '🎟',
-    'Cupón Eliminado': '🎟',
+    'Cupón Creado': '🎟️',
+    'Cupón Editado': '🎟️',
+    'Cupón Eliminado': '🎟️',
     'Oferta Creada': '🎫',
     'Oferta Editada': '🎫',
     'Oferta Eliminada': '🎫',
@@ -100,7 +129,9 @@ export const getDetailIcon = (action) => {
   return icons[action] || '📄';
 };
 
-export const getDetailColor = (action) => {
+export const getDetailColor = (rawAction) => {
+  const action = normalizeLogAction(rawAction);
+
   const colors = {
     'Venta Realizada': 'green',
     'Apertura de Caja': 'green',
@@ -127,6 +158,7 @@ export const getDetailColor = (action) => {
     'Nuevo Socio': 'blue',
     'Edición de Socio': 'blue',
     'Pedido Creado': 'blue',
+    'Pedido Editado': 'indigo',
     'Edición de Puntos': 'violet',
     'Nuevo Premio': 'violet',
     'Editar Premio': 'violet',
@@ -136,7 +168,7 @@ export const getDetailColor = (action) => {
     'Presupuesto Editado': 'indigo',
     'Modificación Pedido': 'amber',
     'Venta Modificada': 'amber',
-    Categoría: 'amber',
+    'Categoría': 'amber',
     'Actualización Masiva': 'amber',
     'Edición Masiva Categorías': 'amber',
     'Horario Modificado': 'amber',
@@ -153,7 +185,7 @@ export const getDetailColor = (action) => {
 export const ACTION_GROUPS = [
   { label: '💰 Caja', actions: ['Apertura de Caja', 'Cierre de Caja', 'Cierre Automático'] },
   { label: '🛒 Ventas', actions: ['Venta Realizada', 'Venta Anulada', 'Venta Restaurada', 'Venta Modificada', 'Venta Eliminada'] },
-  { label: '📦 Pedidos', actions: ['Presupuesto Creado', 'Presupuesto Editado', 'Presupuesto Eliminado', 'Pedido Creado', 'Pago Pedido', 'Pedido Retirado', 'Pedido Cancelado', 'Pedido Eliminado'] },
+  { label: '📦 Pedidos', actions: ['Presupuesto Creado', 'Presupuesto Editado', 'Presupuesto Eliminado', 'Pedido Creado', 'Pedido Editado', 'Pago Pedido', 'Pedido Retirado', 'Pedido Cancelado', 'Pedido Eliminado'] },
   { label: '📉 Gastos', actions: ['Nuevo Gasto'] },
   { label: '📦 Productos', actions: ['Alta de Producto', 'Edición Producto', 'Baja Producto', 'Producto Duplicado'] },
   { label: '🎫 Ofertas y Descuentos', actions: ['Oferta Creada', 'Oferta Editada', 'Oferta Eliminada', 'Cupón Creado', 'Cupón Editado', 'Cupón Eliminado'] },
@@ -166,17 +198,18 @@ export const ACTION_GROUPS = [
 export const extractRealNote = (log) => {
   if (!log) return null;
 
-  let r = log.reason;
-  let d = log.details;
+  const action = normalizeLogAction(log.action);
+  let reason = log.reason;
+  let details = log.details;
 
-  if (typeof d === 'string') {
+  if (typeof details === 'string') {
     try {
-      d = JSON.parse(d);
+      details = JSON.parse(details);
     } catch {
-      d = {};
+      details = {};
     }
-  } else if (!d) {
-    d = {};
+  } else if (!details) {
+    details = {};
   }
 
   const generics = [
@@ -205,27 +238,31 @@ export const extractRealNote = (log) => {
     'se devolvió la seña',
   ];
 
-  if (r && typeof r === 'string' && r.trim() !== '') {
-    const cleanR = r.trim();
-    const lowerR = cleanR.toLowerCase();
+  if (typeof reason === 'string' && reason.trim() !== '') {
+    const cleanReason = reason.trim();
+    const lowerReason = cleanReason.toLowerCase();
 
-    if (!generics.includes(lowerR)) {
-      if (!((log.action === 'Nuevo Gasto' || log.action === 'Gasto') && lowerR === (d.category || '').toLowerCase())) {
-        return cleanR;
+    if (!generics.includes(lowerReason)) {
+      if (!((action === 'Nuevo Gasto' || action === 'Gasto') && lowerReason === String(details.category || '').toLowerCase())) {
+        return cleanReason;
       }
     }
   }
 
-  const candidates = [d.description, d.note, d.reason, d.extraInfo];
+  const candidates = [details.description, details.note, details.reason, details.extraInfo];
 
-  for (let cand of candidates) {
-    if (typeof cand === 'string' && cand.trim() !== '') {
-      const clean = cand.trim();
-      const lower = clean.toLowerCase();
-      if (!generics.includes(lower)) {
-        if ((log.action === 'Nuevo Gasto' || log.action === 'Gasto') && lower === (d.category || '').toLowerCase()) continue;
-        return clean;
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string' || candidate.trim() === '') continue;
+
+    const cleanCandidate = candidate.trim();
+    const lowerCandidate = cleanCandidate.toLowerCase();
+
+    if (!generics.includes(lowerCandidate)) {
+      if ((action === 'Nuevo Gasto' || action === 'Gasto') && lowerCandidate === String(details.category || '').toLowerCase()) {
+        continue;
       }
+
+      return cleanCandidate;
     }
   }
 

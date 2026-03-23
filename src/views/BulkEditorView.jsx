@@ -20,6 +20,19 @@ export default function BulkEditorView({
   setExportConfig,
   onCreateFixedProduct
 }) {
+  const buildEditStateFromInventory = (inventory) => {
+    const nextEdits = {};
+    (inventory || []).forEach((p) => {
+      const isWeight = p.product_type === 'weight';
+      nextEdits[p.id] = {
+        price: isWeight ? Math.round((Number(p.price) || 0) * 1000) : (Number(p.price) || 0),
+        purchasePrice: isWeight ? Math.round((Number(p.purchasePrice) || 0) * 1000) : (Number(p.purchasePrice) || 0),
+        stock: Number(p.stock) || 0,
+      };
+    });
+    return nextEdits;
+  };
+
   // --- SANDBOX (Inventario Clonado) ---
   const [sandboxInventory, setSandboxInventory] = useState([]);
 
@@ -49,17 +62,7 @@ export default function BulkEditorView({
   useEffect(() => {
     const clonedData = JSON.parse(JSON.stringify(realInventory || []));
     setSandboxInventory(clonedData);
-    
-    const initialEdits = {};
-    clonedData.forEach(p => {
-      const isWeight = p.product_type === 'weight';
-      initialEdits[p.id] = {
-        price: isWeight ? Math.round((Number(p.price) || 0) * 1000) : (Number(p.price) || 0),
-        purchasePrice: isWeight ? Math.round((Number(p.purchasePrice) || 0) * 1000) : (Number(p.purchasePrice) || 0),
-        stock: Number(p.stock) || 0,
-      };
-    });
-    setEdits(initialEdits);
+    setEdits(buildEditStateFromInventory(clonedData));
   }, [realInventory]);
 
   useEffect(() => {
@@ -149,6 +152,36 @@ export default function BulkEditorView({
         stock: Number(p.stock) || 0,
       }
     }));
+  };
+
+  const handleResetAllEdits = async () => {
+    if (!sandboxInventory.some((p) => hasChanges(p)) && selectedIds.length === 0 && bulkAction.percentage === '') return;
+
+    const result = await Swal.fire({
+      title: '¿Deshacer todos los cambios?',
+      text: 'Se van a restaurar todos los cambios masivos no guardados.',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#0f172a',
+      cancelButtonColor: '#64748b',
+      confirmButtonText: 'Sí, deshacer todo',
+      cancelButtonText: 'Cancelar',
+      reverseButtons: true
+    });
+
+    if (!result.isConfirmed) return;
+
+    setEdits(buildEditStateFromInventory(sandboxInventory));
+    setSelectedIds([]);
+    setBulkAction((prev) => ({ ...prev, percentage: '' }));
+
+    Swal.fire({
+      title: 'Cambios revertidos',
+      text: 'El editor volvió al último estado guardado.',
+      icon: 'success',
+      timer: 1400,
+      showConfirmButton: false
+    });
   };
 
   const handleSaveSingle = async (product) => {
@@ -382,6 +415,8 @@ export default function BulkEditorView({
            Number(edits[p.id].stock) !== getOriginalVal(p, 'stock');
   };
 
+  const hasPendingBulkChanges = sandboxInventory.some((p) => hasChanges(p));
+
   const calculateDiffPercent = (oldVal, newVal) => {
     if (oldVal === 0) return newVal > 0 ? '+100%' : null;
     const diff = ((newVal - oldVal) / oldVal) * 100;
@@ -458,6 +493,15 @@ export default function BulkEditorView({
           >
             <FileText size={14} />
             {selectedIds.length > 0 ? `Añadir al PDF (${selectedIds.length})` : `Ver Presupuesto ${exportItems.length > 0 ? `(${exportItems.length})` : ''}`}
+          </button>
+
+          <button 
+            onClick={handleResetAllEdits}
+            disabled={(!hasPendingBulkChanges && selectedIds.length === 0 && bulkAction.percentage === '') || isSaving}
+            className="bg-white text-slate-700 px-3 py-1.5 rounded-md font-black text-xs shadow-sm border border-slate-200 hover:bg-slate-50 disabled:opacity-50 transition-colors flex items-center gap-1.5 whitespace-nowrap"
+          >
+            <RotateCcw size={14} />
+            Deshacer todo
           </button>
 
           <button 

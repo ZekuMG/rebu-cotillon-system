@@ -4,7 +4,7 @@ import { ArrowRight, CheckCircle, Edit3, Plus, Save, AlertTriangle, FileText, Do
 import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
 import { HintIcon } from '../HintIcon';
-import { extractRealNote } from './logHelpers';
+import { extractRealNote, normalizeLogAction } from './logHelpers';
 
 // ════════════════════════════════════════════
 //  HELPERS EXPORTABLES
@@ -361,7 +361,7 @@ const EditableReasonCard = ({ note, logId, onUpdateNote }) => {
 };
 
 export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
-  const action = log.action;
+  const action = normalizeLogAction(log.action);
   const details = log.details;
 
   if (!details) return <p className="text-slate-400 italic text-sm text-center py-4">Sin detalles registrados.</p>;
@@ -835,7 +835,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
     case 'Exportación PDF': {
       // Leemos el config que está ADENTRO del snapshot
       const snap = details.snapshot || {};
-      const config = snap.config || {};
+      const config = snap.config || details.config || {};
       
       const isClient = config.isForClient;
       const itemsCount = details.itemCount || (snap.items ? snap.items.length : 0);

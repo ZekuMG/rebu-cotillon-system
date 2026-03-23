@@ -2,44 +2,44 @@ import React, { useState } from 'react';
 import { HelpCircle } from 'lucide-react';
 
 /**
- * Componente HintIcon - Icono de ayuda/información reutilizable
- * 
- * Muestra un icono gris oscuro que, al pasar el mouse, despliega un tooltip 
- * flotante centrado sobre toda la interfaz.
- * 
- * @param {string} hint - Texto del tooltip (mensaje de ayuda)
- * @param {number} size - Tamaño del icono en píxeles (default: 16)
- * @param {string} className - Clases Tailwind adicionales para el contenedor
- * 
- * @example
- * <HintIcon hint="Esta es una instrucción de ayuda" />
- * <HintIcon hint="Campo opcional" size={14} />
+ * HintIcon
+ *
+ * Muestra un icono de ayuda que despliega un tooltip cerca del cursor.
+ * El texto soporta saltos de linea usando "\n".
  */
-export const HintIcon = ({ 
-  hint, 
-  size = 16,
-  className = ''
-}) => {
+export const HintIcon = ({ hint, size = 16, className = '' }) => {
   const [showTooltip, setShowTooltip] = useState(false);
+  const [cursorPosition, setCursorPosition] = useState({ x: 0, y: 0 });
+
+  const handlePointerMove = (event) => {
+    setCursorPosition({
+      x: event.clientX + 14,
+      y: event.clientY - 12,
+    });
+  };
 
   return (
-    <div 
+    <div
       className={`relative inline-flex ${className}`}
       onMouseEnter={() => setShowTooltip(true)}
       onMouseLeave={() => setShowTooltip(false)}
+      onMouseMove={handlePointerMove}
     >
-      {/* Icono */}
-      <HelpCircle 
-        size={size} 
-        className="text-slate-400 hover:text-slate-500 cursor-help transition-colors"
+      <HelpCircle
+        size={size}
+        className="cursor-help text-slate-400 transition-colors hover:text-slate-500"
         strokeWidth={2}
       />
-      
-      {/* Tooltip Flotante - Centrado en pantalla */}
+
       {showTooltip && hint && (
-        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[9999] pointer-events-none">
-          {/* Contenedor del mensaje - con sombra y animación */}
-          <div className="bg-slate-600 text-slate-100 text-xs px-3 py-1.5 rounded-lg shadow-xl border border-slate-500 animate-in fade-in duration-150">
+        <div
+          className="fixed z-[9999] pointer-events-none"
+          style={{
+            left: cursorPosition.x,
+            top: cursorPosition.y,
+          }}
+        >
+          <div className="max-w-[260px] whitespace-pre-line rounded-lg border border-slate-500 bg-slate-600 px-3 py-1.5 text-xs text-slate-100 shadow-xl">
             {hint}
           </div>
         </div>

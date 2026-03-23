@@ -85,10 +85,13 @@ export default function useDashboardData({
       if (tx.status === 'voided') return;
       const txDate = safeParseDate(tx.date); 
       if (txDate && isInRange(txDate)) {
+        const net = getTransactionNet(tx);
         validTransactions.push({
           source: 'tx', id: tx.id, date: txDate, time: tx.time, total: Number(tx.total) || 0, 
           payment: tx.payment, items: tx.items || [], 
-          client: tx.client // ✨ NUEVO: Pasamos el cliente
+          client: tx.client,
+          net,
+          cost: (Number(tx.total) || 0) - net,
         });
         processedTxIds.add(tx.id);
       }
@@ -100,10 +103,14 @@ export default function useDashboardData({
         if (!processedTxIds.has(txId)) { 
           const logDate = safeParseDate(log.date);
           if (logDate && isInRange(logDate)) {
+            const logTxLike = { total: Number(log.details.total) || 0, items: log.details.items || [] };
+            const net = getTransactionNet(logTxLike);
             validTransactions.push({
               source: 'log', id: txId || log.id, date: logDate, time: log.timestamp || '00:00',
               total: Number(log.details.total) || 0, payment: log.details.payment || 'Efectivo', items: log.details.items || [],
-              client: log.details.client // ✨ NUEVO: Pasamos el cliente
+              client: log.details.client,
+              net,
+              cost: (Number(log.details.total) || 0) - net,
             });
           }
         }

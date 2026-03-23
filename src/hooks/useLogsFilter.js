@@ -44,6 +44,7 @@ const detectActionType = (log) => {
     'Presupuesto Editado',
     'Presupuesto Eliminado',
     'Pedido Creado',
+    'Pedido Editado',
     'Pago Pedido',
     'Pedido Retirado',
     'Pedido Cancelado',

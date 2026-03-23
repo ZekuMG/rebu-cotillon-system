@@ -1,5 +1,5 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
-import { BarChart3, CalendarDays, Minus, Plus, ShoppingCart, X } from 'lucide-react';
+import { Activity, BarChart3, CalendarDays, Minus, Plus, ShoppingCart, TrendingUp, X } from 'lucide-react';
 import { FancyPrice } from '../FancyPrice';
 
 export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMessage }) => {
@@ -54,7 +54,7 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
   if (globalFilter === 'year') {
     const annualZoomBase = 2.5;
     const chartHeight = 340;
-    const annualTopInset = 74;
+    const annualTopInset = 68;
     const annualDatesHeight = 40;
     const padding = { top: 18, right: 0, bottom: 18, left: 10 };
     const baseDayStep = 4.6;
@@ -86,14 +86,11 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
       runningNet += point.net || 0;
       point.cumulativeNet = runningNet;
     });
-    points.forEach((point) => {
-      point.metricValue = annualMetricMode === 'net' ? point.cumulativeNet : point.cumulativeSales;
-      point.dayMetric = annualMetricMode === 'net' ? (point.net || 0) : (point.sales || 0);
-      point.isNegativeDay = annualMetricMode === 'net' && point.dayMetric < 0;
-    });
-    const metricValues = points.map((point) => point.metricValue);
-    const metricMin = annualMetricMode === 'net' ? Math.min(0, ...metricValues) : 0;
-    const metricMax = Math.max(...metricValues, annualMetricMode === 'net' ? 0 : 1);
+    const metricValues = annualMetricMode === 'both'
+      ? points.flatMap((point) => [point.cumulativeSales, point.cumulativeNet])
+      : points.map((point) => (annualMetricMode === 'net' ? point.cumulativeNet : point.cumulativeSales));
+    const metricMin = annualMetricMode === 'sales' ? 0 : Math.min(0, ...metricValues);
+    const metricMax = Math.max(...metricValues, 1);
     const metricRange = Math.max(metricMax - metricMin, 1);
     const scaleValues = [
       metricMax,
@@ -102,19 +99,44 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
       metricMin,
     ];
     points.forEach((point) => {
-      point.y = padding.top + drawableHeight - (((point.metricValue - metricMin) / metricRange) * drawableHeight);
+      point.ySales = padding.top + drawableHeight - (((point.cumulativeSales - metricMin) / metricRange) * drawableHeight);
+      point.yNet = padding.top + drawableHeight - (((point.cumulativeNet - metricMin) / metricRange) * drawableHeight);
+      point.metricValue = annualMetricMode === 'sales' ? point.cumulativeSales : point.cumulativeNet;
+      point.dayMetric = annualMetricMode === 'sales' ? (point.sales || 0) : (point.net || 0);
+      point.isNegativeDay = (point.net || 0) < 0;
+      point.y = annualMetricMode === 'sales' ? point.ySales : point.yNet;
     });
     const annualMetricMeta = annualMetricMode === 'net'
       ? { id: 'net', label: 'Ganancia neta', shortLabel: 'Neto', accent: 'emerald' }
-      : { id: 'sales', label: 'Facturacion', shortLabel: 'Facturacion', accent: 'sky' };
+      : annualMetricMode === 'sales'
+        ? { id: 'sales', label: 'Facturacion', shortLabel: 'Facturacion', accent: 'sky' }
+        : { id: 'both', label: 'Facturacion + Neto', shortLabel: 'Ambas', accent: 'violet' };
+    const accumulatedSales = points[points.length - 1]?.cumulativeSales || 0;
+    const accumulatedNet = points[points.length - 1]?.cumulativeNet || 0;
+    const activeDays = chartData.filter((item) => (item.sales || 0) > 0 || (item.count || 0) > 0).length;
+    const totalTransactions = chartData.reduce((sum, item) => sum + (item.count || 0), 0);
+    const annualHeroTone = '';
+    const annualHeroLabel = annualMetricMode === 'sales'
+      ? 'Facturacion acumulada'
+      : annualMetricMode === 'net'
+        ? 'Ganancia neta acumulada'
+        : 'Vista comparada';
+    const annualHeroValue = annualMetricMode === 'sales'
+      ? <FancyPrice amount={accumulatedSales} />
+      : annualMetricMode === 'net'
+        ? <FancyPrice amount={accumulatedNet} />
+        : 'Facturacion y neto';
+    const secondaryMetricCards = [];
+    const deskStats = [];
     const hoveredPoint = hoveredIndex != null ? points[hoveredIndex] : null;
-    const linePath = points.map((point, idx) => `${idx === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
+    const salesLinePath = points.map((point, idx) => `${idx === 0 ? 'M' : 'L'} ${point.x} ${point.ySales}`).join(' ');
+    const netLinePath = points.map((point, idx) => `${idx === 0 ? 'M' : 'L'} ${point.x} ${point.yNet}`).join(' ');
+    const linePath = annualMetricMode === 'sales' ? salesLinePath : netLinePath;
     const areaPath = `${linePath} L ${padding.left + drawableWidth} ${padding.top + drawableHeight} L ${padding.left} ${padding.top + drawableHeight} Z`;
+    const salesAreaPath = `${salesLinePath} L ${padding.left + drawableWidth} ${padding.top + drawableHeight} L ${padding.left} ${padding.top + drawableHeight} Z`;
+    const netAreaPath = `${netLinePath} L ${padding.left + drawableWidth} ${padding.top + drawableHeight} L ${padding.left} ${padding.top + drawableHeight} Z`;
     const monthMarkers = points.filter((point) => point.isMonthStart);
     const currentPoint = points.find((point) => point.isCurrent) || points[points.length - 1];
-    const activeDays = chartData.filter((item) => item.sales > 0).length;
-    const totalTransactions = chartData.reduce((acc, item) => acc + item.count, 0);
-    const accumulatedNet = points[points.length - 1]?.cumulativeNet || 0;
     const hoveredTooltipLeft = hoveredPoint && annualScrollRef.current
       ? annualScrollRef.current.offsetLeft + hoveredPoint.x - annualScrollRef.current.scrollLeft
       : null;
@@ -204,17 +226,44 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
       <div ref={annualWidgetRef} className="relative h-full overflow-visible rounded-[30px] border border-slate-200 bg-[linear-gradient(145deg,#fbfffd_0%,#f8fbff_48%,#ffffff_100%)] shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
         {hoveredPoint && hoveredTooltipLeft != null && hoveredTooltipTop != null && (
           <div
-            className="pointer-events-none absolute z-[160] -translate-x-1/2 -translate-y-full rounded-[22px] border border-emerald-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(240,253,244,0.98)_100%)] px-3 py-2 text-[10px] text-slate-800 shadow-[0_22px_45px_rgba(15,23,42,0.18)]"
+            className="pointer-events-none absolute z-[160] min-w-[212px] max-w-[240px] -translate-x-1/2 -translate-y-full rounded-[22px] border border-emerald-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(240,253,244,0.98)_100%)] px-3 py-2.5 text-[10px] text-slate-800 shadow-[0_22px_45px_rgba(15,23,42,0.18)]"
             style={{
               left: `${hoveredTooltipLeft}px`,
               top: `${hoveredTooltipTop}px`,
             }}
           >
-            <p className="font-bold capitalize">{hoveredPoint.dayNum} de {hoveredPoint.monthName} {hoveredPoint.year}</p>
-            <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{annualMetricMeta.label}</p>
-            <p className={`text-xs font-black ${hoveredPoint.metricValue < 0 ? 'text-rose-600' : 'text-emerald-600'}`}><FancyPrice amount={hoveredPoint.metricValue} /></p>
-            <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Dia</p>
-            <p className="text-[11px] font-bold text-slate-700"><FancyPrice amount={hoveredPoint.sales} /> · {hoveredPoint.count} {hoveredPoint.count === 1 ? 'Venta' : 'Ventas'}</p>
+            <p className="text-[11px] font-black capitalize leading-none text-slate-800">
+              {hoveredPoint.dayNum} de {hoveredPoint.monthName} {hoveredPoint.year}
+            </p>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <div className="rounded-[14px] border border-sky-100 bg-white/70 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+                <p className="text-[8px] font-black uppercase tracking-[0.1em] text-slate-400">Acum. bruto</p>
+                <div className="mt-1 text-[12px] font-black leading-none text-sky-700">
+                  <FancyPrice amount={hoveredPoint.cumulativeSales} />
+                </div>
+              </div>
+              <div className="rounded-[14px] border border-emerald-100 bg-white/70 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+                <p className="text-[8px] font-black uppercase tracking-[0.1em] text-slate-400">Acum. neto</p>
+                <div className={`mt-1 text-[12px] font-black leading-none ${hoveredPoint.cumulativeNet < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                  <FancyPrice amount={hoveredPoint.cumulativeNet} />
+                </div>
+              </div>
+              <div className="rounded-[14px] border border-slate-200 bg-white/70 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+                <p className="text-[8px] font-black uppercase tracking-[0.1em] text-slate-400">Bruto dia</p>
+                <div className="mt-1 text-[12px] font-bold leading-none text-slate-700">
+                  <FancyPrice amount={hoveredPoint.sales} />
+                </div>
+              </div>
+              <div className="rounded-[14px] border border-slate-200 bg-white/70 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+                <p className="text-[8px] font-black uppercase tracking-[0.1em] text-slate-400">Neto dia</p>
+                <div className={`mt-1 text-[12px] font-bold leading-none ${hoveredPoint.net < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                  <FancyPrice amount={hoveredPoint.net} />
+                </div>
+              </div>
+            </div>
+            <p className="mt-2 text-[10px] font-bold leading-none text-slate-500">
+              {hoveredPoint.count} {hoveredPoint.count === 1 ? 'Venta' : 'Ventas'}
+            </p>
           </div>
         )}
         <div>
@@ -232,69 +281,6 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
               </div>
 
               <div className="group relative min-w-0 flex-1 overflow-hidden rounded-[26px] border border-white/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.68)_0%,rgba(248,253,251,0.72)_44%,rgba(246,250,255,0.82)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.96)]">
-                <div className="hidden pointer-events-none absolute inset-x-2 top-2 z-20 flex items-start gap-2 pr-[118px]">
-                  <div className="pointer-events-auto w-full max-w-[280px] rounded-[22px] border border-white/90 bg-[linear-gradient(145deg,rgba(255,255,255,0.96)_0%,rgba(241,253,247,0.88)_100%)] px-3 py-3 shadow-[0_14px_32px_rgba(15,23,42,0.08)] backdrop-blur-sm">
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[16px] border border-emerald-200 bg-emerald-50 text-emerald-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
-                        <BarChart3 size={18} />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-800">
-                            Evolucion anual
-                          </span>
-                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-emerald-700">
-                            Neto
-                          </span>
-                        </div>
-                        <p className="mt-1 text-[12px] font-semibold leading-tight text-slate-700">
-                          Lectura acumulada del periodo con hoy fijo al extremo derecho.
-                        </p>
-                      </div>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <div className="rounded-[16px] border border-slate-200/80 bg-white/70 px-2.5 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
-                        <span className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">
-                          Rango
-                        </span>
-                        <p className="mt-1 text-[12px] font-bold text-slate-800">365 dias</p>
-                      </div>
-                      <div className="rounded-[16px] border border-slate-200/80 bg-white/70 px-2.5 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
-                        <span className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">
-                          Enfoque
-                        </span>
-                        <p className="mt-1 text-[12px] font-bold text-slate-800">Hoy a la derecha</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="pointer-events-auto ml-auto grid min-w-[360px] grid-cols-3 gap-2">
-                    <div className="rounded-[20px] border border-slate-200/90 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(239,246,255,0.92)_100%)] px-3 py-2 shadow-[0_12px_30px_rgba(15,23,42,0.06)] backdrop-blur-sm">
-                      <span className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-500">
-                        Ganancia neta
-                      </span>
-                      <div className="mt-1 text-sm font-black text-slate-800">
-                        <FancyPrice amount={accumulatedNet} />
-                      </div>
-                    </div>
-                    <div className="rounded-[20px] border border-sky-200/90 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(240,249,255,0.92)_100%)] px-3 py-2 shadow-[0_12px_30px_rgba(15,23,42,0.06)] backdrop-blur-sm">
-                      <span className="text-[9px] font-black uppercase tracking-[0.16em] text-sky-700">
-                        Dias activos
-                      </span>
-                      <div className="mt-1 text-sm font-black text-slate-800">
-                        {activeDays}
-                      </div>
-                    </div>
-                    <div className="rounded-[20px] border border-emerald-200/90 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(236,253,245,0.92)_100%)] px-3 py-2 shadow-[0_12px_30px_rgba(15,23,42,0.06)] backdrop-blur-sm">
-                      <span className="text-[9px] font-black uppercase tracking-[0.16em] text-emerald-700">
-                        Ventas
-                      </span>
-                      <div className="mt-1 text-sm font-black text-slate-800">
-                        {totalTransactions}
-                      </div>
-                    </div>
-                  </div>
-                </div>
               <div className="hidden absolute left-2 top-2 z-20 rounded-[18px] border border-white/90 bg-white/90 px-3 py-2 shadow-[0_10px_24px_rgba(15,23,42,0.08)] backdrop-blur-sm">
                 <div className="flex items-center gap-2">
                   <span className="rounded-full bg-emerald-500 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.14em] text-white">
@@ -334,9 +320,10 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                   <span>{totalTransactions} ventas</span>
                 </div>
               </div>
-                <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
-                  <div className="pointer-events-auto flex items-center justify-between gap-3 border-b border-white/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.96)_0%,rgba(240,250,246,0.92)_45%,rgba(241,246,255,0.94)_100%)] px-3 py-2 shadow-[0_14px_28px_rgba(15,23,42,0.06)] backdrop-blur-sm">
-                    <div className="flex min-w-0 items-center gap-2.5">
+                <div className="hidden pointer-events-none absolute inset-x-0 top-0 z-20">
+                  <div className="pointer-events-auto border-b border-white/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.96)_0%,rgba(240,250,246,0.92)_45%,rgba(241,246,255,0.94)_100%)] px-3 py-2.5 shadow-[0_14px_28px_rgba(15,23,42,0.06)] backdrop-blur-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-2.5">
                         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px] border border-emerald-200 bg-[linear-gradient(180deg,#ecfdf5_0%,#d1fae5_100%)] text-emerald-700 shadow-[0_8px_18px_rgba(16,185,129,0.14)]">
                           <BarChart3 size={18} />
                         </div>
@@ -345,30 +332,156 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                             <span className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-800">
                               Evolucion anual
                             </span>
-                            <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] ${annualMetricMode === 'net' ? 'border border-emerald-200 bg-emerald-50 text-emerald-700' : 'border border-sky-200 bg-sky-50 text-sky-700'}`}>
+                            <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] ${annualMetricMode === 'net' ? 'border border-emerald-200 bg-emerald-50 text-emerald-700' : annualMetricMode === 'sales' ? 'border border-sky-200 bg-sky-50 text-sky-700' : 'border border-violet-200 bg-violet-50 text-violet-700'}`}>
                               {annualMetricMeta.shortLabel}
                             </span>
                           </div>
                           <p className="mt-0.5 text-[10px] font-semibold text-slate-500">
-                            {activeDays} dias activos · {totalTransactions} ventas
+                            365 dias corridos · {activeDays} dias activos · {totalTransactions} ventas
                           </p>
                         </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setAnnualMetricMode('sales')}
+                          className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.06em] transition ${annualMetricMode === 'sales' ? 'border border-sky-200 bg-sky-50 text-sky-700 shadow-sm' : 'border border-slate-200 bg-white/90 text-slate-500 hover:bg-white'}`}
+                        >
+                          Facturacion
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAnnualMetricMode('net')}
+                          className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.06em] transition ${annualMetricMode === 'net' ? 'border border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm' : 'border border-slate-200 bg-white/90 text-slate-500 hover:bg-white'}`}
+                        >
+                          Neto
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAnnualMetricMode('both')}
+                          className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.06em] transition ${annualMetricMode === 'both' ? 'border border-violet-200 bg-violet-50 text-violet-700 shadow-sm' : 'border border-slate-200 bg-white/90 text-slate-500 hover:bg-white'}`}
+                        >
+                          Ambas
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setAnnualMetricMode('sales')}
-                        className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.08em] transition ${annualMetricMode === 'sales' ? 'border border-sky-200 bg-sky-50 text-sky-700 shadow-sm' : 'border border-slate-200 bg-white/90 text-slate-500 hover:bg-white'}`}
-                      >
-                        Facturacion
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAnnualMetricMode('net')}
-                        className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.08em] transition ${annualMetricMode === 'net' ? 'border border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm' : 'border border-slate-200 bg-white/90 text-slate-500 hover:bg-white'}`}
-                      >
-                        Ganancia neta
-                      </button>
+
+                    <div className="mt-2 grid gap-2 xl:grid-cols-[1.5fr_1fr]">
+                      <div className={`rounded-[22px] border px-4 py-3 shadow-[0_16px_36px_rgba(15,23,42,0.06)] ${annualHeroTone}`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-500">
+                              {annualHeroLabel}
+                            </p>
+                            {annualMetricMode === 'both' ? (
+                              <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
+                                <div className="rounded-[16px] border border-white/70 bg-white/72 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.92)]">
+                                  <p className="text-[9px] font-black uppercase tracking-[0.12em] text-sky-700">Facturacion</p>
+                                  <div className="mt-1 text-[18px] font-black text-slate-900">
+                                    <FancyPrice amount={accumulatedSales} />
+                                  </div>
+                                </div>
+                                <div className="rounded-[16px] border border-white/70 bg-white/72 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.92)]">
+                                  <p className="text-[9px] font-black uppercase tracking-[0.12em] text-emerald-700">Ganancia neta</p>
+                                  <div className={`mt-1 text-[18px] font-black ${accumulatedNet < 0 ? 'text-rose-600' : 'text-slate-900'}`}>
+                                    <FancyPrice amount={accumulatedNet} />
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className={`mt-1 text-[24px] font-black leading-none ${annualMetricMode === 'sales' ? 'text-sky-700' : accumulatedNet < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                {annualHeroValue}
+                              </div>
+                            )}
+                          </div>
+                          <div className="grid min-w-[132px] grid-cols-2 gap-2">
+                            <div className="rounded-[16px] border border-white/70 bg-white/72 px-2.5 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.92)]">
+                              <p className="text-[8px] font-black uppercase tracking-[0.14em] text-slate-400">Activos</p>
+                              <p className="mt-1 text-[15px] font-black text-slate-800">{activeDays}</p>
+                            </div>
+                            <div className="rounded-[16px] border border-white/70 bg-white/72 px-2.5 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.92)]">
+                              <p className="text-[8px] font-black uppercase tracking-[0.14em] text-slate-400">Ventas</p>
+                              <p className="mt-1 text-[15px] font-black text-slate-800">{totalTransactions}</p>
+                            </div>
+                            <div className="col-span-2 rounded-[16px] border border-white/70 bg-white/72 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.92)]">
+                              <p className="text-[8px] font-black uppercase tracking-[0.14em] text-slate-400">Lectura</p>
+                              <p className="mt-1 text-[11px] font-semibold text-slate-700">
+                                Cierre anual con vista corrida al hoy.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        {secondaryMetricCards.map(({ key, label, value, note, tone, Icon }) => (
+                          <div key={key} className={`rounded-[18px] border px-3 py-2.5 shadow-[0_12px_28px_rgba(15,23,42,0.04)] ${tone}`}>
+                            <div className="flex items-center gap-1.5">
+                              <Icon size={11} />
+                              <span className="text-[9px] font-black uppercase tracking-[0.12em]">{label}</span>
+                            </div>
+                            <div className="mt-1 text-[18px] font-black leading-none text-slate-900">{value}</div>
+                            <p className="mt-1 text-[9px] font-semibold uppercase tracking-[0.1em] text-slate-400">{note}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mt-2 grid grid-cols-2 gap-2 xl:grid-cols-4">
+                      {deskStats.map(({ key, label, value, note, tone }) => (
+                        <div key={key} className="rounded-[18px] border border-slate-200/90 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(246,249,252,0.92)_100%)] px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.92)]">
+                          <p className="text-[8px] font-black uppercase tracking-[0.14em] text-slate-400">{label}</p>
+                          <div className={`mt-1 text-[15px] font-black leading-none ${tone}`}>{value}</div>
+                          <p className="mt-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-400">{note}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
+                  <div className="pointer-events-auto border-b border-white/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.96)_0%,rgba(241,250,246,0.92)_48%,rgba(241,246,255,0.94)_100%)] px-3 py-2.5 shadow-[0_12px_24px_rgba(15,23,42,0.05)] backdrop-blur-sm">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px] border border-emerald-200 bg-[linear-gradient(180deg,#ecfdf5_0%,#d1fae5_100%)] text-emerald-700 shadow-[0_8px_18px_rgba(16,185,129,0.14)]">
+                          <BarChart3 size={18} />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-800">
+                              Evolucion anual
+                            </span>
+                            <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] ${annualMetricMode === 'net' ? 'border border-emerald-200 bg-emerald-50 text-emerald-700' : annualMetricMode === 'sales' ? 'border border-sky-200 bg-sky-50 text-sky-700' : 'border border-violet-200 bg-violet-50 text-violet-700'}`}>
+                              {annualMetricMeta.shortLabel}
+                            </span>
+                          </div>
+                          <p className="mt-0.5 text-[10px] font-semibold text-slate-500">
+                            Curva acumulada del periodo anual
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 self-start sm:self-auto">
+                        <button
+                          type="button"
+                          onClick={() => setAnnualMetricMode('sales')}
+                          className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.06em] transition ${annualMetricMode === 'sales' ? 'border border-sky-200 bg-sky-50 text-sky-700 shadow-sm' : 'border border-slate-200 bg-white/90 text-slate-500 hover:bg-white'}`}
+                        >
+                          Facturacion
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAnnualMetricMode('net')}
+                          className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.06em] transition ${annualMetricMode === 'net' ? 'border border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm' : 'border border-slate-200 bg-white/90 text-slate-500 hover:bg-white'}`}
+                        >
+                          Neto
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAnnualMetricMode('both')}
+                          className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.06em] transition ${annualMetricMode === 'both' ? 'border border-violet-200 bg-violet-50 text-violet-700 shadow-sm' : 'border border-slate-200 bg-white/90 text-slate-500 hover:bg-white'}`}
+                        >
+                          Ambas
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -442,6 +555,22 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                         <stop offset="52%" stopColor={annualMetricMode === 'net' ? '#10b981' : '#0ea5e9'} />
                         <stop offset="100%" stopColor={annualMetricMode === 'net' ? '#14b8a6' : '#2563eb'} />
                       </linearGradient>
+                      <linearGradient id="yearChartAreaSales" x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.18" />
+                        <stop offset="100%" stopColor="#ffffff" stopOpacity="0.02" />
+                      </linearGradient>
+                      <linearGradient id="yearChartAreaNet" x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="0%" stopColor="#10b981" stopOpacity="0.22" />
+                        <stop offset="100%" stopColor="#ffffff" stopOpacity="0.02" />
+                      </linearGradient>
+                      <linearGradient id="yearChartStrokeSales" x1="0" x2="1" y1="0" y2="0">
+                        <stop offset="0%" stopColor="#60a5fa" />
+                        <stop offset="100%" stopColor="#2563eb" />
+                      </linearGradient>
+                      <linearGradient id="yearChartStrokeNet" x1="0" x2="1" y1="0" y2="0">
+                        <stop offset="0%" stopColor="#34d399" />
+                        <stop offset="100%" stopColor="#14b8a6" />
+                      </linearGradient>
                       <filter id="yearLineGlow" x="-20%" y="-20%" width="140%" height="140%">
                         <feGaussianBlur stdDeviation="4.5" result="blur" />
                         <feMerge>
@@ -494,23 +623,52 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                         x2={currentPoint.x}
                         y1={padding.top}
                         y2={padding.top + drawableHeight}
-                        stroke={currentPoint.isNegativeDay ? '#e11d48' : (annualMetricMode === 'net' ? '#16a34a' : '#2563eb')}
+                        stroke={currentPoint.isNegativeDay ? '#e11d48' : (annualMetricMode === 'both' ? '#7c3aed' : annualMetricMode === 'net' ? '#16a34a' : '#2563eb')}
                         strokeWidth="1.3"
                         opacity="0.9"
                       />
                     )}
 
-                    <path d={areaPath} fill="url(#yearChartArea)" opacity={chartData.some((item) => item.sales > 0) ? 1 : 0.4} />
-                    <path
-                      d={linePath}
-                      fill="none"
-                      stroke="url(#yearChartStroke)"
-                      strokeWidth="3.2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      filter="url(#yearLineGlow)"
-                      opacity={chartData.some((item) => item.sales > 0) ? 1 : 0.35}
-                    />
+                    {annualMetricMode === 'both' ? (
+                      <>
+                        <path d={salesAreaPath} fill="url(#yearChartAreaSales)" opacity={chartData.some((item) => item.sales > 0) ? 1 : 0.3} />
+                        <path d={netAreaPath} fill="url(#yearChartAreaNet)" opacity={chartData.some((item) => item.sales > 0) ? 0.85 : 0.25} />
+                        <path
+                          d={salesLinePath}
+                          fill="none"
+                          stroke="url(#yearChartStrokeSales)"
+                          strokeWidth="2.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          filter="url(#yearLineGlow)"
+                          opacity={chartData.some((item) => item.sales > 0) ? 0.95 : 0.3}
+                        />
+                        <path
+                          d={netLinePath}
+                          fill="none"
+                          stroke="url(#yearChartStrokeNet)"
+                          strokeWidth="3.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          filter="url(#yearLineGlow)"
+                          opacity={chartData.some((item) => item.sales > 0) ? 1 : 0.35}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <path d={areaPath} fill="url(#yearChartArea)" opacity={chartData.some((item) => item.sales > 0) ? 1 : 0.4} />
+                        <path
+                          d={linePath}
+                          fill="none"
+                          stroke="url(#yearChartStroke)"
+                          strokeWidth="3.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          filter="url(#yearLineGlow)"
+                          opacity={chartData.some((item) => item.sales > 0) ? 1 : 0.35}
+                        />
+                      </>
+                    )}
 
                     {points.map((point, idx) => (
                       <g
@@ -519,25 +677,47 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                         onMouseLeave={() => setHoveredIndex(null)}
                       >
                         {point.isCurrent && (
-                        <circle
-                          cx={point.x}
-                          cy={point.y}
-                          r="9"
-                          fill={point.isNegativeDay ? '#f43f5e' : '#22c55e'}
-                          opacity="0.18"
-                          className="pointer-events-none"
-                        />
-                      )}
-                      {(point.isMonthStart || point.isCurrent || hoveredIndex === idx || point.isNegativeDay) && (
                           <circle
-                          cx={point.x}
-                          cy={point.y}
-                          r={point.isCurrent ? 4.6 : hoveredIndex === idx ? 3.8 : 3.2}
-                          fill="#ffffff"
-                          stroke={point.isNegativeDay ? '#e11d48' : point.isCurrent ? '#16a34a' : annualMetricMode === 'net' ? '#22c55e' : '#2563eb'}
-                          strokeWidth="2"
-                          className="cursor-pointer transition-all"
-                        />
+                            cx={annualMetricMode === 'both' ? point.x : point.x}
+                            cy={annualMetricMode === 'sales' ? point.ySales : point.yNet}
+                            r="9"
+                            fill={point.isNegativeDay ? '#f43f5e' : annualMetricMode === 'sales' ? '#60a5fa' : annualMetricMode === 'both' ? '#8b5cf6' : '#22c55e'}
+                            opacity="0.18"
+                            className="pointer-events-none"
+                          />
+                        )}
+                        {(point.isMonthStart || point.isCurrent || hoveredIndex === idx || point.isNegativeDay) && annualMetricMode === 'both' && (
+                          <>
+                            <circle
+                              cx={point.x}
+                              cy={point.ySales}
+                              r={point.isCurrent ? 4.6 : hoveredIndex === idx ? 3.8 : 3.2}
+                              fill="#ffffff"
+                              stroke="#2563eb"
+                              strokeWidth="2"
+                              className="cursor-pointer transition-all"
+                            />
+                            <circle
+                              cx={point.x}
+                              cy={point.yNet}
+                              r={point.isCurrent ? 4.6 : hoveredIndex === idx ? 3.8 : 3.2}
+                              fill="#ffffff"
+                              stroke={point.isNegativeDay ? '#e11d48' : '#16a34a'}
+                              strokeWidth="2"
+                              className="cursor-pointer transition-all"
+                            />
+                          </>
+                        )}
+                        {(point.isMonthStart || point.isCurrent || hoveredIndex === idx || point.isNegativeDay) && annualMetricMode !== 'both' && (
+                          <circle
+                            cx={point.x}
+                            cy={point.y}
+                            r={point.isCurrent ? 4.6 : hoveredIndex === idx ? 3.8 : 3.2}
+                            fill="#ffffff"
+                            stroke={point.isNegativeDay ? '#e11d48' : point.isCurrent ? '#16a34a' : annualMetricMode === 'net' ? '#22c55e' : '#2563eb'}
+                            strokeWidth="2"
+                            className="cursor-pointer transition-all"
+                          />
                         )}
                         <rect
                           x={Math.max(point.x - Math.max(dayStep / 2, 6), 0)}
@@ -604,11 +784,21 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                 <div className="mb-5 grid grid-cols-2 gap-3">
                   <div className="rounded-xl border border-slate-200 bg-white p-3 text-center shadow-sm">
                     <p className="text-[10px] font-bold uppercase text-slate-400">Facturacion</p>
-                    <p className="text-lg font-black text-emerald-500"><FancyPrice amount={selectedDay.sales} /></p>
+                    <p className="text-lg font-black text-sky-600"><FancyPrice amount={selectedDay.sales} /></p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 text-center shadow-sm">
+                    <p className="text-[10px] font-bold uppercase text-slate-400">Ganancia neta</p>
+                    <p className={`text-lg font-black ${selectedDay.net < 0 ? 'text-rose-600' : 'text-emerald-500'}`}><FancyPrice amount={selectedDay.net} /></p>
                   </div>
                   <div className="rounded-xl border border-slate-200 bg-white p-3 text-center shadow-sm">
                     <p className="text-[10px] font-bold uppercase text-slate-400">Operaciones</p>
                     <p className="text-lg font-black text-blue-600">{selectedDay.count}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 text-center shadow-sm">
+                    <p className="text-[10px] font-bold uppercase text-slate-400">Margen</p>
+                    <p className="text-lg font-black text-violet-600">
+                      {selectedDay.sales > 0 ? `${((selectedDay.net / selectedDay.sales) * 100).toFixed(1)}%` : '0.0%'}
+                    </p>
                   </div>
                 </div>
 
@@ -627,10 +817,15 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                           </div>
                           <div>
                             <p className="text-xs font-bold text-slate-700">Ticket #{tx.id}</p>
-                            <p className="text-[10px] font-medium text-slate-400">{tx.time} • {tx.payment}</p>
+                            <p className="text-[10px] font-medium text-slate-400">{tx.time} · {tx.payment}</p>
                           </div>
                         </div>
-                        <p className="text-sm font-bold text-emerald-600"><FancyPrice amount={tx.total} /></p>
+                        <div className="text-right">
+                          <p className="text-sm font-bold text-sky-600"><FancyPrice amount={tx.total} /></p>
+                          <p className={`text-[10px] font-bold ${tx.net < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                            Neto <FancyPrice amount={tx.net ?? ((tx.total || 0) - (tx.cost || 0))} />
+                          </p>
+                        </div>
                       </div>
                     ))
                   ) : (

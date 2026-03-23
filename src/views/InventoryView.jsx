@@ -42,7 +42,8 @@ export default function InventoryView({
   inventoryCategoryFilter, setInventoryCategoryFilter,
   setIsModalOpen, setEditingProduct, handleDeleteProduct,
   inventoryViewMode, setInventoryViewMode, gridColumns, setGridColumns,
-  currentUser
+  currentUser,
+  closeDetailsToken
 }) {
   const [selectedProduct, setSelectedProduct] = useState(null); 
   const [showGridMenu, setShowGridMenu] = useState(false);
@@ -70,6 +71,12 @@ export default function InventoryView({
       setVisibleCount(40);
     }
   }, [inventorySearch, setInventorySearch]);
+
+  useEffect(() => {
+    if (closeDetailsToken > 0) {
+      setSelectedProduct(null);
+    }
+  }, [closeDetailsToken]);
 
   const filteredInventory = (inventory || []).filter((item) => {
     const searchString = (inventorySearch || '').toLowerCase().trim();

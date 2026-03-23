@@ -17,17 +17,21 @@ export const DEFAULT_BUDGET_CONFIG = {
   customerNote: '',
 };
 
-export const createEmptyBudgetItem = () => ({
-  id: `temp-${Date.now()}-${Math.round(Math.random() * 1000)}`,
-  productId: null,
-  title: '',
-  category: 'Adicionales',
-  qty: 1,
-  newPrice: 0,
-  product_type: 'quantity',
-  isTemporary: true,
-  stock: 0,
-});
+export const createEmptyBudgetItem = (overrides = {}) => {
+  const nextType = overrides.product_type || 'quantity';
+  return {
+    id: `temp-${Date.now()}-${Math.round(Math.random() * 1000)}`,
+    productId: null,
+    title: '',
+    category: 'Adicionales',
+    qty: nextType === 'weight' ? 1000 : 1,
+    newPrice: 0,
+    product_type: nextType,
+    isTemporary: true,
+    stock: 0,
+    ...overrides,
+  };
+};
 
 export const calculateBudgetLineSubtotal = (item = {}) => {
   const qty = Number(item.qty) || 0;

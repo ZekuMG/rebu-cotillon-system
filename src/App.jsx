@@ -380,6 +380,7 @@ export default function PartySupplyApp() {
   const [deleteProductReason, setDeleteProductReason] = useState('');
 
   const [editingProduct, setEditingProduct] = useState(null);
+  const [inventoryPanelCloseToken, setInventoryPanelCloseToken] = useState(0);
   const [editReason, setEditReason] = useState('');
   const [isUploadingImage, setIsUploadingImage] = useState(false);
 
@@ -723,6 +724,128 @@ export default function PartySupplyApp() {
     }
   };
 
+  const handleUpdateOrder = async (id, orderData) => {
+    try {
+      const previousOrder = orders.find((order) => String(order.id) === String(id)) || null;
+      if (!previousOrder) {
+        throw new Error('No se encontró el pedido a actualizar.');
+      }
+
+      const nextTotalAmount = Number(orderData.totalAmount || 0);
+      const nextPaidTotal = Math.min(Number(previousOrder.paidTotal || 0), nextTotalAmount);
+      const nextDepositAmount = Math.min(Number(previousOrder.depositAmount || 0), nextPaidTotal);
+      const nextRemainingAmount = Math.max(nextTotalAmount - nextPaidTotal, 0);
+      const nextStatus = deriveOrderStatus({
+        paidTotal: nextPaidTotal,
+        totalAmount: nextTotalAmount,
+        currentStatus: previousOrder.status,
+      });
+
+      const orderPreview = {
+        ...previousOrder,
+        memberId: orderData.memberId || null,
+        customerName: orderData.customerName || '',
+        customerPhone: orderData.customerPhone || '',
+        customerNote: orderData.customerNote || '',
+        documentTitle: orderData.documentTitle || 'PEDIDO',
+        eventLabel: orderData.eventLabel || '',
+        itemsSnapshot: orderData.itemsSnapshot || [],
+        totalAmount: nextTotalAmount,
+        depositAmount: nextDepositAmount,
+        paidTotal: nextPaidTotal,
+        remainingAmount: nextRemainingAmount,
+        status: nextStatus,
+      };
+
+      const isCrossingToFullyPaid =
+        Number(previousOrder.paidTotal || 0) < Number(previousOrder.totalAmount || 0) &&
+        nextPaidTotal >= nextTotalAmount &&
+        nextTotalAmount > 0;
+      const wasStockReserved = isOrderStockReserved(previousOrder);
+
+      if (isCrossingToFullyPaid) {
+        const { stockIssues } = getOrderStockIssues(orderPreview);
+        if (stockIssues.length > 0) {
+          showNotification('error', 'Stock Insuficiente', `No se puede guardar el pedido: ${stockIssues.join(', ')}`);
+          return;
+        }
+      }
+
+      let reservationChanges = [];
+      if (wasStockReserved) {
+        const { stockIssues, stockChanges } = await syncReservedOrderStock(previousOrder, orderPreview);
+        if (stockIssues.length > 0) {
+          showNotification('error', 'Stock Insuficiente', `No se puede guardar el pedido: ${stockIssues.join(', ')}`);
+          return;
+        }
+        reservationChanges = stockChanges;
+      }
+
+      const payload = {
+        member_id: orderPreview.memberId || null,
+        customer_name: orderPreview.customerName || '',
+        customer_phone: orderPreview.customerPhone || '',
+        customer_note: orderPreview.customerNote || '',
+        document_title: orderPreview.documentTitle || 'PEDIDO',
+        event_label: orderPreview.eventLabel || '',
+        items_snapshot: orderPreview.itemsSnapshot || [],
+        total_amount: nextTotalAmount,
+        deposit_amount: nextDepositAmount,
+        paid_total: nextPaidTotal,
+        remaining_amount: nextRemainingAmount,
+        pickup_date: previousOrder.pickupDate || null,
+        status: nextStatus,
+      };
+
+      const { data } = await updateWithSchemaFallback('orders', id, payload);
+      const updatedOrder = mapOrderRecords([data])[0];
+
+      setOrders((prev) =>
+        prev.map((order) => (String(order.id) === String(id) ? updatedOrder : order))
+      );
+
+      let finalizedSale = null;
+      if (isCrossingToFullyPaid && Number(updatedOrder.totalAmount || 0) > 0) {
+        finalizedSale = await handleFinalizePaidOrder(updatedOrder, {
+          skipStockDeduction: wasStockReserved,
+        });
+      }
+
+      addLog(
+        'Pedido Editado',
+        {
+          id,
+          budgetId: updatedOrder.budgetId || null,
+          sharedRecordId: updatedOrder.budgetId || id,
+          saleId: finalizedSale?.id || null,
+          transactionId: finalizedSale?.id || null,
+          customerName: updatedOrder.customerName,
+          memberId: updatedOrder.memberId,
+          customerPhone: updatedOrder.customerPhone || '',
+          customerNote: updatedOrder.customerNote || '',
+          eventLabel: updatedOrder.eventLabel || '',
+          documentTitle: updatedOrder.documentTitle || 'PEDIDO',
+          totalAmount: Number(updatedOrder.totalAmount || 0),
+          depositAmount: Number(updatedOrder.depositAmount || 0),
+          paidTotal: Number(updatedOrder.paidTotal || 0),
+          remainingAmount: Number(updatedOrder.remainingAmount || 0),
+          pickupDate: updatedOrder.pickupDate || null,
+          itemCount: (updatedOrder.itemsSnapshot || []).length,
+          itemsSnapshot: buildOrderLogItems(updatedOrder.itemsSnapshot || []),
+          previousItemsSnapshot: buildOrderLogItems(previousOrder.itemsSnapshot || []),
+          changes: buildBudgetChanges(previousOrder, updatedOrder),
+          stockChanges: finalizedSale?.stockChanges || reservationChanges,
+        },
+        orderData.eventLabel || 'Gestión de pedidos'
+      );
+      showNotification('success', 'Pedido Actualizado', 'Los cambios del pedido se guardaron.');
+    } catch (error) {
+      console.error('Error actualizando pedido:', error);
+      showNotification('error', 'Error', `No se pudo actualizar el pedido. ${getCloudErrorMessage(error)}`);
+      throw error;
+    }
+  };
+
   const handleDeleteBudget = async (budgetRecord) => {
     try {
       const { data } = await updateWithSchemaFallback('budgets', budgetRecord.id, {
@@ -738,9 +861,14 @@ export default function PartySupplyApp() {
           id: budgetRecord.id,
           sharedRecordId: budgetRecord.id,
           customerName: deletedBudget?.customerName || budgetRecord.customerName,
+          customerPhone: deletedBudget?.customerPhone || budgetRecord.customerPhone || '',
+          customerNote: deletedBudget?.customerNote || budgetRecord.customerNote || '',
           memberId: deletedBudget?.memberId ?? budgetRecord.memberId ?? null,
+          documentTitle: deletedBudget?.documentTitle || budgetRecord.documentTitle || 'PRESUPUESTO',
+          eventLabel: deletedBudget?.eventLabel || budgetRecord.eventLabel || '',
           totalAmount: Number(deletedBudget?.totalAmount ?? budgetRecord.totalAmount ?? 0),
           itemCount: (deletedBudget?.itemsSnapshot || budgetRecord.itemsSnapshot || []).length,
+          itemsSnapshot: buildOrderLogItems(deletedBudget?.itemsSnapshot || budgetRecord.itemsSnapshot || []),
         },
         deletedBudget?.eventLabel || budgetRecord.eventLabel || 'Gestión de pedidos'
       );
@@ -792,6 +920,111 @@ export default function PartySupplyApp() {
     };
   };
 
+  const hasFinalizedOrderSale = (orderId) =>
+    dailyLogs.some(
+      (log) =>
+        log.action === 'Venta Realizada' &&
+        String(log.details?.orderId) === String(orderId)
+    );
+
+  const isOrderStockReserved = (orderRecord) =>
+    Boolean(orderRecord) &&
+    Number(orderRecord.paidTotal || 0) > 0 &&
+    !hasFinalizedOrderSale(orderRecord.id);
+
+  const applyOrderStockDelta = async (deltaByProduct = {}) => {
+    const entries = Object.entries(deltaByProduct).filter(([, delta]) => Number(delta || 0) !== 0);
+    if (entries.length === 0) return { stockChanges: [], stockIssues: [] };
+
+    const stockIssues = entries
+      .map(([id, delta]) => {
+        const product = inventory.find((entry) => String(entry.id) === String(id));
+        if (!product) return `Producto #${id} (ya no existe en inventario)`;
+        const stockBefore = Number(product.stock || 0);
+        const nextStock = stockBefore + Number(delta || 0);
+        if (nextStock < 0) {
+          return `${product.title} (faltan ${Math.abs(nextStock)})`;
+        }
+        return null;
+      })
+      .filter(Boolean);
+
+    if (stockIssues.length > 0) {
+      return { stockChanges: [], stockIssues };
+    }
+
+    const stockChanges = entries
+      .map(([id, delta]) => {
+        const product = inventory.find((entry) => String(entry.id) === String(id));
+        if (!product) return null;
+        const stockBefore = Number(product.stock || 0);
+        const quantityChanged = Math.abs(Number(delta || 0));
+        return {
+          productId: product.id,
+          title: product.title,
+          product_type: product.product_type || 'quantity',
+          quantityChanged,
+          quantityReserved: Number(delta || 0) < 0 ? quantityChanged : 0,
+          quantityRestored: Number(delta || 0) > 0 ? quantityChanged : 0,
+          stockBefore,
+          stockAfter: stockBefore + Number(delta || 0),
+        };
+      })
+      .filter(Boolean);
+
+    for (const [id, delta] of entries) {
+      const product = inventory.find((entry) => String(entry.id) === String(id));
+      if (!product) continue;
+      await supabase
+        .from('products')
+        .update({ stock: Number(product.stock || 0) + Number(delta || 0) })
+        .eq('id', id);
+    }
+
+    setInventory((prev) =>
+      prev.map((product) => {
+        const delta = deltaByProduct[String(product.id)];
+        return delta ? { ...product, stock: Number(product.stock || 0) + Number(delta || 0) } : product;
+      })
+    );
+
+    return { stockChanges, stockIssues: [] };
+  };
+
+  const reserveOrderStock = async (orderRecord) => {
+    const { requiredStock } = getOrderStockIssues(orderRecord);
+    const deltaByProduct = Object.fromEntries(
+      Object.entries(requiredStock).map(([id, qty]) => [id, -Number(qty || 0)])
+    );
+    return applyOrderStockDelta(deltaByProduct);
+  };
+
+  const restoreOrderStock = async (orderRecord) => {
+    const { requiredStock } = getOrderStockIssues(orderRecord);
+    const deltaByProduct = Object.fromEntries(
+      Object.entries(requiredStock).map(([id, qty]) => [id, Number(qty || 0)])
+    );
+    return applyOrderStockDelta(deltaByProduct);
+  };
+
+  const syncReservedOrderStock = async (previousOrder, nextOrder) => {
+    const previousRequired = buildOrderRequiredStock(getOrderCheckoutItems(previousOrder));
+    const nextRequired = buildOrderRequiredStock(getOrderCheckoutItems(nextOrder));
+    const allIds = new Set([...Object.keys(previousRequired), ...Object.keys(nextRequired)]);
+    const deltaByProduct = {};
+
+    allIds.forEach((id) => {
+      const previousQty = Number(previousRequired[id] || 0);
+      const nextQty = Number(nextRequired[id] || 0);
+      const delta = previousQty - nextQty;
+      if (delta !== 0) {
+        deltaByProduct[id] = delta;
+      }
+    });
+
+    return applyOrderStockDelta(deltaByProduct);
+  };
+
   const buildOrderLogItems = (itemsSnapshot = []) =>
     hydrateBudgetSnapshot(itemsSnapshot).map((item) => ({
       id: item.productId || item.id || null,
@@ -830,7 +1063,7 @@ export default function PartySupplyApp() {
     return changes;
   };
 
-  const handleFinalizePaidOrder = async (orderRecord) => {
+  const handleFinalizePaidOrder = async (orderRecord, { skipStockDeduction = false } = {}) => {
     const alreadyLogged = dailyLogs.some(
       (log) =>
         log.action === 'Venta Realizada' &&
@@ -839,7 +1072,7 @@ export default function PartySupplyApp() {
     if (alreadyLogged) return null;
 
     const { items, requiredStock, stockIssues } = getOrderStockIssues(orderRecord);
-    if (stockIssues.length > 0) {
+    if (!skipStockDeduction && stockIssues.length > 0) {
       throw new Error(`No hay stock suficiente para completar el pedido: ${stockIssues.join(', ')}`);
     }
 
@@ -876,29 +1109,32 @@ export default function PartySupplyApp() {
     const { error: saleItemsErr } = await supabase.from('sale_items').insert(itemsPayload);
     if (saleItemsErr) throw saleItemsErr;
 
-    const stockChanges = Object.entries(requiredStock)
-      .map(([id, qtyToDeduct]) => {
-        const product = inventory.find((entry) => String(entry.id) === String(id));
-        if (!product) return null;
-        const stockBefore = Number(product.stock || 0);
-        return {
-          productId: product.id,
-          title: product.title,
-          product_type: product.product_type || 'quantity',
-          quantitySold: Number(qtyToDeduct || 0),
-          stockBefore,
-          stockAfter: stockBefore - Number(qtyToDeduct || 0),
-        };
-      })
-      .filter(Boolean);
+    let stockChanges = [];
+    if (!skipStockDeduction) {
+      stockChanges = Object.entries(requiredStock)
+        .map(([id, qtyToDeduct]) => {
+          const product = inventory.find((entry) => String(entry.id) === String(id));
+          if (!product) return null;
+          const stockBefore = Number(product.stock || 0);
+          return {
+            productId: product.id,
+            title: product.title,
+            product_type: product.product_type || 'quantity',
+            quantitySold: Number(qtyToDeduct || 0),
+            stockBefore,
+            stockAfter: stockBefore - Number(qtyToDeduct || 0),
+          };
+        })
+        .filter(Boolean);
 
-    for (const [id, qtyToDeduct] of Object.entries(requiredStock)) {
-      const product = inventory.find((entry) => String(entry.id) === String(id));
-      if (product) {
-        await supabase
-          .from('products')
-          .update({ stock: Number(product.stock || 0) - Number(qtyToDeduct || 0) })
-          .eq('id', id);
+      for (const [id, qtyToDeduct] of Object.entries(requiredStock)) {
+        const product = inventory.find((entry) => String(entry.id) === String(id));
+        if (product) {
+          await supabase
+            .from('products')
+            .update({ stock: Number(product.stock || 0) - Number(qtyToDeduct || 0) })
+            .eq('id', id);
+        }
       }
     }
 
@@ -920,12 +1156,14 @@ export default function PartySupplyApp() {
       }
     }
 
-    setInventory((prev) =>
-      prev.map((product) => {
-        const qtyToDeduct = requiredStock[String(product.id)];
-        return qtyToDeduct ? { ...product, stock: Number(product.stock || 0) - Number(qtyToDeduct || 0) } : product;
-      })
-    );
+    if (!skipStockDeduction) {
+      setInventory((prev) =>
+        prev.map((product) => {
+          const qtyToDeduct = requiredStock[String(product.id)];
+          return qtyToDeduct ? { ...product, stock: Number(product.stock || 0) - Number(qtyToDeduct || 0) } : product;
+        })
+      );
+    }
 
     const now = new Date();
     const historyItems = items.map((item) => ({
@@ -1029,10 +1267,10 @@ export default function PartySupplyApp() {
       const remainingAmount = Math.max(totalAmount - initialPayment, 0);
       const status = deriveOrderStatus({ paidTotal: initialPayment, totalAmount });
 
-      if (initialPayment >= totalAmount) {
+      if (initialPayment > 0) {
         const { stockIssues } = getOrderStockIssues(budgetRecord);
         if (stockIssues.length > 0) {
-          showNotification('error', 'Stock Insuficiente', `No se puede marcar como pagado: ${stockIssues.join(', ')}`);
+          showNotification('error', 'Stock Insuficiente', `No se puede señar el pedido: ${stockIssues.join(', ')}`);
           return null;
         }
       }
@@ -1060,9 +1298,21 @@ export default function PartySupplyApp() {
       const newOrder = mapOrderRecords([data])[0];
       setOrders((prev) => [newOrder, ...prev]);
       let finalizedSale = null;
+      let reservationChanges = [];
+
+      if (initialPayment > 0) {
+        const { stockIssues, stockChanges } = await reserveOrderStock(newOrder);
+        if (stockIssues.length > 0) {
+          showNotification('error', 'Stock Insuficiente', `No se pudo reservar stock para el pedido: ${stockIssues.join(', ')}`);
+          return null;
+        }
+        reservationChanges = stockChanges;
+      }
 
       if (initialPayment >= totalAmount && totalAmount > 0) {
-        finalizedSale = await handleFinalizePaidOrder(newOrder);
+        finalizedSale = await handleFinalizePaidOrder(newOrder, {
+          skipStockDeduction: initialPayment > 0,
+        });
       }
 
       addLog(
@@ -1086,7 +1336,7 @@ export default function PartySupplyApp() {
           paidTotal: newOrder.paidTotal,
           remainingAmount: newOrder.remainingAmount,
           pickupDate: newOrder.pickupDate,
-          stockChanges: finalizedSale?.stockChanges || [],
+          stockChanges: finalizedSale?.stockChanges || reservationChanges,
         },
         budgetRecord.eventLabel || 'Conversión desde presupuesto'
       );
@@ -1101,14 +1351,18 @@ export default function PartySupplyApp() {
 
   const handleRegisterOrderPayment = async (orderRecord, paymentAmount) => {
     try {
+      const isFirstPayment =
+        Number(orderRecord.paidTotal || 0) <= 0 &&
+        Number(paymentAmount || 0) > 0;
+      const wasStockReserved = isOrderStockReserved(orderRecord);
       const isCrossingToFullyPaid =
         Number(orderRecord.paidTotal || 0) < Number(orderRecord.totalAmount || 0) &&
         Number(orderRecord.paidTotal || 0) + Number(paymentAmount || 0) >= Number(orderRecord.totalAmount || 0);
 
-      if (isCrossingToFullyPaid) {
+      if (isFirstPayment || isCrossingToFullyPaid) {
         const { stockIssues } = getOrderStockIssues(orderRecord);
         if (stockIssues.length > 0) {
-          showNotification('error', 'Stock Insuficiente', `No se puede completar el pedido: ${stockIssues.join(', ')}`);
+          showNotification('error', 'Stock Insuficiente', `No se puede registrar el pago del pedido: ${stockIssues.join(', ')}`);
           return;
         }
       }
@@ -1138,9 +1392,21 @@ export default function PartySupplyApp() {
 
       const updatedOrder = mapOrderRecords([data])[0];
       let finalizedSale = null;
+      let reservationChanges = [];
+
+      if (isFirstPayment) {
+        const { stockIssues, stockChanges } = await reserveOrderStock(updatedOrder);
+        if (stockIssues.length > 0) {
+          showNotification('error', 'Stock Insuficiente', `No se pudo reservar stock para el pedido: ${stockIssues.join(', ')}`);
+          return;
+        }
+        reservationChanges = stockChanges;
+      }
 
       if (isCrossingToFullyPaid && Number(updatedOrder.totalAmount || 0) > 0) {
-        finalizedSale = await handleFinalizePaidOrder(updatedOrder);
+        finalizedSale = await handleFinalizePaidOrder(updatedOrder, {
+          skipStockDeduction: wasStockReserved || isFirstPayment,
+        });
       }
 
       addLog(
@@ -1162,7 +1428,7 @@ export default function PartySupplyApp() {
           remainingAmount: nextRemaining,
           pickupDate: updatedOrder.pickupDate || null,
           itemsSnapshot: buildOrderLogItems(updatedOrder.itemsSnapshot || []),
-          stockChanges: finalizedSale?.stockChanges || [],
+          stockChanges: finalizedSale?.stockChanges || reservationChanges,
         },
         'Cobro manual en Pedidos'
       );
@@ -1212,6 +1478,16 @@ export default function PartySupplyApp() {
 
   const handleCancelOrder = async (orderRecord, { keepDeposit }) => {
     try {
+      let restoredStockChanges = [];
+      if (isOrderStockReserved(orderRecord)) {
+        const { stockIssues, stockChanges } = await restoreOrderStock(orderRecord);
+        if (stockIssues.length > 0) {
+          showNotification('error', 'Stock', `No se pudo restaurar el stock del pedido: ${stockIssues.join(', ')}`);
+          return;
+        }
+        restoredStockChanges = stockChanges;
+      }
+
       const currentDeposit = Number(orderRecord.depositAmount || 0);
       const currentPaid = Number(orderRecord.paidTotal || 0);
       const retainedDeposit = keepDeposit ? Math.min(currentDeposit, currentPaid || currentDeposit) : 0;
@@ -1232,11 +1508,22 @@ export default function PartySupplyApp() {
         'Pedido Cancelado',
         {
           id: orderRecord.id,
+          budgetId: orderRecord.budgetId || null,
+          sharedRecordId: orderRecord.budgetId || orderRecord.id,
           customerName: orderRecord.customerName,
+          customerPhone: orderRecord.customerPhone || '',
+          customerNote: orderRecord.customerNote || '',
+          memberId: orderRecord.memberId || null,
+          documentTitle: orderRecord.documentTitle || 'PEDIDO',
+          eventLabel: orderRecord.eventLabel || '',
           keepDeposit: Boolean(keepDeposit),
           retainedDeposit,
           refundedAmount,
           totalAmount: Number(orderRecord.totalAmount || 0),
+          paidTotal: Number(orderRecord.paidTotal || 0),
+          pickupDate: orderRecord.pickupDate || null,
+          itemsSnapshot: buildOrderLogItems(orderRecord.itemsSnapshot || []),
+          stockChanges: restoredStockChanges,
         },
         keepDeposit ? 'Se retuvo la seña' : 'Se devolvió la seña'
       );
@@ -1254,6 +1541,16 @@ export default function PartySupplyApp() {
 
   const handleDeleteOrder = async (orderRecord) => {
     try {
+      let restoredStockChanges = [];
+      if (isOrderStockReserved(orderRecord)) {
+        const { stockIssues, stockChanges } = await restoreOrderStock(orderRecord);
+        if (stockIssues.length > 0) {
+          showNotification('error', 'Stock', `No se pudo restaurar el stock del pedido: ${stockIssues.join(', ')}`);
+          return;
+        }
+        restoredStockChanges = stockChanges;
+      }
+
       const { data } = await updateWithSchemaFallback('orders', orderRecord.id, {
         is_active: false,
       });
@@ -1266,10 +1563,21 @@ export default function PartySupplyApp() {
         {
           id: orderRecord.id,
           budgetId: deletedOrder?.budgetId ?? orderRecord.budgetId ?? null,
+          sharedRecordId: deletedOrder?.budgetId ?? orderRecord.budgetId ?? orderRecord.id,
           customerName: deletedOrder?.customerName || orderRecord.customerName,
+          customerPhone: deletedOrder?.customerPhone || orderRecord.customerPhone || '',
+          customerNote: deletedOrder?.customerNote || orderRecord.customerNote || '',
+          memberId: deletedOrder?.memberId ?? orderRecord.memberId ?? null,
+          documentTitle: deletedOrder?.documentTitle || orderRecord.documentTitle || 'PEDIDO',
+          eventLabel: deletedOrder?.eventLabel || orderRecord.eventLabel || '',
           totalAmount: Number(deletedOrder?.totalAmount ?? orderRecord.totalAmount ?? 0),
+          depositAmount: Number(deletedOrder?.depositAmount ?? orderRecord.depositAmount ?? 0),
           paidTotal: Number(deletedOrder?.paidTotal ?? orderRecord.paidTotal ?? 0),
+          remainingAmount: Number(deletedOrder?.remainingAmount ?? orderRecord.remainingAmount ?? 0),
+          pickupDate: deletedOrder?.pickupDate || orderRecord.pickupDate || null,
           status: deletedOrder?.status || orderRecord.status,
+          itemsSnapshot: buildOrderLogItems(deletedOrder?.itemsSnapshot || orderRecord.itemsSnapshot || []),
+          stockChanges: restoredStockChanges,
         },
         deletedOrder?.eventLabel || orderRecord.eventLabel || 'Gestión de pedidos'
       );
@@ -2531,6 +2839,7 @@ export default function PartySupplyApp() {
       }, editReason);
       
       setEditingProduct(null);
+      setInventoryPanelCloseToken((prev) => prev + 1);
       setEditReason('');
       showNotification('success', 'Producto Editado', 'Cambios guardados en la nube.');
     } catch (err) {
@@ -2945,6 +3254,11 @@ export default function PartySupplyApp() {
             isTest: tx.isTest || false,
             testMarker: tx.isTest ? 'test' : 'normal',
             items: tx.items || [],
+            itemsReturned: (tx.items || []).map((item) => ({
+              title: item.title || item.name || 'Producto',
+              quantity: item.quantity || item.qty || 0,
+            })),
+            stockAlreadyRestored: true,
             client: clientName === 'No asociado' ? null : clientName,
             memberNumber: clientNum,
             pointsEarned: tx.pointsEarned || 0,
@@ -2963,6 +3277,7 @@ export default function PartySupplyApp() {
       // ==========================================
       Swal.fire({ title: 'Anulando...', text: 'Paso 1: Devolviendo stock...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       const updatedInventory = [...inventory];
+      const restoredStockChanges = [];
       for (const item of tx.items) {
         if (!item.isReward && !item.isCustom) { 
           const prodIndex = updatedInventory.findIndex(p => 
@@ -2973,7 +3288,16 @@ export default function PartySupplyApp() {
           if (prodIndex !== -1) {
             const prodId = updatedInventory[prodIndex].id;
             const qtyToReturn = Number(item.quantity || item.qty || 0);
-            const newStock = updatedInventory[prodIndex].stock + qtyToReturn;
+            const beforeStock = Number(updatedInventory[prodIndex].stock || 0);
+            const newStock = beforeStock + qtyToReturn;
+            restoredStockChanges.push({
+              productId: prodId,
+              title: updatedInventory[prodIndex].title,
+              product_type: updatedInventory[prodIndex].product_type || 'quantity',
+              quantityRestored: qtyToReturn,
+              stockBefore: beforeStock,
+              stockAfter: newStock,
+            });
             updatedInventory[prodIndex] = { ...updatedInventory[prodIndex], stock: newStock };
             
             const { error: stockErr } = await supabase.from('products').update({ stock: newStock }).eq('id', prodId);
@@ -3032,7 +3356,8 @@ export default function PartySupplyApp() {
         itemsReturned: tx.items.map(i => ({
           title: i.title,
           quantity: i.quantity || i.qty
-        }))
+        })),
+        stockChanges: restoredStockChanges,
       };
       
       addLog('Venta Anulada', logDetails, refundReason || 'Anulación manual');
@@ -3708,10 +4033,10 @@ export default function PartySupplyApp() {
                 onViewTransaction={(tx) => setDetailsModalTx(tx)}
               />
             </PersistentTabPanel>
-            <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} /></PersistentTabPanel>
+            <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} closeDetailsToken={inventoryPanelCloseToken} /></PersistentTabPanel>
             <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{currentUser?.role === 'admin' ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">El Dueño debe abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} offers={offers} />)}</PersistentTabPanel>
             <PersistentTabPanel tab="clients" activeTab={activeTab} className="h-full min-h-0"><ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={() => {}} /></PersistentTabPanel>
-            <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onDeleteBudget={handleDeleteBudget} onDeleteOrder={handleDeleteOrder} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
+            <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} offers={offers} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onUpdateOrder={handleUpdateOrder} onDeleteBudget={handleDeleteBudget} onDeleteOrder={handleDeleteOrder} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
             <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} members={members} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setDailyLogs} /></PersistentTabPanel>
             {currentUser?.role === 'admin' && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members}/></PersistentTabPanel>)}
             {currentUser?.role === 'admin' && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} /></PersistentTabPanel>)}

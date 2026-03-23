@@ -1,5 +1,5 @@
 // src/views/HistoryView.jsx
-// â™»ï¸ REFACTOR: Interfaz de Historial Consolidada y Optimizada (Filtros, Celdas Inline, UI Premium)
+// ♻️ REFACTOR: Interfaz de Historial Consolidada y Optimizada (Filtros, Celdas Inline, UI Premium)
 
 import React, { useEffect, useState, useMemo } from 'react';
 import {
@@ -73,7 +73,7 @@ export default function HistoryView({
   const [selectedTx, setSelectedTx] = useState(null);
 
   // =====================================================
-  // TRANSACCIONES HISTÃ“RICAS (desde logs)
+  // TRANSACCIONES HIST?RICAS (desde logs)
   // =====================================================
   const historicTransactions = useMemo(() => {
     const txList = [];
@@ -86,7 +86,7 @@ export default function HistoryView({
       if (log.action === 'Venta Anulada' && log.details?.id) {
         voidedIds.add(String(log.details.id));
       }
-      // âœ¨ FIX: Actualizamos el nombre a "Venta Eliminada"
+      //  FIX: Actualizamos el nombre a "Venta Eliminada"
       const deletedTxId = log.details?.transactionId || log.details?.id;
       if ((log.action === 'Borrado Permanente' || log.action === 'Venta Eliminada') && deletedTxId) {
         const normalizedDeletedTxId = String(deletedTxId);
@@ -129,7 +129,7 @@ export default function HistoryView({
       if (isVentaLog(log) && log.details) {
         const txId = String(log.details.transactionId || log.id);
         
-        // âœ¨ FIX: Si estÃ¡ en la lista de borrados permanentes, NO la dibujamos en el historial
+        //  FIX: Si est? en la lista de borrados permanentes, NO la dibujamos en el historial
         if (activeIds.has(txId) || permanentlyDeletedIds.has(txId)) return;
 
         const logDate = normalizeDate(log.date);
@@ -151,7 +151,7 @@ export default function HistoryView({
                 client: log.details.client || log.details.memberName || null,
                 memberNumber: log.details.client?.memberNumber || log.details.memberNumber || null,
                 
-                // âœ¨ FIX: AHORA SÃ RESCATAMOS LOS PUNTOS DEL FANTASMA
+                //  FIX: AHORA S? RESCATAMOS LOS PUNTOS DEL FANTASMA
                 pointsEarned: log.details.pointsEarned || 0,
                 pointsSpent: log.details.pointsSpent || 0,
                 
@@ -159,7 +159,7 @@ export default function HistoryView({
                 isHistoric: true,
                 sortDate: logDate, 
                 isTest: log.isTest,
-                isRestored: false // Generalmente los anulados histÃ³ricos no estÃ¡n restaurados
+                isRestored: false // Generalmente los anulados hist?ricos no est?n restaurados
             });
         }
       }
@@ -220,7 +220,7 @@ export default function HistoryView({
       }
     });
 
-    // 2. LÃ“GICA DE VISTA: HOY vs HISTORIAL
+    // 2. L?GICA DE VISTA: HOY vs HISTORIAL
     if (viewMode === 'today') {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -253,11 +253,11 @@ export default function HistoryView({
       txList = txList.filter((tx) => tx.sortDate <= endDate);
     }
 
-    // 4. RESTO DE FILTROS BÃSICOS
+    // 4. RESTO DE FILTROS B?SICOS
     if (filterPayment) txList = txList.filter((tx) => tx.payment === filterPayment);
     if (filterUser) txList = txList.filter((tx) => tx.user === filterUser);
     
-    // 5. FILTRO DE CATEGORÃA 
+    // 5. FILTRO DE CATEGOR?A
     if (filterCategory) {
       txList = txList.filter((tx) =>
         (tx.items || []).some((item) => {
@@ -270,7 +270,7 @@ export default function HistoryView({
       );
     }
 
-    // 6. BÃšSQUEDA GENERAL
+    // 6. B?SQUEDA GENERAL
     if (searchQuery.trim() && !isSearchingTest) {
       const query = searchQuery.toLowerCase().trim();
       txList = txList.filter((tx) => {
@@ -363,7 +363,7 @@ export default function HistoryView({
     <div className="bg-white rounded-xl shadow-sm border overflow-hidden h-full min-h-0 flex flex-col">
       {/* HEADER Y FILTROS */}
       <div className="p-4 border-b bg-slate-50 shrink-0 space-y-4">
-        {/* Fila 1: TÃ­tulo y Stats */}
+        {/* Fila 1: T?tulo y Stats */}
         <div className="flex flex-wrap justify-between items-center gap-2">
           <div className="flex items-center gap-3">
             <div className="bg-blue-100 p-1.5 rounded-lg text-blue-600">
@@ -371,7 +371,7 @@ export default function HistoryView({
             </div>
             <h3 className="font-bold text-slate-800 text-sm">Registro de Ventas</h3>
             <span className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1 rounded-lg font-bold shadow-sm ml-2 flex items-center gap-1">
-              Total de ventas: {stats.count} °
+              Total de ventas: {stats.count} ?
               <span className="text-blue-600"><FancyPrice amount={stats.total} /></span>
             </span>
           </div>
@@ -382,7 +382,7 @@ export default function HistoryView({
               </button>
             )}
             <button onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')} className="flex items-center gap-1 px-3 py-1.5 text-[10px] font-bold text-slate-600 bg-white hover:bg-slate-100 rounded-lg border border-slate-200 shadow-sm transition-colors" title="Invertir Orden">
-              <ArrowUpDown size={12} /> {sortOrder === 'desc' ? 'MÃ¡s recientes' : 'MÃ¡s antiguas'}
+              <ArrowUpDown size={12} /> {sortOrder === 'desc' ? 'M?s recientes' : 'M?s antiguas'}
             </button>
           </div>
         </div>
@@ -413,7 +413,7 @@ export default function HistoryView({
           <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-sm">
             <Calendar size={12} className="text-slate-400" />
             <input type="date" className="text-[10px] bg-transparent outline-none font-medium text-slate-600 cursor-pointer" value={filterDateStart} onChange={(e) => setFilterDateStart(e.target.value)} title="Desde"/>
-            <span className="text-[10px] text-slate-300">â€”</span>
+            <span className="text-[10px] text-slate-300">?</span>
             <input type="date" className="text-[10px] bg-transparent outline-none font-medium text-slate-600 cursor-pointer" value={filterDateEnd} onChange={(e) => setFilterDateEnd(e.target.value)} title="Hasta"/>
           </div>
 
@@ -422,19 +422,19 @@ export default function HistoryView({
             <div className="relative">
                <Filter size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                <select className="pl-7 pr-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white appearance-none cursor-pointer" value={filterPayment} onChange={(e) => setFilterPayment(e.target.value)}>
-                 <option value="">MÃ©todo de Pago</option>
+                 <option value="">M?todo de Pago</option>
                  {PAYMENT_METHODS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
                </select>
             </div>
             
             <select className="px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer" value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
-              <option value="">Todas las CategorÃ­as</option>
+              <option value="">Todas las Categor?as</option>
               {categoriesList.map((c) => (<option key={c} value={c}>{c}</option>))}
             </select>
 
             <select className="px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer" value={filterUser} onChange={(e) => setFilterUser(e.target.value)}>
               <option value="">Todos los Usuarios</option>
-              <option value="DueÃ±o">DueÃ±o</option>
+              <option value="Due?o">Due?o</option>
               <option value="Vendedor">Vendedor</option>
             </select>
           </div>
@@ -509,7 +509,7 @@ export default function HistoryView({
                         ELIMINADO
                       </span>
                     )}
-                    {/* âœ¨ MEDALLA DE RESTAURADO CON HORA */}
+                    {/*  MEDALLA DE RESTAURADO CON HORA */}
                     {!isVoided && !isDeleted && isRestored && (
                       <div className="mt-1.5 flex flex-col items-start gap-0.5">
                         <span className="text-[8.5px] font-black tracking-widest text-emerald-600 uppercase bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">
@@ -526,7 +526,7 @@ export default function HistoryView({
                   
                   <td className="px-4 py-3 align-middle">
                     <span className={`px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider ${
-                        isVoided ? 'bg-red-200 text-red-800' : isDeleted ? 'bg-orange-100 text-orange-700 border border-orange-200' : tx.user === 'Dueño' ? 'bg-[#eef2ff] text-indigo-600 border border-indigo-100' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+              <option value="Due?o">Due?o</option>
                       }`}
                     >
                       {tx.user || 'Desconocido'}
@@ -589,7 +589,7 @@ export default function HistoryView({
                       })}
                       {(tx.items || []).length > 3 && (
                         <span className="text-[9px] text-slate-400 font-medium italic mt-1 inline-block bg-slate-50 px-2 py-0.5 rounded-full border border-slate-100">
-                          +{tx.items.length - 3} productos mÃ¡s
+                          +{tx.items.length - 3} productos m?s
                         </span>
                       )}
                     </div>
@@ -634,17 +634,17 @@ export default function HistoryView({
                     <td className="px-4 py-3 align-middle">
                       <div className="flex items-center justify-center gap-1.5">
                         
-                        {/* BotÃ³n Ver Detalles */}
+                        {/* Bot?n Ver Detalles */}
                         <button onClick={() => setSelectedTx(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-300 transition-all shadow-sm group" title="Ver Detalles">
                           <Eye size={14} className="group-hover:scale-110 transition-transform" />
                         </button>
                         
-                        {/* BotÃ³n Ver Ticket */}
+                        {/* Bot?n Ver Ticket */}
                         <button onClick={() => onViewTicket(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 hover:border-slate-300 transition-all shadow-sm group" title="Ver Ticket">
                           <FileText size={14} className="group-hover:scale-110 transition-transform" />
                         </button>
 
-                        {/* Botones Modificar/Anular (solo si NO estÃ¡ anulada) */}
+                        {/* Botones Modificar/Anular (solo si NO est? anulada) */}
                         {!isVoided && !isDeleted && (
                           <>
                             <button onClick={() => onEditTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-amber-50 hover:text-amber-600 hover:border-amber-300 transition-all shadow-sm group" title="Modificar Pedido">
@@ -657,10 +657,10 @@ export default function HistoryView({
                           </>
                         )}
                         
-                        {/* Botones Restaurar/Eliminar (solo si SÃ estÃ¡ anulada) */}
+                        {/* Botones Restaurar/Eliminar (solo si SÍ está anulada) */}
                         {isVoided && (
                           <>
-                            {/* âœ¨ NUEVO BOTÃ“N: Restaurar Venta */}
+                            {/* NUEVO BOTÓN: Restaurar Venta */}
                             <button onClick={() => onRestoreTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-emerald-500 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-300 transition-all shadow-sm group" title="Restaurar Venta (Recuperar)">
                               <RotateCcw size={14} className="group-hover:-rotate-45 transition-transform" />
                             </button>

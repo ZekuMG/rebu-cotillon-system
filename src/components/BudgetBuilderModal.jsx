@@ -7,6 +7,7 @@ import {
   Plus,
   Search,
   StickyNote,
+  TicketPercent,
   Trash2,
   User,
   Users,
@@ -14,6 +15,7 @@ import {
 } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { FancyPrice } from './FancyPrice';
+import { HintIcon } from './HintIcon';
 import {
   buildBudgetSnapshot,
   calculateBudgetLineSubtotal,
@@ -25,6 +27,7 @@ import {
   normalizeBudgetBuilderItem,
 } from '../utils/budgetHelpers';
 import { formatCurrency, formatWeight } from '../utils/helpers';
+import { normalizeLegacyOffer } from '../utils/offerHelpers';
 
 const ITEMS_STEP = 30;
 
@@ -68,6 +71,7 @@ export default function BudgetBuilderModal({
   inventory,
   categories,
   members,
+  offers = [],
   initialRecord = null,
   onSave,
   isSaving = false,
@@ -78,6 +82,8 @@ export default function BudgetBuilderModal({
   const [selectedCategory, setSelectedCategory] = useState('Todas');
   const [memberSearch, setMemberSearch] = useState('');
   const [catalogLimit, setCatalogLimit] = useState(ITEMS_STEP);
+  const [showOffersPanel, setShowOffersPanel] = useState(false);
+  const [offerView, setOfferView] = useState('combo');
   const initialRecordKey = initialRecord?.id ? `edit-${initialRecord.id}` : 'new';
   const draftStorageKey = `rebu-budget-builder-${initialRecordKey}`;
   const initialDraftRef = useRef({ key: '', draft: { config: DEFAULT_BUDGET_CONFIG, items: [] } });
@@ -161,6 +167,54 @@ export default function BudgetBuilderModal({
 
   const visibleInventory = filteredInventory.slice(0, catalogLimit);
 
+  const productsByCategory = useMemo(
+    () =>
+      (categories || []).reduce((acc, categoryName) => {
+        acc[categoryName] = (inventory || []).filter((product) =>
+          Array.isArray(product.categories)
+            ? product.categories.includes(categoryName)
+            : product.category === categoryName
+        );
+        return acc;
+      }, {}),
+    [categories, inventory]
+  );
+
+  const normalizedBudgetOffers = useMemo(
+    () =>
+      (offers || []).map((offer) => ({
+        ...offer,
+        canonical: normalizeLegacyOffer(offer, productsByCategory, inventory),
+      })),
+    [offers, productsByCategory, inventory]
+  );
+
+  const selectableBudgetOffers = useMemo(
+    () =>
+      normalizedBudgetOffers.filter((offer) =>
+        offer.canonical?.benefitType === 'combo' ||
+        offer.canonical?.benefitType === 'fixed_price' ||
+        offer.canonical?.benefitType === 'coupon' ||
+        (offer.canonical?.benefitType === 'discount' &&
+          (offer.canonical?.scopeMode === 'all_products' || (offer.productsIncluded || []).length === 0))
+      ),
+    [normalizedBudgetOffers]
+  );
+
+  const visibleBudgetOffers = useMemo(
+    () =>
+      selectableBudgetOffers.filter((offer) => {
+        const canonical = offer.canonical;
+        const isCombo =
+          canonical?.benefitType === 'combo' ||
+          canonical?.benefitType === 'fixed_price' ||
+          offer.applyTo === 'Seleccion';
+
+        return offerView === 'combo' ? isCombo : !isCombo;
+      }),
+    [offerView, selectableBudgetOffers]
+  );
+
   const filteredMembers = useMemo(() => {
     const searchWords = memberSearch.toLowerCase().trim().split(/\s+/).filter(Boolean);
     return (members || []).filter((member) => {
@@ -184,11 +238,22 @@ export default function BudgetBuilderModal({
       : null;
 
   const budgetTotal = calculateBudgetTotal(draftItems);
+  const discountBaseTotal = calculateBudgetTotal(
+    draftItems.filter((item) => Number(item.newPrice || 0) >= 0)
+  );
   const fieldShellClass =
-    'rounded-[16px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(241,245,249,0.94)_0%,rgba(236,242,248,0.96)_100%)] px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.68)]';
-  const panelShellClass = 'rounded-[18px] border border-slate-200 bg-slate-50/85 p-2';
+    'rounded-[16px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(241,245,249,0.94)_0%,rgba(236,242,248,0.96)_100%)] px-2 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.68)]';
+  const panelShellClass = 'rounded-[18px] border border-slate-200 bg-slate-50/85 p-1.5';
   const fieldInputClass =
-    'w-full bg-transparent text-[13px] font-medium text-slate-700 outline-none placeholder:text-slate-400';
+    'w-full rounded-[11px] border border-white/65 bg-white/55 px-2 py-1 text-[12px] font-medium text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)] outline-none placeholder:text-slate-400';
+  const fieldSelectClass =
+    'w-full rounded-[11px] border border-white/65 bg-white/55 px-2 py-1 text-[12px] font-semibold text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)] outline-none';
+  const fieldNumberClass =
+    'w-full rounded-[11px] border border-white/65 bg-white/55 px-2 py-1 text-center text-[12px] font-black text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
+  const quantityInputClass =
+    'w-full rounded-[11px] border border-indigo-100/80 bg-white/70 px-2 py-1 text-center text-[12px] font-black text-indigo-700 outline-none [appearance:textfield] ring-1 ring-indigo-100/60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
+  const lockedFieldClass =
+    'flex min-h-[30px] items-center rounded-[11px] border border-slate-200/70 bg-slate-100/80 px-2 py-1 text-[12px] font-semibold text-slate-500';
 
   const handleCatalogScroll = (e) => {
     const { scrollTop, clientHeight, scrollHeight } = e.target;
@@ -242,17 +307,75 @@ export default function BudgetBuilderModal({
     setDraftItems((prev) => [...prev, createEmptyBudgetItem()]);
   };
 
+  const applyOfferToDraft = (offer) => {
+    const canonical = offer?.canonical || normalizeLegacyOffer(offer, productsByCategory, inventory);
+
+    if (canonical.benefitType === 'combo' || canonical.benefitType === 'fixed_price' || offer.applyTo === 'Seleccion') {
+      const comboItem = createEmptyBudgetItem({
+        title: offer.name || 'Combo manual',
+        category: 'Combos',
+        qty: 1,
+        newPrice: Number(offer.offerPrice || 0),
+        product_type: 'quantity',
+      });
+
+      setDraftItems((prev) => [...prev, comboItem]);
+      return;
+    }
+
+    if (canonical.benefitType === 'coupon' || canonical.benefitType === 'discount') {
+      const rawValue = Number(canonical.discountValue || offer.discountValue || 0);
+      const discountAmount =
+        canonical.discountMode === 'percentage'
+          ? Math.round((discountBaseTotal * rawValue) / 100)
+          : rawValue;
+
+      if (discountAmount <= 0 || discountBaseTotal <= 0) {
+        Swal.fire('Descuento inválido', 'Agregá productos al presupuesto antes de aplicar un descuento.', 'warning');
+        return;
+      }
+
+      const discountItem = createEmptyBudgetItem({
+        title:
+          canonical.benefitType === 'coupon'
+            ? `Cupón ${canonical.couponCode || offer.name || 'Manual'}`
+            : offer.name || 'Descuento manual',
+        category: canonical.benefitType === 'coupon' ? 'Cupones' : 'Descuentos',
+        qty: 1,
+        newPrice: -Math.abs(discountAmount),
+        product_type: 'quantity',
+      });
+
+      setDraftItems((prev) => [...prev, discountItem]);
+    }
+  };
+
   const updateDraftItem = (id, field, value) => {
     setDraftItems((prev) =>
       prev.map((item) =>
         item.id === id
-          ? {
-              ...item,
-              [field]:
-                field === 'qty' || field === 'newPrice'
-                  ? Number(value)
-                  : value,
-            }
+          ? item.productId !== null && !item.isTemporary && (field === 'title' || field === 'product_type')
+            ? item
+            : field === 'product_type'
+            ? {
+                ...item,
+                product_type: value === 'weight' ? 'weight' : 'quantity',
+                qty:
+                  value === 'weight'
+                    ? item.product_type === 'weight'
+                      ? Math.max(Number(item.qty) || 0, 100)
+                      : 1000
+                    : item.product_type === 'weight'
+                      ? 1
+                      : Math.max(Math.round(Number(item.qty) || 1), 1),
+              }
+            : {
+                ...item,
+                [field]:
+                  field === 'qty' || field === 'newPrice'
+                    ? Number(value)
+                    : value,
+              }
           : item
       )
     );
@@ -260,6 +383,36 @@ export default function BudgetBuilderModal({
 
   const removeDraftItem = (id) => {
     setDraftItems((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const resetDraftToZero = async () => {
+    const result = await Swal.fire({
+      title: 'Volver a 0',
+      text: 'Se va a limpiar todo el presupuesto actual. Podés seguir armándolo desde cero.',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Sí, limpiar',
+      cancelButtonText: 'No',
+      confirmButtonColor: '#4f46e5',
+      cancelButtonColor: '#cbd5e1',
+      reverseButtons: true,
+    });
+
+    if (!result.isConfirmed) return;
+
+    setDraftConfig(DEFAULT_BUDGET_CONFIG);
+    setDraftItems([]);
+    setProductSearch('');
+    setSelectedCategory('Todas');
+    setMemberSearch('');
+    setCatalogLimit(ITEMS_STEP);
+    setShowOffersPanel(false);
+
+    try {
+      window.localStorage.removeItem(draftStorageKey);
+    } catch (error) {
+      console.warn('No se pudo limpiar el borrador del presupuesto:', error);
+    }
   };
 
   const selectMember = (member) => {
@@ -355,7 +508,7 @@ export default function BudgetBuilderModal({
             </div>
             <div>
               <h2 className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-800">
-                {initialRecord ? 'Editar presupuesto' : 'Crear presupuesto'}
+                {initialRecord ? (initialRecord.type === 'order' ? 'Editar pedido' : 'Editar presupuesto') : 'Crear presupuesto'}
               </h2>
               <p className="text-[10px] font-medium text-slate-500">
                 Armá el presupuesto, definí el cliente y congelá el detalle del pedido.
@@ -371,10 +524,10 @@ export default function BudgetBuilderModal({
           </button>
         </div>
 
-        <div className="grid min-h-0 flex-1 gap-0 overflow-x-hidden lg:grid-cols-[0.92fr_1.08fr]">
+        <div className="grid min-h-0 flex-1 gap-0 overflow-x-hidden lg:grid-cols-[0.8fr_1.2fr]">
           <div className="min-h-0 border-b border-slate-200 bg-white lg:border-b-0 lg:border-r">
             <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-slate-200 px-3 py-2">
+              <div className="border-b border-slate-200 px-2.5 py-1.5">
                 <div className={`flex items-center gap-2 ${fieldShellClass}`}>
                   <Search size={14} className="text-slate-400" />
                   <input
@@ -388,7 +541,7 @@ export default function BudgetBuilderModal({
                 <select
                   value={selectedCategory}
                   onChange={(e) => setSelectedCategory(e.target.value)}
-                  className={`mt-2 w-full text-[13px] font-semibold text-slate-700 outline-none ${fieldShellClass}`}
+                  className={`mt-2 ${fieldSelectClass} ${fieldShellClass}`}
                 >
                   <option value="Todas">Todas las categorias</option>
                   {(categories || []).map((category) => (
@@ -397,43 +550,187 @@ export default function BudgetBuilderModal({
                     </option>
                   ))}
                 </select>
+
+                <div className="mt-2 rounded-[16px] border border-slate-200 bg-white/80 px-2.5 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                        Combos y descuentos
+                      </p>
+                      <p className="text-[10px] font-medium text-slate-400">
+                        Aplicá promociones manuales al presupuesto.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowOffersPanel((prev) => !prev)}
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.1em] text-emerald-700 transition hover:bg-emerald-100"
+                    >
+                      <TicketPercent size={12} />
+                      {showOffersPanel ? 'Ocultar' : 'Ver disponibles'}
+                    </button>
+                  </div>
+
+                  {showOffersPanel && (
+                    <div className="mt-2 rounded-[14px] border border-emerald-200 bg-emerald-50/70 p-1.5">
+                      <div className="mb-1.5 flex items-center gap-1 rounded-[12px] border border-emerald-200/70 bg-white/75 p-1">
+                        <button
+                          type="button"
+                          onClick={() => setOfferView('combo')}
+                          className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] transition ${
+                            offerView === 'combo'
+                              ? 'bg-emerald-600 text-white'
+                              : 'text-emerald-700 hover:bg-emerald-100'
+                          }`}
+                        >
+                          Combos
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setOfferView('discount')}
+                          className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] transition ${
+                            offerView === 'discount'
+                              ? 'bg-emerald-600 text-white'
+                              : 'text-emerald-700 hover:bg-emerald-100'
+                          }`}
+                        >
+                          Cupón y desc.
+                        </button>
+                      </div>
+
+                      {visibleBudgetOffers.length === 0 ? (
+                        <div className="rounded-[12px] border border-dashed border-emerald-200 bg-white/80 px-3 py-3 text-center">
+                          <p className="text-[12px] font-bold text-emerald-700">
+                            {offerView === 'combo'
+                              ? 'No hay combos manuales disponibles.'
+                              : 'No hay cupones ni descuentos disponibles.'}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="grid gap-1.5">
+                          {visibleBudgetOffers.map((offer) => {
+                            const canonical = offer.canonical;
+                            const isCombo = canonical.benefitType === 'combo' || canonical.benefitType === 'fixed_price' || offer.applyTo === 'Seleccion';
+                            const label = isCombo
+                              ? 'Combo'
+                              : canonical.benefitType === 'coupon'
+                                ? 'Cupón'
+                                : 'Descuento';
+                            const detail = isCombo
+                              ? <FancyPrice amount={Number(offer.offerPrice || 0)} />
+                              : canonical.discountMode === 'percentage'
+                                ? `${Number(canonical.discountValue || offer.discountValue || 0)}%`
+                                : <FancyPrice amount={Number(canonical.discountValue || offer.discountValue || 0)} />;
+                            const comboProducts = Array.isArray(offer.productsIncluded) ? offer.productsIncluded.slice(0, 3) : [];
+                            const remainingProducts = Array.isArray(offer.productsIncluded) ? Math.max(offer.productsIncluded.length - 3, 0) : 0;
+
+                            return (
+                              <button
+                                key={`budget-offer-${offer.id}`}
+                                type="button"
+                                onClick={() => applyOfferToDraft(offer)}
+                                className="rounded-[14px] border border-emerald-200 bg-white px-3 py-2 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <p className="truncate text-[12px] font-black text-slate-800">{offer.name}</p>
+                                    <p className="mt-1 text-[10px] font-semibold text-slate-500">{label}</p>
+                                  </div>
+                                  <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">
+                                    {detail}
+                                  </span>
+                                </div>
+
+                                {isCombo && comboProducts.length > 0 && (
+                                  <div className="mt-1.5 flex flex-wrap gap-1">
+                                    {comboProducts.map((product) => (
+                                      <span
+                                        key={`${offer.id}-${product.id ?? product.title}`}
+                                        className="rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500"
+                                      >
+                                        {product.title}
+                                      </span>
+                                    ))}
+                                    {remainingProducts > 0 && (
+                                      <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
+                                        +{remainingProducts}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 scrollbar-hide" onScroll={handleCatalogScroll}>
-                <div className="grid gap-1.5 sm:grid-cols-2">
+              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5 py-1.5 scrollbar-hide" onScroll={handleCatalogScroll}>
+                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                   {visibleInventory.map((product) => (
                     <button
                       key={`${product.id}-catalog`}
                       type="button"
                       onClick={() => addProductToDraft(product)}
-                      className="rounded-[16px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(248,250,252,0.9)_0%,rgba(241,245,249,0.82)_100%)] px-2.5 py-2 text-left transition hover:border-indigo-300 hover:bg-indigo-50"
+                      className="group overflow-hidden rounded-[18px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(241,245,249,0.96)_100%)] text-left shadow-[0_10px_24px_rgba(148,163,184,0.12)] transition hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-[0_16px_30px_rgba(99,102,241,0.18)]"
                     >
-                      <div className="min-w-0">
-                        <div className="min-w-0">
-                          <p className="truncate text-[13px] font-black text-slate-800">{product.title}</p>
-                          <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-                            {getProductCategory(product)}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="mt-2 flex items-center justify-between gap-2 text-xs">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <div className="h-7 w-7 overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
-                            {product.image ? (
-                              <img src={product.image} alt={product.title} className="h-full w-full object-cover" />
-                            ) : (
-                              <div className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-400">
-                                <Package size={12} />
-                              </div>
-                            )}
+                      <div className="relative aspect-[4/3] overflow-hidden border-b border-slate-200/80 bg-slate-100">
+                        {product.image ? (
+                          <img
+                            src={product.image}
+                            alt={product.title}
+                            className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full flex-col items-center justify-center bg-[radial-gradient(circle_at_top,rgba(224,231,255,0.9),rgba(226,232,240,0.95))] px-4 text-center text-slate-500">
+                            <Package size={26} className="mb-2 text-indigo-400" />
+                            <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                              Sin imagen
+                            </span>
                           </div>
-                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500">
-                            {product.product_type === 'weight' ? formatWeight(product.stock) : `${product.stock || 0} u.`}
+                        )}
+                        <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-2">
+                          <span className="rounded-full bg-white/92 px-2 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-slate-600 shadow-sm">
+                            {getProductCategory(product)}
+                          </span>
+                          <span className="rounded-full bg-slate-900/75 px-2 py-1 text-[9px] font-black text-white shadow-sm backdrop-blur-sm">
+                            {product.product_type === 'weight'
+                              ? formatWeight(product.stock)
+                              : `${product.stock || 0} u.`}
                           </span>
                         </div>
-                        <span className="text-[13px] font-black text-indigo-700">
-                          <FancyPrice amount={product.product_type === 'weight' ? (Number(product.price) || 0) * 1000 : product.price} />
-                        </span>
+                      </div>
+                      <div className="space-y-2 p-2.5">
+                        <div className="min-w-0">
+                          <p className="min-h-[34px] text-[13px] font-black leading-tight text-slate-800">
+                            {product.title}
+                          </p>
+                          <p className="mt-1 text-[10px] font-semibold text-slate-500">
+                            {product.product_type === 'weight' ? 'Venta por peso' : 'Venta por unidad'}
+                          </p>
+                        </div>
+                        <div className="flex items-end justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">
+                              {product.product_type === 'weight' ? 'Precio/Kg' : 'Precio/u'}
+                            </p>
+                            <span className="mt-0.5 block text-[16px] font-black leading-none text-indigo-700">
+                              <FancyPrice
+                                amount={
+                                  product.product_type === 'weight'
+                                    ? (Number(product.price) || 0) * 1000
+                                    : product.price
+                                }
+                              />
+                            </span>
+                          </div>
+                          <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-indigo-700 transition group-hover:border-indigo-300 group-hover:bg-indigo-100">
+                            Agregar
+                          </span>
+                        </div>
                       </div>
                     </button>
                   ))}
@@ -444,14 +741,14 @@ export default function BudgetBuilderModal({
 
           <div className="min-h-0 bg-slate-50">
             <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
-                <div className="grid gap-2 xl:grid-cols-[0.98fr_1.02fr]">
+              <div className="border-b border-slate-200 bg-slate-50 px-2.5 py-1.5">
+                <div className="grid gap-1.5 xl:grid-cols-[0.9fr_1.1fr]">
                   <div className={panelShellClass}>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => switchCustomerMode('member')}
-                        className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] transition ${
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.1em] transition ${
                           draftConfig.customerMode === 'member'
                             ? 'bg-indigo-600 text-white'
                             : 'border border-slate-200 bg-white text-slate-500'
@@ -463,7 +760,7 @@ export default function BudgetBuilderModal({
                       <button
                         type="button"
                         onClick={() => switchCustomerMode('guest')}
-                        className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] transition ${
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.1em] transition ${
                           draftConfig.customerMode === 'guest'
                             ? 'bg-slate-900 text-white'
                             : 'border border-slate-200 bg-white text-slate-500'
@@ -475,7 +772,7 @@ export default function BudgetBuilderModal({
                     </div>
 
                     {draftConfig.customerMode === 'member' ? (
-                      <div className="mt-2.5">
+                      <div className="mt-2">
                         <div className={`flex items-center gap-2 ${fieldShellClass}`}>
                           <Search size={14} className="text-slate-400" />
                           <input
@@ -486,19 +783,19 @@ export default function BudgetBuilderModal({
                             className={fieldInputClass}
                           />
                         </div>
-                        <div className="mt-2 max-h-36 overflow-y-auto overflow-x-hidden rounded-[16px] border border-slate-200/80 bg-slate-100/80 p-1.5 scrollbar-hide">
+                        <div className="mt-1.5 max-h-32 overflow-y-auto overflow-x-hidden rounded-[16px] border border-slate-200/80 bg-slate-100/80 p-1 scrollbar-hide">
                           {filteredMembers.slice(0, 8).map((member) => (
                             <button
                               key={member.id}
                               type="button"
                               onClick={() => selectMember(member)}
-                              className={`mb-1 w-full rounded-[12px] px-2.5 py-1.5 text-left transition ${
+                              className={`mb-0.5 w-full rounded-[12px] px-2 py-1 text-left transition ${
                                 String(draftConfig.memberId) === String(member.id)
                                   ? 'bg-indigo-600 text-white'
                                   : 'bg-white text-slate-700 hover:bg-indigo-50'
                               }`}
                             >
-                              <p className="text-[13px] font-black">{member.name}</p>
+                              <p className="text-[12px] font-black">{member.name}</p>
                               <p className={`text-[10px] font-semibold ${String(draftConfig.memberId) === String(member.id) ? 'text-indigo-100' : 'text-slate-400'}`}>
                                 #{member.memberNumber || '---'} {member.phone ? `· ${member.phone}` : ''}
                               </p>
@@ -506,13 +803,13 @@ export default function BudgetBuilderModal({
                           ))}
                         </div>
                         {selectedMember && (
-                          <div className="mt-2 rounded-[16px] border border-indigo-200 bg-indigo-50/90 px-2.5 py-1.5 text-[11px] font-semibold text-indigo-700">
+                          <div className="mt-1.5 rounded-[14px] border border-indigo-200 bg-indigo-50/90 px-2 py-1 text-[10px] font-semibold text-indigo-700">
                             Socio vinculado: {selectedMember.name}
                           </div>
                         )}
                       </div>
                     ) : (
-                      <div className="mt-3 grid gap-2">
+                      <div className="mt-2 grid gap-1.5">
                         <label className={fieldShellClass}>
                           <span className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
                             <User size={11} />
@@ -543,7 +840,7 @@ export default function BudgetBuilderModal({
                             Nota
                           </span>
                           <textarea
-                            rows="2"
+                            rows="1"
                             value={draftConfig.customerNote}
                             onChange={(e) => setDraftConfig((prev) => ({ ...prev, customerNote: e.target.value }))}
                             className={`${fieldInputClass} resize-none`}
@@ -554,7 +851,7 @@ export default function BudgetBuilderModal({
                   </div>
 
                   <div className={panelShellClass}>
-                    <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="grid gap-1.5 sm:grid-cols-2">
                       <label className={fieldShellClass}>
                         <span className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
                           <FileText size={11} />
@@ -564,7 +861,7 @@ export default function BudgetBuilderModal({
                           type="text"
                           value={draftConfig.documentTitle}
                           onChange={(e) => setDraftConfig((prev) => ({ ...prev, documentTitle: e.target.value.toUpperCase() }))}
-                          className="w-full bg-transparent text-[13px] font-black uppercase text-slate-700 outline-none"
+                          className={`${fieldInputClass} text-[13px] font-black uppercase`}
                         />
                       </label>
                       <label className={fieldShellClass}>
@@ -581,11 +878,11 @@ export default function BudgetBuilderModal({
                       </label>
                     </div>
 
-                    <div className="mt-2 rounded-[16px] border border-emerald-200 bg-emerald-50 px-2.5 py-1.5">
+                    <div className="mt-1.5 rounded-[16px] border border-emerald-200 bg-emerald-50 px-2 py-1">
                       <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">
                         Total congelado
                       </p>
-                      <p className="mt-0.5 text-[20px] font-black leading-none text-emerald-700">
+                      <p className="mt-0.5 text-[18px] font-black leading-none text-emerald-700">
                         <FancyPrice amount={budgetTotal} />
                       </p>
                     </div>
@@ -593,8 +890,8 @@ export default function BudgetBuilderModal({
                 </div>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-2 scrollbar-hide">
-                <div className="mb-2 flex items-center justify-between">
+              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-1.5 scrollbar-hide">
+                <div className="mb-1.5 flex items-center justify-between">
                   <div>
                     <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
                       Detalle del presupuesto
@@ -606,49 +903,154 @@ export default function BudgetBuilderModal({
                   <button
                     type="button"
                     onClick={addManualItem}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100/90 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600 transition hover:border-slate-300 hover:bg-slate-200/80 hover:text-slate-800"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100/90 px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-slate-600 transition hover:border-slate-300 hover:bg-slate-200/80 hover:text-slate-800"
                   >
                     <Plus size={12} />
                     Item manual
                   </button>
                 </div>
 
-                <div className="space-y-1.5">
+                <div className="hidden mb-2 items-center justify-between rounded-[16px] border border-slate-200 bg-white/80 px-2.5 py-2">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                      Combos y descuentos
+                    </p>
+                    <p className="text-[10px] font-medium text-slate-400">
+                      Aplicá promociones manuales al presupuesto.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowOffersPanel((prev) => !prev)}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.1em] text-emerald-700 transition hover:bg-emerald-100"
+                  >
+                    <TicketPercent size={12} />
+                    {showOffersPanel ? 'Ocultar' : 'Ver disponibles'}
+                  </button>
+                </div>
+
+                {showOffersPanel && selectableBudgetOffers.length < 0 && (
+                  <div className="mb-2 rounded-[18px] border border-emerald-200 bg-emerald-50/70 p-2">
+                    {selectableBudgetOffers.length === 0 ? (
+                      <div className="rounded-[14px] border border-dashed border-emerald-200 bg-white/80 px-3 py-4 text-center">
+                        <p className="text-[12px] font-bold text-emerald-700">No hay combos ni descuentos manuales disponibles.</p>
+                      </div>
+                    ) : (
+                      <div className="grid gap-1.5 sm:grid-cols-2">
+                        {selectableBudgetOffers.map((offer) => {
+                          const canonical = offer.canonical;
+                          const isCombo = canonical.benefitType === 'combo' || canonical.benefitType === 'fixed_price' || offer.applyTo === 'Seleccion';
+                          const label = isCombo
+                            ? 'Combo'
+                            : canonical.benefitType === 'coupon'
+                              ? 'Cupón'
+                              : 'Descuento';
+                          const detail = isCombo
+                            ? <FancyPrice amount={Number(offer.offerPrice || 0)} />
+                            : canonical.discountMode === 'percentage'
+                              ? `${Number(canonical.discountValue || offer.discountValue || 0)}%`
+                              : <FancyPrice amount={Number(canonical.discountValue || offer.discountValue || 0)} />;
+
+                          return (
+                            <button
+                              key={`budget-offer-${offer.id}`}
+                              type="button"
+                              onClick={() => applyOfferToDraft(offer)}
+                              className="rounded-[14px] border border-emerald-200 bg-white px-3 py-2 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="truncate text-[12px] font-black text-slate-800">{offer.name}</p>
+                                  <p className="mt-1 text-[10px] font-semibold text-slate-500">{label}</p>
+                                </div>
+                                <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">
+                                  {detail}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="space-y-1">
                   {draftItems.map((item) => {
                     const subtotal = calculateBudgetLineSubtotal(item);
+                    const isInventoryItem = item.productId !== null && !item.isTemporary;
                     return (
-                      <div key={item.id} className="overflow-hidden rounded-[16px] border border-slate-200/80 bg-white/85 px-2 py-2 shadow-sm">
-                        <div className="grid min-w-0 gap-1.5 sm:grid-cols-[minmax(0,1.45fr)_84px_104px_96px_34px]">
+                      <div
+                        key={item.id}
+                        className="overflow-hidden rounded-[13px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(241,245,249,0.94)_0%,rgba(236,242,248,0.96)_100%)] px-1.5 py-[3px] shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]"
+                      >
+                        <div className="grid min-w-0 gap-1 sm:grid-cols-[minmax(0,1.52fr)_90px_94px_94px_120px_30px]">
                           <label className={fieldShellClass}>
-                            <span className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
+                            <span className="mb-0.5 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">
                               <Package size={11} />
                               Articulo
                             </span>
-                            <input
-                              type="text"
-                              value={item.title}
-                              onChange={(e) => updateDraftItem(item.id, 'title', e.target.value)}
-                              className={fieldInputClass}
-                            />
+                            {isInventoryItem ? (
+                              <div className={lockedFieldClass}>{item.title}</div>
+                            ) : (
+                              <input
+                                type="text"
+                                value={item.title}
+                                onChange={(e) => updateDraftItem(item.id, 'title', e.target.value)}
+                                className={fieldInputClass}
+                              />
+                            )}
                           </label>
 
                           <label className={fieldShellClass}>
-                            <span className="mb-1 block text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
-                              Cantidad
+                            <span className="mb-0.5 block text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">
+                              Tipo
+                            </span>
+                            {isInventoryItem ? (
+                              <div className={lockedFieldClass}>
+                                {item.product_type === 'weight' ? 'Peso' : 'Unidad'}
+                              </div>
+                            ) : (
+                              <select
+                                value={item.product_type === 'weight' ? 'weight' : 'quantity'}
+                                onChange={(e) => updateDraftItem(item.id, 'product_type', e.target.value)}
+                                className={fieldSelectClass}
+                              >
+                                <option value="quantity">Unidad</option>
+                                <option value="weight">Peso</option>
+                              </select>
+                            )}
+                          </label>
+
+                          <label className={fieldShellClass}>
+                            <span className="mb-0.5 flex items-center gap-1 whitespace-nowrap text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">
+                              {item.product_type === 'weight' ? 'Peso (g)' : 'Cantidad'}
+                              {item.product_type === 'weight' && (
+                                <HintIcon
+                                  hint={'La cantidad se ingresa en gramos. \n\nEjemplo:\n100g = 0,1kg\n1.000g = 1kg\n10.000g = 10kg'}
+                                  size={13}
+                                />
+                              )}
                             </span>
                             <input
                               type="number"
-                              min="1"
-                              step="1"
+                              min={item.product_type === 'weight' ? '100' : '1'}
+                              step={item.product_type === 'weight' ? '100' : '1'}
                               value={item.qty}
                               onChange={(e) => updateDraftItem(item.id, 'qty', e.target.value)}
-                              className="w-full bg-transparent text-[13px] font-black text-slate-700 outline-none"
+                              className={quantityInputClass}
                             />
                           </label>
 
                           <label className={fieldShellClass}>
-                            <span className="mb-1 block text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
-                              {item.product_type === 'weight' ? 'Precio por peso' : 'Precio unitario'}
+                            <span className="mb-0.5 flex items-center gap-1 whitespace-nowrap text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">
+                              {item.product_type === 'weight' ? 'Precio/Kg' : 'Precio/u'}
+                              {item.product_type === 'weight' && (
+                                <HintIcon
+                                  hint={'Es el precio por Kilo.\n\nEjemplo: \nsi ponés 2800, el kilo vale $2.800,00.'}
+                                  size={13}
+                                />
+                              )}
                             </span>
                             <input
                               type="number"
@@ -656,28 +1058,30 @@ export default function BudgetBuilderModal({
                               step="0.01"
                               value={item.newPrice}
                               onChange={(e) => updateDraftItem(item.id, 'newPrice', e.target.value)}
-                              className="w-full bg-transparent text-[13px] font-black text-slate-700 outline-none"
+                              className={fieldNumberClass}
                             />
                           </label>
 
-                          <div className="rounded-[16px] border border-emerald-200 bg-emerald-50 px-2.5 py-1.5">
-                            <span className="mb-1 block text-[10px] font-black uppercase tracking-[0.12em] text-emerald-500">
+                          <div className="rounded-[13px] border border-emerald-200 bg-emerald-50 px-2 py-[3px]">
+                            <span className="mb-0.5 block text-[10px] font-black uppercase tracking-[0.1em] text-emerald-500">
                               Subtotal
                             </span>
-                            <span className="text-[13px] font-black text-emerald-700">
-                              {formatCurrency(subtotal)}
-                            </span>
-                            <div className="mt-0.5 text-[9px] font-semibold text-emerald-600">
-                              {formatBudgetItemQuantity(item)}
+                            <div className="flex items-center justify-center gap-1.5 whitespace-nowrap">
+                              <span className="text-center text-[12px] font-black text-emerald-700">
+                                {formatCurrency(subtotal)}
+                              </span>
+                              <span className="text-center text-[9px] font-semibold text-emerald-600">
+                                {formatBudgetItemQuantity(item)}
+                              </span>
                             </div>
                           </div>
 
                           <button
                             type="button"
                             onClick={() => removeDraftItem(item.id)}
-                            className="flex h-full min-h-[52px] items-center justify-center rounded-[14px] border border-red-200 bg-red-50 text-red-600 transition hover:bg-red-100"
+                            className="flex h-full min-h-[38px] items-center justify-center rounded-[12px] border border-red-200 bg-red-50 text-red-600 transition hover:bg-red-100"
                           >
-                            <Trash2 size={15} />
+                            <Trash2 size={14} />
                           </button>
                         </div>
                       </div>
@@ -705,6 +1109,15 @@ export default function BudgetBuilderModal({
                     </p>
                   </div>
                   <div className="flex gap-2">
+                    {!initialRecord && (
+                      <button
+                        type="button"
+                        onClick={resetDraftToZero}
+                        className="rounded-[16px] border border-amber-200 bg-amber-50 px-3.5 py-1.5 text-[12px] font-bold text-amber-700 transition hover:bg-amber-100"
+                      >
+                        Volver a 0
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={onClose}
