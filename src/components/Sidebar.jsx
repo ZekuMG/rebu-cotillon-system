@@ -1,37 +1,54 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  PartyPopper,
-  LayoutDashboard,
-  Package,
-  ShoppingCart,
-  History,
-  LogOut,
-  FileText,
+  Building2,
   ClipboardList,
-  Settings2,
   FileBarChart,
+  FileText,
+  History,
+  LayoutDashboard,
+  LogOut,
+  Monitor,
+  Package,
   Percent,
-  Users // ✅ Ícono de Socios restaurado
+  Settings2,
+  ShoppingCart,
+  SlidersHorizontal,
+  Users,
 } from 'lucide-react';
+import {
+  getRoleLabel,
+  hasOwnerAccess,
+} from '../utils/appUsers';
+import { canAccessTab } from '../utils/userPermissions';
+import { hexToRgba, resolveUserPresentation } from '../utils/userPresentation';
+import UserAvatar from './UserAvatar';
 
-const SidebarButton = ({ onClick, isActive, icon: Icon, label }) => {
+const SidebarButton = ({ onClick, isActive, icon: Icon, label, accentColor = '#c026d3' }) => {
   const [showTooltip, setShowTooltip] = useState(false);
+  const activeStyle = isActive
+    ? {
+        backgroundColor: accentColor,
+        color: '#ffffff',
+        boxShadow: `0 10px 20px ${hexToRgba(accentColor, 0.28) || 'rgba(0,0,0,0.18)'}`,
+      }
+    : undefined;
+
   return (
     <div className="relative group flex justify-center">
       <button
         onClick={onClick}
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => setShowTooltip(false)}
-        className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all ${
-          isActive
-            ? 'bg-fuchsia-600 text-white shadow-md'
-            : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+        className={`flex h-10 w-10 items-center justify-center rounded-lg transition-all ${
+          isActive ? '' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
         }`}
+        style={activeStyle}
       >
         <Icon size={20} />
       </button>
+
       {showTooltip && (
-        <div className="absolute left-14 top-1/2 -translate-y-1/2 bg-slate-800 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50 shadow-lg pointer-events-none">
+        <div className="pointer-events-none absolute left-14 top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-xs text-white shadow-lg">
           {label}
           <div className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-slate-800" />
         </div>
@@ -40,130 +57,186 @@ const SidebarButton = ({ onClick, isActive, icon: Icon, label }) => {
   );
 };
 
-export default function Sidebar({
-  activeTab,
-  setActiveTab,
-  currentUser,
-  onLogout,
-}) {
-  const [showAdminMenu, setShowAdminMenu] = useState(false);
+export default function Sidebar({ activeTab, setActiveTab, currentUser, onLogout }) {
+  const [showUserMenu, setShowUserMenu] = useState(false);
   const menuRef = useRef(null);
+  const currentUserPresentation = resolveUserPresentation(currentUser);
+  const canUseAdminArea = hasOwnerAccess(currentUser);
+  const canViewDashboard = canAccessTab(currentUser, 'dashboard');
+  const canViewInventory = canAccessTab(currentUser, 'inventory');
+  const canViewPos = canAccessTab(currentUser, 'pos');
+  const canViewClients = canAccessTab(currentUser, 'clients');
+  const canViewAgenda = canAccessTab(currentUser, 'agenda');
+  const canViewOrders = canAccessTab(currentUser, 'orders');
+  const canViewExtras = canAccessTab(currentUser, 'extras');
+  const canViewReports = canAccessTab(currentUser, 'reports');
+  const canViewLogs = canAccessTab(currentUser, 'logs');
+  const canViewSessions = canAccessTab(currentUser, 'sessions');
+  const canViewBulkEditor = canAccessTab(currentUser, 'bulk-editor');
+  const canManageUsers = canAccessTab(currentUser, 'user-management');
+  const navAccentColor = currentUserPresentation?.nameColor || '#c026d3';
 
   useEffect(() => {
     function handleClickOutside(event) {
       if (menuRef.current && !menuRef.current.contains(event.target)) {
-        setShowAdminMenu(false);
+        setShowUserMenu(false);
       }
     }
+
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   return (
-    <div className="w-16 bg-slate-900 flex flex-col items-center py-4 gap-4 z-40 shadow-xl relative">
+    <div className="relative z-40 flex w-16 flex-col items-center gap-4 bg-slate-900 py-4 shadow-xl">
       <div className="mb-2">
-        <PartyPopper className="text-fuchsia-500" size={24} />
+        <img
+          src="/rebu-logo.png"
+          alt="Rebu"
+          className="h-10 w-10 rounded-xl object-contain drop-shadow-[0_4px_12px_rgba(236,72,153,0.35)]"
+        />
       </div>
-      <nav className="flex-1 space-y-2 w-full flex flex-col items-center">
-        
-        <SidebarButton
-          onClick={() => setActiveTab('dashboard')}
-          isActive={activeTab === 'dashboard'}
-          icon={LayoutDashboard}
-          label="Control de Caja"
-        />
-        <SidebarButton
-          onClick={() => setActiveTab('inventory')}
-          isActive={activeTab === 'inventory'}
-          icon={Package}
-          label="Inventario"
-        />
-        <SidebarButton
-          onClick={() => setActiveTab('pos')}
-          isActive={activeTab === 'pos'}
-          icon={ShoppingCart}
-          label="Punto de Venta"
-        />
-        <SidebarButton
-          onClick={() => setActiveTab('clients')}
-          isActive={activeTab === 'clients'}
-          icon={Users}
-          label="Socios"
-        />
-        <SidebarButton
-          onClick={() => setActiveTab('orders')}
-          isActive={activeTab === 'orders'}
-          icon={ClipboardList}
-          label="Pedidos"
-        />
-          <SidebarButton
-            onClick={() => setActiveTab('extras')}
-            isActive={activeTab === 'extras'}
-            icon={Settings2}
-            label="Extras"
-          />
+
+      <nav className="flex w-full flex-1 flex-col items-center space-y-2">
+        {canViewDashboard && <SidebarButton onClick={() => setActiveTab('dashboard')} isActive={activeTab === 'dashboard'} icon={LayoutDashboard} label="Control de Caja" accentColor={navAccentColor} />}
+        {canViewInventory && <SidebarButton onClick={() => setActiveTab('inventory')} isActive={activeTab === 'inventory'} icon={Package} label="Inventario" accentColor={navAccentColor} />}
+        {canViewPos && <SidebarButton onClick={() => setActiveTab('pos')} isActive={activeTab === 'pos'} icon={ShoppingCart} label="Punto de Venta" accentColor={navAccentColor} />}
+        {canViewClients && <SidebarButton onClick={() => setActiveTab('clients')} isActive={activeTab === 'clients'} icon={Users} label="Socios" accentColor={navAccentColor} />}
+        {canViewAgenda && <SidebarButton onClick={() => setActiveTab('agenda')} isActive={activeTab === 'agenda'} icon={Building2} label="Agenda" accentColor={navAccentColor} />}
+        {canViewOrders && <SidebarButton onClick={() => setActiveTab('orders')} isActive={activeTab === 'orders'} icon={ClipboardList} label="Pedidos" accentColor={navAccentColor} />}
+        {canViewExtras && <SidebarButton onClick={() => setActiveTab('extras')} isActive={activeTab === 'extras'} icon={Settings2} label="Extras" accentColor={navAccentColor} />}
       </nav>
 
-      <SidebarButton
-        onClick={() => setActiveTab('history')}
-        isActive={activeTab === 'history'}
-        icon={History}
-        label="Historial de Ventas"
-      />
+      <div className="flex w-full flex-col items-center gap-2 pb-1">
+        {canViewReports && (
+          <SidebarButton
+            onClick={() => setActiveTab('reports')}
+            isActive={activeTab === 'reports'}
+            icon={FileBarChart}
+            label="Reportes de Caja"
+            accentColor={navAccentColor}
+          />
+        )}
+        {canAccessTab(currentUser, 'history') && <SidebarButton
+          onClick={() => setActiveTab('history')}
+          isActive={activeTab === 'history'}
+          icon={History}
+          label="Historial de Ventas"
+          accentColor={navAccentColor}
+        />}
+      </div>
 
-      <div
-        className="pt-4 border-t border-slate-800 w-full flex flex-col items-center gap-3 relative"
-        ref={menuRef}
-      >
+      <div className="relative flex w-full flex-col items-center gap-3 border-t border-slate-800 pt-4" ref={menuRef}>
         <button
-          onClick={() => {
-            if (currentUser?.role === 'admin') {
-              setShowAdminMenu(!showAdminMenu);
-            }
-          }}
-          className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-[10px] transition-transform hover:scale-110 ${
-            currentUser?.role === 'admin'
-              ? 'bg-blue-600 cursor-pointer ring-2 ring-transparent hover:ring-blue-400'
-              : 'bg-green-600 cursor-default'
+          onClick={() => setShowUserMenu((prev) => !prev)}
+          className={`flex h-8 w-8 items-center justify-center rounded-full text-[10px] font-bold text-white transition-transform hover:scale-110 ${
+            canUseAdminArea
+              ? 'bg-blue-600 ring-2 ring-transparent hover:ring-blue-400'
+              : 'bg-green-600 ring-2 ring-transparent hover:ring-green-400'
           }`}
-          title={currentUser?.role === 'admin' ? 'Menú de Dueño' : 'Vendedor'}
+          title="Menú de usuario"
+          style={{
+            color: '#ffffff',
+            backgroundColor: currentUserPresentation?.nameColor || (canUseAdminArea ? '#2563eb' : '#16a34a'),
+          }}
         >
-          {currentUser?.avatar}
+          <UserAvatar
+            avatar={currentUserPresentation?.avatar || currentUser?.avatar}
+            name={currentUserPresentation?.displayName || currentUser?.name}
+            color={currentUserPresentation?.nameColor || (canUseAdminArea ? '#2563eb' : '#16a34a')}
+            sizeClass="h-8 w-8"
+            textClass="text-[10px]"
+          />
         </button>
 
-        {showAdminMenu && currentUser?.role === 'admin' && (
-          <div className="absolute left-14 bottom-0 w-48 bg-white rounded-lg shadow-xl border border-slate-200 py-1 overflow-hidden z-50">
-            <div className="px-3 py-2 border-b border-slate-100 bg-slate-50">
-              <p className="text-xs font-bold text-slate-700">Menú de Dueño</p>
+        {showUserMenu && (
+          <div className="absolute bottom-0 left-14 z-50 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
+            <div className="border-b border-slate-100 bg-slate-50 px-3 py-2">
+              <p className="text-xs font-bold text-slate-700">Menú de usuario</p>
+              <div className="mt-1 flex items-center gap-2">
+                <UserAvatar
+                  avatar={currentUserPresentation?.avatar || currentUser?.avatar}
+                  name={currentUserPresentation?.displayName || currentUser?.name}
+                  color={currentUserPresentation?.nameColor || '#334155'}
+                  sizeClass="h-6 w-6"
+                  textClass="text-[9px]"
+                />
+                <div className="min-w-0">
+                  <p className="truncate text-[11px] font-black" style={currentUserPresentation?.textStyle}>
+                    {currentUserPresentation?.displayName || currentUser?.name}
+                  </p>
+                  <p className="text-[10px] font-semibold text-slate-400">
+                    {getRoleLabel(currentUser?.role)}
+                  </p>
+                </div>
+              </div>
             </div>
-            
+
             <button
-              onClick={() => { setActiveTab('reports'); setShowAdminMenu(false); }}
-              className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2 transition-colors border-b border-slate-50"
+              onClick={() => {
+                setActiveTab('settings');
+                setShowUserMenu(false);
+              }}
+              className="flex w-full items-center gap-2 border-b border-slate-50 px-4 py-2.5 text-left text-xs text-slate-600 transition-colors hover:bg-fuchsia-50 hover:text-fuchsia-700"
             >
-              <FileBarChart size={14} /> Reportes de Caja
+              <SlidersHorizontal size={14} /> Ajustes
             </button>
-            <button
-              onClick={() => { setActiveTab('logs'); setShowAdminMenu(false); }}
-              className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2"
-            >
-              <FileText size={14} /> Registro de Acciones
-            </button>
-            {/* ✨ BOTÓN UNIFICADO */}
-            <button
-              onClick={() => { setActiveTab('bulk-editor'); setShowAdminMenu(false); }}
-              className="w-full text-left px-4 py-2.5 text-xs text-slate-600 hover:bg-fuchsia-50 hover:text-fuchsia-700 flex items-center gap-2 border-t border-slate-50"
-            >
-              <Percent size={14} /> Productos (Avanzado)
-            </button>
+
+            {canManageUsers && (
+              <button
+                onClick={() => {
+                  setActiveTab('user-management');
+                  setShowUserMenu(false);
+                }}
+                className="flex w-full items-center gap-2 border-b border-slate-50 px-4 py-2.5 text-left text-xs text-slate-600 transition-colors hover:bg-fuchsia-50 hover:text-fuchsia-700"
+              >
+                <Users size={14} /> Gestión de usuarios
+              </button>
+            )}
+
+            {canViewLogs && (
+              <>
+                <button
+                  onClick={() => {
+                    setActiveTab('logs');
+                    setShowUserMenu(false);
+                  }}
+                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs text-slate-600 transition-colors hover:bg-fuchsia-50 hover:text-fuchsia-700"
+                >
+                  <FileText size={14} /> Registro de Acciones
+                </button>
+              </>
+            )}
+            {canViewSessions && (
+              <>
+                <button
+                  onClick={() => {
+                    setActiveTab('sessions');
+                    setShowUserMenu(false);
+                  }}
+                  className="flex w-full items-center gap-2 border-t border-slate-50 px-4 py-2.5 text-left text-xs text-slate-600 transition-colors hover:bg-fuchsia-50 hover:text-fuchsia-700"
+                >
+                  <Monitor size={14} /> Gestor de Sesiones
+                </button>
+              </>
+            )}
+            {canViewBulkEditor && (
+              <>
+                <button
+                  onClick={() => {
+                    setActiveTab('bulk-editor');
+                    setShowUserMenu(false);
+                  }}
+                  className="flex w-full items-center gap-2 border-t border-slate-50 px-4 py-2.5 text-left text-xs text-slate-600 transition-colors hover:bg-fuchsia-50 hover:text-fuchsia-700"
+                >
+                  <Percent size={14} /> Productos (Avanzado)
+                </button>
+              </>
+            )}
           </div>
         )}
 
-        <button
-          onClick={onLogout}
-          className="text-red-400 hover:text-red-300 p-2"
-          title="Cerrar Sesión"
-        >
+        <button onClick={onLogout} className="p-2 text-red-400 hover:text-red-300" title="Cerrar sesión">
           <LogOut size={20} />
         </button>
       </div>

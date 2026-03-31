@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import { formatNumber, isTestRecord } from '../utils/helpers'; // ✨ Importado isTestRecord
 import { FancyPrice } from '../components/FancyPrice';
+import { hasPermission } from '../utils/userPermissions';
+import useIncrementalFeed from '../hooks/useIncrementalFeed';
 
 export default function ClientsView({ 
   members, 
@@ -42,6 +44,12 @@ export default function ClientsView({
 
   const [selectedMember, setSelectedMember] = useState(null);
   const [selectedTx, setSelectedTx] = useState(null);
+  const canCreateClients = hasPermission(currentUser, 'clients.create');
+  const canEditClients = hasPermission(currentUser, 'clients.edit');
+  const canDeleteClients = hasPermission(currentUser, 'clients.delete');
+  const canAuditClients = canEditClients;
+  const canEditSales = hasPermission(currentUser, 'history.editSale');
+  const canVoidSales = hasPermission(currentUser, 'history.voidSale');
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState('create');
@@ -143,42 +151,65 @@ export default function ClientsView({
 
   const getMemberHistory = (member) => {
     if (!member) return [];
-    
+
+    const parseDateTime = (dStr, tStr) => {
+      if (!dStr || dStr === '--/--/--') return 0;
+      if (dStr.includes('/')) {
+        const [day, month, year] = dStr.split('/');
+        const fullYear = year.length === 2 ? `20${year}` : year;
+        const timePart = tStr ? tStr.split(' ')[0] : '00:00:00';
+        return new Date(`${fullYear}-${month}-${day}T${timePart}`).getTime();
+      }
+      return new Date(dStr).getTime();
+    };
+
     const memberSales = transactions.filter(tx => {
       if (!tx.client) return false;
+      if (tx.status === 'voided' || tx.status === 'deleted') return false;
       return String(tx.client.id) === String(member.id) || 
              String(tx.client.memberNumber) === String(member.memberNumber);
     });
 
-    return memberSales.map(tx => {
-      const isRedemption = Number(tx.pointsSpent) > 0;
-      const pointsDiff = isRedemption ? Number(tx.pointsSpent) : Number(tx.pointsEarned || 0);
-      
+    const normalizedHistory = memberSales
+      .map((tx) => {
+        const earnedPoints = Number(tx.pointsEarned || 0);
+        const spentPoints = Number(tx.pointsSpent || 0);
+        const signedDiff = earnedPoints - spentPoints;
+        const isRedemption = spentPoints > 0;
+
+        return {
+          id: tx.id,
+          orderId: tx.id,
+          date: tx.date || '--/--/--',
+          time: tx.time || tx.timestamp || '--:--',
+          type: isRedemption ? 'redeemed' : 'earned',
+          concept: isRedemption ? 'Canje en Compra' : 'Compra Regular',
+          totalSale: tx.total,
+          points: isRedemption ? spentPoints : earnedPoints,
+          signedDiff,
+        };
+      })
+      .sort((a, b) => parseDateTime(a.date, a.time) - parseDateTime(b.date, b.time));
+
+    const startingPoints =
+      Number(member.points || 0) -
+      normalizedHistory.reduce((acc, movement) => acc + movement.signedDiff, 0);
+
+    let runningPoints = startingPoints;
+
+    const historyWithTotals = normalizedHistory.map((movement) => {
+      const prevPoints = runningPoints;
+      const newPoints = prevPoints + movement.signedDiff;
+      runningPoints = newPoints;
+
       return {
-        id: tx.id,
-        orderId: tx.id,
-        date: tx.date || '--/--/--', 
-        time: tx.time || tx.timestamp || '--:--', 
-        type: isRedemption ? 'redeemed' : 'earned',
-        concept: isRedemption ? 'Canje en Compra' : 'Compra Regular',
-        totalSale: tx.total,
-        points: pointsDiff,
-        newPoints: member.points, 
-        prevPoints: isRedemption ? member.points + pointsDiff : member.points - pointsDiff
+        ...movement,
+        prevPoints,
+        newPoints,
       };
-    }).sort((a, b) => {
-      const parseDateTime = (dStr, tStr) => {
-        if (!dStr || dStr === '--/--/--') return 0;
-        if (dStr.includes('/')) {
-          const [day, month, year] = dStr.split('/');
-          const fullYear = year.length === 2 ? `20${year}` : year;
-          const timePart = tStr ? tStr.split(' ')[0] : '00:00:00';
-          return new Date(`${fullYear}-${month}-${day}T${timePart}`).getTime();
-        }
-        return new Date(dStr).getTime();
-      };
-      return parseDateTime(b.date, b.time) - parseDateTime(a.date, a.time);
     });
+
+    return historyWithTotals.sort((a, b) => parseDateTime(b.date, b.time) - parseDateTime(a.date, a.time));
   };
 
   useEffect(() => {
@@ -246,6 +277,9 @@ export default function ClientsView({
       return true;
     }).length;
   }, [members, searchTerm]);
+  const visibleMembersFeed = useIncrementalFeed(sortedMembers, {
+    resetKey: `${searchTerm}|${sortBy}|${sortedMembers.length}`,
+  });
 
   const openCreateModal = () => {
     setModalMode('create');
@@ -410,7 +444,7 @@ export default function ClientsView({
             </select>
           </div>
 
-          {checkExpirations && currentUser?.role === 'admin' && (
+          {checkExpirations && canAuditClients && (
             <button
               onClick={handleRunAudit}
               className="py-1.5 px-3 text-slate-600 bg-white border border-slate-200 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
@@ -421,19 +455,19 @@ export default function ClientsView({
             </button>
           )}
 
-          <button
+          {canCreateClients && <button
             onClick={openCreateModal}
             className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shadow-md transition-all active:scale-95 text-xs uppercase tracking-wide"
           >
             <Plus size={14} />
             <span className="hidden sm:inline">Nuevo Socio</span>
-          </button>
+          </button>}
         </div>
       </div>
 
       
       {/* TABLA DE SOCIOS */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex-1 min-h-0 overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex-1 min-h-0 overflow-y-auto" onScroll={visibleMembersFeed.handleScroll}>
         <table className="w-full text-left">
           <thead className="bg-gray-50/50 border-b border-gray-100 sticky top-0 z-10 backdrop-blur-sm">
             <tr>
@@ -447,7 +481,7 @@ export default function ClientsView({
           </thead>
           <tbody className="divide-y divide-gray-100">
             {sortedMembers.length > 0 ? (
-              sortedMembers.map((member) => {
+              visibleMembersFeed.visibleItems.map((member) => {
                 const lastPurchase = getLastPurchaseDate(member);
 
                 return (
@@ -520,8 +554,8 @@ export default function ClientsView({
                         <td className="px-4 py-3 text-center">
                           <div className="flex items-center justify-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                             <button onClick={() => setSelectedMember(member)} className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Ver Detalles e Historial"><History size={16} /></button>
-                            <button onClick={() => openEditModal(member)} className="p-1.5 text-gray-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Editar Socio"><Edit2 size={16} /></button>
-                            <button onClick={() => handleDeleteRequest(member)} className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Eliminar Socio"><Trash2 size={16} /></button>
+                            {canEditClients && <button onClick={() => openEditModal(member)} className="p-1.5 text-gray-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Editar Socio"><Edit2 size={16} /></button>}
+                            {canDeleteClients && <button onClick={() => handleDeleteRequest(member)} className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Eliminar Socio"><Trash2 size={16} /></button>}
                           </div>
                         </td>
                   </tr>
@@ -540,6 +574,11 @@ export default function ClientsView({
             )}
           </tbody>
         </table>
+        {sortedMembers.length > 0 && (
+          <div className="border-t border-slate-200 bg-white px-4 py-2 text-[11px] font-semibold text-slate-500">
+            Mostrando <span className="font-black text-slate-700">{visibleMembersFeed.visibleCount}</span> de <span className="font-black text-slate-700">{sortedMembers.length}</span> socios
+          </div>
+        )}
       </div>
 
       {/* --- PANEL LATERAL (DRAWER) DE DETALLES --- */}
@@ -572,7 +611,7 @@ export default function ClientsView({
               </div>
               
               <div className="flex gap-2">
-                {!isDrawerEditMode && (
+                {!isDrawerEditMode && canEditClients && (
                   <button 
                     onClick={startDrawerEdit}
                     className="p-2 bg-white border hover:bg-blue-50 hover:text-blue-600 rounded-full text-gray-500 transition-colors shadow-sm"
@@ -810,7 +849,7 @@ export default function ClientsView({
                   <FileText size={14} /> Ticket
                 </button>
 
-                {currentUser?.role === 'admin' && selectedTx.status !== 'voided' && (
+                {canEditSales && selectedTx.status !== 'voided' && (
                   <button
                     onClick={() => {
                       setSelectedTx(null);
@@ -822,7 +861,7 @@ export default function ClientsView({
                   </button>
                 )}
 
-                {currentUser?.role === 'admin' && selectedTx.status !== 'voided' && (
+                {canVoidSales && selectedTx.status !== 'voided' && (
                   <button
                     onClick={() => {
                       setSelectedTx(null);

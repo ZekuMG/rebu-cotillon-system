@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 
 import useDashboardData from '../hooks/useDashboardData';
+import { hasOwnerAccess } from '../utils/appUsers';
+import { canAccessTab, getAllowedDashboardFilters } from '../utils/userPermissions';
 import {
   KpiCard,
   SalesChart,
@@ -22,6 +24,7 @@ import { isTestRecord } from '../utils/helpers'; // ✨ Importado el escudo anti
 
 const DEFAULT_BOTTOM_ORDER = ['chart', 'payments', 'topProducts', 'lowStock', 'financialActivity', 'systemLogs'];
 const DEFAULT_TOP_ORDER = ['sales', 'revenue', 'net', 'opening', 'average', 'expenses'];
+const DASHBOARD_FEED_BATCH = 50;
 
 export default function DashboardView({
   openingBalance,
@@ -34,22 +37,36 @@ export default function DashboardView({
   dailyLogs,
   inventory,
   expenses = [],
+  isLoading = false,
+  emptyStateMessage = '',
   onOpenExpenseModal,
   onAlertClick,
   onNavigate,
   onViewTransaction
 }) {
-  const isAdmin = currentUser?.role === 'admin';
+  const isAdmin = hasOwnerAccess(currentUser);
+  const canViewHistory = canAccessTab(currentUser, 'history');
+  const canViewInventory = canAccessTab(currentUser, 'inventory');
 
   // ✨ LIMPIEZA ABSOLUTA DE MODO TEST ANTES DE CALCULAR NADA
   const cleanTransactions = useMemo(() => (transactions || []).filter(t => !isTestRecord(t)), [transactions]);
   const cleanDailyLogs = useMemo(() => (dailyLogs || []).filter(l => !isTestRecord(l)), [dailyLogs]);
   const cleanInventory = useMemo(() => (inventory || []).filter(i => !isTestRecord(i)), [inventory]);
   const cleanExpenses = useMemo(() => (expenses || []).filter(e => !isTestRecord(e)), [expenses]);
+  const availableDashboardFilters = useMemo(() => getAllowedDashboardFilters(currentUser), [currentUser]);
 
-  const [globalFilter, setGlobalFilter] = useState('day');
+  const [globalFilter, setGlobalFilter] = useState(availableDashboardFilters[0] || 'day');
   const [rankingMode, setRankingMode] = useState('products');
   const [rankingCriteria, setRankingCriteria] = useState('revenue');
+  const [visibleActivityCount, setVisibleActivityCount] = useState(DASHBOARD_FEED_BATCH);
+  const [visibleLogsCount, setVisibleLogsCount] = useState(DASHBOARD_FEED_BATCH);
+
+  useEffect(() => {
+    if (!availableDashboardFilters.length) return;
+    if (!availableDashboardFilters.includes(globalFilter)) {
+      setGlobalFilter(availableDashboardFilters[0]);
+    }
+  }, [availableDashboardFilters, globalFilter]);
 
   const [widgetOrder, setWidgetOrder] = useState(() => {
     const saved = localStorage.getItem('party_dashboard_order_bottom');
@@ -158,6 +175,29 @@ export default function DashboardView({
     return [...sales, ...exps].sort((a, b) => b.sortTime - a.sortTime);
   }, [filteredData, filteredExpenses]);
 
+  useEffect(() => {
+    setVisibleActivityCount(DASHBOARD_FEED_BATCH);
+  }, [combinedActivity, globalFilter]);
+
+  useEffect(() => {
+    setVisibleLogsCount(DASHBOARD_FEED_BATCH);
+  }, [cleanDailyLogs]);
+
+  const handleInfiniteFeedScroll = (event, totalItems, setVisibleCount) => {
+    const { scrollTop, clientHeight, scrollHeight } = event.currentTarget;
+    if (scrollHeight - scrollTop > clientHeight + 200) return;
+
+    setVisibleCount((current) => {
+      if (current >= totalItems) return current;
+      return Math.min(current + DASHBOARD_FEED_BATCH, totalItems);
+    });
+  };
+
+  const hasDashboardSourceData =
+    cleanTransactions.length > 0 ||
+    cleanDailyLogs.length > 0 ||
+    cleanExpenses.length > 0;
+
   const renderWidget = (widgetKey) => {
     switch (widgetKey) {
       case 'chart':
@@ -172,7 +212,28 @@ export default function DashboardView({
             setRankingMode={setRankingMode}
             rankingCriteria={rankingCriteria}
             setRankingCriteria={setRankingCriteria}
-            getEmptyStateMessage={getEmptyStateMessage} 
+            getEmptyStateMessage={getEmptyStateMessage}
+            onSelectEntry={(entry, mode) => {
+              if (mode === 'categories') {
+                if (canViewHistory && onNavigate) {
+                  onNavigate('history', { category: entry.name });
+                  return;
+                }
+                if (canViewInventory && onNavigate) {
+                  onNavigate('inventory', { category: entry.name });
+                }
+                return;
+              }
+
+              const query = entry.name || '';
+              if (canViewHistory && onNavigate) {
+                onNavigate('history', { searchQuery: query });
+                return;
+              }
+              if (canViewInventory && onNavigate && !String(query).trim().startsWith('*')) {
+                onNavigate('inventory', { searchQuery: query });
+              }
+            }}
           />
         );
       case 'lowStock':
@@ -185,7 +246,7 @@ export default function DashboardView({
         );
       case 'financialActivity':
         return (
-            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 h-full flex flex-col">
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 h-full min-h-0 flex flex-col">
               <div className="flex justify-between items-center mb-4 gap-2 shrink-0">
                 <div className="flex items-center gap-3">
                   <h3 className="font-bold text-slate-800 flex items-center gap-1.5 whitespace-nowrap text-sm">
@@ -205,15 +266,17 @@ export default function DashboardView({
                 </div>
               </div>
 
-              <div className="relative flex-1 min-h-[280px]">
-                <div className="absolute inset-0 overflow-y-auto custom-scrollbar pr-1">
+              <div
+                className="custom-scrollbar flex-1 min-h-[280px] overflow-y-auto pr-1"
+                onScroll={(event) => handleInfiniteFeedScroll(event, combinedActivity.length, setVisibleActivityCount)}
+              >
                   <div className="space-y-2">
                     {combinedActivity.length > 0 ? (
                       (() => {
                         let lastDateStr = null;
                         const elements = [];
 
-                        combinedActivity.slice(0, 50).forEach((item, idx) => {
+                        combinedActivity.slice(0, visibleActivityCount).forEach((item, idx) => {
                           const itemDate = new Date(item.sortTime);
                           const dateStr = itemDate.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
@@ -297,13 +360,12 @@ export default function DashboardView({
                       </div>
                     )}
                   </div>
-                </div>
               </div>
             </div>
         );
       case 'systemLogs':
         return (
-            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 h-full flex flex-col">
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 h-full min-h-0 flex flex-col">
               <div className="flex justify-between items-center mb-4 gap-2 shrink-0">
                 <div className="flex items-center gap-3">
                   <h3 className="font-bold text-slate-800 flex items-center gap-1.5 whitespace-nowrap text-sm">
@@ -318,12 +380,14 @@ export default function DashboardView({
                 </button>
               </div>
               
-              <div className="relative flex-1 min-h-[280px]">
-                <div className="absolute inset-0 overflow-y-auto custom-scrollbar pr-1">
+              <div
+                className="custom-scrollbar flex-1 min-h-[280px] overflow-y-auto pr-1"
+                onScroll={(event) => handleInfiniteFeedScroll(event, cleanDailyLogs.length, setVisibleLogsCount)}
+              >
                   <div className="ml-2.5 mt-2 space-y-0 border-l border-slate-200">
                     {/* ✨ USAMOS cleanDailyLogs en lugar de dailyLogs crudos */}
                     {cleanDailyLogs && cleanDailyLogs.length > 0 ? (
-                      cleanDailyLogs.slice(0, 50).map((log) => (
+                      cleanDailyLogs.slice(0, visibleLogsCount).map((log) => (
                         <div key={log.id} className="group/log relative pb-5 pl-5 transition-all">
                           <div className="absolute -left-[5.5px] top-1.5 w-2.5 h-2.5 rounded-full bg-slate-200 ring-4 ring-white group-hover/log:bg-fuchsia-500 group-hover/log:scale-125 transition-all duration-200" />
                           
@@ -359,7 +423,6 @@ export default function DashboardView({
                       </div>
                     )}
                   </div>
-                </div>
               </div>
             </div>
         );
@@ -367,8 +430,32 @@ export default function DashboardView({
     }
   };
 
+  if (isLoading && !hasDashboardSourceData) {
+    return (
+      <div className="flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white/85 shadow-sm">
+        <div className="text-center">
+          <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Cargando panel</p>
+          <p className="mt-2 text-sm font-medium text-slate-500">Estamos trayendo ventas, logs y cierres sin bloquear el resto de la app.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (emptyStateMessage && !hasDashboardSourceData) {
+    return (
+      <div className="flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white/85 shadow-sm">
+        <div className="max-w-md text-center">
+          <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Dashboard no disponible</p>
+          <p className="mt-2 text-sm font-medium text-slate-500">{emptyStateMessage}</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-10">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="custom-scrollbar flex-1 min-h-0 overflow-y-auto pr-1">
+        <div className="mx-auto max-w-7xl space-y-6 pb-10">
       <div className="flex flex-col lg:flex-row justify-between items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold text-slate-800">Panel de Control</h2>
@@ -377,7 +464,11 @@ export default function DashboardView({
         <div className="flex flex-wrap items-center gap-3">
           <LayoutManagerControls isAdmin={isAdmin} hasUnsavedChanges={hasUnsavedChanges} onSave={handleSaveLayout} onRestore={handleRestoreLayout} />
           <div className="h-6 w-px bg-slate-200 hidden sm:block"></div>
-          <GlobalTimeSwitch globalFilter={globalFilter} setGlobalFilter={setGlobalFilter} />
+          <GlobalTimeSwitch
+            globalFilter={globalFilter}
+            setGlobalFilter={setGlobalFilter}
+            availableFilters={availableDashboardFilters}
+          />
         </div>
       </div>
 
@@ -435,7 +526,7 @@ export default function DashboardView({
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:auto-rows-[26rem]">
         {widgetOrder.map((widgetKey, index) => (
           (() => {
             const isExpandedAnnualChart = widgetKey === 'chart' && globalFilter === 'year';
@@ -457,9 +548,9 @@ export default function DashboardView({
                   e.preventDefault();
                   setDraggedItem(null);
                 }}
-                className={`h-full transition-all duration-200 ${isExpandedAnnualChart ? 'lg:col-span-2' : ''} ${draggedItem === widgetKey ? 'rounded-xl border-2 border-dashed border-slate-300 opacity-40 scale-95' : ''}`}
+                className={`min-h-0 transition-all duration-200 ${isExpandedAnnualChart ? 'lg:col-span-2 lg:h-[34rem]' : 'lg:h-[26rem]'} ${draggedItem === widgetKey ? 'rounded-xl border-2 border-dashed border-slate-300 opacity-40 scale-95' : ''}`}
               >
-                <div className="group relative h-full">
+                <div className="group relative h-full min-h-0">
                   {isAdmin && (
                     <div
                       draggable
@@ -481,6 +572,8 @@ export default function DashboardView({
             );
           })()
         ))}
+        </div>
+      </div>
       </div>
     </div>
   );

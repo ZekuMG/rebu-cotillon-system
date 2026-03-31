@@ -44,6 +44,66 @@ export default function useDashboardData({
     return (Number(tx.total) || 0) - cost;
   };
 
+  const getLiveProductForItem = (item) => {
+    if (!inventory) return null;
+    const itemId = item?.id || item?.productId;
+    if (itemId !== undefined && itemId !== null) {
+      const byId = inventory.find((product) => String(product.id) === String(itemId));
+      if (byId) return byId;
+    }
+
+    const normalizedTitle = String(item?.title || '').trim().toLowerCase();
+    if (!normalizedTitle) return null;
+    return inventory.find((product) => String(product.title || '').trim().toLowerCase() === normalizedTitle) || null;
+  };
+
+  const getRankingItemRevenue = (item, txTotal = 0) => {
+    const qty = Number(item?.qty) || Number(item?.quantity) || 0;
+    const price = Number(item?.price) || Number(item?.unit_price) || Number(item?.newPrice) || 0;
+    if (qty <= 0 || price <= 0) return 0;
+
+    const liveProduct = getLiveProductForItem(item);
+    const isWeightItem = isLegacyWeightLikeItem(item, liveProduct);
+    const subtotal =
+      Number(item?.subtotal ?? item?.lineSubtotal ?? item?.line_total ?? item?.lineTotal ?? item?.total ?? 0);
+
+    if (!isWeightItem) {
+      if (Number.isFinite(subtotal) && subtotal > 0) return subtotal;
+      return price * qty;
+    }
+
+    const perGramRevenue = price * qty;
+    const perKgRevenue = price * (qty / 1000);
+    const safeTxTotal = Number(txTotal) || 0;
+
+    if (safeTxTotal > 0) {
+      const maxReasonableLineRevenue = safeTxTotal * 1.1;
+      const perGramLooksWrong = perGramRevenue > maxReasonableLineRevenue;
+      const perKgLooksWrong = perKgRevenue > maxReasonableLineRevenue;
+
+      if (perGramLooksWrong && !perKgLooksWrong) return perKgRevenue;
+      if (!perGramLooksWrong && perKgLooksWrong) return perGramRevenue;
+    }
+
+    if (Number.isFinite(subtotal) && subtotal > 0) {
+      const subtotalDiffPerGram = Math.abs(subtotal - perGramRevenue);
+      const subtotalDiffPerKg = Math.abs(subtotal - perKgRevenue);
+      return subtotalDiffPerKg < subtotalDiffPerGram ? perKgRevenue : perGramRevenue;
+    }
+
+    if (liveProduct) {
+      const liveGramPrice = Number(liveProduct.price) || 0;
+      const liveKgPrice = liveGramPrice * 1000;
+      if (liveGramPrice > 0 && liveKgPrice > 0) {
+        const gramDistance = Math.abs(price - liveGramPrice) / liveGramPrice;
+        const kgDistance = Math.abs(price - liveKgPrice) / liveKgPrice;
+        return kgDistance < gramDistance ? perKgRevenue : perGramRevenue;
+      }
+    }
+
+    return price >= 100 ? perKgRevenue : perGramRevenue;
+  };
+
   const isInRange = useMemo(() => {
     const now = new Date();
     const currentYear = now.getFullYear();
@@ -93,14 +153,14 @@ export default function useDashboardData({
           net,
           cost: (Number(tx.total) || 0) - net,
         });
-        processedTxIds.add(tx.id);
+        processedTxIds.add(String(tx.id));
       }
     });
 
     (dailyLogs || []).forEach(log => {
       if (isVentaLog(log) && log.details) {
         const txId = log.details.transactionId;
-        if (!processedTxIds.has(txId)) { 
+        if (!processedTxIds.has(String(txId))) { 
           const logDate = safeParseDate(log.date);
           if (logDate && isInRange(logDate)) {
             const logTxLike = { total: Number(log.details.total) || 0, items: log.details.items || [] };
@@ -301,7 +361,7 @@ export default function useDashboardData({
     filteredData.forEach(tx => {
       tx.items.forEach(item => {
         const qty = Number(item.qty) || Number(item.quantity) || 0;
-        const revenue = (Number(item.price) || 0) * qty;
+        const revenue = getRankingItemRevenue(item, tx.total);
         
         const liveProduct = inventory ? inventory.find(p => p.id === (item.id || item.productId)) : null;
         const isWeightItem = isLegacyWeightLikeItem(item, liveProduct);

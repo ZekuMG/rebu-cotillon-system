@@ -7,13 +7,13 @@ import { HelpCircle } from 'lucide-react';
  * Muestra un icono de ayuda que despliega un tooltip cerca del cursor.
  * El texto soporta saltos de linea usando "\n".
  */
-export const HintIcon = ({ hint, size = 16, className = '' }) => {
+export const HintIcon = ({ hint, size = 16, className = '', side = 'right' }) => {
   const [showTooltip, setShowTooltip] = useState(false);
   const [cursorPosition, setCursorPosition] = useState({ x: 0, y: 0 });
 
   const handlePointerMove = (event) => {
     setCursorPosition({
-      x: event.clientX + 14,
+      x: side === 'left' ? event.clientX - 14 : event.clientX + 14,
       y: event.clientY - 12,
     });
   };
@@ -37,6 +37,7 @@ export const HintIcon = ({ hint, size = 16, className = '' }) => {
           style={{
             left: cursorPosition.x,
             top: cursorPosition.y,
+            transform: side === 'left' ? 'translateX(-100%)' : undefined,
           }}
         >
           <div className="max-w-[260px] whitespace-pre-line rounded-lg border border-slate-500 bg-slate-600 px-3 py-1.5 text-xs text-slate-100 shadow-xl">

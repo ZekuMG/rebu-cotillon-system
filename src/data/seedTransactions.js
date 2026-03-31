@@ -11,7 +11,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 1001,
     date: getDateStr(0),
     time: getTimeStr(9, 15),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 1, title: 'Pack Globos Metalizados Dorados', price: 3500, qty: 3 },
       { id: 5, title: 'Bengalas para Torta (Pack x4)', price: 1200, qty: 2 },
@@ -24,7 +24,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 1002,
     date: getDateStr(0),
     time: getTimeStr(9, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [{ id: 8, title: 'Velas Número 0-9 Glitter', price: 800, qty: 3 }],
     payment: 'Efectivo',
     total: 2400,
@@ -34,7 +34,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 1003,
     date: getDateStr(0),
     time: getTimeStr(10, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 6, title: 'Guirnalda LED Multicolor 5m', price: 6500, qty: 1 },
       { id: 8, title: 'Velas Número 0-9 Glitter', price: 800, qty: 2 },
@@ -60,7 +60,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 1005,
     date: getDateStr(0),
     time: getTimeStr(12, 0),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 4, title: 'Piñata Mexicana Multicolor', price: 8500, qty: 1 },
     ],
@@ -72,7 +72,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 1006,
     date: getDateStr(0),
     time: getTimeStr(13, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       {
         id: 7,
@@ -90,7 +90,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 1007,
     date: getDateStr(0),
     time: getTimeStr(14, 20),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 3, title: 'Antifaz Veneciano con Plumas', price: 1800, qty: 4 },
     ],
@@ -115,7 +115,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 1009,
     date: getDateStr(0),
     time: getTimeStr(16, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 10, title: 'Peluca Afro Colores', price: 3500, qty: 2 },
       { id: 3, title: 'Antifaz Veneciano con Plumas', price: 1800, qty: 3 },
@@ -128,7 +128,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 1010,
     date: getDateStr(0),
     time: getTimeStr(17, 10),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 5, title: 'Bengalas para Torta (Pack x4)', price: 1200, qty: 5 },
       { id: 8, title: 'Velas Número 0-9 Glitter', price: 800, qty: 4 },
@@ -141,7 +141,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 1011,
     date: getDateStr(0),
     time: getTimeStr(18, 0),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 6, title: 'Guirnalda LED Multicolor 5m', price: 6500, qty: 2 },
     ],
@@ -173,7 +173,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 2001,
     date: getDateStr(1),
     time: getTimeStr(9, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 1, title: 'Pack Globos Metalizados Dorados', price: 3500, qty: 5 },
     ],
@@ -185,7 +185,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 2002,
     date: getDateStr(1),
     time: getTimeStr(10, 15),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 8, title: 'Velas Número 0-9 Glitter', price: 800, qty: 6 },
       { id: 5, title: 'Bengalas para Torta (Pack x4)', price: 1200, qty: 3 },
@@ -210,7 +210,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 2004,
     date: getDateStr(1),
     time: getTimeStr(12, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 2, title: 'Set Vasos Neón Fluo (x50)', price: 4200, qty: 4 },
       { id: 9, title: 'Mantel Descartable Premium', price: 2200, qty: 4 },
@@ -223,7 +223,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 2005,
     date: getDateStr(1),
     time: getTimeStr(13, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 6, title: 'Guirnalda LED Multicolor 5m', price: 6500, qty: 1 },
       { id: 10, title: 'Peluca Afro Colores', price: 3500, qty: 1 },
@@ -236,7 +236,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 2006,
     date: getDateStr(1),
     time: getTimeStr(14, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 3, title: 'Antifaz Veneciano con Plumas', price: 1800, qty: 8 },
     ],
@@ -265,7 +265,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 2008,
     date: getDateStr(1),
     time: getTimeStr(16, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 1, title: 'Pack Globos Metalizados Dorados', price: 3500, qty: 2 },
       { id: 5, title: 'Bengalas para Torta (Pack x4)', price: 1200, qty: 4 },
@@ -278,7 +278,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 2009,
     date: getDateStr(1),
     time: getTimeStr(17, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [{ id: 8, title: 'Velas Número 0-9 Glitter', price: 800, qty: 5 }],
     payment: 'Efectivo',
     total: 4000,
@@ -288,7 +288,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 2010,
     date: getDateStr(1),
     time: getTimeStr(18, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 4, title: 'Piñata Mexicana Multicolor', price: 8500, qty: 1 },
       { id: 2, title: 'Set Vasos Neón Fluo (x50)', price: 4200, qty: 2 },
@@ -303,7 +303,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 3001,
     date: getDateStr(2),
     time: getTimeStr(9, 20),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 5, title: 'Bengalas para Torta (Pack x4)', price: 1200, qty: 10 },
     ],
@@ -327,7 +327,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 3003,
     date: getDateStr(2),
     time: getTimeStr(11, 15),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       {
         id: 7,
@@ -345,7 +345,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 3004,
     date: getDateStr(2),
     time: getTimeStr(12, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 3, title: 'Antifaz Veneciano con Plumas', price: 1800, qty: 6 },
       { id: 10, title: 'Peluca Afro Colores', price: 3500, qty: 2 },
@@ -358,7 +358,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 3005,
     date: getDateStr(2),
     time: getTimeStr(13, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [{ id: 8, title: 'Velas Número 0-9 Glitter', price: 800, qty: 8 }],
     payment: 'Debito',
     total: 6400,
@@ -381,7 +381,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 3007,
     date: getDateStr(2),
     time: getTimeStr(15, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [{ id: 2, title: 'Set Vasos Neón Fluo (x50)', price: 4200, qty: 3 }],
     payment: 'MercadoPago',
     total: 12600,
@@ -391,7 +391,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 3008,
     date: getDateStr(2),
     time: getTimeStr(16, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 1, title: 'Pack Globos Metalizados Dorados', price: 3500, qty: 3 },
       { id: 5, title: 'Bengalas para Torta (Pack x4)', price: 1200, qty: 2 },
@@ -404,7 +404,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 3009,
     date: getDateStr(2),
     time: getTimeStr(17, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 6, title: 'Guirnalda LED Multicolor 5m', price: 6500, qty: 1 },
     ],
@@ -436,7 +436,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 4001,
     date: getDateStr(3),
     time: getTimeStr(9, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 8, title: 'Velas Número 0-9 Glitter', price: 800, qty: 10 },
       { id: 5, title: 'Bengalas para Torta (Pack x4)', price: 1200, qty: 5 },
@@ -449,7 +449,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 4002,
     date: getDateStr(3),
     time: getTimeStr(10, 15),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 4, title: 'Piñata Mexicana Multicolor', price: 8500, qty: 2 },
     ],
@@ -473,7 +473,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 4004,
     date: getDateStr(3),
     time: getTimeStr(12, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 2, title: 'Set Vasos Neón Fluo (x50)', price: 4200, qty: 5 },
       { id: 9, title: 'Mantel Descartable Premium', price: 2200, qty: 5 },
@@ -486,7 +486,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 4005,
     date: getDateStr(3),
     time: getTimeStr(13, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 10, title: 'Peluca Afro Colores', price: 3500, qty: 3 },
       { id: 3, title: 'Antifaz Veneciano con Plumas', price: 1800, qty: 6 },
@@ -499,7 +499,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 4006,
     date: getDateStr(3),
     time: getTimeStr(14, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 6, title: 'Guirnalda LED Multicolor 5m', price: 6500, qty: 2 },
     ],
@@ -529,7 +529,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 4008,
     date: getDateStr(3),
     time: getTimeStr(16, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [{ id: 8, title: 'Velas Número 0-9 Glitter', price: 800, qty: 4 }],
     payment: 'Efectivo',
     total: 3200,
@@ -539,7 +539,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 4009,
     date: getDateStr(3),
     time: getTimeStr(17, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 1, title: 'Pack Globos Metalizados Dorados', price: 3500, qty: 2 },
       { id: 4, title: 'Piñata Mexicana Multicolor', price: 8500, qty: 1 },
@@ -552,7 +552,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 4010,
     date: getDateStr(3),
     time: getTimeStr(18, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 2, title: 'Set Vasos Neón Fluo (x50)', price: 4200, qty: 2 },
       { id: 3, title: 'Antifaz Veneciano con Plumas', price: 1800, qty: 3 },
@@ -567,7 +567,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 5001,
     date: getDateStr(4),
     time: getTimeStr(9, 15),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       {
         id: 7,
@@ -596,7 +596,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 5003,
     date: getDateStr(4),
     time: getTimeStr(11, 15),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 1, title: 'Pack Globos Metalizados Dorados', price: 3500, qty: 4 },
       { id: 5, title: 'Bengalas para Torta (Pack x4)', price: 1200, qty: 6 },
@@ -609,7 +609,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 5004,
     date: getDateStr(4),
     time: getTimeStr(12, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [{ id: 8, title: 'Velas Número 0-9 Glitter', price: 800, qty: 12 }],
     payment: 'Debito',
     total: 9600,
@@ -619,7 +619,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 5005,
     date: getDateStr(4),
     time: getTimeStr(13, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 10, title: 'Peluca Afro Colores', price: 3500, qty: 4 },
       { id: 3, title: 'Antifaz Veneciano con Plumas', price: 1800, qty: 8 },
@@ -645,7 +645,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 5007,
     date: getDateStr(4),
     time: getTimeStr(15, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [{ id: 2, title: 'Set Vasos Neón Fluo (x50)', price: 4200, qty: 3 }],
     payment: 'MercadoPago',
     total: 12600,
@@ -655,7 +655,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 5008,
     date: getDateStr(4),
     time: getTimeStr(16, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 1, title: 'Pack Globos Metalizados Dorados', price: 3500, qty: 2 },
       { id: 6, title: 'Guirnalda LED Multicolor 5m', price: 6500, qty: 1 },
@@ -668,7 +668,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 5009,
     date: getDateStr(4),
     time: getTimeStr(17, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 5, title: 'Bengalas para Torta (Pack x4)', price: 1200, qty: 8 },
     ],
@@ -699,7 +699,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 6001,
     date: getDateStr(5),
     time: getTimeStr(9, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 3, title: 'Antifaz Veneciano con Plumas', price: 1800, qty: 10 },
     ],
@@ -711,7 +711,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 6002,
     date: getDateStr(5),
     time: getTimeStr(10, 15),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 10, title: 'Peluca Afro Colores', price: 3500, qty: 3 },
       { id: 1, title: 'Pack Globos Metalizados Dorados', price: 3500, qty: 3 },
@@ -736,7 +736,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 6004,
     date: getDateStr(5),
     time: getTimeStr(12, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 8, title: 'Velas Número 0-9 Glitter', price: 800, qty: 15 },
       { id: 5, title: 'Bengalas para Torta (Pack x4)', price: 1200, qty: 8 },
@@ -749,7 +749,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 6005,
     date: getDateStr(5),
     time: getTimeStr(13, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 6, title: 'Guirnalda LED Multicolor 5m', price: 6500, qty: 2 },
     ],
@@ -761,7 +761,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 6006,
     date: getDateStr(5),
     time: getTimeStr(14, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 2, title: 'Set Vasos Neón Fluo (x50)', price: 4200, qty: 4 },
       { id: 9, title: 'Mantel Descartable Premium', price: 2200, qty: 4 },
@@ -791,7 +791,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 6008,
     date: getDateStr(5),
     time: getTimeStr(16, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 1, title: 'Pack Globos Metalizados Dorados', price: 3500, qty: 5 },
     ],
@@ -803,7 +803,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 6009,
     date: getDateStr(5),
     time: getTimeStr(17, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 3, title: 'Antifaz Veneciano con Plumas', price: 1800, qty: 5 },
       { id: 10, title: 'Peluca Afro Colores', price: 3500, qty: 2 },
@@ -816,7 +816,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 6010,
     date: getDateStr(5),
     time: getTimeStr(18, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 4, title: 'Piñata Mexicana Multicolor', price: 8500, qty: 1 },
       { id: 5, title: 'Bengalas para Torta (Pack x4)', price: 1200, qty: 4 },
@@ -831,7 +831,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 7001,
     date: getDateStr(6),
     time: getTimeStr(9, 15),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 6, title: 'Guirnalda LED Multicolor 5m', price: 6500, qty: 3 },
     ],
@@ -861,7 +861,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 7003,
     date: getDateStr(6),
     time: getTimeStr(11, 15),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 1, title: 'Pack Globos Metalizados Dorados', price: 3500, qty: 6 },
     ],
@@ -873,7 +873,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 7004,
     date: getDateStr(6),
     time: getTimeStr(12, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 4, title: 'Piñata Mexicana Multicolor', price: 8500, qty: 2 },
       { id: 9, title: 'Mantel Descartable Premium', price: 2200, qty: 6 },
@@ -886,7 +886,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 7005,
     date: getDateStr(6),
     time: getTimeStr(13, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [{ id: 2, title: 'Set Vasos Neón Fluo (x50)', price: 4200, qty: 5 }],
     payment: 'Credito',
     total: 23100,
@@ -908,7 +908,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 7007,
     date: getDateStr(6),
     time: getTimeStr(15, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 10, title: 'Peluca Afro Colores', price: 3500, qty: 4 },
       { id: 3, title: 'Antifaz Veneciano con Plumas', price: 1800, qty: 5 },
@@ -921,7 +921,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 7008,
     date: getDateStr(6),
     time: getTimeStr(16, 30),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 6, title: 'Guirnalda LED Multicolor 5m', price: 6500, qty: 1 },
       { id: 8, title: 'Velas Número 0-9 Glitter', price: 800, qty: 5 },
@@ -934,7 +934,7 @@ export const INITIAL_TRANSACTIONS = [
     id: 7009,
     date: getDateStr(6),
     time: getTimeStr(17, 45),
-    user: 'Vendedor',
+    user: 'Caja',
     items: [
       { id: 1, title: 'Pack Globos Metalizados Dorados', price: 3500, qty: 3 },
     ],

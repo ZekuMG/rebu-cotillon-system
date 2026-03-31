@@ -1,6 +1,5 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  PartyPopper,
   Lock,
   Clock,
   ChevronRight,
@@ -10,11 +9,13 @@ import {
 } from 'lucide-react';
 import Swal from 'sweetalert2';
 
-// --- CONEXIÓN A LA NUBE ---
+// --- CONEXIÃ“N A LA NUBE ---
 import { supabase } from './supabase/client';
 import { uploadProductImage, deleteProductImage } from './utils/storage';
 import { formatDateAR, formatTimeAR, formatTimeFullAR, isTestRecord } from './utils/helpers';
 import {
+  mapAgendaContactRecord,
+  mapAgendaContactRecords,
   mapBudgetRecords,
   mapCashClosureRecord,
   mapCashClosureRecords,
@@ -32,6 +33,30 @@ import {
 } from './utils/cloudMappers';
 import { buildBudgetExportConfig, buildExportItemsFromSnapshot, deriveOrderStatus, hydrateBudgetSnapshot } from './utils/budgetHelpers';
 import { buildLegacyOfferPayload } from './utils/offerHelpers';
+import {
+  bootstrapAppUsers,
+  buildLegacyBootstrapSeed,
+  buildLegacyUsers,
+  buildUserCatalog,
+  createAppUser,
+  fetchAppUsersPublic,
+  getRoleLabel,
+  hasOwnerAccess,
+  setAppUserActive,
+  updateAppUserPassword,
+  updateAppUserPermissions,
+  updateAppUserProfile,
+  verifyAppUserLogin,
+} from './utils/appUsers';
+import {
+  canAccessTab,
+  canEditUserProfile,
+  canManageUserPermissions,
+  canToggleUserActiveState,
+  getDefaultTabForUser,
+  hasPermission,
+} from './utils/userPermissions';
+import { resolveUserPresentation } from './utils/userPresentation';
 
 import { USERS } from './data';
 import Sidebar from './components/Sidebar';
@@ -41,12 +66,17 @@ import DashboardView from './views/DashboardView';
 import InventoryView from './views/InventoryView';
 import POSView from './views/POSView';
 import ClientsView from './views/ClientsView';
+import AgendaView from './views/AgendaView';
 import HistoryView from './views/HistoryView';
 import LogsView from './views/LogsView';
 import ExtrasView from './views/ExtrasView';
 import ReportsHistoryView from './views/ReportsHistoryView';
 import BulkEditorView from './views/BulkEditorView';
 import OrdersView from './views/OrdersView';
+import SessionsView from './views/SessionsView';
+import UserSettingsView from './views/UserSettingsView';
+import UserManagementView from './views/UserManagementView';
+import UserAvatar from './components/UserAvatar';
 
 // Modales y Componentes de Impresión
 import {
@@ -68,20 +98,317 @@ import {
 } from './components/AppModals';
 
 import { ExpenseModal } from './components/modals/ExpenseModal';
-import { RedemptionModal } from './components/modals/RedemptionModal';
+import { MemberIdentityPanel } from './components/modals/MemberIdentityPanel';
 import { TicketPrintLayout } from './components/TicketPrintLayout';
-import { ClientSelectionModal } from './components/modals/ClientSelectionModal';
 import { TransactionDetailModal } from './components/modals/HistoryModals'; 
 import { ExportPdfLayout } from './components/ExportPdfLayout';
 
 // Código de barras
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 
-const OFFLINE_CACHE_KEY = 'party_cloud_snapshot_v1';
+const OFFLINE_CORE_CACHE_KEY = 'party_cloud_snapshot_core_v2';
+const OFFLINE_DASHBOARD_CACHE_KEY = 'party_cloud_snapshot_dashboard_v2';
+const OFFLINE_ORDERS_CACHE_KEY = 'party_cloud_snapshot_orders_v2';
+const LEGACY_OFFLINE_CACHE_KEY = 'party_cloud_snapshot_v1';
+const USER_SETTINGS_KEY = 'party_user_settings_v1';
+const APP_TEXT_ENCODING_VERSION = 'utf8-clean';
+const CLOUD_FETCH_BATCH_SIZE = 200;
+const SESSION_ABSENT_MS = 10 * 60 * 1000;
+const SESSION_EXPIRED_MS = 60 * 60 * 1000;
+const SESSION_ACTIVITY_UPDATE_THROTTLE_MS = 5000;
+const APP_USERS_FRESHNESS_MS = 15 * 1000;
 
-const loadOfflineSnapshot = () => {
+const MODULE_LOAD_DEFAULT_STATE = {
+  core: { status: 'idle', lastLoadedAt: 0, dirty: false },
+  dashboard: { status: 'idle', lastLoadedAt: 0, dirty: false },
+  orders: { status: 'idle', lastLoadedAt: 0, dirty: false },
+};
+
+const TAB_TO_DATA_MODULE = {
+  dashboard: 'dashboard',
+  clients: 'dashboard',
+  history: 'dashboard',
+  logs: 'dashboard',
+  reports: 'dashboard',
+  sessions: 'dashboard',
+  orders: 'orders',
+};
+
+const sharedUsersCache = {
+  promise: null,
+  users: null,
+  authMode: 'legacy',
+  loadedAt: 0,
+};
+
+let initialBootstrapPromise = null;
+
+const fetchAllCloudRows = async (buildQuery, batchSize = CLOUD_FETCH_BATCH_SIZE) => {
+  const rows = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await buildQuery().range(from, from + batchSize - 1);
+    if (error) return { data: null, error };
+
+    const page = Array.isArray(data) ? data : [];
+    rows.push(...page);
+
+    if (page.length < batchSize) break;
+    from += page.length;
+  }
+
+  return { data: rows, error: null };
+};
+
+const hasUsableCloudResult = (result) => result.status === 'fulfilled' && !result.value?.error;
+
+const fetchCoreCloudPayload = async () => {
+  const [
+    prodResult,
+    clientResult,
+    agendaResult,
+    catResult,
+    rewardsResult,
+    registerResult,
+    offersResult,
+  ] = await Promise.allSettled([
+    fetchAllCloudRows(() =>
+      supabase
+        .from('products')
+        .select('*')
+        .eq('is_active', true)
+        .order('title')
+        .order('id')
+    ),
+    fetchAllCloudRows(() =>
+      supabase
+        .from('clients')
+        .select('*')
+        .eq('is_active', true)
+        .order('name')
+        .order('id')
+    ),
+    fetchAllCloudRows(() =>
+      supabase
+        .from('agenda_contacts')
+        .select('*')
+        .order('name')
+        .order('id')
+    ),
+    fetchAllCloudRows(() =>
+      supabase
+        .from('categories')
+        .select('*')
+        .order('name')
+        .order('id')
+    ),
+    fetchAllCloudRows(() =>
+      supabase
+        .from('rewards')
+        .select('*')
+        .order('points_cost', { ascending: true })
+        .order('id', { ascending: true })
+    ),
+    supabase.from('register_state').select('*').eq('id', 1).maybeSingle(),
+    fetchAllCloudRows(() =>
+      supabase
+        .from('offers')
+        .select('*')
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+    ),
+  ]);
+
+  const hasCloudConnection = [
+    prodResult,
+    clientResult,
+    agendaResult,
+    catResult,
+    rewardsResult,
+    registerResult,
+    offersResult,
+  ].some(hasUsableCloudResult);
+
+  const prodData = safeCloudData(prodResult, 'productos');
+  const clientData = safeCloudData(clientResult, 'clientes');
+  const agendaData = safeCloudData(agendaResult, 'agenda');
+  const catData = safeCloudData(catResult, 'categorias');
+  const rewardsData = safeCloudData(rewardsResult, 'premios');
+  const offersData = safeCloudData(offersResult, 'ofertas');
+
+  let registerState = null;
+  if (registerResult.status === 'fulfilled' && !registerResult.value.error) {
+    registerState = registerResult.value.data;
+  }
+
+  if (!registerState && hasCloudConnection) {
+    const { data: newState, error: upsertErr } = await supabase
+      .from('register_state')
+      .upsert([{ id: 1, is_open: false, opening_balance: 0, closing_time: '21:00' }], { onConflict: 'id' })
+      .select()
+      .maybeSingle();
+
+    if (!upsertErr && newState) registerState = newState;
+  }
+
+  return {
+    hasCloudConnection,
+    inventory: prodData ? mapInventoryRecords(prodData) : null,
+    members: clientData ? mapMemberRecords(clientData) : null,
+    agendaContacts: agendaData ? mapAgendaContactRecords(agendaData) : null,
+    categories: catData ? mapCategoryRecords(catData) : null,
+    rewards: rewardsData ? mapRewardRecords(rewardsData) : null,
+    offers: offersData ? mapOfferRecords(offersData) : null,
+    registerState,
+  };
+};
+
+const fetchDashboardCloudPayload = async () => {
+  const [salesResult, logsResult, expResult, closureResult] = await Promise.allSettled([
+    fetchAllCloudRows(() =>
+      supabase
+        .from('sales')
+        .select('*, sale_items(*), clients(name, member_number)')
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+    ),
+    fetchAllCloudRows(() =>
+      supabase
+        .from('logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+    ),
+    fetchAllCloudRows(() =>
+      supabase
+        .from('expenses')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+    ),
+    fetchAllCloudRows(() =>
+      supabase
+        .from('cash_closures')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+    ),
+  ]);
+
+  const hasCloudConnection = [salesResult, logsResult, expResult, closureResult].some(hasUsableCloudResult);
+
+  const logsData = safeCloudData(logsResult, 'logs');
+  const parsedLogs = logsData ? mapLogRecords(logsData) : null;
+  const salesData = safeCloudData(salesResult, 'ventas');
+  const expData = safeCloudData(expResult, 'gastos');
+  const closureData = safeCloudData(closureResult, 'reportes');
+
+  return {
+    hasCloudConnection,
+    dailyLogs: parsedLogs,
+    transactions: salesData ? mapSaleRecords(salesData, parsedLogs || []) : null,
+    expenses: expData ? mapExpenseRecords(expData) : null,
+    pastClosures: closureData ? mapCashClosureRecords(closureData) : null,
+  };
+};
+
+const fetchOrdersCloudPayload = async () => {
+  const [budgetsResult, ordersResult] = await Promise.allSettled([
+    fetchAllCloudRows(() =>
+      supabase
+        .from('budgets')
+        .select('*')
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+    ),
+    fetchAllCloudRows(() =>
+      supabase
+        .from('orders')
+        .select('*')
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+    ),
+  ]);
+
+  const hasCloudConnection = [budgetsResult, ordersResult].some(hasUsableCloudResult);
+  const budgetsData = safeCloudData(budgetsResult, 'presupuestos');
+  const ordersData = safeCloudData(ordersResult, 'pedidos');
+
+  return {
+    hasCloudConnection,
+    budgets: budgetsData ? mapBudgetRecords(budgetsData) : null,
+    orders: ordersData ? mapOrderRecords(ordersData) : null,
+  };
+};
+
+const getElectronRequire = () =>
+  window.require ||
+  window['require'] ||
+  globalThis.require ||
+  globalThis['require'] ||
+  null;
+
+const buildGuestPosClient = () => ({
+  id: 'guest',
+  name: 'No asociado',
+  memberNumber: '---',
+  points: 0,
+  usedCoupons: [],
+});
+
+const getPrimaryLocalIp = (networkInterfaces = {}) => {
   try {
-    const raw = window.localStorage.getItem(OFFLINE_CACHE_KEY);
+    for (const interfaces of Object.values(networkInterfaces)) {
+      for (const net of interfaces || []) {
+        const family = net?.family;
+        const isIPv4 = family === 'IPv4' || family === 4;
+        if (isIPv4 && !net.internal && net.address) {
+          return net.address;
+        }
+      }
+    }
+  } catch (error) {
+    console.error('No se pudo resolver la IP local:', error);
+  }
+  return null;
+};
+
+const getSessionDeviceInfo = () => {
+  const fallbackInfo = {
+    deviceName: 'Equipo desconocido',
+    ipAddress: window.location.hostname || 'No disponible',
+    platform: navigator.platform || 'Web',
+    runtime: 'Web',
+  };
+
+  try {
+    const electronReq = getElectronRequire();
+    if (!electronReq) return fallbackInfo;
+
+    const os = electronReq('os');
+    const deviceName = os.hostname?.() || fallbackInfo.deviceName;
+    const ipAddress = getPrimaryLocalIp(os.networkInterfaces?.()) || fallbackInfo.ipAddress;
+    const platform = `${os.platform?.() || 'desktop'} ${os.release?.() || ''}`.trim();
+
+    return {
+      deviceName,
+      ipAddress,
+      platform,
+      runtime: 'Electron',
+    };
+  } catch (error) {
+    console.error('No se pudo obtener la info del equipo:', error);
+    return fallbackInfo;
+  }
+};
+
+const loadSnapshotFromStorage = (storageKey) => {
+  try {
+    const raw = window.localStorage.getItem(storageKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === 'object' ? parsed : null;
@@ -91,19 +418,56 @@ const loadOfflineSnapshot = () => {
   }
 };
 
-const saveOfflineSnapshot = (snapshot) => {
+const saveSnapshotToStorage = (storageKey, snapshot) => {
   try {
-    window.localStorage.setItem(OFFLINE_CACHE_KEY, JSON.stringify(snapshot));
+    window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
   } catch (error) {
     console.error('No se pudo guardar el snapshot offline:', error);
   }
 };
 
+const loadOfflineSnapshot = () =>
+  loadSnapshotFromStorage(OFFLINE_CORE_CACHE_KEY) || loadSnapshotFromStorage(LEGACY_OFFLINE_CACHE_KEY);
+
+const saveOfflineSnapshot = (snapshot) => saveSnapshotToStorage(OFFLINE_CORE_CACHE_KEY, snapshot);
+
+const loadOfflineDashboardSnapshot = () => loadSnapshotFromStorage(OFFLINE_DASHBOARD_CACHE_KEY);
+const saveOfflineDashboardSnapshot = (snapshot) => saveSnapshotToStorage(OFFLINE_DASHBOARD_CACHE_KEY, snapshot);
+
+const loadOfflineOrdersSnapshot = () => loadSnapshotFromStorage(OFFLINE_ORDERS_CACHE_KEY);
+const saveOfflineOrdersSnapshot = (snapshot) => saveSnapshotToStorage(OFFLINE_ORDERS_CACHE_KEY, snapshot);
+
+const loadUserSettings = () => {
+  try {
+    const raw = window.localStorage.getItem(USER_SETTINGS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    console.error('No se pudieron leer los ajustes de usuario:', error);
+    return {};
+  }
+};
+
+const saveUserSettings = (settings) => {
+  try {
+    window.localStorage.setItem(USER_SETTINGS_KEY, JSON.stringify(settings));
+  } catch (error) {
+    console.error('No se pudieron guardar los ajustes de usuario:', error);
+  }
+};
+
 function PersistentTabPanel({ tab, activeTab, className = '', children }) {
   const cachedChildrenRef = useRef(children);
+  const hasMountedRef = useRef(activeTab === tab);
 
   if (activeTab === tab) {
+    hasMountedRef.current = true;
     cachedChildrenRef.current = children;
+  }
+
+  if (!hasMountedRef.current) {
+    return null;
   }
 
   return (
@@ -180,8 +544,18 @@ const updateWithSchemaFallback = async (table, id, payload) => {
 };
 
 export default function PartySupplyApp() {
+  window.__REBU_APP_READY__ = true;
+
+  useEffect(() => {
+    window.__REBU_APP_READY__ = true;
+
+    return () => {
+      window.__REBU_APP_READY__ = false;
+    };
+  }, []);
   
-  const [isCloudLoading, setIsCloudLoading] = useState(true);
+  const [isCloudLoading, setIsCloudLoading] = useState(false);
+  const [isAuthBootLoading, setIsAuthBootLoading] = useState(true);
   const [isOfflineReadOnly, setIsOfflineReadOnly] = useState(false);
   const [offlineSnapshotAt, setOfflineSnapshotAt] = useState(null);
 
@@ -194,11 +568,22 @@ export default function PartySupplyApp() {
   const [transactions, setTransactions] = useState([]);
   const [dailyLogs, setDailyLogs] = useState([]);
   const [members, setMembers] = useState([]);
+  const [agendaContacts, setAgendaContacts] = useState([]);
   const [pastClosures, setPastClosures] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [budgets, setBudgets] = useState([]);
   const [orders, setOrders] = useState([]);
-  const [offers, setOffers] = useState([]); // ✨ NUEVO ESTADO: Ofertas
+  const [offers, setOffers] = useState([]); // ? NUEVO ESTADO: Ofertas
+  const [moduleLoadState, setModuleLoadState] = useState(MODULE_LOAD_DEFAULT_STATE);
+  const moduleLoadStateRef = useRef(MODULE_LOAD_DEFAULT_STATE);
+  const moduleLoadPromisesRef = useRef({
+    core: null,
+    dashboard: null,
+    orders: null,
+  });
+  const activeTabRef = useRef('pos');
+  const dataStateRef = useRef({});
+  const registerStateSnapshotRef = useRef(null);
 
   const [openingBalance, setOpeningBalance] = useState(0);
   const [isRegisterClosed, setIsRegisterClosed] = useState(true); 
@@ -208,6 +593,7 @@ export default function PartySupplyApp() {
   const isAutoClosing = useRef(false);
 
   const syncRegisterState = (registerState) => {
+    registerStateSnapshotRef.current = registerState || null;
     const mappedRegisterState = mapRegisterState(registerState);
     if (!mappedRegisterState) return;
 
@@ -217,173 +603,408 @@ export default function PartySupplyApp() {
     setRegisterOpenedAt(mappedRegisterState.registerOpenedAt);
   };
 
-  const applyOfflineSnapshot = (snapshot) => {
-    if (!snapshot) return false;
+  const setModuleState = (moduleKey, patch) => {
+    const currentState = moduleLoadStateRef.current[moduleKey] || MODULE_LOAD_DEFAULT_STATE[moduleKey];
+    const nextPartial = typeof patch === 'function' ? patch(currentState) : patch;
+    const nextState = {
+      ...currentState,
+      ...(nextPartial || {}),
+    };
+
+    moduleLoadStateRef.current = {
+      ...moduleLoadStateRef.current,
+      [moduleKey]: nextState,
+    };
+    setModuleLoadState(moduleLoadStateRef.current);
+  };
+
+  const applyCoreSnapshot = (snapshot) => {
+    const hasCoreData =
+      snapshot &&
+      (
+        'inventory' in snapshot ||
+        'categories' in snapshot ||
+        'rewards' in snapshot ||
+        'members' in snapshot ||
+        'agendaContacts' in snapshot ||
+        'offers' in snapshot ||
+        'registerState' in snapshot
+      );
+    if (!hasCoreData) return false;
     setInventory(Array.isArray(snapshot.inventory) ? snapshot.inventory : []);
     setCategories(Array.isArray(snapshot.categories) ? snapshot.categories : []);
     setRewards(Array.isArray(snapshot.rewards) ? snapshot.rewards : []);
-    setTransactions(Array.isArray(snapshot.transactions) ? snapshot.transactions : []);
-    setDailyLogs(Array.isArray(snapshot.dailyLogs) ? snapshot.dailyLogs : []);
     setMembers(Array.isArray(snapshot.members) ? snapshot.members : []);
-    setPastClosures(Array.isArray(snapshot.pastClosures) ? snapshot.pastClosures : []);
-    setExpenses(Array.isArray(snapshot.expenses) ? snapshot.expenses : []);
-    setBudgets(Array.isArray(snapshot.budgets) ? snapshot.budgets : []);
-    setOrders(Array.isArray(snapshot.orders) ? snapshot.orders : []);
+    setAgendaContacts(Array.isArray(snapshot.agendaContacts) ? snapshot.agendaContacts : []);
     setOffers(Array.isArray(snapshot.offers) ? snapshot.offers : []);
     syncRegisterState(snapshot.registerState || null);
-    setOfflineSnapshotAt(snapshot.savedAt || null);
+    if (snapshot.savedAt) setOfflineSnapshotAt(snapshot.savedAt);
     return true;
+  };
+
+  const applyDashboardSnapshot = (snapshot) => {
+    const hasDashboardData =
+      snapshot &&
+      (
+        'transactions' in snapshot ||
+        'dailyLogs' in snapshot ||
+        'pastClosures' in snapshot ||
+        'expenses' in snapshot
+      );
+    if (!hasDashboardData) return false;
+    setTransactions(Array.isArray(snapshot.transactions) ? snapshot.transactions : []);
+    setDailyLogs(Array.isArray(snapshot.dailyLogs) ? snapshot.dailyLogs : []);
+    setPastClosures(Array.isArray(snapshot.pastClosures) ? snapshot.pastClosures : []);
+    setExpenses(Array.isArray(snapshot.expenses) ? snapshot.expenses : []);
+    return true;
+  };
+
+  const applyOrdersSnapshot = (snapshot) => {
+    const hasOrdersData = snapshot && ('budgets' in snapshot || 'orders' in snapshot);
+    if (!hasOrdersData) return false;
+    setBudgets(Array.isArray(snapshot.budgets) ? snapshot.budgets : []);
+    setOrders(Array.isArray(snapshot.orders) ? snapshot.orders : []);
+    return true;
+  };
+
+  const applyOfflineSnapshot = (snapshot) => {
+    if (!snapshot) return false;
+    applyCoreSnapshot(snapshot);
+    applyDashboardSnapshot(snapshot);
+    applyOrdersSnapshot(snapshot);
+    if (snapshot.savedAt) setOfflineSnapshotAt(snapshot.savedAt);
+    return true;
+  };
+
+  const loadAppUsers = async ({ force = false } = {}) => {
+    if (sharedUsersCache.promise) {
+      const cachedResult = await sharedUsersCache.promise;
+      setAuthMode(cachedResult.authMode);
+      setAppUsers(cachedResult.users);
+      return cachedResult.users;
+    }
+
+    const cacheAge = Date.now() - Number(sharedUsersCache.loadedAt || 0);
+    if (!force && Array.isArray(sharedUsersCache.users) && cacheAge < APP_USERS_FRESHNESS_MS) {
+      setAuthMode(sharedUsersCache.authMode || 'legacy');
+      setAppUsers(sharedUsersCache.users);
+      return sharedUsersCache.users;
+    }
+
+    sharedUsersCache.promise = (async () => {
+      try {
+        let users = await fetchAppUsersPublic();
+
+        if (users.length === 0) {
+          const seed = buildLegacyBootstrapSeed(USERS, userSettings);
+          await bootstrapAppUsers(seed);
+          users = await fetchAppUsersPublic();
+        }
+
+        if (users.length > 0) {
+          return { users, authMode: 'supabase' };
+        }
+
+        throw new Error('No se encontraron usuarios activos.');
+      } catch (error) {
+        const isMissingSharedUsersSchema =
+          error?.code === 'PGRST205' &&
+          /app_users_public|app_users/i.test(String(error?.message || ''));
+
+        if (isMissingSharedUsersSchema) {
+          console.warn('No existe todavía el schema compartido de usuarios. Seguimos con el login legacy.');
+        } else {
+          console.error('No se pudieron cargar los usuarios compartidos:', error);
+        }
+
+        return {
+          users: buildLegacyUsers(USERS, userSettings),
+          authMode: 'legacy',
+        };
+      }
+    })();
+
+    try {
+      const result = await sharedUsersCache.promise;
+      sharedUsersCache.users = result.users;
+      sharedUsersCache.authMode = result.authMode;
+      sharedUsersCache.loadedAt = Date.now();
+      setAuthMode(result.authMode);
+      setAppUsers(result.users);
+      return result.users;
+    } finally {
+      sharedUsersCache.promise = null;
+    }
+  };
+
+  const applyCorePayload = (payload) => {
+    if (payload.inventory !== null) setInventory(payload.inventory);
+    if (payload.members !== null) setMembers(payload.members);
+    if (payload.agendaContacts !== null) setAgendaContacts(payload.agendaContacts);
+    if (payload.categories !== null) setCategories(payload.categories);
+    if (payload.rewards !== null) setRewards(payload.rewards);
+    if (payload.offers !== null) setOffers(payload.offers);
+    if (payload.registerState) syncRegisterState(payload.registerState);
+  };
+
+  const applyDashboardPayload = (payload) => {
+    if (payload.dailyLogs !== null) setDailyLogs(payload.dailyLogs);
+    if (payload.transactions !== null) setTransactions(payload.transactions);
+    if (payload.expenses !== null) setExpenses(payload.expenses);
+    if (payload.pastClosures !== null) setPastClosures(payload.pastClosures);
+  };
+
+  const applyOrdersPayload = (payload) => {
+    if (payload.budgets !== null) setBudgets(payload.budgets);
+    if (payload.orders !== null) setOrders(payload.orders);
+  };
+
+  const loadCoreCloudData = async ({ showSpinner = false, force = false } = {}) => {
+    if (moduleLoadPromisesRef.current.core) {
+      return moduleLoadPromisesRef.current.core;
+    }
+
+    const currentState = moduleLoadStateRef.current.core;
+    if (!force && currentState.status === 'loaded' && !currentState.dirty) {
+      return true;
+    }
+
+    const run = async () => {
+      if (showSpinner) setIsCloudLoading(true);
+      setModuleState('core', { status: 'loading', dirty: false });
+
+      try {
+        const payload =
+          !force && currentState.status === 'idle'
+            ? await (initialBootstrapPromise ||= fetchCoreCloudPayload())
+            : await fetchCoreCloudPayload();
+
+        if (!payload?.hasCloudConnection) {
+          const cachedSnapshot = loadOfflineSnapshot();
+          if (applyCoreSnapshot(cachedSnapshot)) {
+            setIsOfflineReadOnly(true);
+            setModuleState('core', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+            return true;
+          }
+
+          setModuleState('core', { status: 'error', dirty: true });
+          return false;
+        }
+
+        applyCorePayload(payload);
+        setIsOfflineReadOnly(false);
+
+        const nextSnapshot = {
+          savedAt: new Date().toISOString(),
+          inventory: payload.inventory ?? dataStateRef.current.inventory ?? [],
+          categories: payload.categories ?? dataStateRef.current.categories ?? [],
+          rewards: payload.rewards ?? dataStateRef.current.rewards ?? [],
+          members: payload.members ?? dataStateRef.current.members ?? [],
+          agendaContacts: payload.agendaContacts ?? dataStateRef.current.agendaContacts ?? [],
+          offers: payload.offers ?? dataStateRef.current.offers ?? [],
+          registerState: payload.registerState ?? registerStateSnapshotRef.current ?? null,
+        };
+        saveOfflineSnapshot(nextSnapshot);
+        setOfflineSnapshotAt(nextSnapshot.savedAt);
+        setModuleState('core', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+        return true;
+      } catch (error) {
+        console.error('Error general de conexión (core):', error);
+        const cachedSnapshot = loadOfflineSnapshot();
+        if (applyCoreSnapshot(cachedSnapshot)) {
+          setIsOfflineReadOnly(true);
+          setModuleState('core', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+          return true;
+        }
+
+        setModuleState('core', { status: 'error', dirty: true });
+        return false;
+      } finally {
+        moduleLoadPromisesRef.current.core = null;
+        if (showSpinner) setIsCloudLoading(false);
+      }
+    };
+
+    const promise = run();
+    moduleLoadPromisesRef.current.core = promise;
+    return promise;
+  };
+
+  const loadDashboardCloudData = async ({ force = false } = {}) => {
+    if (moduleLoadPromisesRef.current.dashboard) {
+      return moduleLoadPromisesRef.current.dashboard;
+    }
+
+    const currentState = moduleLoadStateRef.current.dashboard;
+    if (!force && currentState.status === 'loaded' && !currentState.dirty) {
+      return true;
+    }
+
+    const run = async () => {
+      setModuleState('dashboard', { status: 'loading', dirty: false });
+
+      try {
+        const payload = await fetchDashboardCloudPayload();
+
+        if (!payload?.hasCloudConnection) {
+          const cachedSnapshot = loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
+          if (applyDashboardSnapshot(cachedSnapshot)) {
+            setModuleState('dashboard', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+            return true;
+          }
+
+          setModuleState('dashboard', { status: 'error', dirty: true });
+          return false;
+        }
+
+        applyDashboardPayload(payload);
+        setIsOfflineReadOnly(false);
+
+        const nextSnapshot = {
+          savedAt: new Date().toISOString(),
+          transactions: payload.transactions ?? dataStateRef.current.transactions ?? [],
+          dailyLogs: payload.dailyLogs ?? dataStateRef.current.dailyLogs ?? [],
+          expenses: payload.expenses ?? dataStateRef.current.expenses ?? [],
+          pastClosures: payload.pastClosures ?? dataStateRef.current.pastClosures ?? [],
+        };
+        saveOfflineDashboardSnapshot(nextSnapshot);
+        setModuleState('dashboard', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+        return true;
+      } catch (error) {
+        console.error('Error general de conexión (dashboard):', error);
+        const cachedSnapshot = loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
+        if (applyDashboardSnapshot(cachedSnapshot)) {
+          setModuleState('dashboard', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+          return true;
+        }
+
+        setModuleState('dashboard', { status: 'error', dirty: true });
+        return false;
+      } finally {
+        moduleLoadPromisesRef.current.dashboard = null;
+      }
+    };
+
+    const promise = run();
+    moduleLoadPromisesRef.current.dashboard = promise;
+    return promise;
+  };
+
+  const loadOrdersCloudData = async ({ force = false } = {}) => {
+    if (moduleLoadPromisesRef.current.orders) {
+      return moduleLoadPromisesRef.current.orders;
+    }
+
+    const currentState = moduleLoadStateRef.current.orders;
+    if (!force && currentState.status === 'loaded' && !currentState.dirty) {
+      return true;
+    }
+
+    const run = async () => {
+      setModuleState('orders', { status: 'loading', dirty: false });
+
+      try {
+        const payload = await fetchOrdersCloudPayload();
+
+        if (!payload?.hasCloudConnection) {
+          const cachedSnapshot = loadOfflineOrdersSnapshot() || loadOfflineSnapshot();
+          if (applyOrdersSnapshot(cachedSnapshot)) {
+            setModuleState('orders', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+            return true;
+          }
+
+          setModuleState('orders', { status: 'error', dirty: true });
+          return false;
+        }
+
+        applyOrdersPayload(payload);
+        setIsOfflineReadOnly(false);
+
+        const nextSnapshot = {
+          savedAt: new Date().toISOString(),
+          budgets: payload.budgets ?? dataStateRef.current.budgets ?? [],
+          orders: payload.orders ?? dataStateRef.current.orders ?? [],
+        };
+        saveOfflineOrdersSnapshot(nextSnapshot);
+        setModuleState('orders', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+        return true;
+      } catch (error) {
+        console.error('Error general de conexión (orders):', error);
+        const cachedSnapshot = loadOfflineOrdersSnapshot() || loadOfflineSnapshot();
+        if (applyOrdersSnapshot(cachedSnapshot)) {
+          setModuleState('orders', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+          return true;
+        }
+
+        setModuleState('orders', { status: 'error', dirty: true });
+        return false;
+      } finally {
+        moduleLoadPromisesRef.current.orders = null;
+      }
+    };
+
+    const promise = run();
+    moduleLoadPromisesRef.current.orders = promise;
+    return promise;
+  };
+
+  const loadModuleForTab = async (tab, { force = false } = {}) => {
+    switch (TAB_TO_DATA_MODULE[tab]) {
+      case 'dashboard':
+        return loadDashboardCloudData({ force });
+      case 'orders':
+        return loadOrdersCloudData({ force });
+      default:
+        return true;
+    }
   };
 
   // ==========================================
   // 1.5 CONEXIÓN SUPABASE
   // ==========================================
-  const fetchCloudData = async (showSpinner = true) => {
+  const fetchCloudData = async (showSpinner = true, { force = true, includeActiveModule = true, moduleKeys = null } = {}) => {
     try {
       if (showSpinner) setIsCloudLoading(true);
-      
-      const [
-        prodResult,
-        clientResult,
-        salesResult,
-        logsResult,
-        expResult,
-        closureResult,
-        catResult,
-        rewardsResult,
-        registerResult,
-        budgetsResult,
-        ordersResult,
-        offersResult // ✨ NUEVA QUERY
-      ] = await Promise.allSettled([
-        supabase.from('products').select('*').eq('is_active', true).order('title').limit(10000),
-        supabase.from('clients').select('*').eq('is_active', true).order('name').limit(10000),
-        supabase.from('sales').select(`*, sale_items(*), clients(name, member_number)`).order('created_at', { ascending: false }).limit(10000),        
-        supabase.from('logs').select('*').order('created_at', { ascending: false }).limit(10000),
-        supabase.from('expenses').select('*').order('created_at', { ascending: false }).limit(10000),
-        supabase.from('cash_closures').select('*').order('created_at', { ascending: false }).limit(10000),
-        supabase.from('categories').select('*').order('name').limit(5000),
-        supabase.from('rewards').select('*').order('points_cost', { ascending: true }).limit(5000),
-        supabase.from('register_state').select('*').eq('id', 1).maybeSingle(),
-        supabase.from('budgets').select('*').eq('is_active', true).order('created_at', { ascending: false }).limit(10000),
-        supabase.from('orders').select('*').eq('is_active', true).order('created_at', { ascending: false }).limit(10000),
-        supabase.from('offers').select('*').eq('is_active', true).order('created_at', { ascending: false }) // ✨ Cargar Ofertas
-      ]);
+      await loadAppUsers({ force });
+      await loadCoreCloudData({ showSpinner: false, force });
 
-      const hasCloudConnection = [
-        prodResult,
-        clientResult,
-        salesResult,
-        logsResult,
-        expResult,
-        closureResult,
-        catResult,
-        rewardsResult,
-        budgetsResult,
-        ordersResult,
-        offersResult,
-      ].some((result) => result.status === 'fulfilled' && !result.value?.error);
+      const explicitModuleKeys = Array.isArray(moduleKeys) ? moduleKeys.filter(Boolean) : [];
+      const nextModuleKeys = explicitModuleKeys.length
+        ? explicitModuleKeys
+        : includeActiveModule && currentUserRef.current
+          ? [TAB_TO_DATA_MODULE[activeTabRef.current]].filter(Boolean)
+          : [];
 
-      if (!hasCloudConnection) {
-        const cachedSnapshot = loadOfflineSnapshot();
-        if (applyOfflineSnapshot(cachedSnapshot)) {
-          setIsOfflineReadOnly(true);
-          return;
+      for (const moduleKey of new Set(nextModuleKeys)) {
+        if (moduleKey === 'dashboard') {
+          await loadDashboardCloudData({ force });
+        } else if (moduleKey === 'orders') {
+          await loadOrdersCloudData({ force });
         }
       }
-
-      const prodData = safeCloudData(prodResult, 'productos');
-      const mappedInventory = prodData ? mapInventoryRecords(prodData) : inventory;
-      if (prodData) setInventory(mappedInventory);
-
-      const clientData = safeCloudData(clientResult, 'clientes');
-      const mappedMembers = clientData ? mapMemberRecords(clientData) : members;
-      if (clientData) setMembers(mappedMembers);
-
-      const logsData = safeCloudData(logsResult, 'logs');
-      let parsedLogs = [];
-      if (logsData) {
-        parsedLogs = mapLogRecords(logsData);
-        setDailyLogs(parsedLogs);
-      }
-      const mappedLogs = logsData ? parsedLogs : dailyLogs;
-
-      const salesData = safeCloudData(salesResult, 'ventas');
-      const mappedTransactions = salesData ? mapSaleRecords(salesData, parsedLogs) : transactions;
-      if (salesData) setTransactions(mappedTransactions);
-
-      const expData = safeCloudData(expResult, 'gastos');
-      const mappedExpenses = expData ? mapExpenseRecords(expData) : expenses;
-      if (expData) setExpenses(mappedExpenses);
-
-      const closureData = safeCloudData(closureResult, 'reportes');
-      const mappedClosures = closureData ? mapCashClosureRecords(closureData) : pastClosures;
-      if (closureData) setPastClosures(mappedClosures);
-
-      const catData = safeCloudData(catResult, 'categorias');
-      const mappedCategories = catData ? mapCategoryRecords(catData) : categories;
-      if (catData) setCategories(mappedCategories);
-
-      const rewardsData = safeCloudData(rewardsResult, 'premios');
-      const mappedRewards = rewardsData ? mapRewardRecords(rewardsData) : rewards;
-      if (rewardsData) setRewards(mappedRewards);
-      const budgetsData = safeCloudData(budgetsResult, 'presupuestos');
-      const mappedBudgets = budgetsData ? mapBudgetRecords(budgetsData) : budgets;
-      if (budgetsData) setBudgets(mappedBudgets);
-      const ordersData = safeCloudData(ordersResult, 'pedidos');
-      const mappedOrders = ordersData ? mapOrderRecords(ordersData) : orders;
-      if (ordersData) setOrders(mappedOrders);
-
-      // ✨ Procesar Ofertas
-      const offersData = safeCloudData(offersResult, 'ofertas');
-      const mappedOffers = offersData ? mapOfferRecords(offersData) : offers;
-      if (offersData) setOffers(mappedOffers);
-
-      let registerState = null;
-      if (registerResult.status === 'fulfilled' && !registerResult.value.error) {
-        registerState = registerResult.value.data;
-      }
-
-      if (!registerState) {
-        const { data: newState, error: upsertErr } = await supabase
-          .from('register_state')
-          .upsert([{ id: 1, is_open: false, opening_balance: 0, closing_time: '21:00' }], { onConflict: 'id' })
-          .select()
-          .maybeSingle();
-        
-        if (!upsertErr && newState) registerState = newState;
-      }
-
-      syncRegisterState(registerState);
-      setIsOfflineReadOnly(false);
-      const nextSnapshot = {
-        savedAt: new Date().toISOString(),
-        inventory: mappedInventory,
-        categories: mappedCategories,
-        rewards: mappedRewards,
-        transactions: mappedTransactions,
-        dailyLogs: mappedLogs,
-        members: mappedMembers,
-        pastClosures: mappedClosures,
-        expenses: mappedExpenses,
-        budgets: mappedBudgets,
-        orders: mappedOrders,
-        offers: mappedOffers,
-        registerState,
-      };
-      saveOfflineSnapshot(nextSnapshot);
-      setOfflineSnapshotAt(nextSnapshot.savedAt);
-
     } catch (error) {
       console.error('Error general de conexión:', error);
       Swal.fire('Error de Conexión', 'Fallo total de red o configuración.', 'error');
     } finally {
-      setIsCloudLoading(false);
+      if (showSpinner) setIsCloudLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchCloudData(true);
+    let disposed = false;
+    setIsAuthBootLoading(true);
+
+    const cachedCoreSnapshot = loadOfflineSnapshot();
+    if (cachedCoreSnapshot) {
+      applyCoreSnapshot(cachedCoreSnapshot);
+    }
+
+    void loadCoreCloudData({ showSpinner: false });
+    void loadAppUsers().finally(() => {
+      if (!disposed) {
+        setIsAuthBootLoading(false);
+      }
+    });
 
     const channel = supabase
       .channel('app_realtime_updates')
@@ -402,8 +1023,19 @@ export default function PartySupplyApp() {
           const c = payload.new;
           if (c) {
              const newReport = mapCashClosureRecord(c);
-             setPastClosures((prev) => [newReport, ...prev]);
+             if (moduleLoadStateRef.current.dashboard.status === 'loaded') {
+               setPastClosures((prev) => [newReport, ...prev]);
+             } else {
+               setModuleState('dashboard', (prev) => ({ ...prev, dirty: true }));
+             }
           }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'app_users' },
+        () => {
+          void loadAppUsers({ force: true });
         }
       )
       .subscribe();
@@ -418,18 +1050,27 @@ export default function PartySupplyApp() {
       if (elapsed < MIN_RESYNC_INTERVAL) return;
 
       lastFetchTime = Date.now();
-      fetchCloudData(false); 
+      void fetchCloudData(false, { force: true });
     };
 
     const handleBrowserOffline = () => {
-      const cachedSnapshot = loadOfflineSnapshot();
-      if (applyOfflineSnapshot(cachedSnapshot)) {
+      const cachedCoreSnapshot = loadOfflineSnapshot();
+      const cachedDashboardSnapshot = loadOfflineDashboardSnapshot();
+      const cachedOrdersSnapshot = loadOfflineOrdersSnapshot();
+      const hasCoreSnapshot = cachedCoreSnapshot
+        ? ('transactions' in cachedCoreSnapshot || 'budgets' in cachedCoreSnapshot)
+          ? applyOfflineSnapshot(cachedCoreSnapshot)
+          : applyCoreSnapshot(cachedCoreSnapshot)
+        : false;
+      if (cachedDashboardSnapshot) applyDashboardSnapshot(cachedDashboardSnapshot);
+      if (cachedOrdersSnapshot) applyOrdersSnapshot(cachedOrdersSnapshot);
+      if (hasCoreSnapshot || cachedDashboardSnapshot || cachedOrdersSnapshot) {
         setIsOfflineReadOnly(true);
       }
     };
 
     const handleBrowserOnline = () => {
-      fetchCloudData(false);
+      void fetchCloudData(false, { force: true });
     };
 
     window.addEventListener('visibilitychange', handleReSync);
@@ -437,6 +1078,7 @@ export default function PartySupplyApp() {
     window.addEventListener('online', handleBrowserOnline);
 
     return () => {
+      disposed = true;
       supabase.removeChannel(channel);
       window.removeEventListener('visibilitychange', handleReSync);
       window.removeEventListener('offline', handleBrowserOffline);
@@ -446,19 +1088,200 @@ export default function PartySupplyApp() {
 
   const [currentTime, setCurrentTime] = useState(new Date());
   const [currentUser, setCurrentUser] = useState(null);
+  const [currentSessionMeta, setCurrentSessionMeta] = useState(null);
   const [activeTab, setActiveTab] = useState('pos');
+  const [userSettings, setUserSettings] = useState(() => loadUserSettings());
+  const [authMode, setAuthMode] = useState('legacy');
+  const [appUsers, setAppUsers] = useState(() => buildLegacyUsers(USERS, loadUserSettings()));
+  const currentUserRef = useRef(null);
+  const currentSessionMetaRef = useRef(null);
+  const forcedDisabledUserLogoutRef = useRef(null);
+  const forcedPermissionsLogoutRef = useRef(null);
+  const writeLogEntryRef = useRef(null);
+  const showNotificationRef = useRef(null);
+  activeTabRef.current = activeTab;
+  dataStateRef.current = {
+    inventory,
+    categories,
+    rewards,
+    transactions,
+    dailyLogs,
+    members,
+    agendaContacts,
+    pastClosures,
+    expenses,
+    budgets,
+    orders,
+    offers,
+  };
 
   useEffect(() => {
     if (activeTab === 'rewards') {
       setActiveTab('extras');
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    saveUserSettings(userSettings);
+  }, [userSettings]);
   const [cart, setCart] = useState([]);
 
   const [loginStep, setLoginStep] = useState('select');
-  const [selectedRoleForLogin, setSelectedRoleForLogin] = useState(null);
+  const [selectedUserIdForLogin, setSelectedUserIdForLogin] = useState(null);
   const [passwordInput, setPasswordInput] = useState('');
   const [loginError, setLoginError] = useState('');
+
+  const userCatalog = useMemo(() => buildUserCatalog(appUsers), [appUsers]);
+  const activeLoginUsers = useMemo(
+    () => userCatalog.all.filter((user) => user.isActive),
+    [userCatalog],
+  );
+  const selectedLoginUser = useMemo(
+    () => userCatalog.byId[String(selectedUserIdForLogin || '')] || null,
+    [selectedUserIdForLogin, userCatalog],
+  );
+  const currentUserPresentation = useMemo(
+    () => resolveUserPresentation(currentUser, userCatalog),
+    [currentUser, userCatalog],
+  );
+  const canUseAdminArea = hasOwnerAccess(currentUser);
+  const canManageRegister = hasPermission(currentUser, 'register.manage');
+  const canViewDashboard = canAccessTab(currentUser, 'dashboard');
+  const canViewReports = canAccessTab(currentUser, 'reports');
+  const canViewLogs = canAccessTab(currentUser, 'logs');
+  const canViewSessions = canAccessTab(currentUser, 'sessions');
+  const canViewUserManagement = canAccessTab(currentUser, 'user-management');
+  const canViewBulkEditor = canAccessTab(currentUser, 'bulk-editor');
+  const canViewAgenda = canAccessTab(currentUser, 'agenda');
+  const canCreateInventory = hasPermission(currentUser, 'inventory.create');
+
+  useEffect(() => {
+    if (!currentUser) return;
+    if (!canAccessTab(currentUser, activeTab)) {
+      setActiveTab(getDefaultTabForUser(currentUser));
+    }
+  }, [activeTab, currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    void loadModuleForTab(activeTab);
+  }, [activeTab, currentUser]);
+
+  useEffect(() => {
+    if (activeTab !== 'user-management' || !canViewUserManagement || authMode === 'supabase') return;
+    void loadAppUsers({ force: true });
+  }, [activeTab, canViewUserManagement, authMode]);
+
+  useEffect(() => {
+    if (authMode !== 'supabase' || !currentUser?.id) {
+      forcedDisabledUserLogoutRef.current = null;
+      forcedPermissionsLogoutRef.current = null;
+      return;
+    }
+
+    const latestCurrentUser = userCatalog.byId[String(currentUser.id)] || null;
+    if (!latestCurrentUser) return;
+
+    if (latestCurrentUser.isActive !== false) {
+      forcedDisabledUserLogoutRef.current = null;
+      if (
+        latestCurrentUser.displayName !== currentUser.displayName ||
+        latestCurrentUser.nameColor !== currentUser.nameColor ||
+        latestCurrentUser.avatar !== currentUser.avatar ||
+        latestCurrentUser.theme !== currentUser.theme
+      ) {
+        setCurrentUser((prev) =>
+          prev
+            ? {
+                ...prev,
+                displayName: latestCurrentUser.displayName,
+                name: latestCurrentUser.displayName,
+                nameColor: latestCurrentUser.nameColor,
+                avatar: latestCurrentUser.avatar,
+                theme: latestCurrentUser.theme,
+                isActive: latestCurrentUser.isActive,
+                updatedAt: latestCurrentUser.updatedAt,
+              }
+            : prev,
+        );
+      }
+      const activeSession = currentSessionMetaRef.current;
+      const sessionPermissionsVersion = Number(activeSession?.permissionsVersion || currentUser.permissionsVersion || 1);
+      const latestPermissionsVersion = Number(latestCurrentUser.permissionsVersion || 1);
+      const latestForceReauthVersion = Number(latestCurrentUser.forceReauthPermissionsVersion || 0);
+
+      if (
+        latestPermissionsVersion > sessionPermissionsVersion &&
+        latestForceReauthVersion >= latestPermissionsVersion
+      ) {
+        if (forcedPermissionsLogoutRef.current === String(latestCurrentUser.id)) return;
+        forcedPermissionsLogoutRef.current = String(latestCurrentUser.id);
+
+        const now = new Date();
+
+        void (async () => {
+          if (activeSession) {
+            await (writeLogEntryRef.current || writeLogEntry)({
+              action: 'Sesion Cerrada',
+              details: {
+                ...activeSession,
+                closedAt: now.toISOString(),
+                closedDate: formatDateAR(now),
+                closedTime: formatTimeFullAR(now),
+                forcedByPermissions: true,
+                updatedPermissionsVersion: latestPermissionsVersion,
+              },
+              reason: 'Permisos actualizados por Sistema',
+              userName: activeSession.userName || latestCurrentUser.displayName || latestCurrentUser.name || 'Usuario',
+            });
+          }
+
+          clearAuthenticatedState();
+
+          (showNotificationRef.current || showNotification)(
+            'warning',
+            'Permisos actualizados',
+            'Tus permisos cambiaron y se reinicio la sesion para aplicar el nuevo acceso.',
+          );
+        })();
+        return;
+      }
+
+      forcedPermissionsLogoutRef.current = null;
+      return;
+    }
+
+    if (forcedDisabledUserLogoutRef.current === String(latestCurrentUser.id)) return;
+    forcedDisabledUserLogoutRef.current = String(latestCurrentUser.id);
+
+    const now = new Date();
+    const activeSession = currentSessionMetaRef.current;
+
+    void (async () => {
+      if (activeSession) {
+        await (writeLogEntryRef.current || writeLogEntry)({
+          action: 'Sesion Cerrada',
+          details: {
+            ...activeSession,
+            closedAt: now.toISOString(),
+            closedDate: formatDateAR(now),
+            closedTime: formatTimeFullAR(now),
+            forcedByDeactivation: true,
+          },
+          reason: 'Usuario desactivado por Sistema',
+          userName: activeSession.userName || latestCurrentUser.displayName || latestCurrentUser.name || 'Usuario',
+        });
+      }
+
+      clearAuthenticatedState();
+
+      (showNotificationRef.current || showNotification)(
+        'warning',
+        'Usuario desactivado',
+        'Tu usuario fue desactivado por Sistema. Se cerró la sesión automáticamente.',
+      );
+    })();
+  }, [authMode, currentUser, userCatalog]);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isOpeningBalanceModalOpen, setIsOpeningBalanceModalOpen] = useState(false);
@@ -472,7 +1295,7 @@ export default function PartySupplyApp() {
   const [ticketToView, setTicketToView] = useState(null);
   const [exportPdfData, setExportPdfData] = useState(null);
 
-  // ✨ ESTADOS PARA PERSISTENCIA DE PRESUPUESTO EN BULK EDITOR
+  // ? ESTADOS PARA PERSISTENCIA DE PRESUPUESTO EN BULK EDITOR
   const [bulkExportItems, setBulkExportItems] = useState([]);
   const [bulkExportConfig, setBulkExportConfig] = useState({
     isForClient: true,
@@ -499,9 +1322,12 @@ export default function PartySupplyApp() {
 
   const [barcodeNotFoundModal, setBarcodeNotFoundModal] = useState({ isOpen: false, code: '' });
   const [barcodeDuplicateModal, setBarcodeDuplicateModal] = useState({ isOpen: false, existingProduct: null, newBarcode: '' });
-  const [isClientModalOpen, setIsClientModalOpen] = useState(false);
   const [posSelectedClient, setPosSelectedClient] = useState(null);
-  const [isRedemptionModalOpen, setIsRedemptionModalOpen] = useState(false);
+  const [memberIdentityPanelState, setMemberIdentityPanelState] = useState({
+    isOpen: false,
+    initialMode: 'member',
+    initialFocus: 'select',
+  });
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
 
   const [detailsModalTx, setDetailsModalTx] = useState(null);
@@ -521,6 +1347,8 @@ export default function PartySupplyApp() {
   const [inventoryViewMode, setInventoryViewMode] = useState('grid');
   const [inventoryCategoryFilter, setInventoryCategoryFilter] = useState('Todas');
   const [inventorySearch, setInventorySearch] = useState('');
+  const [inventoryNavigationRequest, setInventoryNavigationRequest] = useState(null);
+  const [historyNavigationRequest, setHistoryNavigationRequest] = useState(null);
   const [posSearch, setPosSearch] = useState('');
   
   const [posSelectedCategory, setPosSelectedCategory] = useState('Todas');
@@ -537,6 +1365,75 @@ export default function PartySupplyApp() {
   const closeNotification = () => {
     setNotification(prev => ({ ...prev, isOpen: false }));
   };
+
+  const openMemberIdentityPanel = ({ initialMode = 'member', initialFocus = 'select' } = {}) => {
+    setMemberIdentityPanelState({
+      isOpen: true,
+      initialMode,
+      initialFocus,
+    });
+  };
+
+  const closeMemberIdentityPanel = () => {
+    setMemberIdentityPanelState((prev) => ({ ...prev, isOpen: false }));
+  };
+
+  const setIsClientModalOpen = (isOpen) => {
+    if (isOpen) {
+      openMemberIdentityPanel({ initialMode: 'member', initialFocus: 'select' });
+      return;
+    }
+    closeMemberIdentityPanel();
+  };
+
+  const setIsRedemptionModalOpen = (isOpen) => {
+    if (isOpen) {
+      openMemberIdentityPanel({ initialMode: 'member', initialFocus: 'redeem' });
+      return;
+    }
+    closeMemberIdentityPanel();
+  };
+
+  currentUserRef.current = currentUser;
+  currentSessionMetaRef.current = currentSessionMeta;
+  showNotificationRef.current = showNotification;
+
+  const getActorContext = (preferredName = null) => {
+    const activeUser = currentUserRef.current;
+    if (activeUser) {
+      return {
+        userId: activeUser.id || null,
+        userRole: activeUser.role || 'seller',
+        userName: preferredName || activeUser.displayName || activeUser.name || 'Sistema',
+      };
+    }
+
+    return {
+      userId: null,
+      userRole: 'system',
+      userName: preferredName || 'Sistema',
+    };
+  };
+
+  const getSessionInactivityMs = (sessionMeta, nowMs = Date.now()) => {
+    if (!sessionMeta) return 0;
+    const lastActivitySource = sessionMeta.lastActivityAt || sessionMeta.startedAt;
+    const lastActivityMs = lastActivitySource ? new Date(lastActivitySource).getTime() : nowMs;
+    if (!Number.isFinite(lastActivityMs)) return 0;
+    return Math.max(0, nowMs - lastActivityMs);
+  };
+
+  const deriveSessionStatus = (sessionMeta, nowMs = Date.now()) => {
+    if (!sessionMeta) return 'Activa';
+    if (sessionMeta.closedAt) return 'Cerrada';
+    if (sessionMeta.expiredAt || sessionMeta.status === 'Expirada') return 'Expirada';
+
+    const inactivityMs = getSessionInactivityMs(sessionMeta, nowMs);
+    if (inactivityMs >= SESSION_EXPIRED_MS) return 'Expirada';
+    if (sessionMeta.status === 'Ausente' || sessionMeta.absentAt || inactivityMs >= SESSION_ABSENT_MS) return 'Ausente';
+    return 'Activa';
+  };
+
   const blockIfOfflineReadonly = (actionLabel = 'realizar cambios') => {
     if (!isOfflineReadOnly) return false;
     showNotification(
@@ -546,28 +1443,31 @@ export default function PartySupplyApp() {
     );
     return true;
   };
-  const reloadClickTimeoutRef = useRef(null);
   const handleSoftReload = () => {
     fetchCloudData(false);
     showNotification('info', 'Recarga suave', 'Actualizamos los datos visibles sin reiniciar la app.');
   };
-  const handleHeaderReloadClick = () => {
-    if (reloadClickTimeoutRef.current) {
-      clearTimeout(reloadClickTimeoutRef.current);
-      reloadClickTimeoutRef.current = null;
-    }
-    reloadClickTimeoutRef.current = window.setTimeout(() => {
-      handleSoftReload();
-      reloadClickTimeoutRef.current = null;
-    }, 220);
-  };
   const handleForceReload = () => {
-    if (reloadClickTimeoutRef.current) {
-      clearTimeout(reloadClickTimeoutRef.current);
-      reloadClickTimeoutRef.current = null;
-    }
     window.location.reload();
   };
+
+  useEffect(() => {
+    const handleAppReloadShortcut = (event) => {
+      if (event.key !== 'F5') return;
+
+      event.preventDefault();
+
+      if (event.ctrlKey) {
+        handleForceReload();
+        return;
+      }
+
+      handleSoftReload();
+    };
+
+    window.addEventListener('keydown', handleAppReloadShortcut);
+    return () => window.removeEventListener('keydown', handleAppReloadShortcut);
+  }, []);
 
   const isTestActive = useMemo(() => {
     return isTestRecord(cart) || 
@@ -579,9 +1479,52 @@ export default function PartySupplyApp() {
            isTestRecord(transactionSearch);
   }, [cart, posSelectedClient, posSearch, newItem, editingProduct, editingTransaction, transactionSearch]);
 
-  const addLog = async (action, details, defaultReason = '') => {
+  const writeLogEntry = async ({ action, details, reason = '', userName }) => {
     const now = new Date();
+    const actor = getActorContext(userName);
+    const normalizedDetails =
+      details && typeof details === 'object'
+        ? {
+            userId: actor.userId,
+            userRole: actor.userRole,
+            userName: actor.userName,
+            ...details,
+          }
+        : details;
+
+    const newLog = {
+      id: Date.now(),
+      timestamp: formatTimeFullAR(now),
+      date: formatDateAR(now),
+      action,
+      user: actor.userName,
+      details: normalizedDetails,
+      reason,
+      created_at: new Date().toISOString()
+    };
     
+    newLog.isTest = isTestRecord({ action, details, reason });
+    setDailyLogs((prev) => [newLog, ...prev]);
+
+    try {
+      await insertWithSchemaFallback('logs', {
+        action,
+        details: normalizedDetails,
+        user: actor.userName,
+        user_id: actor.userId,
+        user_role: actor.userRole,
+        user_name: actor.userName,
+        reason,
+        created_at: new Date().toISOString()
+      });
+    } catch (e) {
+      console.error("Error guardando log en nube", e);
+    }
+  };
+
+  writeLogEntryRef.current = writeLogEntry;
+
+  const addLog = async (action, details, defaultReason = '') => {
     let finalReason = defaultReason;
     if (details && typeof details === 'object') {
         const userNote = details.description || details.note || details.extraInfo;
@@ -590,32 +1533,186 @@ export default function PartySupplyApp() {
         }
     }
 
-    const newLog = {
-      id: Date.now(),
-      timestamp: formatTimeFullAR(now),
-      date: formatDateAR(now),
+    await writeLogEntry({
       action,
-      user: currentUser?.name || 'Sistema',
       details,
-      reason: finalReason, 
-      created_at: new Date().toISOString()
-    };
-    
-    newLog.isTest = isTestRecord({ action, details, reason: finalReason });
-    setDailyLogs((prev) => [newLog, ...prev]);
-
-    try {
-      await supabase.from('logs').insert([{
-         action,
-         details,
-         user: currentUser?.name || 'Sistema',
-         reason: finalReason, 
-         created_at: new Date().toISOString()
-      }]);
-    } catch (e) {
-      console.error("Error guardando log en nube", e);
-    }
+      reason: finalReason,
+    });
   };
+
+  const buildSessionMeta = (user) => {
+    const now = new Date();
+    const deviceInfo = getSessionDeviceInfo();
+
+    return {
+      sessionId: `SES-${now.getTime().toString(36)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+      userId: user?.id || null,
+      userName: user?.displayName || user?.name || 'Sistema',
+      role: user?.role || 'unknown',
+      avatar: user?.avatar || '--',
+      deviceName: deviceInfo.deviceName,
+      ipAddress: deviceInfo.ipAddress,
+      platform: deviceInfo.platform,
+      runtime: deviceInfo.runtime,
+      startedAt: now.toISOString(),
+      startedDate: formatDateAR(now),
+      startedTime: formatTimeFullAR(now),
+      lastActivityAt: now.toISOString(),
+      permissionsVersion: Number(user?.permissionsVersion || 1),
+      status: 'Activa',
+      absentAt: null,
+      expiredAt: null,
+    };
+  };
+
+  const clearAuthenticatedState = () => {
+    currentSessionMetaRef.current = null;
+    currentUserRef.current = null;
+    setCurrentSessionMeta(null);
+    setCurrentUser(null);
+    setCart([]);
+    setPosSelectedClient(null);
+    setLoginStep('select');
+    setSelectedUserIdForLogin(null);
+    setPasswordInput('');
+    setLoginError('');
+  };
+
+  const writeSessionTransitionLog = async (action, sessionMeta, reason) => {
+    if (!sessionMeta) return;
+    await (writeLogEntryRef.current || writeLogEntry)({
+      action,
+      details: sessionMeta,
+      reason,
+      userName: sessionMeta.userName || currentUserRef.current?.displayName || currentUserRef.current?.name || 'Sistema',
+    });
+  };
+
+  const updateSessionStatus = async (nextStatus, reason, extraFields = {}) => {
+    const sessionMeta = currentSessionMetaRef.current;
+    if (!sessionMeta) return;
+
+    const now = new Date();
+    const statusFieldMap = {
+      Ausente: { absentAt: now.toISOString(), expiredAt: null },
+      Activa: { absentAt: null, expiredAt: null },
+      Expirada: { expiredAt: now.toISOString() },
+    };
+
+    const nextSession = {
+      ...sessionMeta,
+      ...statusFieldMap[nextStatus],
+      ...extraFields,
+      status: nextStatus,
+    };
+
+    currentSessionMetaRef.current = nextSession;
+    setCurrentSessionMeta(nextSession);
+
+    const actionMap = {
+      Ausente: 'Sesion Ausente',
+      Activa: 'Sesion Reanudada',
+      Expirada: 'Sesion Expirada',
+    };
+
+    await writeSessionTransitionLog(actionMap[nextStatus], nextSession, reason);
+    return nextSession;
+  };
+
+  const expireCurrentSession = async () => {
+    const sessionMeta = currentSessionMetaRef.current;
+    if (!sessionMeta) return;
+
+    const expiredSession = await updateSessionStatus(
+      'Expirada',
+      '1 hora sin actividad'
+    );
+
+    clearAuthenticatedState();
+    showNotificationRef.current?.(
+      'warning',
+      'Sesión expirada',
+      'La sesión expiró por inactividad. Volvé a ingresar para continuar.'
+    );
+
+    return expiredSession;
+  };
+
+  useEffect(() => {
+    const handleSessionActivity = () => {
+      const sessionMeta = currentSessionMetaRef.current;
+      if (!sessionMeta) return;
+
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const statusNow = deriveSessionStatus(sessionMeta, now.getTime());
+
+      if (statusNow === 'Expirada') {
+        void expireCurrentSession();
+        return;
+      }
+
+      if (statusNow === 'Ausente' && (sessionMeta.status === 'Ausente' || sessionMeta.absentAt)) {
+        const resumedSession = {
+          ...sessionMeta,
+          lastActivityAt: nowIso,
+          status: 'Activa',
+          absentAt: null,
+        };
+
+        currentSessionMetaRef.current = resumedSession;
+        setCurrentSessionMeta(resumedSession);
+        void writeSessionTransitionLog('Sesion Reanudada', resumedSession, 'Actividad detectada nuevamente');
+        return;
+      }
+
+      const lastActivityMs = sessionMeta.lastActivityAt ? new Date(sessionMeta.lastActivityAt).getTime() : 0;
+      if (Number.isFinite(lastActivityMs) && now.getTime() - lastActivityMs < SESSION_ACTIVITY_UPDATE_THROTTLE_MS) {
+        return;
+      }
+
+      const nextSession = {
+        ...sessionMeta,
+        lastActivityAt: nowIso,
+        status: 'Activa',
+      };
+
+      currentSessionMetaRef.current = nextSession;
+      setCurrentSessionMeta(nextSession);
+    };
+
+    const activityEvents = ['pointerdown', 'keydown', 'wheel', 'touchstart', 'focus'];
+
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(eventName, handleSessionActivity, { passive: true });
+    });
+
+    return () => {
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, handleSessionActivity);
+      });
+    };
+  }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      const sessionMeta = currentSessionMetaRef.current;
+      if (!sessionMeta) return;
+
+      const derivedStatus = deriveSessionStatus(sessionMeta);
+
+      if (derivedStatus === 'Expirada' && sessionMeta.status !== 'Expirada') {
+        void expireCurrentSession();
+        return;
+      }
+
+      if (derivedStatus === 'Ausente' && sessionMeta.status === 'Activa') {
+        void updateSessionStatus('Ausente', '10 minutos sin actividad');
+      }
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   const handleUpdateLogNote = async (logId, newNote) => {
     try {
@@ -678,12 +1775,12 @@ export default function PartySupplyApp() {
           }
         } else {
           window.print();
-          showNotification('info', 'Vista de impresión abierta', 'No se detectó Electron; usá “Guardar como PDF” desde el diálogo del navegador.');
+          showNotification('info', 'Vista de impresión abierta', 'No se detectó Electron; usó "Guardar como PDF" desde el diálogo del navegador');
         }
       } catch (e) {
         console.error('Error IPC:', e);
         window.print();
-        showNotification('info', 'Vista de impresión abierta', 'Falló la conexión con Windows; usá “Guardar como PDF” desde el diálogo del navegador.');
+        showNotification('info', 'Vista de impresión abierta', 'Falló la conexión con Windows; usó "Guardar como PDF" desde el diálogo del navegador');
       }
       
       setTimeout(() => setExportPdfData(null), 500);
@@ -722,12 +1819,12 @@ export default function PartySupplyApp() {
           }
         } else {
           window.print();
-          showNotification('info', 'Vista de impresión abierta', 'No se detectó Electron; usá “Guardar como PDF” desde el diálogo del navegador.');
+          showNotification('info', 'Vista de impresión abierta', 'No se detectó Electron; usó "Guardar como PDF" desde el diálogo del navegador.');
         }
       } catch (e) {
         console.error('Error IPC:', e);
         window.print();
-        showNotification('info', 'Vista de impresión abierta', 'Falló la conexión con Windows; usá “Guardar como PDF” desde el diálogo del navegador.');
+        showNotification('info', 'Vista de impresión abierta', 'Falló la conexión con Windows; usó "Guardar como PDF" desde el diálogo del navegador.');
       }
       
       setTimeout(() => setExportPdfData(null), 500);
@@ -735,7 +1832,7 @@ export default function PartySupplyApp() {
   };
   
 
-    // ✨ NUEVO: HANDLER PARA FIJAR PRODUCTO PERSONALIZADO DESDE EL PRESUPUESTO
+    // ? NUEVO: HANDLER PARA FIJAR PRODUCTO PERSONALIZADO DESDE EL PRESUPUESTO
   const handleCreateFixedProduct = async (title, price) => {
     if (blockIfOfflineReadonly('crear productos')) return;
     try {
@@ -806,7 +1903,7 @@ export default function PartySupplyApp() {
           itemCount: newBudget.itemsSnapshot.length,
           itemsSnapshot: buildOrderLogItems(newBudget.itemsSnapshot || []),
         },
-        newBudget.eventLabel || 'Gestión de pedidos'
+        newBudget.eventLabel || 'Gestion de pedidos'
       );
       showNotification('success', 'Presupuesto Creado', 'Se guardó correctamente en Pedidos.');
       return newBudget;
@@ -856,7 +1953,7 @@ export default function PartySupplyApp() {
           previousItemsSnapshot: buildOrderLogItems(previousBudget?.itemsSnapshot || []),
           changes: buildBudgetChanges(previousBudget, updatedBudget),
         },
-        budgetData.eventLabel || 'Gestión de pedidos'
+        budgetData.eventLabel || 'Gestion de pedidos'
       );
       showNotification('success', 'Presupuesto Actualizado', 'Los cambios se guardaron.');
     } catch (error) {
@@ -979,7 +2076,7 @@ export default function PartySupplyApp() {
           changes: buildBudgetChanges(previousOrder, updatedOrder),
           stockChanges: finalizedSale?.stockChanges || reservationChanges,
         },
-        orderData.eventLabel || 'Gestión de pedidos'
+        orderData.eventLabel || 'Gestion de pedidos'
       );
       showNotification('success', 'Pedido Actualizado', 'Los cambios del pedido se guardaron.');
     } catch (error) {
@@ -1014,7 +2111,7 @@ export default function PartySupplyApp() {
           itemCount: (deletedBudget?.itemsSnapshot || budgetRecord.itemsSnapshot || []).length,
           itemsSnapshot: buildOrderLogItems(deletedBudget?.itemsSnapshot || budgetRecord.itemsSnapshot || []),
         },
-        deletedBudget?.eventLabel || budgetRecord.eventLabel || 'Gestión de pedidos'
+        deletedBudget?.eventLabel || budgetRecord.eventLabel || 'Gestion de pedidos'
       );
       showNotification('success', 'Presupuesto Eliminado', 'El presupuesto fue eliminado de Pedidos.');
     } catch (error) {
@@ -1224,20 +2321,19 @@ export default function PartySupplyApp() {
     const clientId = orderRecord.memberId || null;
     const pointsEarned = clientId ? Math.floor(totalAmount / 500) : 0;
     const pointsSpent = 0;
+    const actor = getActorContext();
 
-    const { data: sale, error: saleErr } = await supabase
-      .from('sales')
-      .insert({
-        total: totalAmount,
-        payment_method: 'Pedido',
-        installments: 0,
-        client_id: clientId,
-        points_earned: clientId ? pointsEarned : 0,
-        points_spent: 0,
-        user_name: currentUser.name,
-      })
-      .select()
-      .single();
+    const { data: sale, error: saleErr } = await insertWithSchemaFallback('sales', {
+      total: totalAmount,
+      payment_method: 'Pedido',
+      installments: 0,
+      client_id: clientId,
+      points_earned: clientId ? pointsEarned : 0,
+      points_spent: 0,
+      user_id: actor.userId,
+      user_role: actor.userRole,
+      user_name: actor.userName,
+    });
 
     if (saleErr) throw saleErr;
 
@@ -1336,7 +2432,9 @@ export default function PartySupplyApp() {
       id: sale.id,
       date: formatDateAR(now),
       time: formatTimeFullAR(now),
-      user: currentUser.name,
+      user: currentUser.displayName || currentUser.name,
+      userId: currentUser.id || null,
+      userRole: currentUser.role || null,
       total: totalAmount,
       payment: 'Pedido',
       installments: 0,
@@ -1353,14 +2451,19 @@ export default function PartySupplyApp() {
     tx.isTest = isTestRecord(tx);
     setTransactions((prev) => [tx, ...prev]);
 
-    const logItems = historyItems.map((item) => ({
-      id: item.id,
-      title: item.title,
-      quantity: item.quantity,
-      price: item.price,
-      isReward: false,
-      product_type: item.product_type || 'quantity',
-      isCustom: Boolean(item.isCustom),
+      const logItems = historyItems.map((item) => ({
+        id: item.id,
+        title: item.title,
+        quantity: item.quantity,
+        price: item.price,
+        subtotal:
+          (Number(item.price) || 0) *
+          ((item.product_type || 'quantity') === 'weight'
+            ? Number(item.quantity || 0) / 1000
+            : Number(item.quantity || 0)),
+        isReward: false,
+        product_type: item.product_type || 'quantity',
+        isCustom: Boolean(item.isCustom),
       isCombo: false,
       isDiscount: false,
       productsIncluded: [],
@@ -1485,7 +2588,7 @@ export default function PartySupplyApp() {
         },
         budgetRecord.eventLabel || 'Conversión desde presupuesto'
       );
-      showNotification('success', 'Pedido Creado', 'El presupuesto se convirtió en pedido.');
+      showNotification('success', 'Pedido Creado', 'El presupuesto se convirtióen pedido.');
       return newOrder;
     } catch (error) {
       console.error('Error convirtiendo presupuesto:', error);
@@ -1728,7 +2831,7 @@ export default function PartySupplyApp() {
           itemsSnapshot: buildOrderLogItems(deletedOrder?.itemsSnapshot || orderRecord.itemsSnapshot || []),
           stockChanges: restoredStockChanges,
         },
-        deletedOrder?.eventLabel || orderRecord.eventLabel || 'Gestión de pedidos'
+        deletedOrder?.eventLabel || orderRecord.eventLabel || 'Gestion de pedidos'
       );
 
       showNotification('success', 'Pedido Eliminado', 'El pedido fue eliminado de Pedidos.');
@@ -1747,7 +2850,7 @@ export default function PartySupplyApp() {
   };
 
   // ==========================================
-  // ✨ HANDLERS DE OFERTAS
+  // ? HANDLERS DE OFERTAS
   // ==========================================
   const normalizeOfferProfitMargin = (value) => {
     if (typeof value === 'string' && value.startsWith('PERCENTAGE:')) {
@@ -1971,16 +3074,19 @@ export default function PartySupplyApp() {
       const userTypedNote = expenseData.note || ''; 
       const safeDescription = userTypedNote || expenseData.description || 'Gasto General';
       const safeAmount = Number(expenseData.amount) || 0;
+      const actor = getActorContext();
 
       const payload = {
         description: safeDescription,
         amount: safeAmount,
         category: expenseData.category || 'Varios',
         payment_method: expenseData.paymentMethod || 'Efectivo',
-        user_name: currentUser?.name || 'Sistema'
+        user_id: actor.userId,
+        user_role: actor.userRole,
+        user_name: actor.userName,
       };
 
-      const { data, error } = await supabase.from('expenses').insert([payload]).select().single();
+      const { data, error } = await insertWithSchemaFallback('expenses', payload);
       if (error) throw error;
 
       const newExpense = {
@@ -2063,11 +3169,11 @@ export default function PartySupplyApp() {
       const { error } = await supabase.from('clients').update(dbUpdates).eq('id', id);
       if (error) throw error;
       
-      // 🔧 Normalizar updates: convertir points a número antes de actualizar estado
+      // ?? Normalizar updates: convertir points a número antes de actualizar estado
       const normalizedUpdates = { ...updates, points: Number(updates.points) || 0 };
       setMembers(members.map(m => m.id === id ? { ...m, ...normalizedUpdates } : m));
       
-      // 🔍 MEJORADO: Detectar cambios específicos para el log
+      // ?? MEJORADO: Detectar cambios específicos para el log
       const pointsDelta = normalizedUpdates.points !== undefined ? Number(normalizedUpdates.points) - Number(oldMember.points || 0) : 0;
       const changes = [];
       
@@ -2088,7 +3194,7 @@ export default function PartySupplyApp() {
       }
       
       const logReason = pointsDelta !== 0 
-        ? `Ajuste de puntos: ${Number(oldMember.points || 0)} → ${Number(normalizedUpdates.points || 0)}`
+        ? `Ajuste de puntos: ${Number(oldMember.points || 0)} ? ${Number(normalizedUpdates.points || 0)}`
         : (normalizedUpdates.extraInfo || (changes.length > 0 ? changes.map(c => c.field).join(', ') : 'Actualización de datos'));
       
       addLog('Edición de Socio', { 
@@ -2137,6 +3243,140 @@ export default function PartySupplyApp() {
     } catch (e) {
       console.error('Error eliminando socio:', e);
       showNotification('error', 'Error al Eliminar', `No se pudo borrar: ${e.message}`);
+    }
+  };
+
+  const buildAgendaPayload = (data = {}) => ({
+    name: String(data.name || '').trim(),
+    contact_type: data.contactType === 'wholesaler' ? 'wholesaler' : 'supplier',
+    phone: data.phone?.trim() || null,
+    email: data.email?.trim() || null,
+    address: data.address?.trim() || null,
+    website: data.website?.trim() || null,
+    tax_id: data.taxId?.trim() || null,
+    contact_person: data.contactPerson?.trim() || null,
+    notes: data.notes?.trim() || null,
+    is_active: data.isActive !== false,
+  });
+
+  const handleCreateAgendaContact = async (data) => {
+    if (blockIfOfflineReadonly('crear contactos de agenda')) return null;
+    try {
+      const payload = buildAgendaPayload(data);
+      if (!payload.name) {
+        showNotification('error', 'Nombre requerido', 'Completá el nombre o empresa antes de guardar.');
+        return null;
+      }
+
+      const { data: createdContact, error } = await supabase
+        .from('agenda_contacts')
+        .insert([payload])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      const mappedContact = mapAgendaContactRecord(createdContact);
+      setAgendaContacts((prev) => [mappedContact, ...prev]);
+      addLog(
+        'Nuevo Contacto Agenda',
+        {
+          id: mappedContact.id,
+          name: mappedContact.name,
+          contactType: mappedContact.contactType,
+          contactPerson: mappedContact.contactPerson || null,
+          phone: mappedContact.phone || null,
+        },
+        `Alta de ${(mappedContact.contactType === 'wholesaler' ? 'mayorista' : 'proveedor')}`,
+      );
+      showNotification('success', 'Contacto creado', `${mappedContact.name} ya quedó en Agenda.`);
+      return mappedContact;
+    } catch (error) {
+      console.error('Error creando contacto de agenda:', error);
+      const errorMessage = error?.message || 'Ha ocurrido un error desconocido. Revisa la consola.';
+      showNotification('error', 'No se pudo crear el contacto', errorMessage);
+      return null;
+    }
+  };
+
+  const handleUpdateAgendaContact = async (id, updates) => {
+    if (blockIfOfflineReadonly('editar contactos de agenda')) return null;
+    try {
+      const currentContact = agendaContacts.find((contact) => String(contact.id) === String(id));
+      const payload = buildAgendaPayload(updates);
+      if (!payload.name) {
+        showNotification('error', 'Nombre requerido', 'Completá el nombre o empresa antes de guardar.');
+        return null;
+      }
+
+      const { data: updatedContact, error } = await supabase
+        .from('agenda_contacts')
+        .update(payload)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      const mappedContact = mapAgendaContactRecord(updatedContact);
+      setAgendaContacts((prev) =>
+        prev.map((contact) => (String(contact.id) === String(id) ? mappedContact : contact)),
+      );
+
+      addLog(
+        'Edicion Agenda',
+        {
+          id: mappedContact.id,
+          name: mappedContact.name,
+          previousName: currentContact?.name || null,
+          contactType: mappedContact.contactType,
+          previousType: currentContact?.contactType || null,
+          contactPerson: mappedContact.contactPerson || null,
+        },
+        updates.notes?.trim() || 'Actualización manual de Agenda',
+      );
+      showNotification('success', 'Agenda actualizada', 'Los cambios quedaron guardados.');
+      return mappedContact;
+    } catch (error) {
+      console.error('Error editando contacto de agenda:', error);
+      showNotification('error', 'Error', 'No se pudo actualizar el contacto.');
+      return null;
+    }
+  };
+
+  const handleDeleteAgendaContact = async (id) => {
+    if (blockIfOfflineReadonly('desactivar contactos de agenda')) return false;
+    try {
+      const currentContact = agendaContacts.find((contact) => String(contact.id) === String(id));
+      const { data: updatedContact, error } = await supabase
+        .from('agenda_contacts')
+        .update({ is_active: false })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      const mappedContact = mapAgendaContactRecord(updatedContact);
+      setAgendaContacts((prev) =>
+        prev.map((contact) => (String(contact.id) === String(id) ? mappedContact : contact)),
+      );
+
+      addLog(
+        'Baja Agenda',
+        {
+          id: mappedContact.id,
+          name: currentContact?.name || mappedContact.name,
+          contactType: currentContact?.contactType || mappedContact.contactType,
+        },
+        'Desactivación lógica desde Agenda',
+      );
+      showNotification('success', 'Contacto desactivado', 'El registro quedó oculto de los activos.');
+      return true;
+    } catch (error) {
+      console.error('Error desactivando contacto de agenda:', error);
+      showNotification('error', 'Error', 'No se pudo desactivar el contacto.');
+      return false;
     }
   };
   
@@ -2269,12 +3509,58 @@ export default function PartySupplyApp() {
     }
   }, [currentTime, closingTime, isRegisterClosed]);
 
-  const handleDashboardAlertClick = (alertType) => {
-    setActiveTab('inventory'); 
-    if (alertType === 'out_of_stock') {
-      setInventorySearch('AGOTADOS'); 
-    } else if (alertType === 'expirations') {
-      setInventorySearch('VENCIMIENTOS'); 
+  const navigateToInventoryFromDashboard = ({
+    searchQuery = '',
+    category = 'Todas',
+    mode = 'default',
+    productId = null,
+  } = {}) => {
+    setInventoryCategoryFilter(category || 'Todas');
+
+    if (mode === 'out_of_stock') {
+      setInventorySearch('AGOTADOS');
+    } else if (mode === 'expirations') {
+      setInventorySearch('VENCIMIENTOS');
+    } else {
+      setInventorySearch(searchQuery || '');
+    }
+
+    setInventoryNavigationRequest({
+      token: Date.now(),
+      searchQuery: searchQuery || '',
+      category: category || 'Todas',
+      mode,
+      productId,
+    });
+    setActiveTab('inventory');
+  };
+
+  const navigateToHistoryFromDashboard = ({
+    searchQuery = '',
+    category = '',
+  } = {}) => {
+    setHistoryNavigationRequest({
+      token: Date.now(),
+      searchQuery: searchQuery || '',
+      category: category || '',
+    });
+    setActiveTab('history');
+  };
+
+  const handleDashboardAlertClick = (alertPayload) => {
+    if (typeof alertPayload === 'string') {
+      navigateToInventoryFromDashboard({
+        mode: alertPayload === 'out_of_stock' ? 'out_of_stock' : 'expirations',
+      });
+      return;
+    }
+
+    if (alertPayload?.type === 'product') {
+      navigateToInventoryFromDashboard({
+        searchQuery: alertPayload.product?.title || '',
+        productId: alertPayload.product?.id ?? null,
+        mode: alertPayload.alertType === 'expirations' ? 'expirations' : 'out_of_stock',
+      });
     }
   };
 
@@ -2369,8 +3655,8 @@ export default function PartySupplyApp() {
         showNotification('success', 'Producto Escaneado', `${product.title} agregado al carrito.`);
       } else {
         playBeep(false);
-        if (currentUser.role !== 'admin') {
-          showNotification('error', 'Producto No Habilitado', 'Contactarse con el dueño.');
+        if (!canCreateInventory) {
+          showNotification('error', 'Producto No Habilitado', 'Contactarse con Sistema o un Dueño.');
           return; 
         }
         setBarcodeNotFoundModal({ isOpen: true, code: scannedCode });
@@ -2380,8 +3666,8 @@ export default function PartySupplyApp() {
       setInventorySearch(scannedCode);
       if (!product) {
         setTimeout(() => {
-          if (currentUser.role !== 'admin') {
-             showNotification('error', 'Producto No Habilitado', 'Contactarse con el dueño.');
+          if (!canCreateInventory) {
+             showNotification('error', 'Producto No Habilitado', 'Contactarse con Sistema o un Dueño.');
              return; 
           }
           setBarcodeNotFoundModal({ isOpen: true, code: scannedCode });
@@ -2396,9 +3682,40 @@ export default function PartySupplyApp() {
     }
   };
 
+  const handleInventoryEditBarcodeScan = (scannedCode, matchedProduct) => {
+    const belongsToAnotherProduct =
+      matchedProduct && String(matchedProduct.id) !== String(editingProduct?.id);
+
+    if (belongsToAnotherProduct) {
+      playBeep(false);
+      handleDuplicateBarcodeDetected(matchedProduct, scannedCode);
+      return true;
+    }
+
+    playBeep(true);
+    setBarcodeNotFoundModal({ isOpen: false, code: '' });
+    setEditingProduct((prev) => (prev ? { ...prev, barcode: scannedCode } : prev));
+    showNotification('success', 'Código asignado', 'El código se cargó en el producto en edición.');
+    return true;
+  };
+
+  const handleBarcodeScanWithInventoryEdit = (scannedCode) => {
+    if (activeTab === 'inventory' && editingProduct) {
+      const matchedProduct = inventory.find(
+        (p) => String(p.barcode) === scannedCode
+      );
+
+      if (handleInventoryEditBarcodeScan(scannedCode, matchedProduct)) {
+        return;
+      }
+    }
+
+    handleBarcodeScan(scannedCode);
+  };
+
   useBarcodeScanner({
     isEnabled: (activeTab === 'pos' && !isRegisterClosed) || activeTab === 'inventory',
-    onScan: handleBarcodeScan,
+    onScan: handleBarcodeScanWithInventoryEdit,
     onInputScan: handleInputScan
   });
 
@@ -2427,38 +3744,388 @@ export default function PartySupplyApp() {
       p.id === existingProduct.id ? { ...p, barcode: '' } : p
     ));
     setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' });
-    showNotification('info', 'Código Reemplazado', `Se quitó el código de "${existingProduct.title}".`);
+    showNotification('info', 'Código reemplazado', `Se quitó el código de "${existingProduct.title}".`);
   };
 
-  const handleSelectRole = (role) => {
-    setSelectedRoleForLogin(role);
+  const handleSelectLoginUser = (userId) => {
+    setSelectedUserIdForLogin(userId);
     setLoginStep('password');
     setPasswordInput('');
     setLoginError('');
   };
 
-  const handleSubmitLogin = (e) => {
+  const handleSubmitLogin = async (e) => {
     e.preventDefault();
-    const user = USERS[selectedRoleForLogin];
-    if (user && passwordInput === user.password) {
-      setCurrentUser(user);
-      setActiveTab(user.role === 'admin' ? 'dashboard' : 'pos');
+    const loginUser = selectedLoginUser;
+    if (!loginUser) {
+      setLoginError('Selecciona un usuario válido.');
+      return;
+    }
+
+    try {
+      let verifiedUser = null;
+
+      if (authMode === 'supabase') {
+        verifiedUser = await verifyAppUserLogin({
+          userId: loginUser.id,
+          password: passwordInput,
+        });
+      } else {
+        const legacySeed = buildLegacyBootstrapSeed(USERS, userSettings);
+        const legacyPassword =
+          loginUser.role === 'system'
+            ? legacySeed.systemUser.password
+            : legacySeed.sellerUser.password;
+        if (passwordInput === legacyPassword) {
+          verifiedUser = loginUser;
+        }
+      }
+
+      if (!verifiedUser) {
+        setLoginError('Contraseña incorrecta');
+        return;
+      }
+
+      const nextSession = buildSessionMeta(verifiedUser);
+      setCurrentUser(verifiedUser);
+      setCurrentSessionMeta(nextSession);
+      setActiveTab(getDefaultTabForUser(verifiedUser));
       setLoginStep('select');
       setPasswordInput('');
       setLoginError('');
-    } else {
-      setLoginError('Contraseña incorrecta');
+      await writeLogEntry({
+        action: 'Sesion Iniciada',
+        details: nextSession,
+        reason: 'Ingreso al sistema',
+        userName: verifiedUser.displayName || verifiedUser.name,
+      });
+    } catch (error) {
+      console.error('No se pudo iniciar sesión:', error);
+      setLoginError(error?.message || 'No se pudo iniciar sesión.');
     }
   };
 
-  const handleLogout = () => {
+  const handleRetrySharedUsersSetup = async () => {
+    try {
+      const users = await loadAppUsers({ force: true });
+      const isSharedEnabled = Array.isArray(users) && users.some((user) => user?.source === 'supabase');
+
+      if (isSharedEnabled) {
+        showNotification('success', 'Usuarios habilitados', 'La gestión de subusuarios ya quedó conectada con Supabase.');
+      } else {
+        showNotification('info', 'Seguimos en modo legacy', 'Todavía no encontramos app_users_public o los usuarios compartidos activos.');
+      }
+    } catch (error) {
+      console.error('No se pudo revalidar el schema de usuarios:', error);
+      showNotification('error', 'No se pudo reconectar', error?.message || 'Falló la verificación del schema app_users.');
+    }
+  };
+
+  const handleSaveUserSettings = async (updates) => {
+    const role = currentUser?.role;
+    if (!role) return;
+
+    try {
+      let nextUser = {
+        ...currentUser,
+        displayName: updates.displayName || updates.name || currentUser.displayName || currentUser.name,
+        name: updates.displayName || updates.name || currentUser.displayName || currentUser.name,
+        avatar: updates.avatar || currentUser.avatar,
+        nameColor: updates.nameColor || currentUser.nameColor || '#0f172a',
+        theme: updates.theme || currentUser.theme || 'light',
+      };
+
+      if (authMode === 'supabase' && currentUser.id) {
+        const updatedProfile = await updateAppUserProfile({
+          actorId: currentUser.id,
+          targetId: currentUser.id,
+          displayName: nextUser.displayName,
+          role: currentUser.role,
+          avatar: nextUser.avatar,
+          nameColor: nextUser.nameColor,
+          theme: nextUser.theme,
+        });
+
+        if (updates.password?.trim()) {
+          await updateAppUserPassword({
+            actorId: currentUser.id,
+            targetId: currentUser.id,
+            password: updates.password.trim(),
+          });
+        }
+
+        nextUser = updatedProfile || nextUser;
+        const refreshedUsers = await loadAppUsers({ force: true });
+        nextUser =
+          refreshedUsers.find((user) => String(user.id) === String(currentUser.id)) ||
+          nextUser;
+      } else {
+        const settingsKey = role === 'system' ? 'admin' : 'seller';
+        const nextUserSettings = {
+          ...userSettings,
+          [settingsKey]: {
+            ...(userSettings[settingsKey] || {}),
+            ...updates,
+          },
+        };
+
+        setUserSettings(nextUserSettings);
+        setAppUsers(buildLegacyUsers(USERS, nextUserSettings));
+      }
+
+      setCurrentUser(nextUser);
+      setCurrentSessionMeta((prev) =>
+        prev
+          ? {
+              ...prev,
+              userId: nextUser.id || prev.userId,
+              userName: nextUser.displayName || nextUser.name,
+              role: nextUser.role,
+              avatar: nextUser.avatar,
+            }
+          : prev,
+      );
+
+      await writeLogEntry({
+        action: 'Ajustes de Usuario',
+        details: {
+          userId: nextUser.id || null,
+          role: nextUser.role,
+          name: nextUser.displayName || nextUser.name,
+          avatar: nextUser.avatar,
+          nameColor: nextUser.nameColor || '#0f172a',
+          theme: nextUser.theme || 'light',
+        },
+        reason: 'Actualización de perfil',
+        userName: nextUser.displayName || nextUser.name,
+      });
+
+      showNotification('success', 'Ajustes guardados', 'Tu perfil se actualizó correctamente.');
+    } catch (error) {
+      console.error('No se pudieron guardar los ajustes del usuario:', error);
+      showNotification('error', 'No se pudo guardar', error?.message || 'Falló la actualización del perfil.');
+    }
+  };
+
+  const handleCreateManagedUser = async (payload) => {
+    if (!currentUser?.id || !hasPermission(currentUser, 'userManagement.createUsers')) return null;
+    if (authMode !== 'supabase') {
+      showNotification('info', 'Gestión de usuarios no disponible', 'Primero ejecuta el schema app_users en Supabase para habilitar subusuarios reales.');
+      return;
+    }
+
+    const createdUser = await createAppUser({
+      actorId: currentUser.id,
+      displayName: payload.displayName,
+      role: payload.role,
+      password: payload.password,
+      avatar: payload.avatar,
+      nameColor: payload.nameColor,
+      theme: payload.theme,
+    });
+
+    await loadAppUsers({ force: true });
+    setAuthMode('supabase');
+
+    await writeLogEntry({
+      action: 'Usuario Creado',
+      details: {
+        targetUserId: createdUser?.id || null,
+        displayName: createdUser?.displayName || payload.displayName,
+        role: createdUser?.role || payload.role,
+        avatar: createdUser?.avatar || payload.avatar,
+        nameColor: createdUser?.nameColor || payload.nameColor,
+      },
+      reason: 'Alta desde Gestión de usuarios',
+      userName: currentUser.displayName || currentUser.name,
+    });
+
+    showNotification('success', 'Usuario creado', 'El subusuario se creó correctamente.');
+    return createdUser;
+  };
+
+  const handleUpdateManagedUser = async (targetUser, payload) => {
+    if (!currentUser?.id || !targetUser?.id || !canEditUserProfile(currentUser, targetUser)) return null;
+    if (authMode !== 'supabase') {
+      showNotification('info', 'Gestión de usuarios no disponible', 'Primero ejecuta el schema app_users en Supabase para habilitar la edición de subusuarios.');
+      return;
+    }
+
+    const updatedProfile = await updateAppUserProfile({
+      actorId: currentUser.id,
+      targetId: targetUser.id,
+      displayName: payload.displayName,
+      role: payload.role,
+      avatar: payload.avatar,
+      nameColor: payload.nameColor,
+      theme: payload.theme,
+    });
+
+    if (payload.password?.trim()) {
+      await updateAppUserPassword({
+        actorId: currentUser.id,
+        targetId: targetUser.id,
+        password: payload.password.trim(),
+      });
+    }
+
+    await loadAppUsers({ force: true });
+
+    await writeLogEntry({
+      action: 'Usuario Editado',
+      details: {
+        targetUserId: targetUser.id,
+        displayName: updatedProfile?.displayName || payload.displayName,
+        role: updatedProfile?.role || payload.role,
+        avatar: updatedProfile?.avatar || payload.avatar,
+        nameColor: updatedProfile?.nameColor || payload.nameColor,
+        theme: updatedProfile?.theme || payload.theme,
+      },
+      reason: 'Edición desde Gestión de usuarios',
+      userName: currentUser.displayName || currentUser.name,
+    });
+
+    showNotification('success', 'Usuario actualizado', 'Los cambios del subusuario se guardaron correctamente.');
+    return updatedProfile;
+  };
+
+  const handleToggleManagedUserActive = async (targetUser) => {
+    if (!currentUser?.id || !targetUser?.id || !canToggleUserActiveState(currentUser, targetUser)) return;
+    if (authMode !== 'supabase') {
+      showNotification('info', 'Gestión de usuarios no disponible', 'Primero ejecuta el schema app_users en Supabase para habilitar el cambio de estado.');
+      return;
+    }
+
+    const nextActive = !targetUser.isActive;
+    const updatedUser = await setAppUserActive({
+      actorId: currentUser.id,
+      targetId: targetUser.id,
+      isActive: nextActive,
+    });
+
+    await loadAppUsers({ force: true });
+
+    await writeLogEntry({
+      action: nextActive ? 'Usuario Reactivado' : 'Usuario Desactivado',
+      details: {
+        targetUserId: targetUser.id,
+        displayName: updatedUser?.displayName || targetUser.displayName || targetUser.name,
+        role: updatedUser?.role || targetUser.role,
+        isActive: updatedUser?.isActive ?? nextActive,
+      },
+      reason: 'Cambio de estado desde Gestión de usuarios',
+      userName: currentUser.displayName || currentUser.name,
+    });
+
+    showNotification(
+      'success',
+      nextActive ? 'Usuario reactivado' : 'Usuario desactivado',
+      `El usuario ${updatedUser?.displayName || targetUser.displayName || targetUser.name} quedó ${nextActive ? 'activo' : 'inactivo'}.`,
+    );
+  };
+
+  const handleUpdateManagedUserPermissions = async (targetUser, permissionsOverride, applyNow) => {
+    if (!currentUser?.id || !targetUser?.id || !canManageUserPermissions(currentUser, targetUser)) return null;
+    if (authMode !== 'supabase') {
+      showNotification('info', 'Gestión de usuarios no disponible', 'Primero ejecuta el schema app_users en Supabase para habilitar permisos reales.');
+      return null;
+    }
+
+    const updatedUser = await updateAppUserPermissions({
+      actorId: currentUser.id,
+      targetId: targetUser.id,
+      permissionsOverride,
+      applyNow,
+    });
+
+    const refreshedUsers = await loadAppUsers({ force: true });
+    setAuthMode('supabase');
+
+    const refreshedTargetUser =
+      refreshedUsers.find((user) => String(user.id) === String(targetUser.id)) ||
+      updatedUser ||
+      targetUser;
+
+    await writeLogEntry({
+      action: 'Permisos de Usuario Actualizados',
+      details: {
+        targetUserId: targetUser.id,
+        displayName: refreshedTargetUser?.displayName || targetUser.displayName || targetUser.name,
+        role: refreshedTargetUser?.role || targetUser.role,
+        permissionsOverride,
+        applyNow: Boolean(applyNow),
+        permissionsVersion: refreshedTargetUser?.permissionsVersion || null,
+      },
+      reason: applyNow ? 'Permisos aplicados de inmediato' : 'Permisos guardados para próxima sesión',
+      userName: currentUser.displayName || currentUser.name,
+    });
+
+    if (applyNow && String(targetUser.id) === String(currentUser.id)) {
+      const now = new Date();
+      const activeSession = currentSessionMetaRef.current;
+
+      if (activeSession) {
+        await writeLogEntry({
+          action: 'Sesion Cerrada',
+          details: {
+            ...activeSession,
+            closedAt: now.toISOString(),
+            closedDate: formatDateAR(now),
+            closedTime: formatTimeFullAR(now),
+            forcedByPermissions: true,
+            updatedPermissionsVersion: refreshedTargetUser?.permissionsVersion || null,
+          },
+          reason: 'Permisos actualizados por Sistema',
+          userName:
+            activeSession.userName ||
+            refreshedTargetUser?.displayName ||
+            refreshedTargetUser?.name ||
+            'Usuario',
+        });
+      }
+
+      clearAuthenticatedState();
+
+      showNotification(
+        'warning',
+        'Permisos actualizados',
+        'Tus permisos cambiaron y se reinicio la sesion para aplicar el nuevo acceso.',
+      );
+      return null;
+    }
+
+    showNotification(
+      'success',
+      'Permisos actualizados',
+      applyNow
+        ? 'Los nuevos permisos se aplicarán cuando el usuario vuelva a iniciar sesión.'
+        : 'Los permisos quedaron guardados para la próxima sesión.',
+    );
+  };
+
+  const handleLogout = async () => {
+    if (currentSessionMeta) {
+      const now = new Date();
+      await writeLogEntry({
+        action: 'Sesion Cerrada',
+        details: {
+          ...currentSessionMeta,
+          closedAt: now.toISOString(),
+          closedDate: formatDateAR(now),
+          closedTime: formatTimeFullAR(now),
+        },
+        reason: 'Cierre manual de sesión',
+        userName: currentSessionMeta.userName || currentUser?.displayName || currentUser?.name || 'Sistema',
+      });
+    }
+
+    setCurrentSessionMeta(null);
     setCurrentUser(null);
     setCart([]);
     setPosSelectedClient(null);
   };
 
-  const handleImageUpload = async (e, isEditing = false) => {
-    const file = e.target.files[0];
+  const handleImageUpload = async (file, isEditing = false) => {
     if (!file) return;
 
     if (file.size > 5 * 1024 * 1024) {
@@ -2472,8 +4139,6 @@ export default function PartySupplyApp() {
       return;
     }
 
-    e.target.value = '';
-
     try {
       setIsUploadingImage(true);
       const publicUrl = await uploadProductImage(file);
@@ -2486,7 +4151,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Imagen subida', 'Se cargó correctamente a la nube.');
     } catch (err) {
       console.error('Error subiendo imagen:', err);
-      showNotification('error', 'Error al subir', 'No se pudo subir la imagen. Intentá de nuevo.');
+      showNotification('error', 'Error al subir', 'No se pudo subir la imagen. Intentó de nuevo.');
     } finally {
       setIsUploadingImage(false);
     }
@@ -2528,8 +4193,8 @@ export default function PartySupplyApp() {
 
   const toggleRegisterStatus = async () => {
     if (blockIfOfflineReadonly('cambiar el estado de la caja')) return;
-    if (currentUser.role !== 'admin') {
-      showNotification('error', 'Acceso Denegado', 'Solo el dueño puede gestionar la caja.');
+    if (!canManageRegister) {
+      showNotification('error', 'Acceso Denegado', 'Solo Sistema o un Dueño pueden gestionar la caja.');
       return;
     }
 
@@ -2540,12 +4205,12 @@ export default function PartySupplyApp() {
     } else {
       Swal.fire({ 
         title: 'Sincronizando Caja...', 
-        text: 'Obteniendo ventas y modificaciones del vendedor...', 
+        text: 'Obteniendo ventas y modificaciones del Usuario de Caja...', 
         allowOutsideClick: false, 
         didOpen: () => Swal.showLoading() 
       });
       
-      await fetchCloudData(false);
+      await fetchCloudData(false, { force: true, moduleKeys: ['dashboard'] });
       Swal.close();
       
       setIsClosingCashModalOpen(true);
@@ -2675,13 +4340,16 @@ export default function PartySupplyApp() {
           ? formatTimeFullAR(new Date(registerOpenedAt))
           : (dailyLogs.find(l => l.action === 'Apertura de Caja')?.timestamp || '--:--');
         const closeTime = formatTimeFullAR(closeDate);
-        const user = currentUser?.name || 'Automático';
+        const actor = getActorContext(isAuto ? 'Automático' : null);
+        const user = actor.userName;
         const type = isAuto ? 'Automático' : 'Manual';
 
         const closurePayload = {
             date: formatDateAR(closeDate),
             open_time: openTime,
             close_time: closeTime,
+            user_id: actor.userId,
+            user_role: actor.userRole,
             user_name: user,
             type: type,
             opening_balance: openingBalance,
@@ -2722,7 +4390,7 @@ export default function PartySupplyApp() {
         };
 
         if (shouldSaveReport) {
-            const { data: savedReport, error } = await supabase.from('cash_closures').insert([closurePayload]).select().single();
+            const { data: savedReport, error } = await insertWithSchemaFallback('cash_closures', closurePayload);
             if (error) throw error;
 
             const adaptedReport = mapCashClosureRecord(savedReport);
@@ -2733,8 +4401,8 @@ export default function PartySupplyApp() {
         setIsRegisterClosed(true);
         setRegisterOpenedAt(null);
         
-        const logMsg = isAuto ? 'Cierre Automático' : 'Cierre de Caja';
-        addLog(logMsg, closureLogDetails, isAuto ? 'Automático' : 'Manual');
+        const logMsg = isAuto ? 'Cierre Automático' : shouldSaveReport ? 'Cierre de Caja' : 'Cierre de Caja (Silencioso)';
+        addLog(logMsg, closureLogDetails, isAuto ? 'Automático' : shouldSaveReport ? 'Manual' : 'Cierre silencioso');
         
         setTransactions([]);
         setExpenses([]); 
@@ -2745,7 +4413,7 @@ export default function PartySupplyApp() {
         if (shouldSaveReport) {
             showNotification('success', 'Reporte Generado', 'Se ha guardado el reporte del día en la nube.');
         } else {
-            showNotification('info', 'Caja Vaciada', 'Se cerró la caja sin dejar reportes (Modo prueba).');
+            showNotification('info', 'Caja Vaciada', 'Se cerró la caja sin dejar reportes (Silencioso).');
         }
 
     } catch (e) {
@@ -2831,7 +4499,7 @@ export default function PartySupplyApp() {
       try {
         await supabase.from('categories').delete().eq('name', name);
         setCategories(categories.filter((c) => c !== name));
-        addLog('Categoría', { name, type: 'delete' });
+        addLog('CategorÃ­a', { name, type: 'delete' });
       } catch (e) {
         console.error(e);
         showNotification('error', 'Error', 'No se pudo eliminar de la nube.');
@@ -2840,7 +4508,7 @@ export default function PartySupplyApp() {
   };
 
   const handleEditCategory = async (oldName, newName) => {
-    if (blockIfOfflineReadonly('editar categorías')) return;
+    if (blockIfOfflineReadonly('editar categorÃ­as')) return;
     try {
       const { error: catError } = await supabase
         .from('categories')
@@ -2865,16 +4533,16 @@ export default function PartySupplyApp() {
         return p;
       }));
       
-      addLog('Editar Categoría', { old: oldName, new: newName });
-      showNotification('success', 'Categoría Actualizada', 'Nombre y productos actualizados.');
+      addLog('Editar CategorÃ­a', { old: oldName, new: newName });
+      showNotification('success', 'CategorÃ­a Actualizada', 'Nombre y productos actualizados.');
     } catch (e) {
       console.error(e);
-      showNotification('error', 'Error', 'No se pudo renombrar la categoría.');
+      showNotification('error', 'Error', 'No se pudo renombrar la categorÃ­a.');
     }
   };
 
   const handleBatchUpdateProductCategory = async (changes) => {
-    if (blockIfOfflineReadonly('editar categorías de productos')) return;
+    if (blockIfOfflineReadonly('editar categorÃ­as de productos')) return;
     try {
       const promises = changes.map(async (change) => {
         const { productId, categoryName, action } = change;
@@ -2906,7 +4574,7 @@ export default function PartySupplyApp() {
         return p;
       }));
 
-      addLog('Actualización Masiva', { count: changes.length, category: changes[0]?.categoryName }, 'Gestor de Categorías');
+      addLog('Actualización Masiva', { count: changes.length, category: changes[0]?.categoryName }, 'Gestor de CategorÃ­as');
       showNotification('success', 'Productos Actualizados', `${changes.length} productos modificados.`);
 
     } catch (e) {
@@ -2921,7 +4589,7 @@ export default function PartySupplyApp() {
     const itemData = overrideData || newItem;
     
     if (itemData.categories.length === 0) {
-      showNotification('warning', 'Faltan datos', 'Por favor selecciona al menos una categoría.');
+      showNotification('warning', 'Faltan datos', 'Por favor selecciona al menos una categorÃ­a.');
       return;
     }
     
@@ -3001,7 +4669,7 @@ export default function PartySupplyApp() {
         price: productData.price, stock: productData.stock,
         category: productData.categories?.[0] || '',
         product_type: productData.product_type,
-        imageChanged: originalProduct?.image !== productData.image ? 'Sí' : 'No'
+        imageChanged: originalProduct?.image !== productData.image ? 'SÃ­' : 'No'
       }, editReason);
       
       setEditingProduct(null);
@@ -3157,8 +4825,9 @@ export default function PartySupplyApp() {
   };
 
   const handleRedeemReward = (reward) => {
-    if (!posSelectedClient) {
+    if (!posSelectedClient || posSelectedClient.id === 'guest' || posSelectedClient.id === 0) {
       showNotification('error', 'Error', 'No hay cliente seleccionado para el canje.');
+      return;
     }
     const rewardItem = {
       id: reward.id, 
@@ -3169,8 +4838,7 @@ export default function PartySupplyApp() {
       pointsCost: Number(reward.pointsCost), 
       image: 'reward' 
     };
-    setCart([...cart, rewardItem]);
-    setIsRedemptionModalOpen(false);
+    setCart((prev) => [...prev, rewardItem]);
     showNotification('success', 'Premio Aplicado', 'El descuento se ha agregado al carrito.');
   };
 
@@ -3210,6 +4878,18 @@ export default function PartySupplyApp() {
     };
   };
 
+  const handleSelectPosClient = (client) => {
+    const enrichedClient = enrichClientWithCouponUsage(client);
+    setPosSelectedClient(enrichedClient);
+    return enrichedClient;
+  };
+
+  const handleCreatePosClient = async (data) => {
+    const createdClient = await handleAddMemberWithLog(data);
+    if (!createdClient?.id) return null;
+    return handleSelectPosClient(createdClient);
+  };
+
   const handleCheckout = async (checkoutOptions = {}) => {
     if (blockIfOfflineReadonly('registrar ventas')) return;
     const total = calculateTotal();
@@ -3220,7 +4900,7 @@ export default function PartySupplyApp() {
       ? Math.max(0, Number(checkoutOptions.cashChange ?? 0))
       : 0;
     
-    // ✨ MAGIA: Agrupamos todo el stock requerido (productos sueltos + los que están adentro de combos)
+    // ? MAGIA: Agrupamos todo el stock requerido (productos sueltos + los que están adentro de combos)
     const requiredStock = {};
     cart.forEach(c => {
       if (c.isReward || c.isCustom || c.isDiscount) return; // IGNORAMOS REWARDS, CUSTOM Y DESCUENTOS PUROS
@@ -3257,6 +4937,7 @@ export default function PartySupplyApp() {
       const pointsEarned = Math.floor(total / 500)
       const pointsSpent = cart.reduce((acc, i) => acc + (i.isReward ? i.pointsCost : 0), 0);
       const clientId = posSelectedClient?.id && posSelectedClient.id !== 'guest' ? posSelectedClient.id : null;
+      const actor = getActorContext();
 
       const salePayload = {
         total,
@@ -3265,7 +4946,9 @@ export default function PartySupplyApp() {
         client_id: clientId,
         points_earned: clientId ? pointsEarned : 0,
         points_spent: pointsSpent,
-        user_name: currentUser.name,
+        user_id: actor.userId,
+        user_role: actor.userRole,
+        user_name: actor.userName,
         cash_received: cashReceived,
         cash_change: cashChange,
       };
@@ -3274,7 +4957,7 @@ export default function PartySupplyApp() {
 
       const itemsPayload = cart.map(i => ({
           sale_id: sale.id, 
-          // 🔥 Evitamos error FK: Si es combo o personalizado, no pasamos el ID como UUID de producto
+          // Evitamos error FK: Si es combo o personalizado, no pasamos el ID como UUID de producto
           product_id: (i.isCustom || i.isCombo) ? null : i.id, 
           product_title: i.title, 
           quantity: i.quantity, 
@@ -3300,7 +4983,7 @@ export default function PartySupplyApp() {
         })
         .filter(Boolean);
 
-      // ✨ Descontamos stock usando el mapa que agrupamos al principio
+      // ? Descontamos stock usando el mapa que agrupamos al principio
       for (const [id, qtyToDeduct] of Object.entries(requiredStock)) {
          // CAST A STRING PARA EVITAR ERROR DE TIPADO
          const prod = inventory.find(p => String(p.id) === String(id));
@@ -3322,7 +5005,7 @@ export default function PartySupplyApp() {
           setMembers(members.map(m => m.id === clientId ? updatedClientForTicket : m));
       }
 
-      // ✨ Actualizamos el inventario local en React
+      // ? Actualizamos el inventario local en React
       setInventory(inventory.map(p => {
         const qtyToDeduct = requiredStock[p.id];
         return qtyToDeduct ? { ...p, stock: p.stock - qtyToDeduct } : p;
@@ -3332,7 +5015,9 @@ export default function PartySupplyApp() {
         id: sale.id,
         date: formatDateAR(new Date()),
         time: formatTimeFullAR(new Date()),
-        user: currentUser.name,
+        user: currentUser.displayName || currentUser.name,
+        userId: currentUser.id || null,
+        userRole: currentUser.role || null,
         total,
         payment: selectedPayment,
         installments: selectedPayment === 'Credito' ? installments : 0,
@@ -3353,6 +5038,11 @@ export default function PartySupplyApp() {
         title: item.title,
         quantity: item.quantity,
         price: item.price,
+        subtotal:
+          (Number(item.price) || 0) *
+          ((item.product_type || 'quantity') === 'weight'
+            ? Number(item.quantity || 0) / 1000
+            : Number(item.quantity || 0)),
         isReward: item.isReward || false,
         product_type: item.product_type || 'quantity',
         isCustom: item.isCustom || false,
@@ -3417,7 +5107,7 @@ export default function PartySupplyApp() {
         const clientName = tx.client?.name || (typeof tx.client === 'string' ? tx.client : null);
         const clientNum = tx.client?.memberNumber || tx.memberNumber || null;
 
-        // 🌟 CREAMOS EL LOG DE "VENTA ELIMINADA" (Antes llamado Borrado Permanente)
+        // CREAMOS EL LOG DE "VENTA ELIMINADA" (Antes llamado Borrado Permanente)
         addLog('Venta Eliminada', {
             transactionId: tx.id,
             total: tx.total,
@@ -3445,7 +5135,7 @@ export default function PartySupplyApp() {
       }
 
       // ==========================================
-      // 2. FLUJO DE ANULACIÓN NORMAL
+      // 2. FLUJO DE ANULACIÃ“N NORMAL
       // ==========================================
       Swal.fire({ title: 'Anulando...', text: 'Paso 1: Devolviendo stock...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       const updatedInventory = [...inventory];
@@ -3548,7 +5238,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Venta Anulada', 'El stock y los puntos han sido restaurados.');
 
     } catch (error) {
-      console.error("❌ ERROR CRÍTICO EN ANULACIÓN:", error);
+      console.error("? ERROR CRÃTICO EN ANULACIÃ“N:", error);
       Swal.fire({
         icon: 'error',
         title: 'Error de Anulación',
@@ -3562,13 +5252,13 @@ export default function PartySupplyApp() {
   const handleRestoreTransaction = async (tx) => {
     if (blockIfOfflineReadonly('restaurar ventas')) return;
     const result = await Swal.fire({
-      title: '¿Restaurar Venta?',
-      text: 'Se volverá a registrar la venta en el sistema, ocupará su fecha original, se descontará el stock nuevamente y se le devolverán los puntos al socio. ¿Estás seguro?',
+      title: 'Â¿Restaurar Venta?',
+      text: 'Se volverá a registrar la venta en el sistema, ocupará su fecha original, se descontará el stock nuevamente y se le devolverán los puntos al socio. Â¿Estás seguro?',
       icon: 'warning',
       showCancelButton: true,
       confirmButtonColor: '#10b981',
       cancelButtonColor: '#64748b',
-      confirmButtonText: 'Sí, restaurar venta',
+      confirmButtonText: 'SÃ­, restaurar venta',
       cancelButtonText: 'Cancelar'
     });
 
@@ -3793,7 +5483,7 @@ export default function PartySupplyApp() {
     if (!editingTransaction) return;
     const updatedItems = editingTransaction.items.filter((item, idx) => idx !== itemIndex);
     if (updatedItems.length === 0) {
-      showNotification('warning', 'Operación Inválida', 'No puedes dejar la orden vacía.');
+      showNotification('warning', 'Operación Inválida', 'No puedes dejar la orden vacÃ­a.');
       return;
     }
     const subtotal = updatedItems.reduce((acc, item) => acc + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
@@ -3913,7 +5603,7 @@ export default function PartySupplyApp() {
       }
 
       // ==========================================
-      // INICIO TRANSACCIÓN A LA NUBE (BLINDADA)
+      // INICIO TRANSACCIÃ“N A LA NUBE (BLINDADA)
       // ==========================================
       
       // A. Actualizar Venta
@@ -4005,7 +5695,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Pedido Actualizado', 'Modificación exitosa.');
 
     } catch (error) {
-      console.error("Error crítico al actualizar:", error);
+      console.error("Error crÃ­tico al actualizar:", error);
       Swal.fire({
         icon: 'error',
         title: 'Error de Sincronización',
@@ -4016,7 +5706,7 @@ export default function PartySupplyApp() {
   };
 
   // ==========================================
-  // ✨ HANDLERS DE PREMIOS (Restaurados)
+  // ? HANDLERS DE PREMIOS (Restaurados)
   // ==========================================
   const handleAddReward = async (rewardData) => {
     if (blockIfOfflineReadonly('crear premios')) return;
@@ -4045,7 +5735,7 @@ export default function PartySupplyApp() {
 
       setRewards([...rewards, newReward]);
       addLog('Nuevo Premio', { title: newReward.title, description: newReward.description, pointsCost: newReward.pointsCost, type: newReward.type, stock: newReward.stock }, 'Gestión Catálogo');
-      showNotification('success', 'Premio Creado', 'Se ha añadido al catálogo.');
+      showNotification('success', 'Premio Creado', 'Se ha aÃ±adido al catálogo.');
     } catch (e) {
       console.error(e);
       showNotification('error', 'Error', 'No se pudo crear el premio.');
@@ -4092,71 +5782,225 @@ export default function PartySupplyApp() {
     }
   };
 
-  const tabsWithInternalScroll = new Set([
-    'inventory',
-    'pos',
-    'clients',
-    'orders',
-    'history',
-    'reports',
-    'logs',
-    'extras',
-    'bulk-editor',
-  ]);
-
   const mainContentClass = [
     'flex-1',
     'min-h-0',
     'p-4',
     'bg-slate-100',
     'relative',
-    tabsWithInternalScroll.has(activeTab) ? 'overflow-hidden' : 'overflow-y-auto',
   ].join(' ');
+  const fallbackLoginUsers = useMemo(
+    () => buildLegacyUsers(USERS, userSettings),
+    [userSettings],
+  );
 
-  if (isCloudLoading) return <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-100"><RefreshCw className="animate-spin text-fuchsia-600 mb-4" size={48} /><h2 className="text-xl font-bold">Cargando Nube...</h2></div>;
+  const visibleLoginUsers = activeLoginUsers.length > 0 ? activeLoginUsers : fallbackLoginUsers;
+
+  const hasLoginUsers = visibleLoginUsers.length > 0;
+  const isCoreHydratingForSession =
+    Boolean(currentUser) &&
+    moduleLoadState.core.status === 'loading' &&
+    inventory.length === 0 &&
+    categories.length === 0 &&
+    members.length === 0 &&
+    rewards.length === 0 &&
+    offers.length === 0;
+  const isDashboardModuleLoading = moduleLoadState.dashboard.status === 'loading';
+  const isOrdersModuleLoading = moduleLoadState.orders.status === 'loading';
+  const dashboardOfflineEmptyMessage =
+    isOfflineReadOnly &&
+    moduleLoadState.dashboard.status !== 'loaded' &&
+    transactions.length === 0 &&
+    dailyLogs.length === 0 &&
+    expenses.length === 0
+      ? 'Sin conexión y sin snapshot local para este módulo. Volvé a intentarlo con internet.'
+      : '';
+  const ordersOfflineEmptyMessage =
+    isOfflineReadOnly &&
+    moduleLoadState.orders.status !== 'loaded' &&
+    budgets.length === 0 &&
+    orders.length === 0
+      ? 'Sin conexión y sin snapshot local de pedidos. Volvé a intentarlo con internet.'
+      : '';
+  const cloudStatusMeta = (() => {
+    const isAnyModuleLoading =
+      moduleLoadState.core.status === 'loading' ||
+      moduleLoadState.dashboard.status === 'loading' ||
+      moduleLoadState.orders.status === 'loading';
+
+    if (isAuthBootLoading || isCloudLoading || isAnyModuleLoading) {
+      return {
+        dotClass: 'bg-amber-500 shadow-[0_0_0_4px_rgba(245,158,11,0.15)]',
+        badgeClass: 'border-amber-200 bg-amber-50 text-amber-700',
+        title: 'Cargando',
+        detail: 'Sincronizando...',
+      };
+    }
+
+    if (isOfflineReadOnly) {
+      return {
+        dotClass: 'bg-rose-500 shadow-[0_0_0_4px_rgba(244,63,94,0.14)]',
+        badgeClass: 'border-rose-200 bg-rose-50 text-rose-700',
+        title: 'Sin conexión',
+        detail: offlineSnapshotAt
+          ? `Snapshot: ${formatDateAR(offlineSnapshotAt)}`
+          : 'Datos locales.',
+      };
+    }
+
+    return {
+      dotClass: 'bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.15)]',
+      badgeClass: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+      title: 'Conectada',
+      detail: 'Sincronizada',
+    };
+  })();
+
+  const activeTabTitles = {
+    pos: 'Punto de Venta',
+    dashboard: 'Control de Caja',
+    inventory: 'Inventario',
+    clients: 'Socios',
+    agenda: 'Agenda',
+    orders: 'Pedidos',
+    history: 'Historial de Ventas',
+    reports: 'Reportes de Caja',
+    logs: 'Registro de Acciones',
+    sessions: 'Gestor de Sesiones',
+    extras: 'Gestión de Extras',
+    'bulk-editor': 'Productos',
+    settings: 'Ajustes',
+    'user-management': 'Gestión de usuarios',
+  };
+
+  const currentRoleLabel = getRoleLabel(currentUser?.role);
+  const currentRoleTone =
+    currentUser?.role === 'system'
+      ? 'bg-fuchsia-100 text-fuchsia-700'
+      : currentUser?.role === 'owner'
+        ? 'bg-blue-100 text-blue-700'
+        : 'bg-green-100 text-green-700';
+
+  if (!currentUser && (isAuthBootLoading || isCloudLoading)) return <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-100"><RefreshCw className="animate-spin text-fuchsia-600 mb-4" size={48} /><h2 className="text-xl font-bold">Cargando Nube...</h2></div>;
 
   if (!currentUser) {
     if (loginStep === 'password') {
-      const user = USERS[selectedRoleForLogin];
+      const user = selectedLoginUser;
       return (
-        <div className="flex h-screen items-center justify-center bg-slate-100">
-          <div className="bg-white p-6 rounded-xl shadow-xl w-full max-w-xs text-center border">
-            <div className="flex justify-between items-center mb-6">
-              <button onClick={() => setLoginStep('select')} className="text-slate-400 hover:text-slate-600"><ArrowLeft size={20} /></button>
-              <h1 className="text-lg font-bold text-slate-800">Iniciar Sesión</h1>
-              <div className="w-5"></div>
-            </div>
-            <div className="mb-6 flex flex-col items-center">
-              <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-sm mb-2 ${user.role === 'admin' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'}`}>{user.avatar}</div>
-              <p className="font-bold text-slate-700">{user.name}</p>
-            </div>
-            <form onSubmit={handleSubmitLogin} className="space-y-4">
-              <div>
-                <input autoFocus type="password" placeholder="Contraseña" className="w-full px-4 py-3 border border-slate-300 rounded-xl text-center text-lg tracking-widest focus:ring-2 focus:ring-fuchsia-500 focus:border-fuchsia-500 outline-none bg-white text-slate-800 placeholder:text-slate-400" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} />
-                {loginError && (<p className="text-xs text-red-500 mt-2">{loginError}</p>)}
+        <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-6 py-10">
+          <div className="w-full max-w-md rounded-[34px] border border-slate-200/80 bg-white/95 p-6 shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur">
+            <div className="mb-5 flex items-center justify-between">
+              <button
+                onClick={() => setLoginStep('select')}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 transition hover:border-slate-300 hover:text-slate-600"
+              >
+                <ArrowLeft size={18} />
+              </button>
+              <div className="text-center">
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Ingreso</p>
+                <h1 className="text-lg font-black text-slate-800">Bienvenido</h1>
               </div>
-              <button type="submit" className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-800 transition-colors">Ingresar</button>
-            </form>
+              <div className="h-10 w-10" />
+            </div>
+
+            <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.98)_0%,rgba(255,255,255,0.98)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.85)]">
+              <div className="flex flex-col items-center px-6 pb-5 pt-6 text-center">
+                <UserAvatar
+                  avatar={user?.avatar}
+                  name={user?.displayName || user?.name}
+                  color={user?.nameColor || '#334155'}
+                  sizeClass="h-24 w-24 shadow-[0_12px_24px_rgba(15,23,42,0.14)]"
+                  textClass="text-2xl"
+                />
+                <p className="mt-4 text-lg font-black text-slate-800">{user?.displayName || user?.name}</p>
+              </div>
+
+              <form onSubmit={handleSubmitLogin} className="border-t border-slate-200 bg-white px-6 pb-6 pt-5">
+                <label className="block">
+                  <span className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
+                    ContraseÃ±a
+                  </span>
+                  <input
+                    autoFocus
+                    type="password"
+                    placeholder="Ingresar contraseÃ±a"
+                    className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-center text-base font-bold tracking-[0.2em] text-slate-800 outline-none placeholder:text-slate-400 focus:border-fuchsia-300 focus:bg-white focus:ring-2 focus:ring-fuchsia-200"
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                  />
+                </label>
+                {loginError && <p className="mt-2 text-center text-xs font-semibold text-red-500">{loginError}</p>}
+                <button
+                  type="submit"
+                  className="mt-4 w-full rounded-2xl bg-slate-900 py-3 text-sm font-black text-white transition-colors hover:bg-slate-800"
+                >
+                  Ingresar
+                </button>
+              </form>
+            </div>
           </div>
         </div>
       );
     }
-    
+
     return (
-      <div className="flex h-screen items-center justify-center bg-slate-100">
-        <div className="bg-white p-6 rounded-xl shadow-xl w-full max-w-xs text-center border">
-          <div className="flex justify-center mb-4"><div className="p-3 bg-fuchsia-600 rounded-xl shadow-lg"><PartyPopper className="text-white" size={32} /></div></div>
-          <h1 className="text-lg font-bold text-slate-800 mb-1">PartyManager</h1>
-          <p className="text-slate-500 text-xs mb-6">Selecciona tu usuario</p>
-          <div className="space-y-3">
-            <button onClick={() => handleSelectRole('admin')} className="w-full flex items-center gap-3 p-3 border rounded-xl hover:bg-slate-50 transition-colors group"><div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs">DU</div><div className="text-left flex-1"><p className="font-bold text-slate-800 text-sm">Dueño</p></div><ChevronRight size={16} className="text-slate-300 group-hover:text-slate-500" /></button>
-            <button onClick={() => handleSelectRole('seller')} className="w-full flex items-center gap-3 p-3 border rounded-xl hover:bg-slate-50 transition-colors group"><div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center font-bold text-xs">VE</div><div className="text-left flex-1"><p className="font-bold text-slate-800 text-sm">Vendedor</p></div><ChevronRight size={16} className="text-slate-300 group-hover:text-slate-500" /></button>
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-6 py-10">
+        <div className="w-full max-w-5xl rounded-[34px] border border-slate-200/80 bg-white/95 p-8 text-center shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur">
+          <div className="mb-5 flex justify-center">
+            <div className="rounded-[20px] bg-white p-2 shadow-[0_12px_28px_rgba(15,23,42,0.12)] ring-1 ring-slate-200">
+              <img src="/rebu-logo.png" alt="Rebu" className="h-24 w-24 object-contain" />
+            </div>
+          </div>
+          <h1 className="mb-1 text-2xl font-black text-slate-800">Rebu Cotillón</h1>
+          <p className="mb-8 text-sm font-medium text-slate-500">Seleccioná tu usuario para continuar</p>
+
+          <div className="text-left">
+            {hasLoginUsers ? (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {visibleLoginUsers.map((user) => (
+                  <button
+                    key={user.id}
+                    onClick={() => handleSelectLoginUser(user.id)}
+                    className="group overflow-hidden rounded-[26px] border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.96)_0%,rgba(255,255,255,0.98)_100%)] text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition duration-200 hover:-translate-y-0.5 hover:border-fuchsia-200 hover:shadow-[0_18px_30px_rgba(15,23,42,0.1)]"
+                  >
+                    <div className="flex flex-col items-center px-5 pb-5 pt-6">
+                      <UserAvatar
+                        avatar={user.avatar}
+                        name={user.displayName || user.name}
+                        color={user.nameColor}
+                        sizeClass="h-24 w-24 shadow-[0_12px_24px_rgba(15,23,42,0.14)]"
+                        textClass="text-2xl"
+                      />
+                      <p className="mt-4 line-clamp-2 text-base font-black text-slate-800">{user.displayName}</p>
+                    </div>
+                    <div className="flex items-center justify-center gap-2 border-t border-slate-200 bg-white px-4 py-3 text-[11px] font-black uppercase tracking-[0.16em] text-slate-500 transition group-hover:text-fuchsia-700">
+                      Ingresar
+                      <ChevronRight size={15} />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 text-center">
+                <p className="text-sm font-black text-slate-700">No hay usuarios activos para ingresar</p>
+                <p className="mt-1 text-xs font-medium text-slate-500">
+                  Reintentá cargar usuarios o verificá la configuración de Supabase.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => fetchCloudData(true)}
+                  className="mt-3 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-100"
+                >
+                  <RefreshCw size={13} />
+                  Reintentar carga
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
     );
   }
-
 // --- MAIN LAYOUT ---
   return (
     <>
@@ -4167,7 +6011,7 @@ export default function PartySupplyApp() {
           {isTestActive && (
             <div className="bg-orange-500 text-white text-xs font-bold px-4 py-2.5 flex items-center justify-center gap-2 z-50 shadow-md w-full animate-in slide-in-from-top">
               <AlertTriangle size={16} />
-              <span>⚠️ Estás usando la palabra "test". Esta acción NO se contabilizará en el sistema y será usada como prueba únicamente.</span>
+              <span>Estás usando la palabra "test". Esta acción no se contabilizará en el sistema y será usada solo como prueba.</span>
             </div>
           )}
 
@@ -4175,81 +6019,141 @@ export default function PartySupplyApp() {
             <div className="flex items-center gap-3">
               <div className="pl-1">
                 <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
-                  {{ pos: 'Punto de Venta', dashboard: 'Control de Caja', inventory: 'Inventario', clients: 'Socios', orders: 'Pedidos', history: 'Historial de Ventas', reports: 'Reportes de Caja', logs: 'Registro de Acciones', extras: 'Gestion de Extras', 'bulk-editor': 'Productos' }[activeTab] || activeTab}
+                  {activeTabTitles[activeTab] || activeTab}
                 </h2>
-                <div className="-mt-0.5 flex items-center gap-2 text-[12px] font-bold text-slate-500">
+                <div className="-mt-2 flex items-center gap-2 text-[12px] font-bold text-slate-500">
+                  <div className="flex items-center gap-1">
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${cloudStatusMeta.dotClass}`} />
+                    <span className={`inline-flex items-center rounded-full border px-1 py-0 text-[7px] font-bold uppercase tracking-[0.08em] ${cloudStatusMeta.badgeClass}`}>
+                      {cloudStatusMeta.title}
+                    </span>
+                  </div>
                   <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
               <div className="flex items-center gap-2">
-                <button onClick={currentUser?.role === 'admin' ? toggleRegisterStatus : undefined} className={`flex items-center gap-2 px-3 py-1.5 rounded border transition-colors ${isRegisterClosed ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'} ${currentUser?.role === 'admin' ? 'hover:opacity-80 cursor-pointer' : 'cursor-default'}`} title={currentUser?.role !== 'admin' ? 'Solo el Dueño puede cambiar el estado de la caja' : ''}><Lock size={14} /><span className="text-xs font-bold">{isRegisterClosed ? 'CAJA CERRADA' : 'CAJA ABIERTA'}</span></button>
                 <button
-                  type="button"
-                  onClick={handleHeaderReloadClick}
-                  onDoubleClick={handleForceReload}
-                  className="hidden items-center justify-center rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700"
-                  title="Click: recarga suave. Doble click: recarga completa"
-                  aria-label="Recargar programa"
+                  onClick={canManageRegister ? toggleRegisterStatus : undefined}
+                  className={`flex items-center gap-2 rounded border px-3 py-1.5 transition-colors ${isRegisterClosed ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'} ${canManageRegister ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
+                  title={canUseAdminArea ? '' : 'Solo Sistema o un DueÃ±o pueden cambiar el estado de la caja'}
                 >
-                  <RefreshCw size={14} />
+                  <Lock size={14} />
+                  <span className="text-xs font-bold">{isRegisterClosed ? 'CAJA CERRADA' : 'CAJA ABIERTA'}</span>
                 </button>
                 {!isRegisterClosed && closingTime && (<div className="flex items-center gap-1 px-2 py-1 bg-amber-50 border border-amber-200 rounded text-amber-700"><Clock size={12} /><span className="text-[10px] font-bold">Cierre: {closingTime}</span></div>)}
               </div>
-              <div className="text-right hidden sm:block"><p className="text-xs font-bold text-slate-700">{currentUser?.name}</p><span className={`text-[10px] px-2 py-0.5 rounded font-bold ${currentUser?.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>{currentUser?.role === 'admin' ? 'DUEÑO' : 'VENDEDOR'}</span></div>
+              <div className="text-right hidden sm:block">
+                <p className="text-xs font-bold" style={currentUserPresentation?.textStyle}>
+                  {currentUserPresentation?.displayName || currentUser?.displayName || currentUser?.name}
+                </p>
+                <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${currentRoleTone}`}>
+                  {currentRoleLabel}
+                </span>
+              </div>
             </div>
-            <button
-              type="button"
-              onClick={handleHeaderReloadClick}
-              onDoubleClick={handleForceReload}
-              className="absolute right-5 top-1/2 hidden -translate-y-1/2 items-center justify-center rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 sm:flex"
-              title="Click: recarga suave. Doble click: recarga completa"
-              aria-label="Recargar programa"
-            >
-              <RefreshCw size={14} />
-            </button>
           </header>
           {isOfflineReadOnly && (
             <div className="border-b border-amber-200 bg-[linear-gradient(180deg,#fffbeb_0%,#fef3c7_100%)] px-5 py-2 text-[11px] font-semibold text-amber-900 shadow-sm">
               <span className="font-black uppercase tracking-[0.08em]">Modo sin conexión</span>
-              <span className="mx-2">·</span>
-              <span>Podés seguir consultando datos, pero no hacer cambios.</span>
+              <span className="mx-2">â€¢</span>
+              <span>PodÃ©s seguir consultando datos, pero no hacer cambios.</span>
               {offlineSnapshotAt && (
                 <>
-                  <span className="mx-2">·</span>
-                  <span>Último snapshot: {formatDateAR(offlineSnapshotAt)} {formatTimeAR(offlineSnapshotAt)}</span>
+                  <span className="mx-2">â€¢</span>
+                  <span>Ãšltimo snapshot: {formatDateAR(offlineSnapshotAt)} {formatTimeAR(offlineSnapshotAt)}</span>
                 </>
               )}
             </div>
           )}
           
           <main className={mainContentClass}>
-            <PersistentTabPanel tab="dashboard" activeTab={activeTab}>
-              <DashboardView 
-                openingBalance={openingBalance} 
-                totalSales={totalSales} 
-                salesCount={salesCount} 
-                currentUser={currentUser} 
-                setTempOpeningBalance={setTempOpeningBalance} 
-                setIsOpeningBalanceModalOpen={setIsOpeningBalanceModalOpen} 
-                transactions={validTransactions} 
-                dailyLogs={dailyLogs} 
-                inventory={inventory}
-                expenses={expenses}
-                onOpenExpenseModal={() => setIsExpenseModalOpen(true)}
-                onAlertClick={handleDashboardAlertClick} 
-                onNavigate={(tab) => setActiveTab(tab)}
-                onViewTransaction={(tx) => setDetailsModalTx(tx)}
+            {isCoreHydratingForSession ? (
+              <div className="flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white shadow-sm">
+                <div className="text-center">
+                  <RefreshCw className="mx-auto mb-4 animate-spin text-fuchsia-600" size={34} />
+                  <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Sincronizando nube</p>
+                  <p className="mt-2 text-sm font-medium text-slate-500">Estamos trayendo productos, socios y configuraciones base de Supabase.</p>
+                </div>
+              </div>
+            ) : (
+              <>
+            {canViewDashboard && (
+              <PersistentTabPanel tab="dashboard" activeTab={activeTab} className="h-full min-h-0">
+                <DashboardView 
+                  openingBalance={openingBalance} 
+                  totalSales={totalSales} 
+                  salesCount={salesCount} 
+                  currentUser={currentUser} 
+                  setTempOpeningBalance={setTempOpeningBalance} 
+                  setIsOpeningBalanceModalOpen={setIsOpeningBalanceModalOpen} 
+                  transactions={validTransactions} 
+                  dailyLogs={dailyLogs} 
+                  inventory={inventory}
+                  expenses={expenses}
+                  isLoading={isDashboardModuleLoading && transactions.length === 0 && dailyLogs.length === 0}
+                  emptyStateMessage={dashboardOfflineEmptyMessage}
+                  onOpenExpenseModal={() => setIsExpenseModalOpen(true)}
+                  onAlertClick={handleDashboardAlertClick} 
+                  onNavigate={(tab, payload = {}) => {
+                    if (tab === 'inventory') {
+                      navigateToInventoryFromDashboard(payload);
+                      return;
+                    }
+                    if (tab === 'history') {
+                      navigateToHistoryFromDashboard(payload);
+                      return;
+                    }
+                    setActiveTab(tab);
+                  }}
+                  onViewTransaction={(tx) => setDetailsModalTx(tx)}
+                />
+              </PersistentTabPanel>
+            )}
+            {canAccessTab(currentUser, 'inventory') && <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} closeDetailsToken={inventoryPanelCloseToken} navigationRequest={inventoryNavigationRequest} /></PersistentTabPanel>}
+            <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{canUseAdminArea ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">Sistema o un DueÃ±o deben abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} offers={offers} currentUser={currentUser} userCatalog={userCatalog} />)}</PersistentTabPanel>
+            <PersistentTabPanel tab="clients" activeTab={activeTab} className="h-full min-h-0"><ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={() => {}} /></PersistentTabPanel>
+            {canViewAgenda && (
+              <PersistentTabPanel tab="agenda" activeTab={activeTab} className="h-full min-h-0">
+                <AgendaView
+                  contacts={agendaContacts}
+                  currentUser={currentUser}
+                  isOfflineReadOnly={isOfflineReadOnly}
+                  onCreateContact={handleCreateAgendaContact}
+                  onUpdateContact={handleUpdateAgendaContact}
+                  onDeleteContact={handleDeleteAgendaContact}
+                />
+              </PersistentTabPanel>
+            )}
+            <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} offers={offers} currentUser={currentUser} userCatalog={userCatalog} isLoading={isOrdersModuleLoading && budgets.length === 0 && orders.length === 0} emptyStateMessage={ordersOfflineEmptyMessage} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onUpdateOrder={handleUpdateOrder} onDeleteBudget={handleDeleteBudget} onDeleteOrder={handleDeleteOrder} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
+            <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} userCatalog={userCatalog} members={members} isLoading={isDashboardModuleLoading && transactions.length === 0 && dailyLogs.length === 0} emptyStateMessage={dashboardOfflineEmptyMessage} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setDailyLogs} navigationRequest={historyNavigationRequest} /></PersistentTabPanel>
+            {canViewReports && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members} isLoading={isDashboardModuleLoading && pastClosures.length === 0} emptyStateMessage={dashboardOfflineEmptyMessage} /></PersistentTabPanel>)}
+            {canViewLogs && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} userCatalog={userCatalog} isLoading={isDashboardModuleLoading && dailyLogs.length === 0} emptyStateMessage={dashboardOfflineEmptyMessage} /></PersistentTabPanel>)}
+            {canViewSessions && (<PersistentTabPanel tab="sessions" activeTab={activeTab} className="h-full min-h-0"><SessionsView dailyLogs={dailyLogs} currentSessionMeta={currentSessionMeta} userCatalog={userCatalog} isLoading={isDashboardModuleLoading && dailyLogs.length === 0} emptyStateMessage={dashboardOfflineEmptyMessage} /></PersistentTabPanel>)}
+            {canViewUserManagement && (
+              <PersistentTabPanel tab="user-management" activeTab={activeTab} className="h-full min-h-0">
+                <UserManagementView
+                  users={appUsers}
+                  userCatalog={userCatalog}
+                  currentUser={currentUser}
+                  isSharedUsersEnabled={authMode === 'supabase' || appUsers.some((user) => user?.source === 'supabase')}
+                  onRetryEnableSharedUsers={handleRetrySharedUsersSetup}
+                  onCreateUser={handleCreateManagedUser}
+                  onUpdateUser={handleUpdateManagedUser}
+                  onToggleUserActive={handleToggleManagedUserActive}
+                  onUpdatePermissions={handleUpdateManagedUserPermissions}
+                  showNotification={showNotification}
+                />
+              </PersistentTabPanel>
+            )}
+            <PersistentTabPanel tab="settings" activeTab={activeTab} className="h-full min-h-0">
+              <UserSettingsView
+                currentUser={currentUser}
+                onSaveSettings={handleSaveUserSettings}
+                showNotification={showNotification}
               />
             </PersistentTabPanel>
-            <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} closeDetailsToken={inventoryPanelCloseToken} /></PersistentTabPanel>
-            <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{currentUser?.role === 'admin' ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">El Dueño debe abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} offers={offers} />)}</PersistentTabPanel>
-            <PersistentTabPanel tab="clients" activeTab={activeTab} className="h-full min-h-0"><ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={() => {}} /></PersistentTabPanel>
-            <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} offers={offers} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onUpdateOrder={handleUpdateOrder} onDeleteBudget={handleDeleteBudget} onDeleteOrder={handleDeleteOrder} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
-            <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} members={members} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setDailyLogs} /></PersistentTabPanel>
-            {currentUser?.role === 'admin' && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members}/></PersistentTabPanel>)}
-            {currentUser?.role === 'admin' && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} /></PersistentTabPanel>)}
             <PersistentTabPanel tab="extras" activeTab={activeTab} className="h-full min-h-0">
               <ExtrasView 
               categories={categories} 
@@ -4269,7 +6173,7 @@ export default function PartySupplyApp() {
               onDeleteReward={handleDeleteReward}
               />
             </PersistentTabPanel>
-            {currentUser?.role === 'admin' && (
+            {canViewBulkEditor && (
               <PersistentTabPanel tab="bulk-editor" activeTab={activeTab} className="h-full min-h-0">
                 <BulkEditorView 
                 inventory={inventory} 
@@ -4277,7 +6181,7 @@ export default function PartySupplyApp() {
                 onSaveSingle={handleBulkSaveSingle} 
                 onSaveBulk={handleBulkSaveMasive} 
                 onExportProducts={handleExportProducts}
-                // ✨ NUEVAS PROPS PARA PDF PERSISTENTE
+                // ? NUEVAS PROPS PARA PDF PERSISTENTE
                 exportItems={bulkExportItems}
                 setExportItems={setBulkExportItems}
                 exportConfig={bulkExportConfig}
@@ -4286,12 +6190,19 @@ export default function PartySupplyApp() {
                 />
               </PersistentTabPanel>
             )}
+              </>
+            )}
           </main>
+          <footer className="shrink-0 border-t border-slate-200 bg-slate-100 px-5 py-1.5">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+              Módulo actual: {activeTabTitles[activeTab] || activeTab}
+            </div>
+          </footer>
         </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* ✨ ZONA DE IMPRESIÓN (SIN LÍMITES DE TAMAÑO, SOLO SE VE AL IMPRIMIR) */}
+      {/* ? ZONA DE IMPRESIÃ“N (SIN LÃMITES DE TAMAÃ‘O, SOLO SE VE AL IMPRIMIR) */}
       {/* ========================================================================= */}
       <div className="hidden print:block w-full h-auto bg-white">
         {exportPdfData ? (
@@ -4318,14 +6229,29 @@ export default function PartySupplyApp() {
         <DeleteProductModal product={productToDelete} onClose={() => { setProductToDelete(null); setDeleteProductReason(''); }} reason={deleteProductReason} setReason={setDeleteProductReason} onConfirm={confirmDeleteProduct} />
         <BarcodeNotFoundModal isOpen={barcodeNotFoundModal.isOpen} scannedCode={barcodeNotFoundModal.code} onClose={() => setBarcodeNotFoundModal({ isOpen: false, code: '' })} onAddProduct={handleAddProductFromBarcode} />
         <BarcodeDuplicateModal isOpen={barcodeDuplicateModal.isOpen} existingProduct={barcodeDuplicateModal.existingProduct} onClose={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onKeepExisting={() => setBarcodeDuplicateModal({ isOpen: false, existingProduct: null, newBarcode: '' })} onReplaceBarcode={handleReplaceDuplicateBarcode} />
-        <ClientSelectionModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} clients={members} addClient={handleAddMemberWithLog} onSelectClient={(client) => setPosSelectedClient(enrichClientWithCouponUsage(client))} onCancelFlow={() => { setPosSelectedClient({ id: 'guest', name: 'No asociado', memberNumber: '---', points: 0, usedCoupons: [] }); setIsClientModalOpen(false); }} />
-        <RedemptionModal isOpen={isRedemptionModalOpen} onClose={() => setIsRedemptionModalOpen(false)} client={posSelectedClient} rewards={rewards} onRedeem={handleRedeemReward} />
+        <MemberIdentityPanel
+          isOpen={memberIdentityPanelState.isOpen}
+          onClose={closeMemberIdentityPanel}
+          initialMode={memberIdentityPanelState.initialMode}
+          initialFocus={memberIdentityPanelState.initialFocus}
+          selectedClient={posSelectedClient}
+          clients={members}
+          rewards={rewards}
+          onSelectClient={handleSelectPosClient}
+          onCreateClient={handleCreatePosClient}
+          onRedeem={handleRedeemReward}
+          onChooseGuest={() => {
+            setPosSelectedClient(buildGuestPosClient());
+            closeMemberIdentityPanel();
+          }}
+        />
         <ExpenseModal isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} onSave={handleAddExpense} />
         
         <TransactionDetailModal
           transaction={detailsModalTx}
           onClose={() => setDetailsModalTx(null)}
           currentUser={currentUser}
+          userCatalog={userCatalog}
           members={members}
           onEditTransaction={(tx) => {
             setDetailsModalTx(null); 
@@ -4341,5 +6267,10 @@ export default function PartySupplyApp() {
     </>
   );
 }
+
+
+
+
+
 
 

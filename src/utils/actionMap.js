@@ -58,6 +58,7 @@ export const ACTION_GROUPS = [
   { label: '👤 Socios',     actions: ['Nuevo Socio', 'Edición de Socio', 'Edición de Puntos', 'Baja de Socio'] },
   { label: '🎁 Premios',    actions: ['Nuevo Premio', 'Editar Premio', 'Eliminar Premio'] },
   { label: '🏷️ Categorías', actions: ['Categoría', 'Actualización Masiva', 'Edición Masiva Categorías'] },
+  { label: '📋 Agenda',     actions: ['Nuevo Contacto Agenda', 'Edicion Agenda', 'Baja Agenda'] },
   { label: '⚙️ Sistema',    actions: ['Login', 'Horario Modificado', 'Sistema Iniciado'] },
 ];
 

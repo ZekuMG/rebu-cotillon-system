@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Search,
   ShoppingCart,
@@ -18,18 +18,20 @@ import {
   User, 
   Gift,
   UserMinus,
-  UserCheck,
   Scale,
   Edit2,
   Wand2,
   AlertTriangle,
-  TicketPercent // ✨ Icono para ofertas
+  TicketPercent // Icono para ofertas
 } from 'lucide-react';
-import Swal from 'sweetalert2'; // ✨ Para las alertas inteligentes
+import Swal from 'sweetalert2'; // Para las alertas inteligentes
 import { PAYMENT_METHODS } from '../data';
 import { formatWeight } from '../utils/helpers';
 import { FancyPrice } from '../components/FancyPrice';
+import { HintIcon } from '../components/HintIcon';
 import { normalizeLegacyOffer } from '../utils/offerHelpers';
+
+const POS_BATCH_SIZE = 50;
 
 const isProductExpired = (dateString) => {
   if (!dateString) return false;
@@ -254,47 +256,70 @@ export default function POSView({
   calculateTotal, handleCheckout, posSearch, setPosSearch,
   selectedCategory, setSelectedCategory, posViewMode, setPosViewMode,
   gridColumns, setGridColumns, selectedClient, setSelectedClient,
-  onOpenClientModal, onOpenRedemptionModal,
+  onOpenMemberPanel,
+  onOpenClientModal,
+  onOpenRedemptionModal,
   transactions = [],
-  offers = [] // ✨ Recibimos las ofertas
+  offers = [], // Recibimos las ofertas
+  currentUser: _currentUser = null,
+  userCatalog: _userCatalog = null,
 }) {
   const [showGridMenu, setShowGridMenu] = useState(false);
   const cashReceivedInputRef = useRef(null);
-  const [showClientCheckModal, setShowClientCheckModal] = useState(false);
   const [weightModalProduct, setWeightModalProduct] = useState(null);
   const [editingWeightItemId, setEditingWeightItemId] = useState(null);
   const [editingWeightValue, setEditingWeightValue] = useState('');
   
   const [isCustomModalOpen, setIsCustomModalOpen] = useState(false);
-  const [isOffersDrawerOpen, setIsOffersDrawerOpen] = useState(false); // ✨ Modal de combos
+  const [isOffersDrawerOpen, setIsOffersDrawerOpen] = useState(false); // Modal de combos
 
   const [isDiscountDrawerOpen, setIsDiscountDrawerOpen] = useState(false);
   const [customDiscountPercent, setCustomDiscountPercent] = useState('');
-  const [visibleCount, setVisibleCount] = useState(40);
-  const [cashPaymentMode, setCashPaymentMode] = useState('full');
+  const [visibleCount, setVisibleCount] = useState(POS_BATCH_SIZE);
   const [cashReceivedInput, setCashReceivedInput] = useState('');
 
+  const openMemberSelectPanel = () => {
+    if (onOpenMemberPanel) {
+      onOpenMemberPanel({ initialMode: 'member', initialFocus: 'select' });
+      return;
+    }
+    onOpenClientModal?.();
+  };
+
+  const openMemberRedeemPanel = () => {
+    if (onOpenMemberPanel) {
+      onOpenMemberPanel({ initialMode: 'member', initialFocus: 'redeem' });
+      return;
+    }
+    onOpenRedemptionModal?.();
+  };
+
+  const openGuestPanel = () => {
+    if (onOpenMemberPanel) {
+      onOpenMemberPanel({ initialMode: 'guest', initialFocus: 'select' });
+      return;
+    }
+    onOpenClientModal?.();
+  };
+
   useEffect(() => {
-    setVisibleCount(40);
+    setVisibleCount(POS_BATCH_SIZE);
   }, [posSearch, selectedCategory]);
 
   useEffect(() => {
     if (selectedPayment === 'Efectivo') {
-      setCashPaymentMode('custom');
       setCashReceivedInput('');
       setTimeout(() => cashReceivedInputRef.current?.focus(), 0);
       return;
     }
 
     if (selectedPayment !== 'Efectivo') {
-      setCashPaymentMode('full');
       setCashReceivedInput('');
     }
   }, [selectedPayment]);
 
   useEffect(() => {
     if (cart.length === 0 && selectedPayment === 'Efectivo') {
-      setCashPaymentMode('custom');
       setCashReceivedInput('');
     }
   }, [cart.length, selectedPayment]);
@@ -369,7 +394,7 @@ export default function POSView({
     addToCart(customProduct, amount);
   };
 
-  // ✨ AGREGAR OFERTA AL CARRITO
+  // AGREGAR OFERTA AL CARRITO
   const getDiscountBaseTotal = () =>
     cart.reduce((acc, item) => {
       if (item.isDiscount) return acc;
@@ -569,7 +594,7 @@ export default function POSView({
     setEditingWeightValue('');
   };
 
-  // ✨ AUTO-CHEQUEO INTELIGENTE DE OFERTAS
+  // AUTO-CHEQUEO INTELIGENTE DE OFERTAS
   const checkSmartDiscounts = () => {
     const applicableOffers = [];
 
@@ -686,7 +711,7 @@ export default function POSView({
              applicableOffers.forEach(discountItem => {
                 addToCart(discountItem);
              });
-             // Mensaje de éxito e interrupción para que el vendedor vea el carrito actualizado
+             // Mensaje de éxito e interrupción para que el Usuario de Caja vea el carrito actualizado
              Swal.fire({
                title: '¡Aplicado!',
                text: 'Revisa el total actualizado y presiona Cobrar nuevamente.',
@@ -705,12 +730,12 @@ export default function POSView({
   };
 
   const proceedToCheckoutFlow = () => {
-    if (selectedPayment === 'Efectivo' && cashPaymentMode === 'custom' && cashReceivedInput.trim() !== '' && cashReceivedAmount < total) {
+    if (selectedPayment === 'Efectivo' && cashReceivedInput.trim() !== '' && cashReceivedAmount < total) {
       Swal.fire('Monto insuficiente', 'El monto recibido en efectivo debe cubrir el total de la compra.', 'warning');
       return;
     }
     if (cart.length > 0 && !selectedClient) {
-      setShowClientCheckModal(true);
+      openGuestPanel();
     } else {
       handleCheckout({
         cashReceived: selectedPayment === 'Efectivo' ? cashReceivedAmount : null,
@@ -723,16 +748,6 @@ export default function POSView({
     const hasDiscountsPending = checkSmartDiscounts();
     if (hasDiscountsPending) return; // Pausa
     proceedToCheckoutFlow(); // Sigue
-  };
-
-  const confirmCheckoutWithoutClient = () => {
-    setShowClientCheckModal(false);
-    setSelectedClient({ id: 0, name: 'Consumidor Final', memberNumber: '---', points: 0 });
-  };
-
-  const handleOpenClientModalFromCheck = () => {
-    setShowClientCheckModal(false);
-    onOpenClientModal();
   };
 
   const filteredProducts = useMemo(() => {
@@ -760,7 +775,7 @@ export default function POSView({
     const { scrollTop, clientHeight, scrollHeight } = e.target;
     if (scrollHeight - scrollTop <= clientHeight + 400) {
       if (visibleCount < filteredProducts.length) {
-        setVisibleCount((prev) => prev + 40);
+        setVisibleCount((prev) => prev + POS_BATCH_SIZE);
       }
     }
   };
@@ -836,16 +851,18 @@ export default function POSView({
   const total = calculateTotal();
   const hasTypedCashAmount = cashReceivedInput.trim() !== '';
   const cashReceivedAmount = selectedPayment === 'Efectivo'
-    ? (cashPaymentMode === 'full' || !hasTypedCashAmount ? total : Number(cashReceivedInput || 0))
+    ? (!hasTypedCashAmount ? total : Number(cashReceivedInput || 0))
     : total;
   const cashChangeAmount = selectedPayment === 'Efectivo'
     ? Math.max(0, cashReceivedAmount - total)
     : 0;
-  const cashMissingAmount = selectedPayment === 'Efectivo' && cashPaymentMode === 'custom'
+  const cashMissingAmount = selectedPayment === 'Efectivo'
     ? (hasTypedCashAmount ? Math.max(0, total - cashReceivedAmount) : 0)
     : 0;
   const pointsToEarn = Math.floor(Math.max(0, total) / 500);
   const discountBaseTotal = getDiscountBaseTotal();
+  const isGuestSelectedClient = Boolean(selectedClient && (selectedClient.id === 'guest' || selectedClient.id === 0));
+  const hasVisibleSelectedClient = Boolean(selectedClient);
 
   return (
     <div className="flex h-full overflow-hidden bg-slate-100 relative">
@@ -856,7 +873,7 @@ export default function POSView({
         {/* Header POS */}
         <div className="p-3 bg-white border-b shrink-0 flex gap-2.5 items-center z-30 relative">
           
-          {/* ✨ BOTÓN DE OFERTAS */}
+          {/* BOTÓN DE OFERTAS */}
           <div className="flex items-center gap-2 shrink-0">
             {selectableOffers.length > 0 && (
               <button 
@@ -1106,15 +1123,79 @@ export default function POSView({
       </div>
 
       {/* COLUMNA DERECHA: CARRITO */}
-      <div className="w-[332px] bg-white border-l flex flex-col min-h-0 shadow-2xl z-20 shrink-0">
+      <div className="w-[352px] bg-white border-l flex flex-col min-h-0 shadow-2xl z-20 shrink-0">
         
-        <div className="flex items-center justify-between border-b bg-white px-3 py-2.5">
-          <h2 className="flex items-center gap-1.5 text-[15px] font-bold text-slate-800">
-            <ShoppingCart size={18} className="text-fuchsia-600" /> Pedido Actual
-          </h2>
-          <span className="rounded-full bg-fuchsia-100 px-1.5 py-0.5 text-[11px] font-bold text-fuchsia-700">
-            {cart.reduce((acc, item) => acc + (item.product_type === 'weight' ? 1 : item.quantity), 0)} items
-          </span>
+        <div className="border-b bg-white px-3 py-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="flex min-w-0 items-center gap-1.5 text-[15px] font-bold text-slate-800">
+              <ShoppingCart size={18} className="shrink-0 text-fuchsia-600" /> Pedido Actual
+            </h2>
+            <span className="shrink-0 rounded-full bg-fuchsia-100 px-1.5 py-0.5 text-[11px] font-bold text-fuchsia-700">
+              {cart.reduce((acc, item) => acc + (item.product_type === 'weight' ? 1 : item.quantity), 0)} items
+            </span>
+          </div>
+          <div className="min-w-0">
+            {hasVisibleSelectedClient ? (
+              isGuestSelectedClient ? (
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <div className="inline-flex h-6 items-center gap-1 rounded-md border border-slate-300 bg-slate-50 px-1.5 py-1 text-[10px] font-bold text-slate-600 shadow-sm">
+                    <User size={11} /> Consumidor final
+                  </div>
+                  <button
+                    onClick={() => setSelectedClient && setSelectedClient(null)}
+                    className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-400 transition-colors hover:text-red-500"
+                    title="Quitar identificacion"
+                  >
+                    <UserMinus size={12} />
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-1.5 rounded-lg border border-fuchsia-200 bg-fuchsia-50/40 px-2.5 py-2 shadow-sm transition-colors">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="truncate text-[13px] font-bold text-slate-800">
+                            {`#${selectedClient.memberNumber} - ${selectedClient.name}`}
+                          </span>
+                          <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
+                            {selectedClient.points} pts
+                          </span>
+                        </div>
+                        <div className="mt-1 text-[10px] font-bold text-green-600">
+                          +{pointsToEarn} pts por esta compra
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 gap-1.5">
+                      <button
+                        onClick={openMemberRedeemPanel}
+                        className="rounded-md border border-fuchsia-200 bg-white px-2 py-1 text-[10px] font-bold text-fuchsia-600 transition-colors hover:bg-fuchsia-50"
+                      >
+                        Canjear
+                      </button>
+                      <button
+                        onClick={() => setSelectedClient && setSelectedClient(null)}
+                        className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-400 transition-colors hover:text-red-500"
+                        title="Quitar socio"
+                      >
+                        <UserMinus size={12} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
+            ) : (
+              <div className="mt-1.5">
+                <button
+                  onClick={openMemberSelectPanel}
+                  className="inline-flex h-6 items-center gap-1 rounded-md border border-fuchsia-200 bg-fuchsia-50 px-1.5 py-1 text-[10px] font-bold text-fuchsia-600 transition-colors hover:bg-fuchsia-100 hover:text-fuchsia-700"
+                >
+                  <User size={11} /> Asignar socio
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
@@ -1128,8 +1209,8 @@ export default function POSView({
               const isWeight = item.product_type === 'weight';
               const isEditingWeight = editingWeightItemId === item.id;
               const isCustom = item.isCustom;
-              const isCombo = item.isCombo; // ✨ Detectamos si es un combo
-              const isDiscount = item.isDiscount; // ✨ Detectamos si es un descuento
+              const isCombo = item.isCombo; // Detectamos si es un combo
+              const isDiscount = item.isDiscount; // Detectamos si es un descuento
 
               const expired = isProductExpired(item.expiration_date);
 
@@ -1209,42 +1290,12 @@ export default function POSView({
 
         {/* Footer */}
         <div className="space-y-2.5 border-t bg-slate-50/95 p-3">
-          {/* Cliente */}
-          <div className={`rounded-lg border bg-white p-2 shadow-sm transition-colors ${selectedClient ? (selectedClient.id === 0 ? 'border-slate-300' : 'border-fuchsia-200 bg-fuchsia-50/30') : 'border-slate-200'}`}>
-            <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1">
-                {selectedClient ? <UserCheck size={12} /> : <User size={12} />} Socio
-              </span>
-              {selectedClient && (
-                <div className="flex gap-2">
-                  {selectedClient.id !== 0 && (
-                    <button onClick={onOpenRedemptionModal} className="text-[10px] bg-white border border-fuchsia-200 text-fuchsia-600 px-2 py-0.5 rounded-md font-bold hover:bg-fuchsia-50 transition-colors flex items-center gap-1"><Gift size={10} /> Canjear Puntos</button>
-                  )}
-                  <button onClick={() => setSelectedClient && setSelectedClient(null)} className="text-[10px] text-red-400 font-bold hover:text-red-600 transition-colors" title="Quitar"><UserMinus size={13} /></button>
-                </div>
-              )}
-            </div>
-            {selectedClient ? (
-              <div>
-                <div className="flex justify-between items-center">
-                   <span className="text-[13px] font-bold text-slate-800">{selectedClient.id === 0 ? 'Consumidor Final' : `#${selectedClient.memberNumber} - ${selectedClient.name}`}</span>
-                   {selectedClient.id !== 0 && (<span className="bg-slate-100 text-slate-600 text-[10px] px-1.5 py-0.5 rounded font-bold">{selectedClient.points} pts</span>)}
-                </div>
-                {selectedClient.id !== 0 && (
-                  <div className="mt-1 text-[10px] text-green-600 font-bold flex items-center gap-1"><span>+{pointsToEarn} pts por esta compra</span></div>
-                )}
-              </div>
-            ) : (
-              <button onClick={onOpenClientModal} className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-slate-300 py-1.5 text-xs font-bold text-slate-400 transition-all hover:border-fuchsia-400 hover:bg-fuchsia-50 hover:text-fuchsia-500"><User size={13} /> Asignar Socio / Puntos</button>
-            )}
-          </div>
-
           {/* Pago */}
           <div className="grid grid-cols-4 gap-1.5">
             {PAYMENT_METHODS.map((method) => {
               const isSelected = selectedPayment === method.id;
               return (
-                <button key={method.id} onClick={() => setSelectedPayment(method.id)} className={`flex h-12 flex-col items-center justify-center rounded-lg border p-1.5 text-[10px] font-bold transition-all ${isSelected ? 'scale-[1.03] border-slate-800 bg-slate-800 text-white shadow-md' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-100'}`}>
+                <button key={method.id} onClick={() => setSelectedPayment(method.id)} className={`flex h-14 flex-col items-center justify-center rounded-lg border p-2 text-[10px] font-bold transition-all ${isSelected ? 'scale-[1.03] border-slate-800 bg-slate-800 text-white shadow-md' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-100'}`}>
                   {method.id === 'Efectivo' && <Banknote size={16} className="mb-1" />}
                   {method.id === 'MercadoPago' && <Smartphone size={16} className="mb-1" />}
                   {(method.id === 'Debito' || method.id === 'Credito') && <CreditCard size={16} className="mb-1" />}
@@ -1267,66 +1318,38 @@ export default function POSView({
           )}
 
           {selectedPayment === 'Efectivo' && (
-            <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50/80 p-2.5 animate-in fade-in slide-in-from-bottom-2">
+            <div className="space-y-2 rounded-xl border border-emerald-300 bg-gradient-to-br from-emerald-50 via-emerald-100/80 to-white px-2.5 py-2.5 shadow-sm animate-in fade-in slide-in-from-bottom-2">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-bold text-emerald-800">Cobro en efectivo</span>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => { setCashPaymentMode('full'); setCashReceivedInput(''); }}
-                    className={`rounded-lg px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] transition ${
-                      cashPaymentMode === 'full'
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-                    }`}
-                  >
-                    Pago completo
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCashPaymentMode('custom')}
-                    className={`rounded-lg px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] transition ${
-                      cashPaymentMode === 'custom'
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-                    }`}
-                  >
-                    Monto específico
-                  </button>
-                </div>
-              </div>
-
-              {cashPaymentMode === 'custom' && (
-                <div className="rounded-lg border border-emerald-200 bg-white px-2.5 py-2">
-                  <label className="block text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">
-                    Monto recibido
+                <div className="flex items-center gap-1.5">
+                  <label className="block text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700">
+                    Cobro en efectivo
                   </label>
-                  <input
-                    ref={cashReceivedInputRef}
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={cashReceivedInput}
-                    onChange={(e) => setCashReceivedInput(e.target.value)}
-                    placeholder="Ej: 4000"
-                    className="mt-1 w-full bg-transparent text-[15px] font-black text-slate-800 outline-none"
+                  <HintIcon
+                    hint="Carga el monto recibido para calcular la devolucion."
+                    size={13}
+                    side="left"
+                    className="rounded-full border border-emerald-200 bg-white/90 p-[1px] shadow-sm"
                   />
                 </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-2 text-[11px]">
-                <div className="rounded-lg border border-emerald-200 bg-white px-2.5 py-2">
-                  <p className="font-bold uppercase tracking-[0.1em] text-emerald-600">Recibido</p>
-                  <p className="mt-1 text-sm font-black text-slate-800"><FancyPrice amount={cashReceivedAmount} /></p>
-                </div>
-                <div className="rounded-lg border border-emerald-200 bg-white px-2.5 py-2">
-                  <p className="font-bold uppercase tracking-[0.1em] text-emerald-600">Devolución</p>
-                  <p className="mt-1 text-sm font-black text-slate-800"><FancyPrice amount={cashChangeAmount} /></p>
-                </div>
+                <span className="rounded-full border border-emerald-200 bg-white/90 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-emerald-600 shadow-sm">
+                  Efectivo
+                </span>
+              </div>
+              <div className="rounded-lg border border-emerald-200 bg-white/90 px-3 py-2 shadow-sm transition-all focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-200">
+                <input
+                  ref={cashReceivedInputRef}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={cashReceivedInput}
+                  onChange={(e) => setCashReceivedInput(e.target.value)}
+                  placeholder="Ingresar el total en efectivo"
+                  className="w-full appearance-none bg-transparent text-[15px] font-black text-slate-800 outline-none placeholder:text-slate-400 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                />
               </div>
 
-              {cashPaymentMode === 'custom' && hasTypedCashAmount && cashMissingAmount > 0 && (
-                <p className="text-[11px] font-bold text-rose-600">
+              {hasTypedCashAmount && cashMissingAmount > 0 && (
+                <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-bold text-rose-600">
                   Faltan <FancyPrice amount={cashMissingAmount} /> para completar el pago.
                 </p>
               )}
@@ -1348,7 +1371,7 @@ export default function POSView({
             </div>
           </div>
 
-          <button onClick={handlePreCheckout} disabled={cart.length === 0 || (selectedPayment === 'Efectivo' && cashPaymentMode === 'custom' && hasTypedCashAmount && cashMissingAmount > 0)} className="group flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-slate-900 to-slate-800 py-3 text-[15px] font-bold text-white shadow-lg transition-all hover:from-black hover:to-slate-900 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50">
+          <button onClick={handlePreCheckout} disabled={cart.length === 0 || (selectedPayment === 'Efectivo' && hasTypedCashAmount && cashMissingAmount > 0)} className="group flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-slate-900 to-slate-800 py-3 text-[15px] font-bold text-white shadow-lg transition-all hover:from-black hover:to-slate-900 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50">
             <CheckCircle className="group-hover:scale-110 transition-transform" />
             {cart.length === 0 ? 'CARRITO VACÍO' : 'COBRAR'}
           </button>
@@ -1372,22 +1395,7 @@ export default function POSView({
           onConfirm={handleCustomConfirm} 
         />
       )}
-
-      {showClientCheckModal && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 text-center border border-slate-200">
-            <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4"><User size={32} strokeWidth={2.5} /></div>
-            <h3 className="text-xl font-bold text-slate-800 mb-2">¿Asignar Socio?</h3>
-            <p className="text-slate-500 text-sm mb-6">Esta venta no tiene un socio asignado.</p>
-            <div className="space-y-3">
-              <button onClick={handleOpenClientModalFromCheck} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-colors shadow-md shadow-blue-200"><User size={18} />Sí, buscar socio</button>
-              <button onClick={confirmCheckoutWithoutClient} className="w-full py-3 bg-white border-2 border-slate-200 text-slate-500 hover:text-slate-700 hover:bg-slate-50 rounded-xl font-bold transition-colors">No, asignar Consumidor Final</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ✨ DRAWER DE OFERTAS Y COMBOS */}
+      {/* DRAWER DE OFERTAS Y COMBOS */}
       {isOffersDrawerOpen && (
         <>
           <div 
@@ -1588,3 +1596,5 @@ export default function POSView({
     </div>
   );
 }
+
+

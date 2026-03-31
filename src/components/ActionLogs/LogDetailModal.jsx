@@ -1,10 +1,10 @@
-// src/components/ActionLogs/LogDetailModal.jsx
 import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import LogDetailRenderer from './LogDetailRenderer';
-import { getDetailIcon, getDetailColor, normalizeLogAction } from './logHelpers';
+import { getDetailColor, getDetailIcon, normalizeLogAction } from './logHelpers';
 import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
+import UserDisplayBadge from '../UserDisplayBadge';
 
 const getTransactionId = (details) => {
   if (!details || typeof details === 'string') return null;
@@ -13,7 +13,23 @@ const getTransactionId = (details) => {
   return typeof id === 'string' && id.includes('TRX-') ? id.replace('TRX-', '') : id;
 };
 
-export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onReprintPdf }) {
+const getManagedUserDisplayName = (details = {}) =>
+  details.displayName || details.name || details.targetUserName || 'Usuario';
+
+const getManagedUserRoleLabel = (role) => {
+  const normalized = String(role || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+  if (['system', 'sistema', 'admin'].includes(normalized)) return 'Sistema';
+  if (['owner', 'dueno', 'duenio'].includes(normalized)) return 'Due\u00f1o';
+  if (['seller', 'vendedor', 'caja'].includes(normalized)) return 'Caja';
+  return role || 'Usuario';
+};
+
+export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onReprintPdf, userCatalog }) {
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
@@ -50,8 +66,13 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
       case 'Apertura de Caja':
         return d.amount != null ? <FancyPrice amount={d.amount} /> : '';
       case 'Cierre de Caja':
-      case 'Cierre Automático':
-        return d.finalBalance != null ? <FancyPrice amount={d.finalBalance} /> : (d.totalSales != null ? <FancyPrice amount={d.totalSales} /> : '');
+      case 'Cierre de Caja (Silencioso)':
+      case 'Cierre Autom\u00e1tico':
+        return d.finalBalance != null
+          ? <FancyPrice amount={d.finalBalance} />
+          : d.totalSales != null
+            ? <FancyPrice amount={d.totalSales} />
+            : '';
       case 'Venta Realizada':
         return d.total != null ? <FancyPrice amount={d.total} /> : '';
       case 'Venta Anulada':
@@ -62,13 +83,13 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
       case 'Alta de Producto':
       case 'Baja Producto':
       case 'Producto Duplicado':
-      case 'Edición Producto':
+      case 'Edici\u00f3n Producto':
         return d.price != null ? <FancyPrice amount={d.price} /> : '';
       case 'Nuevo Socio':
         return d.number ? `#${String(d.number).padStart(4, '0')}` : '';
       case 'Baja de Socio':
-        return d.number ? `#${String(d.number).padStart(4, '0')}` : (d.id ? `ID: ${d.id}` : '');
-      case 'Edición de Socio': {
+        return d.number ? `#${String(d.number).padStart(4, '0')}` : d.id ? `ID: ${d.id}` : '';
+      case 'Edici\u00f3n de Socio': {
         if (d.number) return `#${String(d.number).padStart(4, '0')}`;
         if (d.oldPoints !== undefined && d.newPoints !== undefined) {
           const delta = Number(d.newPoints) - Number(d.oldPoints);
@@ -83,7 +104,7 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
         }
         return '';
       }
-      case 'Edición de Puntos': {
+      case 'Edici\u00f3n de Puntos': {
         const pts = d.pointsChange || d;
         return pts.diff !== undefined ? `${pts.diff > 0 ? '+' : ''}${formatNumber(pts.diff)} pts` : '';
       }
@@ -91,17 +112,25 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
       case 'Editar Premio':
       case 'Eliminar Premio':
         return d.pointsCost ? `${formatNumber(d.pointsCost)} pts` : '';
-      case 'Categoría':
+      case 'Categor\u00eda':
         return d.type === 'create' ? 'Creada' : d.type === 'delete' ? 'Eliminada' : 'Renombrada';
-      case 'Edición Masiva Categorías':
-      case 'Actualización Masiva':
+      case 'Edici\u00f3n Masiva Categor\u00edas':
+      case 'Actualizaci\u00f3n Masiva':
         return `${d.count || (d.details && d.details.length) || (d.changes && d.changes.length) || 0} cambios`;
-      case 'Modificación Pedido':
+      case 'Edici\u00f3n Masiva':
+        return `${d.count || (Array.isArray(d.items) ? d.items.length : 0)} cambios`;
+      case 'Modificaci\u00f3n Pedido':
       case 'Venta Modificada':
         return d.changes?.total ? <FancyPrice amount={d.changes.total.new} /> : 'Editado';
-      case 'Exportación PDF': {
+      case 'Ajustes de Usuario':
+      case 'Usuario Creado':
+      case 'Usuario Editado':
+        return getManagedUserRoleLabel(d.role);
+      case 'Permisos de Usuario Actualizados':
+        return `${Object.keys(d.permissionsOverride || d.permissions_override || {}).length} ajustes`;
+      case 'Exportaci\u00f3n PDF': {
         const exportConfig = d.snapshot?.config || d.config || {};
-        return exportConfig.isForClient ? (exportConfig.clientName || 'Presupuesto Cliente') : 'Reporte Interno';
+        return exportConfig.isForClient ? exportConfig.clientName || 'Presupuesto Cliente' : 'Reporte Interno';
       }
       case 'Presupuesto Editado':
         return d.totalAmount != null ? <FancyPrice amount={d.totalAmount} /> : 'Presupuesto';
@@ -111,14 +140,14 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
         return d.amount != null ? <FancyPrice amount={d.amount} /> : 'Pago';
       case 'Pedido Retirado':
         return d.totalAmount != null ? <FancyPrice amount={d.totalAmount} /> : 'Pedido';
-      case 'Cupón Creado':
-      case 'Cupón Editado':
-      case 'Cupón Eliminado':
-        return 'Cupón';
+      case 'Cup\u00f3n Creado':
+      case 'Cup\u00f3n Editado':
+      case 'Cup\u00f3n Eliminado':
+        return 'Cup\u00f3n';
       case 'Oferta Creada':
       case 'Oferta Editada':
       case 'Oferta Eliminada':
-        return d.type ? d.type : 'Oferta';
+        return d.type || 'Oferta';
       default:
         return '';
     }
@@ -131,11 +160,11 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
       case 'Venta Realizada':
       case 'Venta Anulada': {
         const txId = getTransactionId(d);
-        return txId ? `Transacción #${txId}` : 'Sin ID';
+        return txId ? `Transacci\u00f3n #${txId}` : 'Sin ID';
       }
       case 'Alta de Producto':
       case 'Baja Producto':
-      case 'Edición Producto':
+      case 'Edici\u00f3n Producto':
         return d.product || d.title || d.name || 'Producto';
       case 'Producto Duplicado':
         return d.newTitle || d.title || 'Producto Copiado';
@@ -143,8 +172,8 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
       case 'Gasto':
         return d.description || 'Gasto registrado';
       case 'Nuevo Socio':
-      case 'Edición de Socio':
-      case 'Edición de Puntos':
+      case 'Edici\u00f3n de Socio':
+      case 'Edici\u00f3n de Puntos':
         return d.name || d.member || 'Socio';
       case 'Baja de Socio':
         return d.name || d.member || (d.id ? `Socio ID: ${d.id}` : 'Socio eliminado');
@@ -152,23 +181,32 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
       case 'Editar Premio':
       case 'Eliminar Premio':
         return d.title || d.name || 'Premio';
-      case 'Categoría':
-        return d.name || 'Categoría';
-      case 'Edición Masiva Categorías':
-      case 'Actualización Masiva':
-        return 'Actualización en Lote';
+      case 'Categor\u00eda':
+        return d.name || d.newName || d.new || 'Categor\u00eda';
+      case 'Edici\u00f3n Masiva Categor\u00edas':
+      case 'Actualizaci\u00f3n Masiva':
+        return 'Actualizaci\u00f3n en lote';
+      case 'Edici\u00f3n Masiva':
+        return 'Editor masivo de productos';
       case 'Apertura de Caja':
         return 'Inicio de operaciones';
       case 'Cierre de Caja':
-        return 'Cierre del día';
-      case 'Cierre Automático':
-        return 'Cierre automático del sistema';
-      case 'Modificación Pedido':
+        return 'Cierre del d\u00eda';
+      case 'Cierre de Caja (Silencioso)':
+        return 'Cierre silencioso sin reporte';
+      case 'Cierre Autom\u00e1tico':
+        return 'Cierre autom\u00e1tico del sistema';
+      case 'Modificaci\u00f3n Pedido':
       case 'Venta Modificada':
-        return `Ajuste en Transacción #${getTransactionId(d) || 'S/N'}`;
-      case 'Exportación PDF': {
+        return `Ajuste en Transacci\u00f3n #${getTransactionId(d) || 'S/N'}`;
+      case 'Ajustes de Usuario':
+      case 'Usuario Creado':
+      case 'Usuario Editado':
+      case 'Permisos de Usuario Actualizados':
+        return getManagedUserDisplayName(d);
+      case 'Exportaci\u00f3n PDF': {
         const exportConfig = d.snapshot?.config || d.config || {};
-        return exportConfig.isForClient ? (exportConfig.clientName || 'Presupuesto Cliente') : 'Reporte Interno';
+        return exportConfig.isForClient ? exportConfig.clientName || 'Presupuesto Cliente' : 'Reporte Interno';
       }
       case 'Presupuesto Editado':
         return d.customerName || 'Presupuesto actualizado';
@@ -178,10 +216,10 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
         return d.customerName || 'Pago registrado';
       case 'Pedido Retirado':
         return d.customerName || 'Pedido entregado';
-      case 'Cupón Creado':
-      case 'Cupón Editado':
-      case 'Cupón Eliminado':
-        return d.name || 'Registro de Cupón';
+      case 'Cup\u00f3n Creado':
+      case 'Cup\u00f3n Editado':
+      case 'Cup\u00f3n Eliminado':
+        return d.name || 'Registro de Cup\u00f3n';
       case 'Oferta Creada':
       case 'Oferta Editada':
       case 'Oferta Eliminada':
@@ -221,13 +259,20 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
 
           <span className="text-[42px] block mb-3 animate-float">{icon}</span>
           <span className={`inline-flex px-[16px] py-[5px] rounded-[20px] text-[10px] font-extrabold tracking-[0.5px] ${colorMap[color] || colorMap.slate}`}>
-            {action === 'Modificación Pedido' ? 'Venta Modificada' : action}
+            {action === 'Modificaci\u00f3n Pedido' ? 'Venta Modificada' : action}
           </span>
           <div className="text-[34px] flex justify-center items-center font-extrabold text-[#1e293b] mt-2.5 tracking-[-1px] leading-none" style={{ fontFamily: "'Outfit', sans-serif" }}>
             {getDisplayAmount()}
           </div>
           <div className="text-[13px] font-semibold text-[#64748b] mt-[3px] px-4 truncate">
             {getDisplaySubTitle()}
+          </div>
+          <div className="mt-2 flex justify-center">
+            <UserDisplayBadge
+              user={{ id: selectedLog.userId, role: selectedLog.userRole, name: selectedLog.user }}
+              userCatalog={userCatalog}
+              size="sm"
+            />
           </div>
           <div className="text-[10px] text-[#94a3b8] mt-[6px] font-mono">
             {selectedLog.date} · {selectedLog.timestamp} · {selectedLog.user} · ID: {selectedLog.id}
@@ -239,6 +284,7 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
             log={selectedLog}
             onUpdateNote={onUpdateNote}
             onReprintPdf={onReprintPdf}
+            userCatalog={userCatalog}
           />
         </div>
 

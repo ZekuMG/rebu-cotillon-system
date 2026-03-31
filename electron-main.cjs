@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, dialog } = require('electron');
+﻿const { app, BrowserWindow, ipcMain, session, dialog } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
@@ -9,12 +9,12 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    title: "Cotillón Rebu System",
-    icon: path.join(__dirname, 'public/favicon.svg'),
+    title: 'Cotillón Rebu System',
+    icon: path.join(__dirname, 'public/rebu-logo.png'),
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
-      webSecurity: false, // Esto ya lo tenías, ¡es vital dejarlo así!
+      webSecurity: false, // Esto ya lo tenÃ­as, Â¡es vital dejarlo asÃ­!
     },
   });
 
@@ -31,7 +31,7 @@ app.on('ready', () => {
   session.defaultSession.webRequest.onBeforeSendHeaders(
     { urls: ['https://*.supabase.co/*'] }, // Solo afectamos las peticiones a Supabase
     (details, callback) => {
-      // Engañamos a Supabase forzando el Origin y el Referer
+      // EngaÃ±amos a Supabase forzando el Origin y el Referer
       details.requestHeaders['Origin'] = 'http://localhost';
       details.requestHeaders['Referer'] = 'http://localhost/';
       
@@ -40,7 +40,7 @@ app.on('ready', () => {
     }
   );
 
-  // ✨ MOTOR DE GENERACIÓN DE PDF NATIVO (SIN VENTANA DE IMPRESIÓN)
+  // âœ¨ MOTOR DE GENERACIÃ“N DE PDF NATIVO (SIN VENTANA DE IMPRESIÃ“N)
   ipcMain.handle('save-as-pdf', async (event, defaultName) => {
     try {
       // Obtener la ruta donde está el ejecutable (.exe)
@@ -75,7 +75,7 @@ app.on('ready', () => {
     }
   });
 
-  // Después de configurar el "disfraz", abrimos la ventana
+  // DespuÃ©s de configurar el "disfraz", abrimos la ventana
   createWindow();
 });
 

@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { formatCurrency, formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
+import UserDisplayBadge from '../UserDisplayBadge';
 import { extractRealNote, normalizeLogAction } from './logHelpers'; // ✨ NUEVA IMPORTACIÓN
 
 const getTransactionId = (details) => {
@@ -24,6 +25,24 @@ const getTransactionId = (details) => {
 
 const getSharedRecordId = (details = {}) => details.sharedRecordId || details.budgetId || details.orderId || details.id || null;
 const formatEntityCode = (_prefix, id) => (id ? `ID-${String(id).slice(0, 8).toUpperCase()}` : null);
+
+const getManagedUserDisplayName = (details = {}) => details.displayName || details.name || details.targetUserName || 'Usuario';
+const getManagedUserRoleLabel = (role) => {
+  const normalized = String(role || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+  if (['system', 'sistema', 'admin'].includes(normalized)) return 'Sistema';
+  if (['owner', 'dueno', 'duenio'].includes(normalized)) return 'Due\u00f1o';
+  if (['seller', 'vendedor', 'caja'].includes(normalized)) return 'Caja';
+  return role || 'Usuario';
+};
+const getPermissionsOverrideCount = (details = {}) => {
+  const override = details.permissionsOverride || details.permissions_override || {};
+  return Object.keys(override || {}).length;
+};
 
 const getFormattedPayment = (payStr, instNum) => {
   if (typeof payStr !== 'string') return 'Efectivo';
@@ -57,21 +76,21 @@ const SortIcon = ({ column, sortColumn, sortDirection }) => {
 };
 
 const s = {
-  table: "w-full border-collapse bg-white rounded-xl overflow-hidden border border-[#e2e8f0] shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
-  th: "text-left p-[10px_14px] text-[9px] font-bold uppercase tracking-[0.5px] text-[#94a3b8] border-b border-[#e2e8f0] bg-[#f8fafc] cursor-pointer hover:bg-slate-100 select-none transition-colors whitespace-nowrap",
-  td: "p-[11px_14px] text-[11px] border-b border-[#f1f5f9] align-middle",
+  table: "w-full border-collapse bg-white",
+  th: "text-left p-[8px_10px] text-[9px] font-bold uppercase tracking-[0.5px] text-[#94a3b8] border-b border-[#e2e8f0] bg-[#f8fafc] cursor-pointer hover:bg-slate-100 select-none transition-colors whitespace-nowrap",
+  td: "p-[8px_10px] text-[10px] border-b border-[#f1f5f9] align-middle",
   tr: "cursor-pointer transition-colors duration-150 hover:bg-[#fef3c7]",
   trSelected: "bg-[#fef9c3]",
-  date: "font-bold text-[#1e293b] text-[11px]",
-  time: "font-mono text-[9px] text-[#94a3b8]",
-  al: "font-bold text-[10px] text-[#1e293b]", 
+  date: "font-bold text-[#1e293b] text-[10px]",
+  time: "font-mono text-[8px] text-[#94a3b8]",
+  al: "font-bold text-[9px] text-[#1e293b]", 
   ubAdm: "inline-flex px-[7px] py-[2px] rounded-[5px] text-[9px] font-bold bg-[#eef2ff] text-[#4f46e5] border border-[#e0e7ff]",
   ubSel: "inline-flex px-[7px] py-[2px] rounded-[5px] text-[9px] font-bold bg-[#ecfdf5] text-[#059669] border border-[#d1fae5]",
   ubSys: "inline-flex px-[7px] py-[2px] rounded-[5px] text-[9px] font-bold bg-[#f1f5f9] text-[#64748b] border border-[#e2e8f0]",
   sr: "flex items-center gap-[5px] flex-wrap",
   se: "text-[9px] text-[#64748b]", 
   ss: "w-[1px] h-[11px] bg-[#e2e8f0]", 
-  ib: "w-[26px] h-[26px] rounded-[6px] text-[#94a3b8] flex items-center justify-center transition-all duration-150 hover:bg-[#fef3c7] hover:text-[#d97706] hover:scale-110 mx-auto",
+  ib: "w-[24px] h-[24px] rounded-[6px] text-[#94a3b8] flex items-center justify-center transition-all duration-150 hover:bg-[#fef3c7] hover:text-[#d97706] hover:scale-110 mx-auto",
   b: "inline-flex items-center gap-[3px] px-[7px] py-[2px] rounded-[4px] text-[9px] font-bold",
 };
 
@@ -85,7 +104,7 @@ const c = {
   bk: "bg-[#1e293b] text-white",
 };
 
-export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSort, onViewDetails, selectedLogId }) {
+export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSort, onViewDetails, selectedLogId, userCatalog, onScroll }) {
 
   const getLogReasonUI = (log) => {
     const note = extractRealNote(log);
@@ -596,28 +615,106 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
         );
       }
 
-      case 'Categoría': {
+      case 'Categor\u00eda': {
         const isCreate = d.type === 'create';
         const isDelete = d.type === 'delete';
+        const previousName = d.oldName || d.old;
+        const nextName = d.newName || d.new || d.name;
+        const isRename = !isCreate && !isDelete && previousName && nextName;
         return (
           <div className={s.sr}>
             {d.id && <><span className={`${s.b} ${c.ba}`}>#{d.id}</span><div className={s.ss}></div></>}
-            <span className={`${s.b} ${c.ba}`}>🏷️ {isCreate ? 'Creada' : isDelete ? 'Eliminada' : 'Editada'}</span>
+            <span className={`${s.b} ${c.ba}`}>{isCreate ? 'Creada' : isDelete ? 'Eliminada' : 'Editada'}</span>
             <div className={s.ss}></div>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: isDelete ? '#94a3b8' : '#334155', textDecoration: isDelete ? 'line-through' : 'none' }}>{d.name}</span>
+            {isRename ? (
+              <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>
+                <span style={{ color: '#94a3b8', textDecoration: 'line-through' }}>{previousName}</span>
+                <span style={{ color: '#cbd5e1', margin: '0 4px' }}>{'->'}</span>
+                <span>{nextName}</span>
+              </span>
+            ) : (
+              <span style={{ fontSize: '10px', fontWeight: 700, color: isDelete ? '#94a3b8' : '#334155', textDecoration: isDelete ? 'line-through' : 'none' }}>{nextName || previousName || 'Categor\u00eda'}</span>
+            )}
             {getLogReasonUI(log)}
           </div>
         );
       }
 
-      case 'Actualización Masiva':
-      case 'Edición Masiva Categorías': {
+      case 'Actualizaci\u00f3n Masiva':
+      case 'Edici\u00f3n Masiva Categor\u00edas': {
         const affectedCount = d.count || (d.details && d.details.length) || (d.changes && d.changes.length) || 0;
         return (
           <div className={s.sr}>
-            <span className={`${s.b} ${c.ba}`}>🏷️ Edición Masiva</span>
+            <span className={`${s.b} ${c.ba}`}>Edici\u00f3n Masiva</span>
             <div className={s.ss}></div>
             <span className={s.se}>{affectedCount} productos actualizados</span>
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
+      case 'Edici\u00f3n Masiva': {
+        const affectedCount = d.count || (Array.isArray(d.items) ? d.items.length : 0);
+        const previewItems = Array.isArray(d.items) ? d.items.filter(Boolean).slice(0, 2) : [];
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.ba}`}>Edici\u00f3n Masiva</span>
+            <div className={s.ss}></div>
+            <span className={s.se}>{affectedCount} productos actualizados</span>
+            {previewItems.length > 0 && <><div className={s.ss}></div><span className={s.se}>{previewItems.join(', ')}{affectedCount > previewItems.length ? '...' : ''}</span></>}
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
+      case 'Ajustes de Usuario': {
+        const displayName = getManagedUserDisplayName(d);
+        const roleLabel = getManagedUserRoleLabel(d.role);
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bb}`}>Ajustes</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{displayName}</span>
+            <div className={s.ss}></div>
+            <span className={`${s.b} ${c.bs}`}>{roleLabel}</span>
+            {d.theme && <><div className={s.ss}></div><span className={s.se}>Tema: {d.theme === 'dark' ? 'Oscuro' : 'Claro'}</span></>}
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
+      case 'Usuario Creado':
+      case 'Usuario Editado': {
+        const isCreated = action === 'Usuario Creado';
+        const displayName = getManagedUserDisplayName(d);
+        const roleLabel = getManagedUserRoleLabel(d.role);
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${isCreated ? c.bg : c.bb}`}>{isCreated ? 'Alta' : 'Edici\u00f3n'}</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{displayName}</span>
+            <div className={s.ss}></div>
+            <span className={`${s.b} ${c.bs}`}>{roleLabel}</span>
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
+      case 'Permisos de Usuario Actualizados': {
+        const displayName = getManagedUserDisplayName(d);
+        const roleLabel = getManagedUserRoleLabel(d.role);
+        const overrideCount = getPermissionsOverrideCount(d);
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bv}`}>Permisos</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{displayName}</span>
+            <div className={s.ss}></div>
+            <span className={`${s.b} ${c.bs}`}>{roleLabel}</span>
+            <div className={s.ss}></div>
+            <span className={s.se}>{overrideCount} ajustes</span>
+            <div className={s.ss}></div>
+            <span className={s.se}>{d.applyNow ? 'Aplica ahora' : 'Proxima sesion'}</span>
             {getLogReasonUI(log)}
           </div>
         );
@@ -634,10 +731,11 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
         );
 
       case 'Cierre de Caja':
+      case 'Cierre de Caja (Silencioso)':
       case 'Cierre Automático':
         return (
           <div className={s.sr}>
-            <span className={`${s.b} ${c.bk}`}>{action === 'Cierre Automático' ? '⏰ Auto' : '🔒 Cierre'}</span>
+            <span className={`${s.b} ${c.bk}`}>{action.includes('Autom') ? 'Auto' : action === 'Cierre de Caja (Silencioso)' ? 'Silencioso' : 'Cierre'}</span>
             <div className={s.ss}></div>
             <span style={{ fontSize: '10px', fontWeight: 700, color: '#1e293b' }}><FancyPrice amount={d.finalBalance || d.netProfit || d.totalSales || 0} /></span>
             {d.salesCount !== undefined && <><div className={s.ss}></div><span className={s.se}>{formatNumber(d.salesCount)} ventas</span></>}
@@ -655,6 +753,43 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
           </div>
         );
 
+      case 'Nuevo Contacto Agenda': {
+        const contactType = d.contactType === 'wholesaler' ? 'Mayorista' : 'Proveedor';
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bb}`}>📋 ⊕ {contactType}</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name || 'Contacto'}</span>
+            {d.phone && <><div className={s.ss}></div><span className={s.se}>{d.phone}</span></>}
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
+      case 'Edicion Agenda': {
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bb}`}>📋 Actualización</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.name || 'Contacto'}</span>
+            {d.changes && d.changes.length > 0 && <><div className={s.ss}></div><span className={s.se}>{d.changes.length} cambios</span></>}
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
+      case 'Baja Agenda': {
+        const contactType = d.contactType === 'wholesaler' ? 'Mayorista' : 'Proveedor';
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.br}`}>📋 ⊖ {contactType}</span>
+            <div className={s.ss}></div>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8', textDecoration: 'line-through' }}>{d.name || 'Contacto'}</span>
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
       default: {
         const txIdDefault = getTransactionId(d);
         if (txIdDefault) return <div className={s.sr}><span className="text-slate-500 text-[10px]">Transacción #{txIdDefault}</span>{getLogReasonUI(log)}</div>;
@@ -666,27 +801,28 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
   };
 
   return (
-    <div className="flex-1 overflow-y-auto px-[20px] pb-[20px] pt-2">
+    <div className="flex-1 overflow-y-auto" onScroll={onScroll}>
       <table className={s.table}>
         <thead className="sticky top-0 z-10">
           <tr>
-            <th className={s.th} style={{ width: '130px' }} onClick={() => onSort('datetime')}>
+            <th className={s.th} style={{ width: '118px' }} onClick={() => onSort('datetime')}>
               <div className="flex items-center gap-1">Fecha / Hora <SortIcon column="datetime" sortColumn={sortColumn} sortDirection={sortDirection} /></div>
             </th>
-            <th className={s.th} style={{ width: '100px' }} onClick={() => onSort('user')}>
+            <th className={s.th} style={{ width: '92px' }} onClick={() => onSort('user')}>
               <div className="flex items-center gap-1">Usuario <SortIcon column="user" sortColumn={sortColumn} sortDirection={sortDirection} /></div>
             </th>
-            <th className={s.th} style={{ width: '150px' }} onClick={() => onSort('action')}>
+            <th className={s.th} style={{ width: '132px' }} onClick={() => onSort('action')}>
               <div className="flex items-center gap-1">Acción <SortIcon column="action" sortColumn={sortColumn} sortDirection={sortDirection} /></div>
             </th>
             <th className={s.th}>Resumen</th>
-            <th className={s.th} style={{ width: '44px', textAlign: 'center' }}>Info</th>
+            <th className={s.th} style={{ width: '38px', textAlign: 'center' }}>Info</th>
           </tr>
         </thead>
         <tbody>
           {(sortedLogs || []).map((log) => {
-            const userClass = log.user === 'Dueño' || log.user === 'admin' ? s.ubAdm : log.user === 'Vendedor' || log.user === 'seller' ? s.ubSel : s.ubSys;
+            const userClass = log.user === 'Dueño' || log.user === 'admin' ? s.ubAdm : log.user === 'Caja' || log.user === 'seller' ? s.ubSel : s.ubSys;
             const normalizedAction = normalizeLogAction(log.action);
+            void userClass;
             const displayAction = (normalizedAction === 'Modificación Pedido' || normalizedAction === 'Venta Modificada') ? 'Venta Modificada' : normalizedAction;
 
             return (
@@ -695,7 +831,13 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
                   <div className={s.date}>{formatDisplayDate(log.date)}</div>
                   <div className={s.time}>{log.timestamp || '--:--'}</div>
                 </td>
-                <td className={s.td}><span className={userClass}>{log.user}</span></td>
+                <td className={s.td}>
+                  <UserDisplayBadge
+                    user={{ id: log.userId, role: log.userRole, name: log.user }}
+                    userCatalog={userCatalog}
+                    size="sm"
+                  />
+                </td>
                 <td className={s.td}><span className={s.al}>{displayAction}</span></td>
                 <td className={s.td}>{getSummary(log)}</td>
                 <td className={s.td} style={{ textAlign: 'center' }}>

@@ -1,10 +1,10 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App.jsx'; // Importa tu componente desde donde lo pegaste
-import './index.css'; // Si tienes estilos
+import DebugAppShell from './components/DebugAppShell.jsx';
+import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
-  </React.StrictMode>
+    <DebugAppShell />
+  </React.StrictMode>,
 );

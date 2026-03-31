@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { AlertTriangle, Package, CalendarX, Info } from 'lucide-react';
 import { formatNumber } from '../../utils/helpers';
+import useIncrementalFeed from '../../hooks/useIncrementalFeed';
 
 // ✨ NUEVO: Agregamos la prop onAlertClick
 export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], onAlertClick }) => {
@@ -9,12 +10,15 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
   const hasAlerts = outOfStockProducts.length > 0 || expiringProducts.length > 0;
   
   const [activeTab, setActiveTab] = useState('stock');
-
-  const visibleStock = outOfStockProducts.slice(0, 20);
-  const visibleExpirations = expiringProducts.slice(0, 20);
+  const stockFeed = useIncrementalFeed(outOfStockProducts, {
+    resetKey: `${activeTab}-stock-${outOfStockProducts.length}`,
+  });
+  const expirationFeed = useIncrementalFeed(expiringProducts, {
+    resetKey: `${activeTab}-exp-${expiringProducts.length}`,
+  });
 
   return (
-    <div className="bg-white p-5 rounded-xl shadow-sm border border-red-100 h-full flex flex-col">
+    <div className="bg-white p-5 rounded-xl shadow-sm border border-red-100 h-full min-h-0 flex flex-col">
       
       {/* HEADER COMPACTO Y ALINEADO */}
       <div className="flex justify-between items-center mb-4 gap-2 shrink-0">
@@ -75,16 +79,18 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
           <p className="text-xs text-slate-400 text-center">Sin productos agotados ni próximos a vencer.</p>
         </div>
       ) : (
-        <div className="relative flex-1 min-h-[280px]">
-          <div className="absolute inset-0 overflow-y-auto custom-scrollbar pr-1">
+        <div
+          className="custom-scrollbar flex-1 min-h-[280px] overflow-y-auto pr-1"
+          onScroll={activeTab === 'stock' ? stockFeed.handleScroll : expirationFeed.handleScroll}
+        >
               
             {/* VISTA: AGOTADOS */}
             {activeTab === 'stock' && (
               <div className="space-y-2">
-                {visibleStock.length > 0 ? visibleStock.map((product) => {
+                {stockFeed.visibleItems.length > 0 ? stockFeed.visibleItems.map((product) => {
                   const isWeight = product.product_type === 'weight';
                   return (
-                    <div key={`stk-${product.id}`} className="flex justify-between items-center p-2.5 rounded-lg border bg-slate-50 border-slate-200 hover:border-red-200 transition-colors">
+                    <button key={`stk-${product.id}`} type="button" onClick={() => onAlertClick && onAlertClick({ type: 'product', product, alertType: 'out_of_stock' })} className="flex w-full justify-between items-center p-2.5 rounded-lg border bg-slate-50 border-slate-200 hover:border-red-200 transition-colors text-left">
                       <div className="flex-1 min-w-0 pr-3 flex items-center gap-2">
                         <Package size={14} className="text-slate-400 shrink-0" />
                         <p className="font-bold text-xs text-slate-700 truncate">{product.title}</p>
@@ -94,14 +100,14 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
                           {formatNumber(product.stock)} {isWeight ? 'g' : 'u'}
                         </p>
                       </div>
-                    </div>
+                    </button>
                   );
                 }) : (
                   <p className="text-center text-xs text-slate-400 mt-6 italic">No hay productos agotados.</p>
                 )}
-                {outOfStockProducts.length > 20 && (
+                {outOfStockProducts.length > 0 && (
                   <p className="text-center text-[10px] font-bold text-slate-400 py-2">
-                    + {outOfStockProducts.length - 20} productos más ocultos
+                    Mostrando {stockFeed.visibleCount} de {outOfStockProducts.length} productos
                   </p>
                 )}
               </div>
@@ -110,10 +116,10 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
             {/* VISTA: VENCIMIENTOS */}
             {activeTab === 'expirations' && (
               <div className="space-y-2">
-                {visibleExpirations.length > 0 ? visibleExpirations.map((product) => {
+                {expirationFeed.visibleItems.length > 0 ? expirationFeed.visibleItems.map((product) => {
                   const isExpired = product.daysUntil <= 0;
                   return (
-                    <div key={`exp-${product.id}`} className={`flex justify-between items-center p-2.5 rounded-lg border transition-colors ${isExpired ? 'bg-red-50 border-red-200 hover:border-red-300' : 'bg-orange-50 border-orange-200 hover:border-orange-300'}`}>
+                    <button key={`exp-${product.id}`} type="button" onClick={() => onAlertClick && onAlertClick({ type: 'product', product, alertType: 'expirations' })} className={`flex w-full justify-between items-center p-2.5 rounded-lg border transition-colors text-left ${isExpired ? 'bg-red-50 border-red-200 hover:border-red-300' : 'bg-orange-50 border-orange-200 hover:border-orange-300'}`}>
                       <div className="flex-1 min-w-0 pr-3">
                         <p className={`font-bold text-xs truncate ${isExpired ? 'text-red-800' : 'text-orange-800'}`}>{product.title}</p>
                         <p className={`text-[10px] flex items-center gap-1 mt-0.5 font-medium ${isExpired ? 'text-red-600' : 'text-orange-600'}`}>
@@ -126,20 +132,18 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
                           {new Date(product.expiration_date).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
                         </p>
                       </div>
-                    </div>
+                    </button>
                   );
                 }) : (
                   <p className="text-center text-xs text-slate-400 mt-6 italic">No hay productos próximos a vencer.</p>
                 )}
-                {expiringProducts.length > 20 && (
+                {expiringProducts.length > 0 && (
                   <p className="text-center text-[10px] font-bold text-slate-400 py-2">
-                    + {expiringProducts.length - 20} productos más ocultos
+                    Mostrando {expirationFeed.visibleCount} de {expiringProducts.length} productos
                   </p>
                 )}
               </div>
             )}
-            
-          </div>
         </div>
       )}
     </div>

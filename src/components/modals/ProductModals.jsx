@@ -19,6 +19,8 @@ import {
 
 // ♻️ FIX: Importamos formatNumber
 import { formatNumber } from '../../utils/helpers';
+import { hasOwnerAccess } from '../../utils/appUsers';
+import { buildAdjustedProductImageFile, readImageFileAsDataUrl } from '../../utils/productImageEditor';
 
 // ==========================================
 // COMPONENTE: Selector multi-categoría
@@ -153,10 +155,167 @@ const WeightStockInput = ({ stock, stockUnit, onStockChange, onUnitChange }) => 
 };
 
 // ==========================================
+const ImageAdjusterModal = ({
+  isOpen,
+  source,
+  zoom,
+  offsetX,
+  offsetY,
+  onZoomChange,
+  onOffsetXChange,
+  onOffsetYChange,
+  onReset,
+  onCancel,
+  onApply,
+  isApplying,
+}) => {
+  if (!isOpen || !source) return null;
+
+  const previewSize = 320;
+  const previewOffsetX = (offsetX / 100) * (previewSize / 2);
+  const previewOffsetY = (offsetY / 100) * (previewSize / 2);
+
+  return (
+    <div className="fixed inset-0 z-[70] bg-black/65 flex items-center justify-center p-4">
+      <div className="w-full max-w-4xl rounded-2xl bg-white shadow-2xl overflow-hidden">
+        <div className="px-5 py-4 border-b flex items-center justify-between bg-slate-50">
+          <div>
+            <h4 className="font-bold text-slate-800">Ajustar imagen</h4>
+            <p className="text-xs text-slate-500">Podés acercar, alejar y mover el encuadre antes de guardarla.</p>
+          </div>
+          <button type="button" onClick={onCancel} className="text-slate-400 hover:text-slate-700 hover:bg-slate-200 p-1 rounded-full transition">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="grid md:grid-cols-[minmax(0,1fr)_260px] gap-0">
+          <div className="p-5 bg-slate-100/70">
+            <div className="mx-auto w-full max-w-[360px] aspect-square rounded-[28px] overflow-hidden border border-slate-200 shadow-inner bg-slate-200">
+              <img
+                src={source}
+                alt="Ajuste"
+                className="w-full h-full object-cover select-none pointer-events-none"
+                style={{
+                  transform: `translate(${previewOffsetX}px, ${previewOffsetY}px) scale(${zoom})`,
+                  transformOrigin: 'center center',
+                }}
+              />
+            </div>
+            <p className="mt-3 text-center text-[11px] text-slate-500">
+              Vista previa cuadrada. Así se verá en las tarjetas del sistema.
+            </p>
+          </div>
+
+          <div className="p-5 space-y-4">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-bold text-slate-500 uppercase">Zoom</label>
+                <span className="text-xs font-semibold text-slate-600">{zoom.toFixed(2)}x</span>
+              </div>
+              <input type="range" min="1" max="2.8" step="0.01" value={zoom} onChange={(e) => onZoomChange(Number(e.target.value))} className="w-full accent-fuchsia-600" />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-bold text-slate-500 uppercase">Mover horizontal</label>
+                <span className="text-xs font-semibold text-slate-600">{offsetX}</span>
+              </div>
+              <input type="range" min="-100" max="100" step="1" value={offsetX} onChange={(e) => onOffsetXChange(Number(e.target.value))} className="w-full accent-fuchsia-600" />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-bold text-slate-500 uppercase">Mover vertical</label>
+                <span className="text-xs font-semibold text-slate-600">{offsetY}</span>
+              </div>
+              <input type="range" min="-100" max="100" step="1" value={offsetY} onChange={(e) => onOffsetYChange(Number(e.target.value))} className="w-full accent-fuchsia-600" />
+            </div>
+
+            <button type="button" onClick={onReset} className="w-full py-2.5 rounded-lg border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition">
+              Restaurar encuadre
+            </button>
+
+            <div className="pt-2 space-y-2">
+              <button
+                type="button"
+                onClick={onApply}
+                disabled={isApplying}
+                className={`w-full py-3 rounded-xl font-bold transition ${isApplying ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-fuchsia-600 text-white hover:bg-fuchsia-700'}`}
+              >
+                {isApplying ? 'Guardando imagen...' : 'Usar esta imagen'}
+              </button>
+              <button type="button" onClick={onCancel} disabled={isApplying} className="w-full py-2.5 rounded-xl font-semibold text-slate-500 hover:bg-slate-100 transition">
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // COMPONENTE: Sección de Imagen
 // ==========================================
 
-const ImageSection = ({ image, onFileChange, onUrlChange, onDelete, isUploading }) => {
+const ImageSection = ({ image, onFileUpload, onUrlChange, onDelete, isUploading }) => {
+  const [editorSource, setEditorSource] = useState('');
+  const [editorFileName, setEditorFileName] = useState('product-image');
+  const [zoom, setZoom] = useState(1);
+  const [offsetX, setOffsetX] = useState(0);
+  const [offsetY, setOffsetY] = useState(0);
+  const [isAdjusting, setIsAdjusting] = useState(false);
+
+  const resetEditor = () => {
+    setZoom(1);
+    setOffsetX(0);
+    setOffsetY(0);
+  };
+
+  const closeEditor = () => {
+    setEditorSource('');
+    setEditorFileName('product-image');
+    resetEditor();
+    setIsAdjusting(false);
+  };
+
+  const handleLocalFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    try {
+      const previewSource = await readImageFileAsDataUrl(file);
+      setEditorSource(previewSource);
+      setEditorFileName((file.name || 'product-image').replace(/\.[^.]+$/, '') || 'product-image');
+      resetEditor();
+    } catch (error) {
+      console.error('Error preparando imagen:', error);
+      window.alert('No se pudo preparar la imagen seleccionada.');
+    }
+  };
+
+  const handleApplyAdjustedImage = async () => {
+    if (!editorSource) return;
+
+    try {
+      setIsAdjusting(true);
+      const adjustedFile = await buildAdjustedProductImageFile(editorSource, {
+        zoom,
+        offsetX,
+        offsetY,
+        fileName: `${editorFileName}.webp`,
+      });
+      await onFileUpload(adjustedFile);
+      closeEditor();
+    } catch (error) {
+      console.error('Error ajustando imagen:', error);
+      window.alert('No se pudo guardar la imagen ajustada.');
+    } finally {
+      setIsAdjusting(false);
+    }
+  };
+
   return (
     <div className="p-3 bg-slate-50 rounded-lg border border-dashed border-slate-300">
       <label className="text-xs font-bold text-slate-500 uppercase block mb-2 flex items-center gap-1"><ImageIcon size={12} /> Imagen del producto</label>
@@ -182,14 +341,28 @@ const ImageSection = ({ image, onFileChange, onUrlChange, onDelete, isUploading 
               <div className="flex flex-col items-center justify-center pt-2 pb-2">
                 <Upload size={20} className="text-slate-400 mb-1" />
                 <p className="text-[10px] text-slate-500">{image ? 'Click para cambiar imagen' : 'Click para subir imagen'}</p>
-                <p className="text-[9px] text-slate-400">Máx. 5MB — JPG, PNG, WebP, GIF</p>
+                <p className="text-[9px] text-slate-400">Después vas a poder moverla y ajustar el zoom.</p>
               </div>
-              <input type="file" className="hidden" accept="image/jpeg,image/png,image/webp,image/gif" onChange={onFileChange} />
+              <input type="file" className="hidden" accept="image/jpeg,image/png,image/webp,image/gif" onChange={handleLocalFileChange} />
             </label>
           </div>
           <div><input type="text" placeholder="O pega una URL de imagen aquí..." className="w-full px-3 py-2 border rounded-lg text-xs" value={image || ''} onChange={onUrlChange} /></div>
         </>
       )}
+      <ImageAdjusterModal
+        isOpen={Boolean(editorSource)}
+        source={editorSource}
+        zoom={zoom}
+        offsetX={offsetX}
+        offsetY={offsetY}
+        onZoomChange={setZoom}
+        onOffsetXChange={setOffsetX}
+        onOffsetYChange={setOffsetY}
+        onReset={resetEditor}
+        onCancel={closeEditor}
+        onApply={handleApplyAdjustedImage}
+        isApplying={isAdjusting || isUploading}
+      />
     </div>
   );
 };
@@ -329,7 +502,7 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
           </div>
 
           {/* Imagen */}
-          <ImageSection image={newItem.image} isUploading={isUploadingImage} onFileChange={(e) => onImageUpload(e, false)} onUrlChange={(e) => setNewItem({ ...newItem, image: e.target.value })} onDelete={() => setNewItem({ ...newItem, image: '' })} />
+          <ImageSection image={newItem.image} isUploading={isUploadingImage} onFileUpload={(file) => onImageUpload(file, false)} onUrlChange={(e) => setNewItem({ ...newItem, image: e.target.value })} onDelete={() => setNewItem({ ...newItem, image: '' })} />
 
           <button type="submit" disabled={isUploadingImage} className={`w-full py-3 rounded-lg font-bold transition-colors ${isUploadingImage ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-slate-900 text-white hover:bg-slate-800'}`}>
             {isUploadingImage ? 'Esperando imagen...' : 'Agregar'}
@@ -349,7 +522,7 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
   const [stockUnit, setStockUnit] = useState('g');
   if (!product) return null;
   const productType = product.product_type || 'quantity';
-  const isAdmin = currentUser?.role === 'admin';
+  const isAdmin = hasOwnerAccess(currentUser);
 
   // ✅ Precio guardado en /g → lo mostramos en /kg
   const displayPrice = productType === 'weight' ? Math.round(Number(product.price) * 1000) : product.price;
@@ -483,7 +656,7 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
           </div>
 
           {/* Imagen */}
-          <ImageSection image={product.image} isUploading={isUploadingImage} onFileChange={(e) => onImageUpload(e, true)} onUrlChange={(e) => setEditingProduct({ ...product, image: e.target.value })} onDelete={() => setEditingProduct({ ...product, image: '' })} />
+          <ImageSection image={product.image} isUploading={isUploadingImage} onFileUpload={(file) => onImageUpload(file, true)} onUrlChange={(e) => setEditingProduct({ ...product, image: e.target.value })} onDelete={() => setEditingProduct({ ...product, image: '' })} />
 
           {/* Motivo */}
           <div>

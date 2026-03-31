@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { FancyPrice } from '../components/FancyPrice';
 import { OfferWizardModal } from '../components/OfferWizardModal';
+import { hasPermission } from '../utils/userPermissions';
 import { formatNumber, isTestRecord } from '../utils/helpers';
 import {
   buildLegacyOfferPayload,
@@ -46,9 +47,10 @@ const OFFER_WIZARD_STEPS = [
   'Resumen',
 ];
 const OFFER_FREE_MODES = ['2x1', '3x2', '4x3'];
+const INCREMENTAL_BATCH_SIZE = 50;
 
 function useIncrementalList(items, options = {}) {
-  const { initialCount = 16, step = 16, threshold = 120 } = options;
+  const { initialCount = INCREMENTAL_BATCH_SIZE, step = INCREMENTAL_BATCH_SIZE, threshold = 120 } = options;
   const totalItems = items.length;
   const [visibleCount, setVisibleCount] = useState(() => Math.min(initialCount, totalItems));
 
@@ -150,13 +152,13 @@ function CategoryEditorModal({
 }) {
   const assignedProducts = selectedCategory ? productsByCategory[selectedCategory] || [] : [];
   const assignedProductsFeed = useIncrementalList(assignedProducts, {
-    initialCount: 30,
-    step: 30,
+    initialCount: INCREMENTAL_BATCH_SIZE,
+    step: INCREMENTAL_BATCH_SIZE,
     resetKey: `${selectedCategory || ''}-${assignedProducts.length}`,
   });
   const categoryEditorAvailableFeed = useIncrementalList(filteredAvailableProducts, {
-    initialCount: 30,
-    step: 30,
+    initialCount: INCREMENTAL_BATCH_SIZE,
+    step: INCREMENTAL_BATCH_SIZE,
     resetKey: `${selectedCategory || ''}-${productSearch}-${filteredAvailableProducts.length}`,
   });
 
@@ -496,13 +498,13 @@ function CategoryCreateModal({
   handleSubmitCategory,
 }) {
   const selectedProductsFeed = useIncrementalList(selectedProductsForNewCategory, {
-    initialCount: 30,
-    step: 30,
+    initialCount: INCREMENTAL_BATCH_SIZE,
+    step: INCREMENTAL_BATCH_SIZE,
     resetKey: `${selectedProductsForNewCategory.length}-${newCategory}`,
   });
   const createCategoryAvailableFeed = useIncrementalList(filteredProductsForNewCategory, {
-    initialCount: 30,
-    step: 30,
+    initialCount: INCREMENTAL_BATCH_SIZE,
+    step: INCREMENTAL_BATCH_SIZE,
     resetKey: `${createCategoryProductSearch}-${filteredProductsForNewCategory.length}-${newCategory}`,
   });
 
@@ -774,7 +776,11 @@ export default function ExtrasView({
   onUpdateReward,
   onDeleteReward
 }) {
-  const isReadOnly = currentUser?.role !== 'admin';
+  const canManageCategories = hasPermission(currentUser, 'extras.categories.manage');
+  const canManageOffers = hasPermission(currentUser, 'extras.offers.manage');
+  const canManageRewards = hasPermission(currentUser, 'extras.rewards.manage');
+  const canManageExpenses = hasPermission(currentUser, 'extras.expenses.manage');
+  const isReadOnly = !(canManageCategories || canManageOffers || canManageRewards || canManageExpenses);
   // --- SISTEMA DE PESTAÑAS PRINCIPAL ---
   const [activeTab, setActiveTab] = useState('categories'); // 'categories' | 'offers' | 'rewards'
 
@@ -1442,38 +1448,38 @@ export default function ExtrasView({
   );
 
   const categoriesFeed = useIncrementalList(filteredOrderedCategories, {
-    initialCount: 30,
-    step: 30,
+    initialCount: INCREMENTAL_BATCH_SIZE,
+    step: INCREMENTAL_BATCH_SIZE,
     resetKey: `${categorySearch}-${filteredOrderedCategories.length}-${recentCategoryName || ''}`,
   });
   const activeCategoryProductsFeed = useIncrementalList(activeCategoryProducts, {
-    initialCount: 30,
-    step: 30,
+    initialCount: INCREMENTAL_BATCH_SIZE,
+    step: INCREMENTAL_BATCH_SIZE,
     resetKey: `${activeCategoryName || ''}-${activeCategoryProducts.length}`,
   });
   const offersFeed = useIncrementalList(filteredOffers, {
-    initialCount: 30,
-    step: 30,
+    initialCount: INCREMENTAL_BATCH_SIZE,
+    step: INCREMENTAL_BATCH_SIZE,
     resetKey: `${offersSearch}-${offersTypeFilter}-${filteredOffers.length}`,
   });
   const selectedOfferProductsFeed = useIncrementalList(selectedOffer?.resolvedProductsIncluded || [], {
-    initialCount: 30,
-    step: 30,
+    initialCount: INCREMENTAL_BATCH_SIZE,
+    step: INCREMENTAL_BATCH_SIZE,
     resetKey: `${selectedOffer?.id || ''}-${selectedOffer?.resolvedProductsIncluded?.length || 0}`,
   });
   const rewardsFeed = useIncrementalList(filteredRewards, {
-    initialCount: 30,
-    step: 30,
+    initialCount: INCREMENTAL_BATCH_SIZE,
+    step: INCREMENTAL_BATCH_SIZE,
     resetKey: `${rewardsSearch}-${rewardsTypeFilter}-${filteredRewards.length}`,
   });
   const offerModalAvailableFeed = useIncrementalList(availableProductsForOffer, {
-    initialCount: 30,
-    step: 30,
+    initialCount: INCREMENTAL_BATCH_SIZE,
+    step: INCREMENTAL_BATCH_SIZE,
     resetKey: `${offerProductSearch}-${availableProductsForOffer.length}-${editingOfferId || 'new'}-${offerForm.scopeMode}`,
   });
   const offerModalIncludedFeed = useIncrementalList(offerResolvedProducts, {
-    initialCount: 30,
-    step: 30,
+    initialCount: INCREMENTAL_BATCH_SIZE,
+    step: INCREMENTAL_BATCH_SIZE,
     resetKey: `${editingOfferId || 'new'}-${offerResolvedProducts.length}-${offerForm.scopeMode}-${offerForm.categoryName}`,
   });
 

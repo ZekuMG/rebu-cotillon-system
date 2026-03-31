@@ -16,8 +16,9 @@ import {
 import { normalizeDate } from '../utils/helpers';
 import { FancyPrice } from '../components/FancyPrice';
 import { DailyReportModal } from '../components/modals/DailyReportModal';
+import useIncrementalFeed from '../hooks/useIncrementalFeed';
 
-export default function ReportsHistoryView({ pastClosures, members }) {
+export default function ReportsHistoryView({ pastClosures, members, isLoading = false, emptyStateMessage = '' }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedReport, setSelectedReport] = useState(null);
   const [typeFilter, setTypeFilter] = useState('Todas');
@@ -55,6 +56,31 @@ export default function ReportsHistoryView({ pastClosures, members }) {
       return matchesSearch && matchesType;
     });
   }, [pastClosures, searchTerm, typeFilter]);
+  const visibleReportsFeed = useIncrementalFeed(sortedAndFilteredClosures, {
+    resetKey: `${searchTerm}|${typeFilter}|${sortedAndFilteredClosures.length}`,
+  });
+
+  if (isLoading && (!pastClosures || pastClosures.length === 0)) {
+    return (
+      <div className="flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="text-center">
+          <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Cargando cierres</p>
+          <p className="mt-2 text-sm font-medium text-slate-500">Estamos trayendo reportes y cierres de caja.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (emptyStateMessage && (!pastClosures || pastClosures.length === 0)) {
+    return (
+      <div className="flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="max-w-md text-center">
+          <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Cierres no disponibles</p>
+          <p className="mt-2 text-sm font-medium text-slate-500">{emptyStateMessage}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-slate-100">
@@ -96,7 +122,7 @@ export default function ReportsHistoryView({ pastClosures, members }) {
       </div>
 
       {/* CUERPO / GRID DE REPORTES */}
-      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar" onScroll={visibleReportsFeed.handleScroll}>
         {sortedAndFilteredClosures.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-slate-400">
             <FileText size={64} className="mb-4 text-slate-300" />
@@ -105,7 +131,7 @@ export default function ReportsHistoryView({ pastClosures, members }) {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-8">
-            {sortedAndFilteredClosures.map((report) => (
+            {visibleReportsFeed.visibleItems.map((report) => (
               <button
                 key={report.id}
                 onClick={() => setSelectedReport(report)}
@@ -177,6 +203,11 @@ export default function ReportsHistoryView({ pastClosures, members }) {
           </div>
         )}
       </div>
+      {sortedAndFilteredClosures.length > 0 && (
+        <div className="border-t border-slate-200 bg-white px-4 py-2 text-[11px] font-semibold text-slate-500">
+          Mostrando <span className="font-black text-slate-700">{visibleReportsFeed.visibleCount}</span> de <span className="font-black text-slate-700">{sortedAndFilteredClosures.length}</span> cierres
+        </div>
+      )}
 
       {/* MODAL DETALLE */}
       <DailyReportModal 

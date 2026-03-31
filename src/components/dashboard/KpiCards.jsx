@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 // ♻️ FIX: Importamos formatNumber y FancyPrice
 import { formatNumber } from '../../utils/helpers';
+import { hasOwnerAccess } from '../../utils/appUsers';
 import { FancyPrice } from '../FancyPrice';
 
 export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, currentUser, setTempOpeningBalance, setIsOpeningBalanceModalOpen, globalFilter, expenses = [], onOpenExpenseModal }) => {
@@ -72,7 +73,7 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 relative overflow-hidden flex flex-col justify-between h-32">
           <div className="flex justify-between items-start mb-1 z-10">
             <span className="text-[15px] font-bold text-slate-400 uppercase">Caja Inicial</span>
-            {currentUser.role === 'admin' && (
+            {hasOwnerAccess(currentUser) && (
               <button
                 onClick={() => {
                   setTempOpeningBalance(String(openingBalance));
@@ -110,7 +111,7 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
         <div className="bg-white p-4 rounded-xl shadow-sm border border-red-100 relative overflow-hidden flex flex-col justify-between h-32">
           <div className="flex justify-between items-start z-10">
             <span className="text-[15px] font-bold text-red-400 uppercase">{getPeriodText('Gastos')}</span>
-            {onOpenExpenseModal && currentUser?.role === 'admin' && (
+            {onOpenExpenseModal && hasOwnerAccess(currentUser) && (
               <button
                 onClick={onOpenExpenseModal}
                 className="text-red-400 hover:text-red-600 bg-red-50 hover:bg-red-100 p-1 rounded transition"

@@ -7,7 +7,9 @@ import {
   CreditCard, ShoppingCart, Trash2, UserCheck, ArrowRight 
 } from 'lucide-react';
 import { formatNumber } from '../../utils/helpers';
+import { hasPermission } from '../../utils/userPermissions';
 import { FancyPrice } from '../FancyPrice'; 
+import UserDisplayBadge from '../UserDisplayBadge';
 
 // ==========================================
 // MODAL: DETALLE DE TRANSACCIÓN
@@ -17,6 +19,7 @@ export const TransactionDetailModal = ({
   transaction,
   onClose,
   currentUser,
+  userCatalog,
   members = [], 
   onEditTransaction,
   onDeleteTransaction,
@@ -25,6 +28,9 @@ export const TransactionDetailModal = ({
   if (!transaction) return null;
 
   const isVoided = transaction.status === 'voided';
+  const canEditSale = hasPermission(currentUser, 'history.editSale');
+  const canVoidSale = hasPermission(currentUser, 'history.voidSale');
+  const canDeleteSale = hasPermission(currentUser, 'history.deleteSale');
 
   let clientName = null;
   let memberNum = null;
@@ -94,9 +100,12 @@ export const TransactionDetailModal = ({
             
             <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center items-start">
               <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1.5"><User size={12}/> Cajero</p>
-              <span className="inline-flex items-center justify-center bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md text-slate-700 text-[10px] font-bold mt-0.5">
-                {transaction.user}
-              </span>
+              <UserDisplayBadge
+                user={{ id: transaction.userId, role: transaction.userRole, name: transaction.user }}
+                userCatalog={userCatalog}
+                size="md"
+                className="mt-0.5"
+              />
             </div>
 
             <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center">
@@ -249,19 +258,19 @@ export const TransactionDetailModal = ({
           <button onClick={() => onViewTicket(transaction)} className="px-4 py-2.5 text-[11px] font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 hover:text-slate-800 rounded-lg transition-all flex items-center gap-1.5 shadow-sm">
             <FileText size={14} /> Ver Ticket
           </button>
-          {currentUser?.role === 'admin' && (
+          {(canEditSale || canVoidSale || canDeleteSale) && (
             <>
               {!isVoided && !transaction.isHistoric && (
                 <>
-                  <button onClick={() => { onClose(); onEditTransaction(transaction); }} className="px-4 py-2.5 text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded-lg transition-all flex items-center gap-1.5 shadow-sm">
+                  {canEditSale && <button onClick={() => { onClose(); onEditTransaction(transaction); }} className="px-4 py-2.5 text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded-lg transition-all flex items-center gap-1.5 shadow-sm">
                     <Edit2 size={14} /> Editar
-                  </button>
-                  <button onClick={() => { onClose(); onDeleteTransaction(transaction); }} className="px-4 py-2.5 text-[11px] font-bold text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg transition-all flex items-center gap-1.5 shadow-sm">
+                  </button>}
+                  {canVoidSale && <button onClick={() => { onClose(); onDeleteTransaction(transaction); }} className="px-4 py-2.5 text-[11px] font-bold text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg transition-all flex items-center gap-1.5 shadow-sm">
                     <XCircle size={14} /> Anular Venta
-                  </button>
+                  </button>}
                 </>
               )}
-              {isVoided && (
+              {isVoided && canDeleteSale && (
                 <button onClick={() => { onClose(); onDeleteTransaction(transaction); }} className="px-4 py-2.5 text-[11px] font-bold text-slate-600 bg-slate-100 border border-slate-300 hover:bg-red-50 hover:text-red-700 hover:border-red-200 rounded-lg transition-all flex items-center gap-1.5 shadow-sm">
                   <Trash2 size={14} /> Eliminar Registro
                 </button>

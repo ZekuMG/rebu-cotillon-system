@@ -1,7 +1,7 @@
 // src/views/HistoryView.jsx
 // ♻️ REFACTOR: Interfaz de Historial Consolidada y Optimizada (Filtros, Celdas Inline, UI Premium)
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   History,
   Trash2,
@@ -15,12 +15,17 @@ import {
   UserX,
   Calendar,
   Filter,
-  RotateCcw
+  RotateCcw,
+  ChevronDown,
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../data';
+import { normalizeUserText } from '../utils/appUsers';
+import { hasPermission } from '../utils/userPermissions';
 import { normalizeDate, isVentaLog, getVentaTotal } from '../utils/helpers';
 import { FancyPrice } from '../components/FancyPrice';
 import { TransactionDetailModal } from '../components/modals/HistoryModals';
+import UserDisplayBadge from '../components/UserDisplayBadge';
+import { resolveUserPresentation } from '../utils/userPresentation';
 
 // --- HELPER LOCAL PARA FORMATO VISUAL ---
 const formatDisplayDate = (dateString) => {
@@ -40,7 +45,10 @@ export default function HistoryView({
   dailyLogs,
   inventory,
   currentUser,
+  userCatalog,
   members,
+  isLoading = false,
+  emptyStateMessage = '',
   onDeleteTransaction,
   onEditTransaction,
   onRestoreTransaction,
@@ -48,7 +56,69 @@ export default function HistoryView({
   setDailyLogs: _setDailyLogs,
   showNotification: _showNotification,
   onViewTicket,
+  navigationRequest,
 }) {
+  const hexToRgba = (hex, alpha) => {
+    const normalized = String(hex || '').trim();
+    const value = normalized.startsWith('#') ? normalized.slice(1) : normalized;
+    if (!/^[0-9a-fA-F]{6}$/.test(value)) return null;
+    const int = Number.parseInt(value, 16);
+    const r = (int >> 16) & 255;
+    const g = (int >> 8) & 255;
+    const b = int & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+
+  const getUserBadgeProps = (userName) => {
+    const normalizedUser = String(userName || '').trim().toLowerCase();
+    const adminProfile = userCatalog?.admin || null;
+    const sellerProfile = userCatalog?.seller || null;
+
+    if (
+      normalizedUser === 'admin' ||
+      normalizedUser === 'dueño' ||
+      normalizedUser === 'due?o' ||
+      normalizedUser === String(adminProfile?.name || '').trim().toLowerCase()
+    ) {
+      const color = adminProfile?.nameColor || '#4f46e5';
+      return {
+        label: userName || adminProfile?.name || 'Dueño',
+        style: {
+          color,
+          backgroundColor: hexToRgba(color, 0.1) || '#eef2ff',
+          borderColor: hexToRgba(color, 0.18) || '#c7d2fe',
+        },
+      };
+    }
+
+    if (
+      normalizedUser === 'seller' ||
+      normalizedUser === 'vendedor' ||
+      normalizedUser === 'caja' ||
+      normalizedUser === String(sellerProfile?.name || '').trim().toLowerCase()
+    ) {
+      const color = sellerProfile?.nameColor || '#059669';
+      return {
+        label: userName || sellerProfile?.name || 'Caja',
+        style: {
+          color,
+          backgroundColor: hexToRgba(color, 0.1) || '#ecfdf5',
+          borderColor: hexToRgba(color, 0.18) || '#a7f3d0',
+        },
+      };
+    }
+
+    return {
+      label: userName || 'Desconocido',
+      style: {
+        color: '#64748b',
+        backgroundColor: '#f1f5f9',
+        borderColor: '#e2e8f0',
+      },
+    };
+  };
+  void getUserBadgeProps;
+
   const getComboIncludedItems = (item) => {
     if (!item?.isCombo || !Array.isArray(item.productsIncluded) || item.productsIncluded.length === 0) return [];
     const comboQty = Number(item.quantity || item.qty || 1);
@@ -68,6 +138,13 @@ export default function HistoryView({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState('desc');
   const [currentPage, setCurrentPage] = useState(1);
+  const [isUserFilterOpen, setIsUserFilterOpen] = useState(false);
+  const userFilterRef = useRef(null);
+  const canEditSale = hasPermission(currentUser, 'history.editSale');
+  const canVoidSale = hasPermission(currentUser, 'history.voidSale');
+  const canRestoreSale = hasPermission(currentUser, 'history.restoreSale');
+  const canDeleteSale = hasPermission(currentUser, 'history.deleteSale');
+  const hasHistoryActions = true;
 
   // Modal de detalle
   const [selectedTx, setSelectedTx] = useState(null);
@@ -204,6 +281,72 @@ export default function HistoryView({
     });
   }, [transactions, dailyLogs]);
 
+  const userFilterOptions = useMemo(() => {
+    const allEntries = [];
+    const seenKeys = new Set();
+    const seenPresentationKeys = new Set();
+    const catalogUsers = Array.isArray(userCatalog?.all) ? userCatalog.all : [];
+
+    const pushOption = (option) => {
+      if (!option?.key || seenKeys.has(option.key)) return;
+
+      const presentation = resolveUserPresentation(option.user, userCatalog);
+      const presentationKey = normalizeUserText(presentation.displayName);
+      if (seenPresentationKeys.has(presentationKey)) return;
+
+      seenKeys.add(option.key);
+      seenPresentationKeys.add(presentationKey);
+      allEntries.push(option);
+    };
+
+    catalogUsers.forEach((user) => {
+      pushOption({
+        key: `id:${user.id}`,
+        user: {
+          id: user.id,
+          role: user.role,
+          name: user.displayName || user.name,
+          displayName: user.displayName || user.name,
+        },
+      });
+    });
+
+    [...activeTransactions, ...historicTransactions].forEach((tx) => {
+      const normalizedName = normalizeUserText(tx.user || tx.userName);
+
+      if (tx.userId) {
+        pushOption({
+          key: `id:${tx.userId}`,
+          user: {
+            id: tx.userId,
+            role: tx.userRole,
+            name: tx.user,
+            displayName: tx.user,
+          },
+        });
+        return;
+      }
+
+      if (!normalizedName) return;
+
+      pushOption({
+        key: `name:${normalizedName}`,
+        user: {
+          role: tx.userRole || null,
+          name: tx.user,
+          displayName: tx.user,
+        },
+      });
+    });
+
+    return allEntries;
+  }, [activeTransactions, historicTransactions, userCatalog]);
+
+  const selectedUserFilter = useMemo(
+    () => userFilterOptions.find((option) => option.key === filterUser) || null,
+    [filterUser, userFilterOptions],
+  );
+
   // =====================================================
   // COMBINAR Y FILTRAR
   // =====================================================
@@ -255,7 +398,17 @@ export default function HistoryView({
 
     // 4. RESTO DE FILTROS B?SICOS
     if (filterPayment) txList = txList.filter((tx) => tx.payment === filterPayment);
-    if (filterUser) txList = txList.filter((tx) => tx.user === filterUser);
+    if (selectedUserFilter) {
+      const selectedUser = selectedUserFilter.user;
+      const selectedName = normalizeUserText(selectedUser?.displayName || selectedUser?.name);
+      txList = txList.filter((tx) => {
+        if (selectedUser?.id && tx.userId && String(selectedUser.id) === String(tx.userId)) {
+          return true;
+        }
+
+        return normalizeUserText(tx.user) === selectedName;
+      });
+    }
     
     // 5. FILTRO DE CATEGORÍA
     if (filterCategory) {
@@ -300,7 +453,7 @@ export default function HistoryView({
   }, [
     viewMode, activeTransactions, historicTransactions, 
     filterDateStart, filterDateEnd, filterPayment, 
-    filterUser, filterCategory, searchQuery, sortOrder, inventory
+    filterCategory, searchQuery, sortOrder, inventory, selectedUserFilter
   ]);
 
 
@@ -356,42 +509,73 @@ export default function HistoryView({
     }
   }, [currentPage, totalPages]);
 
+  useEffect(() => {
+    if (!navigationRequest?.token) return;
+
+    setViewMode('all');
+    setFilterDateStart('');
+    setFilterDateEnd('');
+    setFilterPayment('');
+    setFilterUser('');
+    setFilterCategory(navigationRequest.category || '');
+    setSearchQuery(navigationRequest.searchQuery || '');
+    setSortOrder('desc');
+    setIsUserFilterOpen(false);
+  }, [navigationRequest]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (!userFilterRef.current?.contains(event.target)) {
+        setIsUserFilterOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   // =====================================================
   // RENDER
   // =====================================================
+  const hasHistorySourceData = (transactions?.length || 0) > 0 || (dailyLogs?.length || 0) > 0;
+
+  if (isLoading && !hasHistorySourceData) {
+    return (
+      <div className="flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="text-center">
+          <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Cargando historial</p>
+          <p className="mt-2 text-sm font-medium text-slate-500">Estamos trayendo ventas y movimientos sin bloquear el resto del sistema.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (emptyStateMessage && !hasHistorySourceData) {
+    return (
+      <div className="flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="max-w-md text-center">
+          <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Historial no disponible</p>
+          <p className="mt-2 text-sm font-medium text-slate-500">{emptyStateMessage}</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white rounded-xl shadow-sm border overflow-hidden h-full min-h-0 flex flex-col">
       {/* HEADER Y FILTROS */}
-      <div className="p-4 border-b bg-slate-50 shrink-0 space-y-4">
-        {/* Fila 1: T?tulo y Stats */}
-        <div className="flex flex-wrap justify-between items-center gap-2">
-          <div className="flex items-center gap-3">
-            <div className="bg-blue-100 p-1.5 rounded-lg text-blue-600">
-              <History size={18} />
-            </div>
-            <h3 className="font-bold text-slate-800 text-sm">Registro de Ventas</h3>
-            <span className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1 rounded-lg font-bold shadow-sm ml-2 flex items-center gap-1">
-              Total de ventas: {stats.count} ?
-              <span className="text-blue-600"><FancyPrice amount={stats.total} /></span>
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-             {hasActiveFilters && (
-              <button onClick={clearFilters} className="flex items-center gap-1 px-3 py-1.5 text-[10px] font-bold text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors border border-red-100">
-                <X size={12} /> Limpiar Filtros
-              </button>
-            )}
-            <button onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')} className="flex items-center gap-1 px-3 py-1.5 text-[10px] font-bold text-slate-600 bg-white hover:bg-slate-100 rounded-lg border border-slate-200 shadow-sm transition-colors" title="Invertir Orden">
-              <ArrowUpDown size={12} /> {sortOrder === 'desc' ? 'M?s recientes' : 'M?s antiguas'}
-            </button>
-          </div>
-        </div>
-
-        {/* Fila 2: Barra de Filtros Estilizada */}
+      <div className="border-b bg-slate-50 px-3 py-3 shrink-0">
         <div className="flex flex-wrap items-center gap-2">
-          
-          {/* Buscador */}
-          <div className="relative flex-1 min-w-[180px]">
+          <div className="bg-blue-100 p-1.5 rounded-lg text-blue-600 shrink-0">
+            <History size={18} />
+          </div>
+
+          <span className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1.5 rounded-lg font-bold shadow-sm flex items-center gap-1 shrink-0">
+            {`Total de ventas: ${stats.count} \u00B7 `}
+            <span className="text-blue-600"><FancyPrice amount={stats.total} /></span>
+          </span>
+
+          <div className="relative flex-1 min-w-[260px]">
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
@@ -402,43 +586,112 @@ export default function HistoryView({
             />
           </div>
 
-          {/* Selector Vista */}
-          <select className="px-3 py-1.5 text-xs font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white" value={viewMode} onChange={(e) => setViewMode(e.target.value)}>
+          <select className="px-3 py-1.5 text-xs font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white shrink-0" value={viewMode} onChange={(e) => setViewMode(e.target.value)}>
             <option value="all">Todas las fechas</option>
             <option value="today">Solo Hoy</option>
             <option value="history">Solo Historial</option>
           </select>
 
-          {/* Fechas */}
-          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-sm">
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1.5 shadow-sm shrink-0">
             <Calendar size={12} className="text-slate-400" />
             <input type="date" className="text-[10px] bg-transparent outline-none font-medium text-slate-600 cursor-pointer" value={filterDateStart} onChange={(e) => setFilterDateStart(e.target.value)} title="Desde"/>
-            <span className="text-[10px] text-slate-300">?</span>
+            <span className="text-[10px] text-slate-300">a</span>
             <input type="date" className="text-[10px] bg-transparent outline-none font-medium text-slate-600 cursor-pointer" value={filterDateEnd} onChange={(e) => setFilterDateEnd(e.target.value)} title="Hasta"/>
           </div>
 
-          {/* Filtros Dropdowns */}
-          <div className="flex items-center gap-2">
-            <div className="relative">
-               <Filter size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-               <select className="pl-7 pr-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white appearance-none cursor-pointer" value={filterPayment} onChange={(e) => setFilterPayment(e.target.value)}>
-                 <option value="">Método de Pago</option>
-                 {PAYMENT_METHODS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
-               </select>
-            </div>
-            
-            <select className="px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer" value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
-              <option value="">Todas las Categorías</option>
-              {categoriesList.map((c) => (<option key={c} value={c}>{c}</option>))}
-            </select>
+          <div className="relative shrink-0">
+             <Filter size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+             <select className="pl-7 pr-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white appearance-none cursor-pointer" value={filterPayment} onChange={(e) => setFilterPayment(e.target.value)}>
+               <option value="">{'M\u00E9todo de Pago'}</option>
+               {PAYMENT_METHODS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
+             </select>
+          </div>
+          
+          <select className="px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer shrink-0" value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
+            <option value="">{'Todas las Categor\u00EDas'}</option>
+            {categoriesList.map((c) => (<option key={c} value={c}>{c}</option>))}
+          </select>
 
-            <select className="px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer" value={filterUser} onChange={(e) => setFilterUser(e.target.value)}>
-              <option value="">Todos los Usuarios</option>
-              <option value="Dueño">Dueño</option>
-              <option value="Vendedor">Vendedor</option>
-            </select>
+          <div className="relative shrink-0" ref={userFilterRef}>
+            <button
+              type="button"
+              onClick={() => setIsUserFilterOpen((prev) => !prev)}
+              className="min-w-[190px] px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer flex items-center justify-between gap-2"
+            >
+              {selectedUserFilter ? (() => {
+                const presentation = resolveUserPresentation(selectedUserFilter.user, userCatalog);
+                return (
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full border border-white/80 shadow-sm"
+                      style={{ backgroundColor: presentation.nameColor }}
+                    />
+                    <span className="truncate text-slate-700">{presentation.displayName}</span>
+                  </span>
+                );
+              })() : (
+                <span className="text-slate-700">Todos los Usuarios</span>
+              )}
+              <ChevronDown size={14} className={`text-slate-400 transition-transform ${isUserFilterOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {isUserFilterOpen && (
+              <div className="absolute right-0 top-full z-20 mt-1.5 w-[260px] rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterUser('');
+                    setIsUserFilterOpen(false);
+                  }}
+                  className={`flex w-full items-center rounded-lg px-2.5 py-2 text-left text-[11px] font-medium transition ${
+                    !selectedUserFilter ? 'bg-slate-100 text-slate-800' : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  Todos los Usuarios
+                </button>
+
+                <div className="mt-1 max-h-72 overflow-y-auto custom-scrollbar pr-1">
+                  {userFilterOptions.map((option) => {
+                    const presentation = resolveUserPresentation(option.user, userCatalog);
+                    const isActive = selectedUserFilter?.key === option.key;
+
+                    return (
+                      <button
+                        key={option.key}
+                        type="button"
+                        onClick={() => {
+                          setFilterUser(option.key);
+                          setIsUserFilterOpen(false);
+                        }}
+                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] transition ${
+                          isActive ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-50'
+                        }`}
+                        style={{
+                          boxShadow: isActive ? `inset 3px 0 0 ${presentation.nameColor}` : undefined,
+                        }}
+                      >
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full border border-white/80 shadow-sm"
+                          style={{ backgroundColor: presentation.nameColor }}
+                        />
+                        <span className="truncate font-medium">{presentation.displayName}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
+          {hasActiveFilters && (
+            <button onClick={clearFilters} className="flex items-center gap-1 px-3 py-1.5 text-[10px] font-bold text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors border border-red-100 shrink-0">
+              <X size={12} /> Limpiar Filtros
+            </button>
+          )}
+
+          <button onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')} className="flex items-center gap-1 px-3 py-1.5 text-[10px] font-bold text-slate-600 bg-white hover:bg-slate-100 rounded-lg border border-slate-200 shadow-sm transition-colors shrink-0 ml-auto" title="Invertir Orden">
+            <ArrowUpDown size={12} /> {sortOrder === 'desc' ? 'M\u00E1s recientes' : 'M\u00E1s antiguas'}
+          </button>
         </div>
       </div>
 
@@ -453,7 +706,7 @@ export default function HistoryView({
               <th className="px-4 py-3.5 text-left">Detalle</th>
               <th className="px-4 py-3.5 text-left">Pago</th>
               <th className="px-4 py-3.5 text-right">Monto</th>
-              {currentUser?.role === 'admin' && (
+              {hasHistoryActions && (
                 <th className="px-4 py-3.5 text-center">Acciones</th>
               )}
             </tr>
@@ -493,44 +746,38 @@ export default function HistoryView({
                   }`}
                 >
                   <td className="px-4 py-3 align-middle">
-                    <p className={`font-mono font-bold text-[11px] ${isVoided ? 'text-red-800 line-through' : isDeleted ? 'text-orange-800 line-through' : 'text-slate-800'}`}>
-                      #{String(tx.id).padStart(6, '0')}
-                    </p>
-                    <p className="text-[10px] text-slate-400 font-medium mt-0.5 flex flex-wrap items-center gap-1.5">
-                      <span>{formatDisplayDate(tx.date)} {(tx.time || tx.timestamp) && ` ${tx.time || tx.timestamp}`}</span>
-                    </p>
-                    {isVoided && (
-                      <span className="text-[8.5px] font-black tracking-widest text-red-600 uppercase bg-red-100 px-1.5 py-0.5 rounded mt-1.5 inline-block border border-red-200">
-                        ANULADO
+                    <div className="flex items-center gap-2 overflow-hidden whitespace-nowrap text-[10px]">
+                      <span className={`font-mono font-bold text-[11px] ${isVoided ? 'text-red-800 line-through' : isDeleted ? 'text-orange-800 line-through' : 'text-slate-800'}`}>
+                        #{String(tx.id).padStart(6, '0')}
                       </span>
-                    )}
-                    {isDeleted && (
-                      <span className="text-[8.5px] font-black tracking-widest text-orange-700 uppercase bg-orange-100 px-1.5 py-0.5 rounded mt-1.5 inline-block border border-orange-200">
-                        ELIMINADO
+                      <span className="text-slate-300">{'\u2022'}</span>
+                      <span className="truncate font-medium text-slate-400">
+                        {formatDisplayDate(tx.date)} {(tx.time || tx.timestamp) && ` ${tx.time || tx.timestamp}`}
                       </span>
-                    )}
-                    {/*  MEDALLA DE RESTAURADO CON HORA */}
-                    {!isVoided && !isDeleted && isRestored && (
-                      <div className="mt-1.5 flex flex-col items-start gap-0.5">
-                        <span className="text-[8.5px] font-black tracking-widest text-emerald-600 uppercase bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">
-                          RESTAURADO
+                      {isVoided && (
+                        <span className="shrink-0 text-[8.5px] font-black tracking-widest text-red-600 uppercase bg-red-100 px-1.5 py-0.5 rounded border border-red-200">
+                          Anulado
                         </span>
-                        {restoredAt && (
-                          <span className="text-[8px] font-medium text-emerald-500">
-                            {restoredAt}
-                          </span>
-                        )}
-                      </div>
-                    )}
+                      )}
+                      {isDeleted && (
+                        <span className="shrink-0 text-[8.5px] font-black tracking-widest text-orange-700 uppercase bg-orange-100 px-1.5 py-0.5 rounded border border-orange-200">
+                          Eliminado
+                        </span>
+                      )}
+                      {!isVoided && !isDeleted && isRestored && (
+                        <span className="shrink-0 text-[8.5px] font-black tracking-widest text-emerald-600 uppercase bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">
+                          {restoredAt ? `Restaurado \u00B7 ${restoredAt}` : 'Restaurado'}
+                        </span>
+                      )}
+                    </div>
                   </td>
                   
                   <td className="px-4 py-3 align-middle">
-                    <span className={`px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider ${
-              <option value="Due?o">Due?o</option>
-                      }`}
-                    >
-                      {tx.user || 'Desconocido'}
-                    </span>
+                    <UserDisplayBadge
+                      user={{ id: tx.userId, role: tx.userRole, name: tx.user }}
+                      userCatalog={userCatalog}
+                      size="sm"
+                    />
                   </td>
 
                   <td className="px-4 py-3 align-middle">
@@ -589,7 +836,7 @@ export default function HistoryView({
                       })}
                       {(tx.items || []).length > 3 && (
                         <span className="text-[9px] text-slate-400 font-medium italic mt-1 inline-block bg-slate-50 px-2 py-0.5 rounded-full border border-slate-100">
-                          +{tx.items.length - 3} productos m?s
+                          +{tx.items.length - 3} {'productos m\u00E1s'}
                         </span>
                       )}
                     </div>
@@ -619,7 +866,7 @@ export default function HistoryView({
                     </div>
                     {tx.payment === 'Efectivo' && Number(tx.cashChange || 0) > 0 && (
                       <p className="mt-1 text-[10px] font-bold text-emerald-600">
-                        Devolución: <FancyPrice amount={Number(tx.cashChange || 0)} />
+                        {'Devoluci\u00F3n'}: <FancyPrice amount={Number(tx.cashChange || 0)} />
                       </p>
                     )}
                   </td>
@@ -630,7 +877,7 @@ export default function HistoryView({
                     </span>
                   </td>
 
-                  {currentUser?.role === 'admin' && (
+                  {hasHistoryActions && (
                     <td className="px-4 py-3 align-middle">
                       <div className="flex items-center justify-center gap-1.5">
                         
@@ -647,13 +894,13 @@ export default function HistoryView({
                         {/* Botones Modificar/Anular (solo si NO est? anulada) */}
                         {!isVoided && !isDeleted && (
                           <>
-                            <button onClick={() => onEditTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-amber-50 hover:text-amber-600 hover:border-amber-300 transition-all shadow-sm group" title="Modificar Pedido">
+                            {canEditSale && <button onClick={() => onEditTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-amber-50 hover:text-amber-600 hover:border-amber-300 transition-all shadow-sm group" title="Modificar Pedido">
                               <Edit2 size={13} className="group-hover:scale-110 transition-transform" />
-                            </button>
+                            </button>}
                             
-                            <button onClick={() => onDeleteTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-red-50 hover:text-red-600 hover:border-red-300 transition-all shadow-sm group" title="Anular Venta">
+                            {canVoidSale && <button onClick={() => onDeleteTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-red-50 hover:text-red-600 hover:border-red-300 transition-all shadow-sm group" title="Anular Venta">
                               <XCircle size={14} className="group-hover:scale-110 transition-transform" />
-                            </button>
+                            </button>}
                           </>
                         )}
                         
@@ -661,14 +908,14 @@ export default function HistoryView({
                         {isVoided && (
                           <>
                             {/* NUEVO BOTÓN: Restaurar Venta */}
-                            <button onClick={() => onRestoreTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-emerald-500 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-300 transition-all shadow-sm group" title="Restaurar Venta (Recuperar)">
+                            {canRestoreSale && <button onClick={() => onRestoreTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-emerald-500 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-300 transition-all shadow-sm group" title="Restaurar Venta (Recuperar)">
                               <RotateCcw size={14} className="group-hover:-rotate-45 transition-transform" />
-                            </button>
+                            </button>}
                             
                             {/* Eliminar Venta Permanentemente */}
-                            <button onClick={() => onDeleteTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-red-400 hover:bg-red-50 hover:text-red-600 hover:border-red-300 transition-all shadow-sm group" title="Eliminar Registro Permanentemente">
+                            {canDeleteSale && <button onClick={() => onDeleteTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-red-400 hover:bg-red-50 hover:text-red-600 hover:border-red-300 transition-all shadow-sm group" title="Eliminar Registro Permanentemente">
                               <Trash2 size={14} className="group-hover:scale-110 transition-transform" />
-                            </button>
+                            </button>}
                           </>
                         )}
 
@@ -680,7 +927,7 @@ export default function HistoryView({
             })}
             {filteredTransactions.length === 0 && (
               <tr>
-                <td colSpan={currentUser?.role === 'admin' ? 7 : 6} className="text-center py-16">
+                <td colSpan={hasHistoryActions ? 7 : 6} className="text-center py-16">
                   <div className="flex flex-col items-center justify-center text-slate-400">
                     <History size={32} className="mb-2 opacity-50" />
                     <p className="text-sm font-medium">{hasActiveFilters ? 'No se encontraron ventas con estos filtros.' : 'No hay historial de ventas disponible.'}</p>
@@ -693,27 +940,27 @@ export default function HistoryView({
       </div>
 
       {filteredTransactions.length > 0 && (
-        <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-[11px] font-semibold text-slate-500">
+        <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold text-slate-500">
               Mostrando <span className="font-black text-slate-700">{pageStart}</span> a <span className="font-black text-slate-700">{pageEnd}</span> de <span className="font-black text-slate-700">{filteredTransactions.length}</span> registros
             </p>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
                 disabled={currentPage === 1}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Anterior
               </button>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1">
                 {visiblePageNumbers.map((pageNumber) => (
                   <button
                     key={pageNumber}
                     type="button"
                     onClick={() => setCurrentPage(pageNumber)}
-                    className={`min-w-[34px] rounded-lg border px-2.5 py-1.5 text-[11px] font-black transition ${
+                    className={`min-w-[30px] rounded-lg border px-2 py-1 text-[10px] font-black transition ${
                       pageNumber === currentPage
                         ? 'border-blue-200 bg-blue-50 text-blue-700'
                         : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
@@ -723,14 +970,14 @@ export default function HistoryView({
                   </button>
                 ))}
               </div>
-              <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-black text-slate-700">
-                Página {currentPage} de {totalPages}
+              <span className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-black text-slate-700">
+                {'P\u00E1gina'} {currentPage} de {totalPages}
               </span>
               <button
                 type="button"
                 onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
                 disabled={currentPage === totalPages}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Siguiente
               </button>
@@ -744,6 +991,7 @@ export default function HistoryView({
         transaction={selectedTx}
         onClose={() => setSelectedTx(null)}
         currentUser={currentUser}
+        userCatalog={userCatalog}
         members={members}
         onEditTransaction={onEditTransaction}
         onDeleteTransaction={onDeleteTransaction}

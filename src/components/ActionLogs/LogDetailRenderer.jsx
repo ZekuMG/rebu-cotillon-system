@@ -5,6 +5,8 @@ import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
 import { HintIcon } from '../HintIcon';
 import { extractRealNote, normalizeLogAction } from './logHelpers';
+import UserDisplayBadge from '../UserDisplayBadge';
+import { APP_PERMISSION_GROUPS, getEffectivePermissions, getPermissionSummary } from '../../utils/userPermissions';
 
 // ════════════════════════════════════════════
 //  HELPERS EXPORTABLES
@@ -44,6 +46,15 @@ const getClientDisplay = (details) => {
 
 const getSharedRecordId = (details = {}) => details.sharedRecordId || details.budgetId || details.orderId || details.id || null;
 const formatEntityCode = (_prefix, id) => (id ? `ID-${String(id).slice(0, 8).toUpperCase()}` : null);
+const PERMISSION_LABELS = Object.fromEntries(APP_PERMISSION_GROUPS.flatMap((group) => [[group.viewKey, group.label], ...group.actions.map((action) => [action.key, action.label])]));
+const getManagedUserDisplayName = (details = {}) => details.displayName || details.name || details.targetUserName || 'Usuario';
+const getManagedUserRoleLabel = (role) => {
+  const normalized = String(role || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+  if (['system', 'sistema', 'admin'].includes(normalized)) return 'Sistema';
+  if (['owner', 'dueno', 'duenio'].includes(normalized)) return 'Dueño';
+  if (['seller', 'vendedor', 'caja'].includes(normalized)) return 'Caja';
+  return role || 'Usuario';
+};
 
 // ════════════════════════════════════════════
 //  SUB-COMPONENTES REUTILIZABLES
@@ -360,7 +371,7 @@ const EditableReasonCard = ({ note, logId, onUpdateNote }) => {
   );
 };
 
-export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
+export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, userCatalog }) {
   const action = normalizeLogAction(log.action);
   const details = log.details;
 
@@ -990,7 +1001,8 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
       );
 
     case 'Cierre de Caja':
-    case 'Cierre Automático':
+    case 'Cierre de Caja (Silencioso)':
+    case 'Cierre Autom\u00e1tico':
       return (
         <div className="space-y-4">
           {action === 'Cierre Automático' && (
@@ -1661,42 +1673,39 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
       );
     }
 
-    case 'Actualización Masiva':
-    case 'Edición Masiva Categorías': {
+    case 'Actualizaci\u00f3n Masiva':
+    case 'Edici\u00f3n Masiva Categor\u00edas': {
       const changeList = details.changes || details.details || [];
       return (
         <div className="space-y-4">
-          <Card icon="🏷️" title="Resumen de Operación">
-            <Item label="Productos Afectados">
+          <Card icon={'\u{1F3F7}'} title="Resumen de Operacion">
+            <Item label="Productos afectados">
               <Badge color="fuchsia">{details.count || changeList.length || 0}</Badge>
             </Item>
-            {details.category && (
-               <Item label="Categoría Objetivo" value={details.category} />
-            )}
+            {details.category && <Item label="Categoria objetivo" value={details.category} />}
           </Card>
           {changeList.length > 0 && (
-            <Card icon="📋" title="Detalle de Operaciones">
+            <Card icon={'\u{1F4CB}'} title="Detalle de Operaciones">
               <div className="max-h-60 overflow-y-auto space-y-[5px] pr-1 custom-scrollbar">
                 {changeList.map((item, idx) => {
                   let isAdd = true;
                   let text = '';
-                  
                   if (typeof item === 'string') {
-                    isAdd = item.includes('✅') || item.includes('Agregado') || !item.includes('❌');
+                    isAdd = item.includes('Agregado') || !item.includes('Removido');
                     text = item;
                   } else {
                     isAdd = item.action === 'add';
-                    text = `${isAdd ? '✅ Agregado' : '❌ Removido'} "${item.title || 'Producto'}" ${isAdd ? 'a' : 'de'} ${item.categoryName || 'categoría'}`;
+                    text = (isAdd ? 'Agregado' : 'Removido') + ' "' + (item.title || 'Producto') + '" ' + (isAdd ? 'a' : 'de') + ' ' + (item.categoryName || 'categoria');
                   }
-
                   return (
                     <div
                       key={idx}
-                      className={`flex items-center gap-[6px] px-[11px] py-[9px] rounded-[9px] text-[10px] border ${
-                        isAdd
+                      className={
+                        'flex items-center gap-[6px] px-[11px] py-[9px] rounded-[9px] text-[10px] border ' +
+                        (isAdd
                           ? 'bg-[#f4f6f9] border-[#eaecf1] text-[#15803d]'
-                          : 'bg-[#fef2f2] border-[#fecaca] text-[#dc2626]'
-                      }`}
+                          : 'bg-[#fef2f2] border-[#fecaca] text-[#dc2626]')
+                      }
                     >
                       <CheckCircle size={12} className={isAdd ? 'text-green-500' : 'text-red-500'} />
                       <span>{text}</span>
@@ -1711,27 +1720,157 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
       );
     }
 
-    case 'Categoría': {
+    case 'Edici\u00f3n Masiva': {
+      const items = Array.isArray(details.items) ? details.items : [];
+      return (
+        <div className="space-y-4">
+          <Card icon={'\u{1F4DA}'} title="Editor Masivo">
+            <Item label="Productos actualizados">
+              <Badge color="amber">{details.count || items.length || 0}</Badge>
+            </Item>
+          </Card>
+          {items.length > 0 && (
+            <Card icon={'\u{1F4E6}'} title="Productos modificados">
+              <div className="max-h-60 overflow-y-auto space-y-[5px] pr-1 custom-scrollbar">
+                {items.map((item, idx) => (
+                  <div key={(item || 'item') + '-' + idx} className="flex items-center justify-between px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1]">
+                    <span className="text-slate-700 font-medium">{item || 'Producto'}</span>
+                    <Badge color="amber">Actualizado</Badge>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+    }
+
+    case 'Categor\u00eda': {
       const isCreate = details.type === 'create';
       const isDelete = details.type === 'delete';
-      const isEdit = details.type === 'edit';
+      const oldName = details.oldName || details.old;
+      const newName = details.newName || details.new || details.name;
+      const isEdit = details.type === 'edit' || Boolean(oldName && newName);
 
       return (
         <div className="space-y-4">
-          <Card icon="🏷️" title="Gestión de Categoría">
-            <Item label="Operación">
+          <Card icon={'\u{1F3F7}'} title="Gestion de Categoria">
+            <Item label="Operacion">
               <Badge color={isCreate ? 'green' : isDelete ? 'red' : 'amber'}>
-                {isCreate ? 'Creación' : isDelete ? 'Eliminación' : 'Renombrada'}
+                {isCreate ? 'Creacion' : isDelete ? 'Eliminacion' : 'Renombrada'}
               </Badge>
             </Item>
-            {isEdit && details.oldName ? (
-              <ChangeRow field="Nombre" oldVal={details.oldName} newVal={details.name} />
+            {isEdit && oldName ? (
+              <ChangeRow field="Nombre" oldVal={oldName} newVal={newName} />
             ) : (
               <Item label="Nombre">
-                <span className={isDelete ? 'line-through text-[#94a3b8]' : ''}>{details.name}</span>
+                <span className={isDelete ? 'line-through text-[#94a3b8]' : ''}>{newName || 'Categoria'}</span>
               </Item>
             )}
           </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+    }
+
+    case 'Ajustes de Usuario': {
+      const displayName = getManagedUserDisplayName(details);
+      const roleLabel = getManagedUserRoleLabel(details.role);
+      return (
+        <div className="space-y-4">
+          <Card icon={'\u{1F3A8}'} title="Perfil Actualizado">
+            <Item label="Usuario">
+              <UserDisplayBadge user={{ id: details.userId, role: details.role, name: displayName }} userCatalog={userCatalog} size="md" className="font-sans" />
+            </Item>
+            <Item label="Rol" value={roleLabel} />
+            {details.theme && <Item label="Tema" value={details.theme === 'dark' ? 'Oscuro' : 'Claro'} />}
+            {details.avatar && <Item label="Avatar / iniciales" value={details.avatar} />}
+            {details.nameColor && (
+              <Item label="Color del nombre">
+                <span className="inline-flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full border border-slate-300" style={{ backgroundColor: details.nameColor }} />
+                  <span className="font-mono text-[10px]">{details.nameColor}</span>
+                </span>
+              </Item>
+            )}
+          </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+    }
+
+    case 'Usuario Creado':
+    case 'Usuario Editado': {
+      const isCreate = action === 'Usuario Creado';
+      const displayName = getManagedUserDisplayName(details);
+      const roleLabel = getManagedUserRoleLabel(details.role);
+      return (
+        <div className="space-y-4">
+          <Card icon={isCreate ? '\u{1F464}' : '\u270F'} title={isCreate ? 'Usuario Creado' : 'Usuario Editado'}>
+            <Item label="Usuario">
+              <UserDisplayBadge user={{ id: details.targetUserId, role: details.role, name: displayName }} userCatalog={userCatalog} size="md" className="font-sans" />
+            </Item>
+            <Item label="Rol" value={roleLabel} />
+            {details.avatar && <Item label="Avatar / iniciales" value={details.avatar} />}
+            {details.theme && <Item label="Tema" value={details.theme === 'dark' ? 'Oscuro' : 'Claro'} />}
+            {details.nameColor && (
+              <Item label="Color del nombre">
+                <span className="inline-flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full border border-slate-300" style={{ backgroundColor: details.nameColor }} />
+                  <span className="font-mono text-[10px]">{details.nameColor}</span>
+                </span>
+              </Item>
+            )}
+          </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+    }
+
+    case 'Permisos de Usuario Actualizados': {
+      const displayName = getManagedUserDisplayName(details);
+      const roleLabel = getManagedUserRoleLabel(details.role);
+      const override = details.permissionsOverride || details.permissions_override || {};
+      const effectivePermissions = getEffectivePermissions({ role: details.role, permissionsOverride: override });
+      const permissionSummary = getPermissionSummary(effectivePermissions);
+      const overrideEntries = Object.entries(override);
+
+      return (
+        <div className="space-y-4">
+          <Card icon={'\u{1F510}'} title="Permisos Actualizados">
+            <Item label="Usuario">
+              <UserDisplayBadge user={{ id: details.targetUserId, role: details.role, name: displayName }} userCatalog={userCatalog} size="md" className="font-sans" />
+            </Item>
+            <Item label="Rol" value={roleLabel} />
+            <Item label="Aplicacion" value={details.applyNow ? 'Aplicar ahora' : 'Proxima sesion'} />
+            {details.permissionsVersion != null && <Item label="Version" value={details.permissionsVersion} />}
+          </Card>
+          <Card icon={'\u{1F4CB}'} title="Resumen efectivo">
+            <Item label="Modulos visibles" value={permissionSummary.visibleTabs.length} />
+            <Item label="Acciones habilitadas" value={permissionSummary.enabledActions.length} />
+          </Card>
+          {permissionSummary.visibleTabs.length > 0 && (
+            <Card icon={'\u{1F4C2}'} title="Modulos visibles">
+              <div className="flex flex-wrap gap-2">
+                {permissionSummary.visibleTabs.map((tab) => (
+                  <Badge key={tab} color="blue">{tab}</Badge>
+                ))}
+              </div>
+            </Card>
+          )}
+          {overrideEntries.length > 0 && (
+            <Card icon={'\u2699'} title="Overrides guardados">
+              <div className="space-y-[6px]">
+                {overrideEntries.map(([key, value]) => (
+                  <div key={key} className="flex items-center justify-between px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1]">
+                    <span className="text-slate-700 font-medium">{PERMISSION_LABELS[key] || key}</span>
+                    <Badge color={value ? 'green' : 'red'}>{value ? 'Habilitado' : 'Oculto'}</Badge>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
           <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
@@ -1743,10 +1882,12 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
       return (
         <div className="space-y-4">
           <Card icon="🔑" title="Sesión Iniciada">
-            <Item label="Usuario" value={roleName} />
+            <Item label="Usuario">
+              <UserDisplayBadge user={{ role: details.role, name: roleName }} userCatalog={userCatalog} size="md" className="font-sans" />
+            </Item>
             <Item label="Nivel de Acceso">
               <Badge color={isAdmin ? 'indigo' : 'green'}>
-                {isAdmin ? 'Administrador' : 'Vendedor'}
+                {isAdmin ? 'Administrador' : 'Caja'}
               </Badge>
             </Item>
           </Card>
@@ -1825,6 +1966,88 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf }) {
         </div>
       );
     }
+
+    case 'Nuevo Contacto Agenda': {
+      const contactType = details.contactType === 'wholesaler' ? 'Mayorista' : 'Proveedor';
+      return (
+        <div className="space-y-4">
+          <Card icon="📋" title="Nuevo Contacto">
+            <Item label="Nombre" value={details.name || '-'} />
+            <Item label="Tipo">
+              <Badge color={details.contactType === 'wholesaler' ? 'purple' : 'blue'}>{contactType}</Badge>
+            </Item>
+            {details.contactPerson && <Item label="Persona de Contacto" value={details.contactPerson} />}
+            {details.phone && <Item label="Teléfono" value={details.phone} />}
+            {details.email && <Item label="Email" value={details.email} />}
+            {details.web && <Item label="Web" value={details.web} />}
+            {details.taxId && <Item label="CUIT/DNI" value={details.taxId} />}
+          </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+    }
+
+    case 'Edicion Agenda': {
+      const contactType = details.contactType === 'wholesaler' ? 'Mayorista' : 'Proveedor';
+      
+      if (details.changes && typeof details.changes === 'object' && !Array.isArray(details.changes) && Object.keys(details.changes).length > 0) {
+        const fieldNames = {
+          name: 'Nombre', contactType: 'Tipo', contactPerson: 'Persona Contacto',
+          phone: 'Teléfono', email: 'Email', web: 'Sitio Web',
+          taxId: 'CUIT/DNI', address: 'Dirección', notes: 'Notas'
+        };
+        return (
+          <div className="space-y-4">
+            <Card icon="📋" title="Contacto Modificado">
+              <Item label="Nombre" value={details.name || '-'} />
+            </Card>
+            <Card icon="🔄" title="Cambios Realizados">
+              {Object.entries(details.changes).map(([key, val]) => (
+                <ChangeRow
+                  key={key}
+                  field={fieldNames[key] || key}
+                  oldVal={val.old}
+                  newVal={val.new}
+                />
+              ))}
+            </Card>
+            <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+          </div>
+        );
+      }
+
+      return (
+        <div className="space-y-4">
+          <Card icon="📋" title="Contacto Actual">
+            <Item label="Nombre" value={details.name || '-'} />
+            <Item label="Tipo">
+              <Badge color={details.contactType === 'wholesaler' ? 'purple' : 'blue'}>{contactType}</Badge>
+            </Item>
+            {details.contactPerson && <Item label="Persona de Contacto" value={details.contactPerson} />}
+            {details.phone && <Item label="Teléfono" value={details.phone} />}
+            {details.email && <Item label="Email" value={details.email} />}
+          </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+    }
+
+    case 'Baja Agenda':
+      return (
+        <div className="space-y-4">
+          <Card icon="📋" title="Contacto Eliminado">
+            <Item label="Nombre" value={details.name || '-'} />
+            <Item label="Tipo">
+              <Badge color={details.contactType === 'wholesaler' ? 'purple' : 'blue'}>
+                {details.contactType === 'wholesaler' ? 'Mayorista' : 'Proveedor'}
+              </Badge>
+            </Item>
+            {details.contactPerson && <Item label="Persona de Contacto" value={details.contactPerson} />}
+            {details.phone && <Item label="Teléfono" value={details.phone} />}
+          </Card>
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
 
     default: {
       return (

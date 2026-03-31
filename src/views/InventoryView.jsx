@@ -22,7 +22,10 @@ import {
 } from 'lucide-react';
 // ♻️ FIX: Importamos FancyPrice junto con helpers
 import { formatStock, formatNumber } from '../utils/helpers';
+import { hasPermission } from '../utils/userPermissions';
 import { FancyPrice } from '../components/FancyPrice';
+
+const INVENTORY_BATCH_SIZE = 50;
 
 // ✨ HELPER: Verifica si la fecha es menor a 14 días o ya pasó
 const isExpiringSoon = (dateString) => {
@@ -43,10 +46,15 @@ export default function InventoryView({
   setIsModalOpen, setEditingProduct, handleDeleteProduct,
   inventoryViewMode, setInventoryViewMode, gridColumns, setGridColumns,
   currentUser,
-  closeDetailsToken
+  closeDetailsToken,
+  navigationRequest,
 }) {
   const [selectedProduct, setSelectedProduct] = useState(null); 
   const [showGridMenu, setShowGridMenu] = useState(false);
+  const canCreateProducts = hasPermission(currentUser, 'inventory.create');
+  const canEditProducts = hasPermission(currentUser, 'inventory.edit');
+  const canDeleteProducts = hasPermission(currentUser, 'inventory.delete');
+  const hasInventoryWriteAccess = canEditProducts || canDeleteProducts;
   
   // ✨ ESTADOS DE FILTROS RÁPIDOS
   const [showOnlyOutOfStock, setShowOnlyOutOfStock] = useState(false);
@@ -54,11 +62,11 @@ export default function InventoryView({
   
   const [sortBy, setSortBy] = useState('title-asc'); // ✨ ESTADO PARA EL ORDEN
 
-  const [visibleCount, setVisibleCount] = useState(40);
+  const [visibleCount, setVisibleCount] = useState(INVENTORY_BATCH_SIZE);
 
   // ✨ EFECTO "PUENTE": Atrapa la orden del Dashboard y activa los botones
   useEffect(() => {
-    if (inventorySearch === 'AGOTADOS') {
+    if (inventorySearch === 'AGOTADOS' || inventorySearch === 'SIN STOCK') {
       setShowOnlyOutOfStock(true);
       setShowOnlyExpirations(false);
       setInventorySearch(''); // Borramos la palabra del buscador
@@ -67,8 +75,8 @@ export default function InventoryView({
       setShowOnlyOutOfStock(false);
       setInventorySearch(''); // Borramos la palabra del buscador
     } else {
-      // Si el usuario busca algo normal, reseteamos la cantidad visible a 40
-      setVisibleCount(40);
+      // Si el usuario busca algo normal, reseteamos la carga visible al primer lote
+      setVisibleCount(INVENTORY_BATCH_SIZE);
     }
   }, [inventorySearch, setInventorySearch]);
 
@@ -77,6 +85,34 @@ export default function InventoryView({
       setSelectedProduct(null);
     }
   }, [closeDetailsToken]);
+
+  useEffect(() => {
+    if (!navigationRequest?.token) return;
+
+    if (navigationRequest.mode === 'out_of_stock') {
+      setShowOnlyOutOfStock(true);
+      setShowOnlyExpirations(false);
+    } else if (navigationRequest.mode === 'expirations') {
+      setShowOnlyExpirations(true);
+      setShowOnlyOutOfStock(false);
+    } else {
+      setShowOnlyOutOfStock(false);
+      setShowOnlyExpirations(false);
+    }
+
+    if (navigationRequest.productId !== undefined && navigationRequest.productId !== null) {
+      const matchedProduct = (inventory || []).find((product) => String(product.id) === String(navigationRequest.productId));
+      setSelectedProduct(matchedProduct || null);
+    } else if (navigationRequest.searchQuery) {
+      const normalizedQuery = String(navigationRequest.searchQuery).trim().toLowerCase();
+      const matchedProduct = (inventory || []).find((product) => String(product.title || '').trim().toLowerCase() === normalizedQuery);
+      setSelectedProduct(matchedProduct || null);
+    } else {
+      setSelectedProduct(null);
+    }
+
+    setVisibleCount(INVENTORY_BATCH_SIZE);
+  }, [navigationRequest, inventory]);
 
   const filteredInventory = (inventory || []).filter((item) => {
     const searchString = (inventorySearch || '').toLowerCase().trim();
@@ -125,12 +161,14 @@ export default function InventoryView({
     const { scrollTop, clientHeight, scrollHeight } = e.target;
     if (scrollHeight - scrollTop <= clientHeight + 400) {
       if (visibleCount < sortedInventory.length) {
-        setVisibleCount((prev) => prev + 40);
+        setVisibleCount((prev) => prev + INVENTORY_BATCH_SIZE);
       }
     }
   };
 
   const displayedInventory = sortedInventory.slice(0, visibleCount);
+  const totalInventoryCount = (inventory || []).length;
+  const visibleInventoryCount = filteredInventory.length;
 
   const handleCardClick = (product) => {
     if (selectedProduct && selectedProduct.id === product.id) {
@@ -169,7 +207,6 @@ export default function InventoryView({
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
               <input type="text" placeholder="Buscar producto..." className="w-full pl-10 pr-4 py-2 border rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-fuchsia-500 outline-none transition-all" value={inventorySearch} onChange={(e) => setInventorySearch(e.target.value)} />
             </div>
-            
             <div className="relative">
               <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
               <select className="pl-9 pr-8 py-2 border rounded-lg bg-slate-50 text-sm focus:ring-2 focus:ring-fuchsia-500 outline-none appearance-none cursor-pointer" value={inventoryCategoryFilter} onChange={(e) => setInventoryCategoryFilter(e.target.value)}>
@@ -244,7 +281,15 @@ export default function InventoryView({
               <button onClick={() => setInventoryViewMode('grid')} className={`p-1.5 rounded-md transition-all ${inventoryViewMode === 'grid' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`} title="Vista Cuadrícula"><LayoutGrid size={18} /></button>
               <button onClick={() => setInventoryViewMode('list')} className={`p-1.5 rounded-md transition-all ${inventoryViewMode === 'list' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`} title="Vista Lista"><List size={18} /></button>
             </div>
-            {currentUser?.role === 'admin' && (
+            <div className="hidden sm:flex items-center gap-2 px-3 py-2 rounded-lg border bg-slate-50 text-slate-600 shrink-0">
+              <Package size={16} className="text-fuchsia-500" />
+              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Productos</span>
+              <span className="text-sm font-extrabold text-slate-800">{formatNumber(visibleInventoryCount)}</span>
+              {visibleInventoryCount !== totalInventoryCount && (
+                <span className="text-[10px] font-semibold text-slate-400">de {formatNumber(totalInventoryCount)}</span>
+              )}
+            </div>
+            {canCreateProducts && (
               <button onClick={() => setIsModalOpen(true)} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg shadow-slate-900/20"><Plus size={18} /> <span className="hidden sm:inline">Nuevo</span></button>
             )}
           </div>
@@ -427,75 +472,77 @@ export default function InventoryView({
         const expired = isExpiringSoon(selectedProduct.expiration_date);
 
         return (
-        <div className="w-[320px] bg-white border-l shadow-2xl flex flex-col shrink-0 animate-in slide-in-from-right duration-300 relative z-20">
-          <div className="p-4 border-b flex justify-between items-start bg-slate-50">
+        <div className="w-[356px] bg-white border-l shadow-2xl flex flex-col shrink-0 animate-in slide-in-from-right duration-300 relative z-20">
+          <div className="px-4 py-3 border-b flex justify-between items-start bg-slate-50">
             <div>
-              <h3 className="font-bold text-slate-800 text-lg">Gestión de Stock</h3>
-              <p className="text-xs text-slate-500">ID: {String(selectedProduct.id).padStart(6, '0')}</p>
+              <h3 className="font-bold text-slate-800 text-base">Gesti{"\u00f3"}n de Stock</h3>
+              <p className="text-[11px] text-slate-500">ID: {String(selectedProduct.id).padStart(6, '0')}</p>
             </div>
-            <button onClick={() => setSelectedProduct(null)} className="text-slate-400 hover:text-slate-700 hover:bg-slate-200 p-1 rounded-full transition"><X size={20} /></button>
+            <button onClick={() => setSelectedProduct(null)} className="text-slate-400 hover:text-slate-700 hover:bg-slate-200 p-1 rounded-full transition"><X size={18} /></button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-5 space-y-6">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
             
             {/* Preview */}
             <div className="text-center">
-              <div className={`w-32 h-32 bg-slate-100 rounded-xl mx-auto mb-3 overflow-hidden border shadow-sm relative group ${expired ? 'ring-2 ring-red-500' : ''}`}>
+              <div className={`w-40 h-40 bg-slate-100 rounded-xl mx-auto overflow-hidden border shadow-sm relative group ${expired ? 'ring-2 ring-red-500' : ''}`}>
                 {selectedProduct.image ? (
                   <img src={selectedProduct.image} alt="" className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center bg-slate-200 text-slate-500 font-bold p-2 text-sm">{selectedProduct.title}</div>
                 )}
-                {currentUser?.role === 'admin' && (
+                {canEditProducts && (
                   <button onClick={() => setEditingProduct(selectedProduct)} className="absolute inset-0 bg-black/40 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity font-bold text-xs"><Edit size={16} className="mr-1" /> Cambiar</button>
                 )}
               </div>
-              <h2 className="font-bold text-xl text-slate-800 leading-tight mb-1">{selectedProduct.title}</h2>
-              <div className="flex justify-center gap-2 flex-wrap">
+              <div className="mt-2.5">
+                <h2 className="font-bold text-base text-slate-800 leading-tight mb-2 break-words">{selectedProduct.title}</h2>
+              <div className="flex justify-center gap-1.5 flex-wrap mb-1">
                 {(selectedProduct.categories || []).map(cat => (
-                  <span key={cat} className="px-2 py-0.5 bg-fuchsia-100 text-fuchsia-700 text-[10px] font-bold rounded-full border border-fuchsia-200">{cat}</span>
+                  <span key={cat} className="px-2 py-0.5 bg-fuchsia-100 text-fuchsia-700 text-[9px] font-bold rounded-full border border-fuchsia-200">{cat}</span>
                 ))}
                 {isWeight && (
-                  <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold rounded-full border border-amber-200 flex items-center gap-1">
-                    <Scale size={10} /> Peso
+                  <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[9px] font-bold rounded-full border border-amber-200 flex items-center gap-1">
+                    <Scale size={9} /> Peso
                   </span>
                 )}
                 {expired && (
-                  <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[10px] font-bold rounded-full border border-red-200 flex items-center gap-1">
-                    <CalendarX size={10} /> Vencido
+                  <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[9px] font-bold rounded-full border border-red-200 flex items-center gap-1">
+                    <CalendarX size={9} /> Vencido
                   </span>
                 )}
+              </div>
               </div>
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="p-3 bg-blue-50 rounded-xl border border-blue-100">
-                <div className="flex items-center gap-2 text-blue-600 mb-1">
-                  {isWeight ? <Scale size={16} /> : <Package size={16} />}
-                  <span className="text-xs font-bold uppercase">Stock</span>
+            <div className="grid grid-cols-2 gap-2.5">
+              <div className="p-2.5 bg-blue-50 rounded-xl border border-blue-100">
+                <div className="flex items-center gap-1.5 text-blue-600 mb-1">
+                  {isWeight ? <Scale size={14} /> : <Package size={14} />}
+                  <span className="text-[11px] font-bold uppercase">Stock</span>
                 </div>
-                <p className={`text-2xl font-bold ${getStockColorClass(selectedProduct)}`}>
+                <p className={`text-xl font-bold ${getStockColorClass(selectedProduct)}`}>
                   {formatStock(selectedProduct)}
                 </p>
               </div>
-              <div className="p-3 bg-green-50 rounded-xl border border-green-100">
-                <div className="flex items-center gap-2 text-green-600 mb-1">
-                  <DollarSign size={16} />
-                  <span className="text-xs font-bold uppercase">Precio</span>
+              <div className="p-2.5 bg-green-50 rounded-xl border border-green-100">
+                <div className="flex items-center gap-1.5 text-green-600 mb-1">
+                  <DollarSign size={14} />
+                  <span className="text-[11px] font-bold uppercase">Precio</span>
                 </div>
-                <p className="text-2xl font-bold text-green-900">
+                <p className="text-xl font-bold text-green-900">
                   <FancyPrice amount={isWeight ? selectedProduct.price * 1000 : selectedProduct.price} />
-                  {isWeight && <span className="text-sm font-medium">/kg</span>}
+                  {isWeight && <span className="text-[11px] font-medium">/kg</span>}
                 </p>
               </div>
             </div>
 
             {/* Equivalencias peso */}
             {isWeight && (
-              <div className="bg-amber-50 rounded-xl p-3 border border-amber-100 space-y-2">
-                <p className="text-xs font-bold text-amber-700 flex items-center gap-1"><Scale size={12} /> Equivalencias</p>
-                <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="bg-amber-50 rounded-xl p-2.5 border border-amber-100 space-y-2">
+                <p className="text-[11px] font-bold text-amber-700 flex items-center gap-1"><Scale size={11} /> Equivalencias</p>
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
                   <div className="bg-white rounded-lg p-2 text-center border">
                     <p className="text-[10px] text-slate-400">Precio/g</p>
                     <p className="font-bold text-amber-700"><FancyPrice amount={selectedProduct.price} /></p>
@@ -509,30 +556,30 @@ export default function InventoryView({
             )}
 
             {/* Datos */}
-            <div className="bg-slate-50 rounded-xl p-4 space-y-3 border">
-              <div className="flex justify-between items-center text-sm border-b border-slate-200 pb-2">
-                <span className="text-slate-500 flex items-center gap-2"><ScanBarcode size={14} /> Código</span>
+            <div className="bg-slate-50 rounded-xl p-3.5 space-y-2.5 border">
+              <div className="flex justify-between items-center text-[13px] border-b border-slate-200 pb-2">
+                <span className="text-slate-500 flex items-center gap-2"><ScanBarcode size={13} /> C{"\u00f3"}digo</span>
                 <span className="font-mono font-bold text-slate-700">{selectedProduct.barcode || '-'}</span>
               </div>
               {selectedProduct.expiration_date && (
-                <div className="flex justify-between items-center text-sm border-b border-slate-200 pb-2">
-                  <span className="text-slate-500 flex items-center gap-2"><CalendarX size={14} /> Vencimiento</span>
+                <div className="flex justify-between items-center text-[13px] border-b border-slate-200 pb-2">
+                  <span className="text-slate-500 flex items-center gap-2"><CalendarX size={13} /> Vencimiento</span>
                   <span className={`font-bold ${expired ? 'text-red-600' : 'text-slate-700'}`}>
                     {new Date(selectedProduct.expiration_date).toLocaleDateString('es-AR')}
                   </span>
                 </div>
               )}
-              {currentUser?.role === 'admin' && (
+              {canEditProducts && (
                 <>
-                  <div className="flex justify-between items-center text-sm border-b border-slate-200 pb-2">
-                    <span className="text-slate-500 flex items-center gap-2"><DollarSign size={14} /> Costo</span>
+                  <div className="flex justify-between items-center text-[13px] border-b border-slate-200 pb-2">
+                    <span className="text-slate-500 flex items-center gap-2"><DollarSign size={13} /> Costo</span>
                     <span className="font-bold text-slate-700">
                       <FancyPrice amount={isWeight ? (selectedProduct.purchasePrice * 1000) : (selectedProduct.purchasePrice || 0)} />
-                      {isWeight && <span className="text-xs text-slate-400">/kg</span>}
+                      {isWeight && <span className="text-[11px] text-slate-400">/kg</span>}
                     </span>
                   </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-slate-500 flex items-center gap-2"><BarChart3 size={14} /> Margen</span>
+                  <div className="flex justify-between items-center text-[13px]">
+                    <span className="text-slate-500 flex items-center gap-2"><BarChart3 size={13} /> Margen</span>
                     <span className="font-bold text-green-600">
                       {selectedProduct.price && selectedProduct.purchasePrice 
                         ? `${Math.round(((selectedProduct.price - selectedProduct.purchasePrice) / selectedProduct.purchasePrice) * 100)}%`
@@ -544,15 +591,10 @@ export default function InventoryView({
             </div>
 
             {/* Acciones */}
-            {currentUser?.role === 'admin' ? (
+            {hasInventoryWriteAccess && (
               <div className="space-y-3 pt-2">
-                <button onClick={() => setEditingProduct(selectedProduct)} className="w-full py-3 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 transition flex items-center justify-center gap-2 shadow-lg"><Edit size={18} /> Editar Detalles</button>
-                <button onClick={() => { handleDeleteProduct(selectedProduct.id); setSelectedProduct(null); }} className="w-full py-3 bg-white text-red-600 border border-red-200 rounded-xl font-bold hover:bg-red-50 transition flex items-center justify-center gap-2"><Trash2 size={18} /> Eliminar Producto</button>
-              </div>
-            ) : (
-              <div className="p-4 bg-slate-100 rounded-lg text-center text-xs text-slate-500 border border-dashed border-slate-300">
-                <p className="font-bold text-slate-600 mb-1">Modo Lectura</p>
-                <p>Contacta al dueño para realizar cambios.</p>
+                {canEditProducts && <button onClick={() => setEditingProduct(selectedProduct)} className="w-full py-2.5 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 transition flex items-center justify-center gap-2 shadow-lg"><Edit size={17} /> Editar Detalles</button>}
+                {canDeleteProducts && <button onClick={() => { handleDeleteProduct(selectedProduct.id); setSelectedProduct(null); }} className="w-full py-2.5 bg-white text-red-600 border border-red-200 rounded-xl font-bold hover:bg-red-50 transition flex items-center justify-center gap-2"><Trash2 size={17} /> Eliminar Producto</button>}
               </div>
             )}
           </div>

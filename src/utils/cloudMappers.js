@@ -41,6 +41,19 @@ export const mapMemberRecords = (clients = []) =>
     createdAt: client.created_at,
   }));
 
+export const mapAgendaContactRecord = (contact) => ({
+  ...contact,
+  contactType: contact.contact_type || 'supplier',
+  taxId: contact.tax_id || '',
+  contactPerson: contact.contact_person || '',
+  isActive: contact.is_active !== false,
+  createdAt: contact.created_at || null,
+  updatedAt: contact.updated_at || null,
+});
+
+export const mapAgendaContactRecords = (contacts = []) =>
+  contacts.map(mapAgendaContactRecord);
+
 export const mapLogRecords = (logs = []) =>
   logs.map((log) => {
     const action = MODIFIED_SALE_ACTIONS.has(log.action) ? 'Modificación Pedido' : log.action;
@@ -59,7 +72,9 @@ export const mapLogRecords = (logs = []) =>
       id: log.id,
       action,
       details,
-      user: log.user,
+      user: log.user_name || log.user || details?.userName || 'Sistema',
+      userId: log.user_id || details?.userId || null,
+      userRole: log.user_role || details?.userRole || details?.role || null,
       reason: log.reason,
       date: formatDateAR(new Date(log.created_at)),
       timestamp: formatTimeFullAR(new Date(log.created_at)),
@@ -79,6 +94,7 @@ const mapSaleItemRecord = (item) => ({
   title: item.product_title,
   qty: Number(item.quantity ?? 0),
   price: Number(item.price ?? 0),
+  subtotal: Number(item.subtotal ?? item.line_subtotal ?? 0) || undefined,
   isReward: Boolean(item.is_reward),
   productId: item.product_id,
   product_type: item.product_type || null,
@@ -89,6 +105,7 @@ const mapRecoveredSaleItem = (item) => ({
   title: item.title || item.product_title || item.name || 'Producto Recuperado',
   qty: Number(item.quantity ?? item.qty ?? 1),
   price: Number(item.price ?? 0),
+  subtotal: Number(item.subtotal ?? item.lineSubtotal ?? item.line_total ?? item.lineTotal ?? 0) || undefined,
   isReward: Boolean(item.isReward ?? item.is_reward ?? false),
   productId: item.productId || item.id || item.product_id || null,
   product_type: item.product_type || null,
@@ -158,6 +175,7 @@ const enrichSaleItemsWithSnapshot = (items = [], snapshotItems = []) => {
       title: item.title || snapshotItem.title,
       qty: item.qty ?? snapshotItem.qty,
       price: item.price ?? snapshotItem.price,
+      subtotal: item.subtotal ?? snapshotItem.subtotal ?? undefined,
       isReward: item.isReward ?? snapshotItem.isReward,
       productId: item.productId || snapshotItem.productId,
       product_type: item.product_type || snapshotItem.product_type || null,
@@ -221,6 +239,8 @@ export const mapSaleRecords = (sales = [], parsedLogs = []) =>
       pointsEarned: sale.points_earned,
       pointsSpent: sale.points_spent,
       user: sale.user_name || 'Desconocido',
+      userId: sale.user_id || null,
+      userRole: sale.user_role || null,
       status: 'completed',
       isRestored: Boolean(restoreLog),
       restoredAt: restoreLog ? `${restoreLog.date} ${restoreLog.timestamp}` : null,
@@ -241,6 +261,8 @@ export const mapExpenseRecords = (expenses = []) =>
       date: formatDateAR(new Date(expense.created_at)),
       time: formatTimeFullAR(new Date(expense.created_at)),
       user: expense.user_name || 'Sistema',
+      userId: expense.user_id || null,
+      userRole: expense.user_role || null,
     };
 
     mappedExpense.isTest = isTestRecord({
@@ -257,6 +279,8 @@ export const mapCashClosureRecord = (closure) => ({
   openTime: closure.open_time,
   closeTime: closure.close_time,
   user: closure.user_name,
+  userId: closure.user_id || null,
+  userRole: closure.user_role || null,
   type: closure.type,
   openingBalance: Number(closure.opening_balance || 0),
   totalSales: Number(closure.total_sales || 0),

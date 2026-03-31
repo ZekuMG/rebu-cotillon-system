@@ -1,5 +1,23 @@
 import { useDeferredValue, useMemo, useState } from 'react';
 
+const SESSION_ACTIONS = new Set([
+  'Sesion Iniciada',
+  'Sesion Cerrada',
+  'Sesion Ausente',
+  'Sesion Reanudada',
+  'Sesion Expirada',
+  'Sesi\u00f3n Iniciada',
+  'Sesi\u00f3n Cerrada',
+  'Sesi\u00f3n Ausente',
+  'Sesi\u00f3n Reanudada',
+  'Sesi\u00f3n Expirada',
+  'Inicio de Sesi\u00f3n',
+  'Cierre de Sesi\u00f3n',
+  'Ausencia de Sesi\u00f3n',
+  'Reanudaci\u00f3n de Sesi\u00f3n',
+  'Expiraci\u00f3n de Sesi\u00f3n',
+]);
+
 const isCouponDetails = (details) => {
   if (!details || typeof details !== 'object') return false;
 
@@ -10,20 +28,25 @@ const isCouponDetails = (details) => {
 };
 
 const getCouponActionFromOfferAction = (action) => {
-  if (action === 'Oferta Creada' || action === 'Cupón Creado') return 'Cupón Creado';
-  if (action === 'Oferta Editada' || action === 'Cupón Editado') return 'Cupón Editado';
-  if (action === 'Oferta Eliminada' || action === 'Cupón Eliminado') return 'Cupón Eliminado';
+  if (action === 'Oferta Creada' || action === 'Cup\u00f3n Creado') return 'Cup\u00f3n Creado';
+  if (action === 'Oferta Editada' || action === 'Cup\u00f3n Editado') return 'Cup\u00f3n Editado';
+  if (action === 'Oferta Eliminada' || action === 'Cup\u00f3n Eliminado') return 'Cup\u00f3n Eliminado';
   return action;
 };
 
 const normalizeAction = (action) => {
   const actionMap = {
     'Nueva Venta': 'Venta Realizada',
-    'Edición Venta': 'Venta Modificada',
+    'Edici\u00f3n Venta': 'Venta Modificada',
     Venta: 'Venta Realizada',
     Gasto: 'Nuevo Gasto',
     'Registrar Gasto': 'Nuevo Gasto',
     'Gasto Registrado': 'Nuevo Gasto',
+    'Borrado Permanente': 'Venta Eliminada',
+    'Editar Categor\u00eda': 'Categor\u00eda',
+    'Editar Categor\u00c3\u0192\u00c2\u00ada': 'Categor\u00eda',
+    'Cierre de caja (Modo Prueba)': 'Cierre de Caja (Silencioso)',
+    'Cierre de Caja (Modo Prueba)': 'Cierre de Caja (Silencioso)',
   };
 
   return actionMap[action] || action;
@@ -37,7 +60,8 @@ const detectActionType = (log) => {
     'Venta Realizada',
     'Venta Modificada',
     'Venta Anulada',
-    'Edición Producto',
+    'Edici\u00f3n Producto',
+    'Edici\u00f3n Masiva',
     'Venta Eliminada',
     'Venta Restaurada',
     'Presupuesto Creado',
@@ -52,16 +76,23 @@ const detectActionType = (log) => {
     'Oferta Creada',
     'Oferta Editada',
     'Oferta Eliminada',
-    'Cupón Creado',
-    'Cupón Editado',
-    'Cupón Eliminado',
+    'Cup\u00f3n Creado',
+    'Cup\u00f3n Editado',
+    'Cup\u00f3n Eliminado',
     'Nuevo Socio',
-    'Edición de Puntos',
-    'Edición de Socio',
+    'Edici\u00f3n de Puntos',
+    'Edici\u00f3n de Socio',
     'Baja de Socio',
     'Nuevo Gasto',
     'Cierre de Caja',
-    'Cierre Automático',
+    'Cierre de Caja (Silencioso)',
+    'Cierre Autom\u00e1tico',
+    'Apertura de Caja',
+    'Ajustes de Usuario',
+    'Usuario Creado',
+    'Usuario Editado',
+    'Permisos de Usuario Actualizados',
+    'Categor\u00eda',
   ];
 
   if (!details || typeof details === 'string') return action;
@@ -77,9 +108,9 @@ const detectActionType = (log) => {
     !details.transactionId &&
     !details.productChanges &&
     !details.itemsSnapshot &&
-    (details.changes || action.includes('Edición'))
+    (details.changes || action.includes('Edici'))
   ) {
-    return 'Edición Producto';
+    return 'Edici\u00f3n Producto';
   }
 
   if (details.items && details.total !== undefined && !details.changes && !details.itemsSnapshot && !details.productChanges) {
@@ -95,7 +126,8 @@ const detectActionType = (log) => {
   }
 
   if (details.salesCount !== undefined && details.totalSales !== undefined && details.finalBalance !== undefined) {
-    return action.includes('Automático') ? 'Cierre Automático' : 'Cierre de Caja';
+    if (action.includes('Silencioso')) return 'Cierre de Caja (Silencioso)';
+    return action.includes('Autom') ? 'Cierre Autom\u00e1tico' : 'Cierre de Caja';
   }
 
   if (details.amount !== undefined && details.scheduledClosingTime !== undefined && details.salesCount === undefined) {
@@ -106,14 +138,22 @@ const detectActionType = (log) => {
     return 'Nuevo Gasto';
   }
 
-  if (details.type && details.name) return 'Categoría';
+  if (details.type && details.name) return 'Categor\u00eda';
+
+  if ((details.old || details.oldName) && (details.new || details.name)) {
+    return 'Categor\u00eda';
+  }
 
   if ((details.title || details.name) && details.price !== undefined && (action === 'Alta de Producto' || action === 'Baja Producto')) {
     return action === 'Baja Producto' ? 'Baja Producto' : 'Alta de Producto';
   }
 
-  if (action === 'Edición Masiva Categorías' || (details.count !== undefined && Array.isArray(details.details))) {
-    return 'Edición Masiva Categorías';
+  if (action === 'Edici\u00f3n Masiva Categor\u00edas' || (details.count !== undefined && Array.isArray(details.details))) {
+    return 'Edici\u00f3n Masiva Categor\u00edas';
+  }
+
+  if (action === 'Edici\u00f3n Masiva' || (details.count !== undefined && Array.isArray(details.items))) {
+    return 'Edici\u00f3n Masiva';
   }
 
   return action;
@@ -196,11 +236,11 @@ export function useLogsFilter(dailyLogs = []) {
 
   const deferredFilterSearch = useDeferredValue(filterSearch);
 
-  const normalizedLogs = useMemo(
-    () => {
-      const safeLogs = Array.isArray(dailyLogs) ? dailyLogs : [];
+  const normalizedLogs = useMemo(() => {
+    const safeLogs = Array.isArray(dailyLogs) ? dailyLogs : [];
 
-      return safeLogs.map((log) => {
+    return safeLogs
+      .map((log) => {
         const action = detectActionType(log);
 
         return {
@@ -211,10 +251,9 @@ export function useLogsFilter(dailyLogs = []) {
           _fullTimestamp: getFullTimestamp(log),
           _searchIndex: buildSearchIndex(log, action),
         };
-      });
-    },
-    [dailyLogs]
-  );
+      })
+      .filter((log) => !SESSION_ACTIONS.has(log.action) && !SESSION_ACTIONS.has(log._originalAction));
+  }, [dailyLogs]);
 
   const uniqueActions = useMemo(() => {
     const validLogsForSelect = normalizedLogs.filter((log) => !log.isTest);
@@ -250,7 +289,7 @@ export function useLogsFilter(dailyLogs = []) {
         return false;
       }
 
-      if (filterAction && log.action !== filterAction && !(filterAction === 'Venta Modificada' && log.action === 'Modificación Pedido')) {
+      if (filterAction && log.action !== filterAction && !(filterAction === 'Venta Modificada' && log.action === 'Modificaci\u00f3n Pedido')) {
         return false;
       }
 

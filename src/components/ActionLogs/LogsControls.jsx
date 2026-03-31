@@ -3,7 +3,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   FilterX,
   Calendar,
-  User,
   ChevronDown,
   Search,
   Activity
@@ -116,18 +115,34 @@ export default function LogsControls({
   filterDateStart, setFilterDateStart,
   filterDateEnd, setFilterDateEnd,
   filterUser, setFilterUser,
+  userFilterOptions = [],
   filterAction, setFilterAction,
   filterSearch, setFilterSearch,
   uniqueActions = []
 }) {
+  const [isUserFilterOpen, setIsUserFilterOpen] = useState(false);
+  const userFilterRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (userFilterRef.current && !userFilterRef.current.contains(event.target)) {
+        setIsUserFilterOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const selectedUserFilter = userFilterOptions.find((option) => option.value === filterUser) || null;
+
   return (
-    <div className="p-2 border-b border-slate-200 bg-slate-50 shrink-0 flex flex-wrap items-center gap-2 relative z-20">
+    <div className="px-2.5 py-1.5 border-b border-slate-200 bg-slate-50 shrink-0 flex flex-wrap items-center gap-1.5 relative z-20">
       
       {/* Botón Limpiar */}
       {hasActiveFilters && (
         <button
           onClick={onClearFilters}
-          className="flex items-center gap-1 px-2 h-[30px] text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors border border-red-100 shrink-0"
+          className="flex items-center gap-1 px-2 h-[28px] text-[11px] font-bold text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors border border-red-100 shrink-0"
           title="Limpiar filtros"
         >
           <FilterX size={14} />
@@ -143,14 +158,14 @@ export default function LogsControls({
         <input
           type="text"
           placeholder="Buscar ID, monto, producto..."
-          className="w-full pl-8 pr-2 py-1.5 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none bg-white transition-all h-[30px] shadow-sm"
+          className="w-full pl-8 pr-2 py-1 text-[11px] border border-slate-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none bg-white transition-all h-[28px] shadow-sm"
           value={filterSearch}
           onChange={(e) => setFilterSearch(e.target.value)}
         />
       </div>
 
       {/* Acción Dropdown */}
-      <div className="w-[200px] relative shrink-0">
+      <div className="w-[190px] relative shrink-0">
         <Activity
           size={12}
           className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none z-10"
@@ -162,45 +177,88 @@ export default function LogsControls({
         />
       </div>
 
-      {/* Usuario - FIX: Se quitó el py-1.5 para que el texto no se aplaste verticalmente */}
-      <div className="w-[180px] relative shrink-0">
-        <User
-          size={12}
-          className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
-        />
-        <select
-          className="w-full pl-7 pr-6 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none bg-white appearance-none cursor-pointer transition-all h-[30px] shadow-sm"
-          value={filterUser}
-          onChange={(e) => setFilterUser(e.target.value)}
+      {/* Usuario */}
+      <div className="w-[180px] relative shrink-0" ref={userFilterRef}>
+        <button
+          type="button"
+          onClick={() => setIsUserFilterOpen((prev) => !prev)}
+          className="w-full px-2.5 text-[11px] border border-slate-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none bg-white cursor-pointer transition-all h-[28px] shadow-sm flex items-center justify-between gap-2"
         >
-          <option value="">Todos los Usuarios</option>
-          <option value="Dueño">Dueño</option>
-          <option value="Vendedor">Vendedor</option>
-          <option value="Sistema">Sistema</option>
-        </select>
-        <ChevronDown
-          size={12}
-          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
-        />
+          {selectedUserFilter ? (
+            <span className="flex min-w-0 items-center gap-2">
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-full border border-white/80 shadow-sm"
+                style={{ backgroundColor: selectedUserFilter.color }}
+              />
+              <span className="truncate font-medium text-slate-700">{selectedUserFilter.displayName}</span>
+            </span>
+          ) : (
+            <span className="truncate font-medium text-slate-700">Todos los Usuarios</span>
+          )}
+          <ChevronDown
+            size={12}
+            className={`text-slate-400 transition-transform duration-200 ${isUserFilterOpen ? 'rotate-180' : ''}`}
+          />
+        </button>
+
+        {isUserFilterOpen && (
+          <div className="absolute top-full left-0 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-xl z-50 max-h-[260px] overflow-y-auto py-1 custom-scrollbar">
+            <button
+              type="button"
+              onClick={() => {
+                setFilterUser('');
+                setIsUserFilterOpen(false);
+              }}
+              className={`w-full text-left px-3 py-1.5 text-[10px] transition ${
+                !selectedUserFilter ? 'bg-slate-100 text-slate-800 font-semibold' : 'text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Todos los Usuarios
+            </button>
+
+            {userFilterOptions.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => {
+                  setFilterUser(option.value);
+                  setIsUserFilterOpen(false);
+                }}
+                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[10px] transition ${
+                  selectedUserFilter?.key === option.key ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-50'
+                }`}
+                style={{
+                  boxShadow: selectedUserFilter?.key === option.key ? `inset 3px 0 0 ${option.color}` : undefined,
+                }}
+              >
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full border border-white/80 shadow-sm"
+                  style={{ backgroundColor: option.color }}
+                />
+                <span className="truncate font-medium">{option.displayName}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Fechas: Desde - Hasta */}
-      <div className="flex items-center gap-1 shrink-0 bg-white border border-slate-200 rounded-lg p-0.5 shadow-sm">
-        <div className="relative w-[110px]">
+      <div className="flex items-center gap-1 shrink-0 bg-white border border-slate-200 rounded-lg px-1 py-0.5 shadow-sm">
+        <div className="relative w-[106px]">
           <Calendar size={10} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
           <input
             type="date"
-            className="w-full pl-6 pr-1 py-1 text-[11px] border-none rounded-md outline-none bg-transparent h-[24px] cursor-pointer"
+            className="w-full pl-6 pr-1 py-1 text-[10px] border-none rounded-md outline-none bg-transparent h-[22px] cursor-pointer"
             value={filterDateStart}
             onChange={(e) => setFilterDateStart(e.target.value)}
             title="Fecha Desde"
           />
         </div>
-        <span className="text-slate-300 text-[10px] px-1">-</span>
-        <div className="relative w-[110px]">
+        <span className="text-slate-300 text-[9px] px-1">-</span>
+        <div className="relative w-[106px]">
           <input
             type="date"
-            className="w-full px-2 py-1 text-[11px] border-none rounded-md outline-none bg-transparent h-[24px] cursor-pointer"
+            className="w-full px-2 py-1 text-[10px] border-none rounded-md outline-none bg-transparent h-[22px] cursor-pointer"
             value={filterDateEnd}
             onChange={(e) => setFilterDateEnd(e.target.value)}
             title="Fecha Hasta"

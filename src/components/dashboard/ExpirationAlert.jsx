@@ -4,7 +4,7 @@ import { CalendarX, AlertTriangle, Info } from 'lucide-react';
 
 export const ExpirationAlert = ({ expiringProducts = [] }) => {
   return (
-    <div className="bg-white p-5 rounded-xl shadow-sm border border-orange-100 h-full flex flex-col">
+    <div className="bg-white p-5 rounded-xl shadow-sm border border-orange-100 h-full min-h-0 flex flex-col">
       <div className="flex justify-between items-center mb-4">
         <h3 className="font-bold text-slate-800 flex items-center gap-2">
           <CalendarX size={18} className="text-orange-500" />
@@ -15,9 +15,9 @@ export const ExpirationAlert = ({ expiringProducts = [] }) => {
         </span>
       </div>
 
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
+      <div className="custom-scrollbar flex-1 overflow-y-auto pr-1">
         {expiringProducts.length > 0 ? (
-          <div className="space-y-2 pr-1">
+          <div className="space-y-2">
             {expiringProducts.map((product) => {
               const isExpired = product.daysUntil <= 0;
               

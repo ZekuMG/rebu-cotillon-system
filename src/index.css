@@ -118,14 +118,41 @@ body {
   margin: 0;
 }
 
-/* Oculta barras de scroll visuales sin deshabilitar el desplazamiento */
-.custom-scrollbar,
+/* Oculta la barra visual en toda la app sin deshabilitar el scroll */
+html,
+body,
+#root,
+* {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+#root::-webkit-scrollbar,
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.custom-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/* Oculta barras visuales sin deshabilitar el desplazamiento */
 .scrollbar-hide {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
 
-.custom-scrollbar::-webkit-scrollbar,
 .scrollbar-hide::-webkit-scrollbar {
   width: 0;
   height: 0;

@@ -5,7 +5,7 @@
 // ⚠️ WARNING: Credenciales en texto plano — mover a variables de entorno en producción
 export const USERS = {
   admin: { name: 'Dueño', role: 'admin', avatar: 'DU', password: '1234' },
-  seller: { name: 'Vendedor', role: 'seller', avatar: 'VE', password: '4321' },
+  seller: { name: 'Caja', role: 'seller', avatar: 'VE', password: '4321' },
 };
 
 export const INITIAL_MEMBERS = [

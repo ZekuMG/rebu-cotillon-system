@@ -11,14 +11,14 @@ import {
   RotateCcw,
 } from 'lucide-react';
 
-export const GlobalTimeSwitch = ({ globalFilter, setGlobalFilter }) => (
+export const GlobalTimeSwitch = ({ globalFilter, setGlobalFilter, availableFilters = ['day', 'week', 'month', 'year'] }) => (
   <div className="flex gap-1 bg-white border border-slate-200 p-0.5 rounded-lg">
     {[
       { id: 'day', label: 'Diario', Icon: Clock },
       { id: 'week', label: 'Semanal', Icon: Calendar },
       { id: 'month', label: 'Mensual', Icon: CalendarRange },
       { id: 'year', label: 'Anual', Icon: CalendarDays },
-    ].map((opt) => (
+    ].filter((opt) => availableFilters.includes(opt.id)).map((opt) => (
       <button
         key={opt.id}
         onClick={() => setGlobalFilter(opt.id)}

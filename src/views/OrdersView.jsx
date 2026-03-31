@@ -5,6 +5,8 @@ import BudgetBuilderModal from '../components/BudgetBuilderModal';
 import { FancyPrice } from '../components/FancyPrice';
 import { calculateBudgetLineSubtotal, deriveOrderStatus, formatBudgetItemQuantity, hydrateBudgetSnapshot } from '../utils/budgetHelpers';
 import { formatCurrency, formatDateAR } from '../utils/helpers';
+import { hasPermission } from '../utils/userPermissions';
+import useIncrementalFeed from '../hooks/useIncrementalFeed';
 
 const RECORD_TYPE_LABELS = { budget: 'Presupuesto', order: 'Pedido' };
 const STATUS_STYLES = {
@@ -88,7 +90,7 @@ function RecordCard({ record, isActive, onSelect }) {
   );
 }
 
-export default function OrdersView({ budgets, orders, members, inventory, categories, offers, onCreateBudget, onUpdateBudget, onUpdateOrder, onDeleteBudget, onDeleteOrder, onConvertBudgetToOrder, onRegisterOrderPayment, onCancelOrder, onMarkOrderRetired, onPrintRecord }) {
+export default function OrdersView({ budgets, orders, members, inventory, categories, offers, currentUser = null, isLoading = false, emptyStateMessage = '', onCreateBudget, onUpdateBudget, onUpdateOrder, onDeleteBudget, onDeleteOrder, onConvertBudgetToOrder, onRegisterOrderPayment, onCancelOrder, onMarkOrderRetired, onPrintRecord }) {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -103,6 +105,15 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
   const [paymentTarget, setPaymentTarget] = useState(null);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [isSavingPayment, setIsSavingPayment] = useState(false);
+  const canCreateBudget = hasPermission(currentUser, 'orders.createBudget');
+  const canEditBudget = hasPermission(currentUser, 'orders.editBudget');
+  const canDeleteBudget = hasPermission(currentUser, 'orders.deleteBudget');
+  const canCreateOrder = hasPermission(currentUser, 'orders.createOrder');
+  const canEditOrder = hasPermission(currentUser, 'orders.editOrder');
+  const canCancelOrder = hasPermission(currentUser, 'orders.cancelOrder');
+  const canDeleteOrder = hasPermission(currentUser, 'orders.deleteOrder');
+  const canMarkRetired = hasPermission(currentUser, 'orders.markRetired');
+  const canRegisterOrderPayment = hasPermission(currentUser, 'orders.registerPayment');
 
   const membersMap = useMemo(() => new Map((members || []).map((member) => [String(member.id), member])), [members]);
   const inventoryById = useMemo(
@@ -143,6 +154,9 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
       return searchWords.every((word) => haystack.includes(word));
     });
   }, [allRecords, search, statusFilter, typeFilter]);
+  const visibleRecordsFeed = useIncrementalFeed(filteredRecords, {
+    resetKey: `${search}|${typeFilter}|${statusFilter}|${filteredRecords.length}`,
+  });
 
   useEffect(() => {
     if (filteredRecords.length === 0) return void setSelectedKey(null);
@@ -151,6 +165,29 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
   }, [filteredRecords, selectedKey]);
 
   const selectedRecord = filteredRecords.find((record) => `${record.type}-${record.id}` === selectedKey) || null;
+  const hasSourceRecords = (budgets?.length || 0) > 0 || (orders?.length || 0) > 0;
+
+  if (isLoading && !hasSourceRecords) {
+    return (
+      <div className="flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white shadow-sm">
+        <div className="text-center">
+          <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Cargando pedidos</p>
+          <p className="mt-2 text-sm font-medium text-slate-500">Estamos trayendo presupuestos y pedidos sin frenar el resto de la app.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (emptyStateMessage && !hasSourceRecords) {
+    return (
+      <div className="flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white shadow-sm">
+        <div className="max-w-md text-center">
+          <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Pedidos no disponibles</p>
+          <p className="mt-2 text-sm font-medium text-slate-500">{emptyStateMessage}</p>
+        </div>
+      </div>
+    );
+  }
   const linkedOrderForBudget = selectedRecord?.type === 'budget' ? orders.find((order) => String(order.budgetId) === String(selectedRecord.id) && order.isActive !== false) : null;
   const resolveRecordItemProduct = (item) => {
     if (item?.productId !== null && item?.productId !== undefined) {
@@ -270,36 +307,43 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
 
   return (
     <>
-      <div className="grid h-full min-h-0 gap-0 xl:grid-cols-[312px_minmax(0,1fr)]">
+      <div className="grid h-full min-h-0 gap-0 xl:grid-cols-[356px_minmax(0,1fr)]">
         <div className="min-h-0 border-b border-slate-200 bg-white xl:border-b-0 xl:border-r">
           <div className="flex h-full min-h-0 flex-col">
-            <div className="border-b border-slate-200 px-2.5 py-1.5">
-              <div className="flex items-start justify-between gap-3">
-                <div><p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Pedidos y presupuestos</p><p className="text-xs font-medium text-slate-400">Seguimiento operativo de seña, saldo y retiro.</p></div>
-                <button
-                  type="button"
-                  onClick={() => { setEditingBudget(null); setIsBudgetModalOpen(true); }}
+              <div className="border-b border-slate-200 px-2.5 py-1.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div><p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Pedidos y presupuestos</p><p className="text-xs font-medium text-slate-400">Seguimiento operativo de seña, saldo y retiro.</p></div>
+                  {canCreateBudget && <button
+                    type="button"
+                    onClick={() => { setEditingBudget(null); setIsBudgetModalOpen(true); }}
                   className="inline-flex shrink-0 items-center gap-1.5 rounded-2xl border border-sky-200 bg-sky-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-sky-700 transition hover:bg-sky-100"
                 >
                   <Plus size={11} />
                   Crear presupuesto
-                </button>
+                </button>}
               </div>
-              <div className="mt-1.5 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5">
-                <Search size={14} className="text-slate-400" />
-                <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar pedido, cliente o teléfono..." className="w-full bg-transparent text-sm font-medium text-slate-700 outline-none placeholder:text-slate-400" />
+              <div className="mt-2 flex items-center gap-2 rounded-[16px] border border-slate-200 bg-white px-3 py-2 transition focus-within:border-sky-300 focus-within:ring-2 focus-within:ring-sky-100">
+                <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
+                  <Search size={14} />
+                </div>
+                <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar pedido, cliente o teléfono..." className="w-full bg-transparent text-[14px] font-semibold text-slate-700 outline-none placeholder:font-medium placeholder:text-slate-400" />
               </div>
               <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
                 <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 outline-none"><option value="all">Todos los tipos</option><option value="budget">Presupuestos</option><option value="order">Pedidos</option></select>
                 <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 outline-none"><option value="all">Todos los estados</option><option value="Presupuesto">Presupuesto</option><option value="Pendiente">Pendiente</option><option value="Señado">Señado</option><option value="Pagado">Pagado</option><option value="Cancelado">Cancelado</option><option value="Retirado">Retirado</option></select>
               </div>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/70 px-2 py-1.5 scrollbar-hide">
+            <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/70 px-2 py-1.5 scrollbar-hide" onScroll={visibleRecordsFeed.handleScroll}>
               <div className="space-y-1">
-                {filteredRecords.map((record) => <RecordCard key={`${record.type}-${record.id}`} record={record} isActive={`${record.type}-${record.id}` === selectedKey} onSelect={() => setSelectedKey(`${record.type}-${record.id}`)} />)}
+                {visibleRecordsFeed.visibleItems.map((record) => <RecordCard key={`${record.type}-${record.id}`} record={record} isActive={`${record.type}-${record.id}` === selectedKey} onSelect={() => setSelectedKey(`${record.type}-${record.id}`)} />)}
                 {filteredRecords.length === 0 && <div className="rounded-[24px] border border-dashed border-slate-300 bg-slate-50 px-4 py-12 text-center"><p className="text-sm font-bold text-slate-500">No hay registros que coincidan con la búsqueda.</p></div>}
               </div>
             </div>
+            {filteredRecords.length > 0 && (
+              <div className="border-t border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold text-slate-500">
+                Mostrando <span className="font-black text-slate-700">{visibleRecordsFeed.visibleCount}</span> de <span className="font-black text-slate-700">{filteredRecords.length}</span> registros
+              </div>
+            )}
           </div>
         </div>
         <div className="min-h-0 bg-slate-50">
@@ -319,21 +363,21 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                   <div className="flex flex-wrap gap-1">
                     <button type="button" onClick={() => onPrintRecord(selectedRecord)} className={NEUTRAL_BUTTON_CLASS}><FileText size={12} />Generar PDF</button>
                     {selectedRecord.type === 'budget' && <>
-                      <button type="button" onClick={() => { setEditingBudget(selectedRecord); setIsBudgetModalOpen(true); }} className={NEUTRAL_BUTTON_CLASS}><FileText size={12} />Editar</button>
-                      <button type="button" onClick={() => { setConvertTarget(selectedRecord); setPickupDate(''); setDepositAmount(''); }} disabled={Boolean(linkedOrderForBudget)} className={PRIMARY_BUTTON_CLASS}><ReceiptText size={12} />{linkedOrderForBudget ? 'Pedido ya creado' : 'Convertir a pedido'}</button>
-                      <button type="button" onClick={() => handleDeleteSelectedBudget(selectedRecord)} className={DANGER_BUTTON_CLASS}><Trash2 size={12} />Eliminar</button>
+                      {canEditBudget && <button type="button" onClick={() => { setEditingBudget(selectedRecord); setIsBudgetModalOpen(true); }} className={NEUTRAL_BUTTON_CLASS}><FileText size={12} />Editar</button>}
+                      {canCreateOrder && <button type="button" onClick={() => { setConvertTarget(selectedRecord); setPickupDate(''); setDepositAmount(''); }} disabled={Boolean(linkedOrderForBudget)} className={PRIMARY_BUTTON_CLASS}><ReceiptText size={12} />{linkedOrderForBudget ? 'Pedido ya creado' : 'Convertir a pedido'}</button>}
+                      {canDeleteBudget && <button type="button" onClick={() => handleDeleteSelectedBudget(selectedRecord)} className={DANGER_BUTTON_CLASS}><Trash2 size={12} />Eliminar</button>}
                     </>}
                     {selectedRecord.type === 'order' && <>
-                      {!['Pagado', 'Retirado', 'Cancelado'].includes(selectedRecord.status) && <button type="button" onClick={() => { setEditingBudget(selectedRecord); setIsBudgetModalOpen(true); }} className={NEUTRAL_BUTTON_CLASS}><FileText size={12} />Editar</button>}
-                      {!['Pagado', 'Retirado', 'Cancelado'].includes(selectedRecord.status) && <button type="button" onClick={() => { setPaymentTarget(selectedRecord); setPaymentAmount(''); }} className={PRIMARY_BUTTON_CLASS}><Wallet size={12} />Registrar pago</button>}
-                      {!['Retirado', 'Cancelado'].includes(selectedRecord.status) && <button type="button" onClick={() => handleCancelSelectedOrder(selectedRecord)} className={DANGER_BUTTON_CLASS}><X size={12} />Cancelar pedido</button>}
-                      {!['Retirado', 'Cancelado'].includes(selectedRecord.status) && <button type="button" onClick={() => handleRetireOrder(selectedRecord)} className={SUCCESS_BUTTON_CLASS}><CheckCircle2 size={12} />Marcar retirado</button>}
-                      <button type="button" onClick={() => handleDeleteSelectedOrder(selectedRecord)} className={DANGER_BUTTON_CLASS}><Trash2 size={12} />Eliminar pedido</button>
+                      {!['Pagado', 'Retirado', 'Cancelado'].includes(selectedRecord.status) && canEditOrder && <button type="button" onClick={() => { setEditingBudget(selectedRecord); setIsBudgetModalOpen(true); }} className={NEUTRAL_BUTTON_CLASS}><FileText size={12} />Editar</button>}
+                      {!['Pagado', 'Retirado', 'Cancelado'].includes(selectedRecord.status) && canRegisterOrderPayment && <button type="button" onClick={() => { setPaymentTarget(selectedRecord); setPaymentAmount(''); }} className={PRIMARY_BUTTON_CLASS}><Wallet size={12} />Registrar pago</button>}
+                      {!['Retirado', 'Cancelado'].includes(selectedRecord.status) && canCancelOrder && <button type="button" onClick={() => handleCancelSelectedOrder(selectedRecord)} className={DANGER_BUTTON_CLASS}><X size={12} />Cancelar pedido</button>}
+                      {!['Retirado', 'Cancelado'].includes(selectedRecord.status) && canMarkRetired && <button type="button" onClick={() => handleRetireOrder(selectedRecord)} className={SUCCESS_BUTTON_CLASS}><CheckCircle2 size={12} />Marcar retirado</button>}
+                      {canDeleteOrder && <button type="button" onClick={() => handleDeleteSelectedOrder(selectedRecord)} className={DANGER_BUTTON_CLASS}><Trash2 size={12} />Eliminar pedido</button>}
                     </>}
                   </div>
                 </div>
               </div>
-              <div className="grid min-h-0 flex-1 gap-1.5 p-2 lg:grid-cols-[0.68fr_1.32fr]">
+              <div className="grid min-h-0 flex-1 gap-1.5 p-2 lg:grid-cols-[0.56fr_1.44fr]">
                 <div className="min-h-0 overflow-y-auto rounded-[18px] border border-slate-200 bg-white p-2 scrollbar-hide">
                   <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Resumen operativo</p>
                   <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">

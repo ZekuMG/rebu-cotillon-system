@@ -40,15 +40,33 @@ export const SaleSuccessModal = ({ transaction, onClose, onViewTicket }) => {
             <p className="text-3xl font-bold text-slate-800">#{String(transaction.id).padStart(6, '0')}</p>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div className="bg-blue-50 p-3 rounded-lg"><p className="text-[10px] font-bold text-blue-400 uppercase">Vendedor</p><p className="font-bold text-blue-700">{transaction.user}</p></div>
+            <div className="bg-blue-50 p-3 rounded-lg"><p className="text-[10px] font-bold text-blue-400 uppercase">Caja</p><p className="font-bold text-blue-700">{transaction.user}</p></div>
             <div className="bg-fuchsia-50 p-3 rounded-lg"><p className="text-[10px] font-bold text-fuchsia-400 uppercase">Método de Pago</p><p className="font-bold text-fuchsia-700">{transaction.payment}{transaction.installments > 1 && ` (${transaction.installments} cuotas)`}</p></div>
           </div>
           {/* ♻️ FIX: FancyPrice al total */}
-          <div className="border-t pt-3 flex justify-between items-end">
-            <span className="font-bold text-slate-600">TOTAL</span>
-            <span className="text-2xl font-bold text-green-600">
-              <FancyPrice amount={transaction.total} />
-            </span>
+          <div className="border-t pt-3 space-y-2">
+            {transaction.cashChange > 0 && (
+              <>
+                <div className="flex justify-between items-end">
+                  <span className="font-bold text-blue-600">Efectivo Recibido</span>
+                  <span className="text-lg font-bold text-blue-700">
+                    <FancyPrice amount={transaction.total + transaction.cashChange} />
+                  </span>
+                </div>
+                <div className="flex justify-between items-end">
+                  <span className="font-bold text-emerald-600">Efectivo Devuelto</span>
+                  <span className="text-lg font-bold text-emerald-700">
+                    <FancyPrice amount={transaction.cashChange} />
+                  </span>
+                </div>
+              </>
+            )}
+            <div className="flex justify-between items-end">
+              <span className="font-bold text-slate-600">TOTAL</span>
+              <span className="text-2xl font-bold text-green-600">
+                <FancyPrice amount={transaction.total} />
+              </span>
+            </div>
           </div>
         </div>
 
