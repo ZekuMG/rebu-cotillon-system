@@ -33,6 +33,7 @@ import {
   getCanonicalOfferOptions,
   getCanonicalOfferSubtypeLabel,
   getCanonicalOfferTypeLabel,
+  getComboProductLineDisplay,
   getOfferWizardGuide,
   normalizeLegacyOffer,
   validateOfferWizardForm,
@@ -1207,6 +1208,7 @@ export default function ExtrasView({
   };
   const handleAddProductToOffer = (product) => {
     if (isReadOnly) return;
+    const isWeight = product.product_type === 'weight';
     setOfferForm((prev) => ({
       ...prev,
       productsIncluded: [
@@ -1216,6 +1218,9 @@ export default function ExtrasView({
           title: product.title,
           price: product.price,
           image: product.image,
+          stock: product.stock,
+          product_type: product.product_type || 'quantity',
+          quantity: isWeight ? 1000 : 1,
         },
       ],
     }));
@@ -1225,6 +1230,21 @@ export default function ExtrasView({
     setOfferForm((prev) => ({
       ...prev,
       productsIncluded: prev.productsIncluded.filter((product) => product.id !== productId),
+    }));
+  };
+  const handleUpdateProductQuantityInOffer = (productId, value) => {
+    if (isReadOnly) return;
+    setOfferForm((prev) => ({
+      ...prev,
+      productsIncluded: prev.productsIncluded.map((product) => {
+        if (String(product.id) !== String(productId)) return product;
+        const isWeight = product.product_type === 'weight';
+        const numericValue = Number(value);
+        return {
+          ...product,
+          quantity: Math.max(isWeight ? 1 : 1, Number.isFinite(numericValue) ? numericValue : isWeight ? 1000 : 1),
+        };
+      }),
     }));
   };
   const handleOfferBenefitTypeChange = (benefitType) => {
@@ -1400,7 +1420,10 @@ export default function ExtrasView({
   const offerWizardIsManualMode =
     offerForm.benefitType === 'combo' || offerForm.benefitType === 'fixed_price';
   const offerWizardSuggestedOriginalPrice = offerResolvedProducts.reduce(
-    (acc, product) => acc + Number(product.price || 0),
+    (acc, product) => {
+      const quantity = Number(product.quantity ?? product.qty ?? (product.product_type === 'weight' ? 1000 : 1)) || (product.product_type === 'weight' ? 1000 : 1);
+      return acc + (Number(product.price || 0) * quantity);
+    },
     0
   );
   const offerWizardGuide = getOfferWizardGuide(offerForm);
@@ -1614,7 +1637,7 @@ export default function ExtrasView({
       accent: 'orange',
     },
     offers: {
-      title: 'Ofertas y Descuentos',
+      title: 'Ofertas y Combos',
       description: 'Promociones activas, descuentos manuales y cupones del punto de venta.',
       icon: TicketPercent,
       accent: 'emerald',
@@ -1710,7 +1733,7 @@ export default function ExtrasView({
                 onClick={() => setActiveTab('offers')}
                 className={extrasTabButtonClass('offers', 'text-emerald-700')}
               >
-                Ofertas y Descuentos
+                Ofertas y Combos
               </button>
               <button
                 onClick={() => setActiveTab('rewards')}
@@ -1774,7 +1797,7 @@ export default function ExtrasView({
             onClick={() => setActiveTab('offers')}
             className={extrasTabButtonClass('offers', 'text-violet-600')}
           >
-            Ofertas y Descuentos
+            Ofertas y Combos
           </button>
           <button 
             onClick={() => setActiveTab('rewards')}
@@ -2248,33 +2271,47 @@ export default function ExtrasView({
                     <div className="min-h-0 flex-1 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none' }} onScroll={selectedOfferProductsFeed.handleScroll}>
                       {selectedOffer.resolvedProductsIncluded.length > 0 ? (
                         <div className="grid gap-2 sm:grid-cols-2">
-                          {selectedOfferProductsFeed.visibleItems.map((product) => (
-                            <div
-                              key={product.id}
-                              className="flex items-center gap-2.5 rounded-[16px] border border-emerald-200 bg-white/90 px-2.5 py-2"
-                            >
-                              {product.image ? (
-                                <img
-                                  src={product.image}
-                                  alt={product.title}
-                                  className="h-10 w-10 rounded-lg border border-slate-200 object-cover"
-                                  onError={(e) => {
-                                    e.target.style.display = 'none';
-                                  }}
-                                />
-                              ) : (
-                                <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white">
-                                  <Package size={16} className="text-slate-300" />
+                          {selectedOfferProductsFeed.visibleItems.map((product) => {
+                            const isManualComboOffer = selectedOffer.canonicalType === 'combo' || selectedOffer.canonicalType === 'fixed_price';
+                            const lineDisplay = getComboProductLineDisplay(product);
+
+                            return (
+                              <div
+                                key={product.id}
+                                className="flex items-center gap-2.5 rounded-[16px] border border-emerald-200 bg-white/90 px-2.5 py-2"
+                              >
+                                {product.image ? (
+                                  <img
+                                    src={product.image}
+                                    alt={product.title}
+                                    className="h-10 w-10 rounded-lg border border-slate-200 object-cover"
+                                    onError={(e) => {
+                                      e.target.style.display = 'none';
+                                    }}
+                                  />
+                                ) : (
+                                  <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white">
+                                    <Package size={16} className="text-slate-300" />
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <p className="truncate text-xs font-black text-slate-800">{product.title}</p>
+                                  {isManualComboOffer ? (
+                                    <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] font-bold text-slate-500">
+                                      <span className="rounded-full border border-emerald-100 bg-emerald-50 px-1.5 py-0.5 text-emerald-700">{lineDisplay.quantityLabel}</span>
+                                      <span><FancyPrice amount={lineDisplay.referenceAmount} /> {lineDisplay.referenceUnitLabel}</span>
+                                      <span className="text-slate-300">|</span>
+                                      <span>Total: <FancyPrice amount={lineDisplay.totalAmount} /></span>
+                                    </div>
+                                  ) : (
+                                    <p className="text-[11px] text-slate-500">
+                                      Precio: <span className="font-bold text-slate-700"><FancyPrice amount={Number(product.price || 0)} /></span>
+                                    </p>
+                                  )}
                                 </div>
-                              )}
-                              <div className="min-w-0">
-                                <p className="truncate text-xs font-black text-slate-800">{product.title}</p>
-                                <p className="text-[11px] text-slate-500">
-                                  Precio: <span className="font-bold text-slate-700"><FancyPrice amount={Number(product.price || 0)} /></span>
-                                </p>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       ) : (
                         <div className="flex h-full min-h-[220px] flex-col items-center justify-center rounded-[20px] border border-dashed border-slate-200 bg-slate-50 text-center">
@@ -3283,6 +3320,7 @@ export default function ExtrasView({
         offerModalIncludedFeed={offerModalIncludedFeed}
         handleAddProductToOffer={handleAddProductToOffer}
         handleRemoveProductFromOffer={handleRemoveProductFromOffer}
+        handleUpdateProductQuantityInOffer={handleUpdateProductQuantityInOffer}
         handleOfferBenefitTypeChange={handleOfferBenefitTypeChange}
         handleOfferScopeChange={handleOfferScopeChange}
         handleAdvanceOfferWizard={handleAdvanceOfferWizard}

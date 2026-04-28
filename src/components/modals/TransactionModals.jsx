@@ -12,7 +12,9 @@ import {
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../../data';
 // ♻️ FIX: Importamos FancyPrice
+import AsyncActionButton from '../AsyncActionButton';
 import { FancyPrice } from '../FancyPrice';
+import usePendingAction from '../../hooks/usePendingAction';
 
 export const EditTransactionModal = ({
   transaction, onClose, inventory, setEditingTransaction,
@@ -20,6 +22,7 @@ export const EditTransactionModal = ({
   editReason, setEditReason, onSave
 }) => {
   const searchInputRef = useRef(null);
+  const { isPending, runAction } = usePendingAction();
   const safeTotal = Number(transaction?.total || 0);
   const cashReceivedAmount = (() => {
     if (!transaction || transaction.payment !== 'Efectivo') return 0;
@@ -269,7 +272,12 @@ export const EditTransactionModal = ({
         </div>
 
         {/* FOOTER (Opciones de Pago y Guardado) */}
-        <form onSubmit={onSave} className="p-5 border-t border-slate-200 bg-white rounded-b-[16px]">
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          void runAction(`edit-transaction:${transaction.id}`, async () => {
+            await onSave(event);
+          });
+        }} className="p-5 border-t border-slate-200 bg-white rounded-b-[16px]">
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Método de Pago</label>
@@ -364,9 +372,9 @@ export const EditTransactionModal = ({
             <textarea className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-amber-50 focus:ring-2 focus:ring-amber-500 outline-none text-amber-900" rows="2" placeholder="Ej: Me equivoqué en el precio, el cliente sumó un producto..." value={editReason} onChange={(e) => setEditReason(e.target.value)}></textarea>
           </div>
 
-          <button type="submit" disabled={transaction.items.length === 0 || (transaction.payment === 'Efectivo' && cashMissingAmount > 0)} className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-md disabled:bg-slate-300 disabled:cursor-not-allowed">
+          <AsyncActionButton type="submit" pending={isPending(`edit-transaction:${transaction.id}`)} disabled={transaction.items.length === 0 || (transaction.payment === 'Efectivo' && cashMissingAmount > 0) || isPending(`edit-transaction:${transaction.id}`)} loadingLabel="Guardando..." className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-md disabled:bg-slate-300 disabled:cursor-not-allowed">
             Guardar y Aplicar Cambios
-          </button>
+          </AsyncActionButton>
         </form>
       </div>
     </div>
@@ -374,6 +382,7 @@ export const EditTransactionModal = ({
 };
 
 export const RefundModal = ({ transaction, onClose, refundReason, setRefundReason, onConfirm }) => {
+  const { isPending, runAction } = usePendingAction();
   if (!transaction) return null;
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
@@ -382,7 +391,12 @@ export const RefundModal = ({ transaction, onClose, refundReason, setRefundReaso
           <h3 className="font-bold text-red-800 flex items-center gap-2"><AlertTriangle size={18} /> {transaction.status === 'voided' ? 'Eliminar Registro' : 'Anular Venta'}</h3>
           <button onClick={onClose}><X size={18} className="text-red-400 hover:text-red-600" /></button>
         </div>
-        <form onSubmit={onConfirm} className="p-5">
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          void runAction(`refund-transaction:${transaction.id}`, async () => {
+            await onConfirm(event);
+          });
+        }} className="p-5">
           <p className="text-sm text-slate-600 mb-4">{transaction.status === 'voided' ? 'Esta acción borrará definitivamente el registro del historial. No se puede deshacer.' : `Se marcará la venta #${transaction.id} como anulada y se devolverá el stock al inventario.`}</p>
           <div className="mb-4">
             <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Motivo (Opcional)</label>
@@ -390,7 +404,7 @@ export const RefundModal = ({ transaction, onClose, refundReason, setRefundReaso
           </div>
           <div className="flex gap-2 justify-end">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm font-bold text-slate-500 hover:bg-slate-100 rounded-lg">Cancelar</button>
-            <button type="submit" className="px-4 py-2 text-sm font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg">{transaction.status === 'voided' ? 'Borrar Definitivamente' : 'Confirmar Anulación'}</button>
+            <AsyncActionButton type="submit" pending={isPending(`refund-transaction:${transaction.id}`)} loadingLabel={transaction.status === 'voided' ? 'Borrando...' : 'Anulando...'} className="px-4 py-2 text-sm font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg disabled:opacity-60 disabled:cursor-wait">{transaction.status === 'voided' ? 'Borrar Definitivamente' : 'Confirmar Anulación'}</AsyncActionButton>
           </div>
         </form>
       </div>

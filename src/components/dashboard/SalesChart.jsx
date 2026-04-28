@@ -53,7 +53,7 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
 
   if (globalFilter === 'year') {
     const annualZoomBase = 2.5;
-    const chartHeight = 340;
+    const chartHeight = 316;
     const annualTopInset = 68;
     const annualDatesHeight = 40;
     const padding = { top: 18, right: 0, bottom: 18, left: 10 };
@@ -780,7 +780,7 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                   <X size={18} />
                 </button>
               </div>
-              <div className="custom-scrollbar flex-1 overflow-y-auto bg-slate-100/50 p-5">
+              <div className="custom-scrollbar flex-1 overflow-y-auto bg-slate-100/50 p-4">
                 <div className="mb-5 grid grid-cols-2 gap-3">
                   <div className="rounded-xl border border-slate-200 bg-white p-3 text-center shadow-sm">
                     <p className="text-[10px] font-bold uppercase text-slate-400">Facturacion</p>
@@ -856,8 +856,8 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
     };
 
     return (
-      <div className="relative flex h-full flex-col rounded-xl border bg-white p-5 shadow-sm">
-        <div className="mb-4 flex items-center justify-between">
+      <div className="relative flex h-full flex-col rounded-xl border bg-white p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between">
           <div>
             <h3 className="flex items-center gap-2 font-bold text-slate-800">
               <CalendarDays size={18} className="text-emerald-500" />
@@ -867,7 +867,7 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
           </div>
         </div>
 
-        <div className="relative flex min-h-[180px] flex-1 flex-col justify-center">
+        <div className="relative flex min-h-[132px] flex-1 flex-col justify-center">
           {!chartData.some((item) => item.sales > 0) && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60 backdrop-blur-[1px]">
               <span className="rounded border bg-white px-2 py-1 text-xs font-bold uppercase tracking-wide text-slate-400">
@@ -931,7 +931,7 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                   <X size={18} />
                 </button>
               </div>
-              <div className="custom-scrollbar flex-1 overflow-y-auto bg-slate-100/50 p-5">
+              <div className="custom-scrollbar flex-1 overflow-y-auto bg-slate-100/50 p-4">
                 <div className="mb-5 grid grid-cols-2 gap-3">
                   <div className="rounded-xl border border-slate-200 bg-white p-3 text-center shadow-sm">
                     <p className="text-[10px] font-bold uppercase text-slate-400">Facturacion</p>
@@ -979,8 +979,8 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
   }
 
   return (
-    <div className="h-full rounded-xl border bg-white p-5 shadow-sm">
-      <div className="mb-4 flex items-center justify-between">
+    <div className="h-full rounded-xl border bg-white p-4 shadow-sm">
+      <div className="mb-3 flex items-center justify-between">
         <div>
           <h3 className="flex items-center gap-2 font-bold text-slate-800">
             <BarChart3 size={18} className="text-fuchsia-500" />

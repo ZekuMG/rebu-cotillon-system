@@ -31,7 +31,7 @@ app.on('ready', () => {
   session.defaultSession.webRequest.onBeforeSendHeaders(
     { urls: ['https://*.supabase.co/*'] }, // Solo afectamos las peticiones a Supabase
     (details, callback) => {
-      // EngaÃ±amos a Supabase forzando el Origin y el Referer
+      // Engañamos a Supabase forzando el Origin y el Referer
       details.requestHeaders['Origin'] = 'http://localhost';
       details.requestHeaders['Referer'] = 'http://localhost/';
       

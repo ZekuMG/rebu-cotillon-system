@@ -1,7 +1,7 @@
 import React from 'react';
 import { MinusCircle, Package, PlusCircle, Save, Search, TicketPercent, X } from 'lucide-react';
 import { FancyPrice } from './FancyPrice';
-import { getCanonicalOfferSubtypeLabel, getCanonicalOfferTypeLabel } from '../utils/offerHelpers';
+import { getCanonicalOfferSubtypeLabel, getCanonicalOfferTypeLabel, getComboProductLineDisplay } from '../utils/offerHelpers';
 
 function ChipButton({ active, disabled = false, onClick, children }) {
   return (
@@ -36,7 +36,10 @@ function Section({ eyebrow, title, hint, aside, children }) {
   );
 }
 
-function ProductRow({ product, subtitle, onAdd, onRemove, removable = true }) {
+function ProductRow({ product, subtitle, onAdd, onRemove, removable = true, onQuantityChange, showQuantityControls = false, showComboPricing = false }) {
+  const isWeight = product.product_type === 'weight';
+  const quantityValue = Number(product.quantity ?? product.qty ?? (isWeight ? 1000 : 1)) || (isWeight ? 1000 : 1);
+  const lineDisplay = getComboProductLineDisplay(product);
   const media = product.image ? (
     <img src={product.image} alt={product.title} className="h-9 w-9 rounded-lg object-cover ring-1 ring-slate-200" />
   ) : (
@@ -47,11 +50,42 @@ function ProductRow({ product, subtitle, onAdd, onRemove, removable = true }) {
 
   return (
     <div className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-2.5 py-2 shadow-sm">
-      <div className="flex min-w-0 items-center gap-2.5">
+      <div className="flex min-w-0 flex-1 items-center gap-2.5">
         {media}
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="truncate text-[12px] font-bold text-slate-800">{product.title}</p>
-          <p className="text-[10px] font-semibold leading-4 text-slate-400">{subtitle}</p>
+          {showQuantityControls ? (
+            <div className="mt-1 space-y-1.5">
+              <label className="block max-w-[150px] rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1">
+                <span className="block text-[8px] font-black uppercase tracking-[0.1em] text-emerald-700">
+                  {isWeight ? 'Gramos' : 'Cantidad'}
+                </span>
+                <input
+                  type="number"
+                  min={isWeight ? '1' : '1'}
+                  step={isWeight ? '1' : '1'}
+                  value={quantityValue}
+                  onChange={(event) => onQuantityChange?.(product.id, event.target.value)}
+                  className="mt-0.5 w-full bg-transparent text-[12px] font-black text-emerald-900 outline-none"
+                />
+              </label>
+              <div className="flex flex-wrap items-center gap-1 text-[9px] font-bold text-slate-500">
+                <span className="rounded-full border border-emerald-100 bg-emerald-50 px-1.5 py-0.5 text-emerald-700">{lineDisplay.quantityLabel}</span>
+                <span><FancyPrice amount={lineDisplay.referenceAmount} /> {lineDisplay.referenceUnitLabel}</span>
+                <span className="text-slate-300">|</span>
+                <span>Total: <FancyPrice amount={lineDisplay.totalAmount} /></span>
+              </div>
+            </div>
+          ) : showComboPricing ? (
+            <div className="mt-1 flex flex-wrap items-center gap-1 text-[9px] font-bold text-slate-500">
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-slate-700">{lineDisplay.quantityLabel}</span>
+              <span><FancyPrice amount={lineDisplay.referenceAmount} /> {lineDisplay.referenceUnitLabel}</span>
+              <span className="text-slate-300">|</span>
+              <span>Total: <FancyPrice amount={lineDisplay.totalAmount} /></span>
+            </div>
+          ) : (
+            <p className="text-[10px] font-semibold leading-4 text-slate-400">{subtitle}</p>
+          )}
         </div>
       </div>
 
@@ -92,6 +126,7 @@ export function OfferWizardModal({
   offerModalIncludedFeed,
   handleAddProductToOffer,
   handleRemoveProductFromOffer,
+  handleUpdateProductQuantityInOffer,
   handleOfferBenefitTypeChange,
   handleOfferScopeChange,
   handleSaveOfferWizard,
@@ -114,7 +149,7 @@ export function OfferWizardModal({
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/70 p-3 backdrop-blur-sm">
-      <div className="flex h-[88vh] w-full max-w-[1140px] flex-col overflow-hidden rounded-[24px] border border-emerald-200 bg-white shadow-2xl shadow-emerald-950/20">
+      <div className="flex h-[88vh] w-full max-w-[1280px] flex-col overflow-hidden rounded-[24px] border border-emerald-200 bg-white shadow-2xl shadow-emerald-950/20">
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-emerald-200 bg-[linear-gradient(135deg,#ecfdf5_0%,#ffffff_60%,#f8fafc_100%)] px-4 py-3">
           <div className="flex min-w-0 items-start gap-2.5">
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-2.5 text-emerald-700 shadow-sm">
@@ -393,6 +428,7 @@ export function OfferWizardModal({
                                 product={product}
                                 subtitle={<FancyPrice amount={Number(product.price || 0)} />}
                                 onAdd={handleAddProductToOffer}
+                                showComboPricing={isCombo}
                               />
                             ))}
                           </div>
@@ -431,9 +467,12 @@ export function OfferWizardModal({
                             <ProductRow
                               key={product.id}
                               product={product}
-                              subtitle={isCombo ? 'Producto del combo' : 'Producto alcanzado por la oferta'}
+                              subtitle="Producto alcanzado por la oferta"
                               onRemove={handleRemoveProductFromOffer}
                               removable={canRemoveItems}
+                              onQuantityChange={handleUpdateProductQuantityInOffer}
+                              showQuantityControls={isCombo}
+                              showComboPricing={isCombo}
                             />
                           ))}
                         </div>

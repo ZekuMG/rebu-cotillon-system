@@ -133,7 +133,7 @@ export default function LogsControls({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const selectedUserFilter = userFilterOptions.find((option) => option.value === filterUser) || null;
+  const selectedUserFilter = userFilterOptions.find((option) => option.key === filterUser) || null;
 
   return (
     <div className="px-2.5 py-1.5 border-b border-slate-200 bg-slate-50 shrink-0 flex flex-wrap items-center gap-1.5 relative z-20">
@@ -221,7 +221,7 @@ export default function LogsControls({
                 key={option.key}
                 type="button"
                 onClick={() => {
-                  setFilterUser(option.value);
+                  setFilterUser(option.key);
                   setIsUserFilterOpen(false);
                 }}
                 className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[10px] transition ${

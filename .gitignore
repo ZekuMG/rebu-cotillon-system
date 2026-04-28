@@ -29,3 +29,4 @@ dist/
 .env
 database supabas/
 .github/agents/rebu-pos-specialist.agent.md
+database/*

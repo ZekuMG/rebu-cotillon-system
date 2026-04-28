@@ -17,6 +17,7 @@ import {
   List,
   Scale,
   PackageX,
+  CalendarClock,
   CalendarX, // ✨ NUEVO ICONO
   ArrowDownUp // ✨ AÑADIDO PARA ORDENAR
 } from 'lucide-react';
@@ -28,8 +29,8 @@ import { FancyPrice } from '../components/FancyPrice';
 const INVENTORY_BATCH_SIZE = 50;
 
 // ✨ HELPER: Verifica si la fecha es menor a 14 días o ya pasó
-const isExpiringSoon = (dateString) => {
-  if (!dateString) return false;
+const getExpirationInfo = (dateString) => {
+  if (!dateString) return null;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const [year, month, day] = dateString.split('-');
@@ -37,7 +38,26 @@ const isExpiringSoon = (dateString) => {
   expDate.setHours(0, 0, 0, 0);
   const diffTime = expDate.getTime() - today.getTime();
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  return diffDays <= 14;
+  const isExpired = diffDays < 0;
+  const isExpiringSoon = diffDays >= 0 && diffDays <= 14;
+
+  if (isExpired) {
+    return { daysUntil: diffDays, isExpired: true, isExpiringSoon: false, isAlert: true, label: 'Vencido' };
+  }
+
+  if (isExpiringSoon) {
+    const label = diffDays === 0
+      ? 'Vence hoy'
+      : `Por vencer en ${diffDays} d\u00eda${diffDays === 1 ? '' : 's'}`;
+    return { daysUntil: diffDays, isExpired: false, isExpiringSoon: true, isAlert: true, label };
+  }
+
+  return { daysUntil: diffDays, isExpired: false, isExpiringSoon: false, isAlert: false, label: null };
+};
+
+const isExpiringSoon = (dateString) => {
+  const expirationInfo = getExpirationInfo(dateString);
+  return Boolean(expirationInfo?.isAlert);
 };
 
 export default function InventoryView({
@@ -325,25 +345,27 @@ export default function InventoryView({
                     const stockColor = getStockColorClass(product);
                     const outOfStock = isOutOfStock(product);
                     const isWeight = product.product_type === 'weight';
-                    const expired = isExpiringSoon(product.expiration_date);
+                    const expirationInfo = getExpirationInfo(product.expiration_date);
+                    const hasExpirationAlert = Boolean(expirationInfo?.isAlert);
+                    const isExpired = Boolean(expirationInfo?.isExpired);
+                    const productImage = product.imageThumb || product.image_thumb || product.image;
 
                     return (
-                      <div key={product.id} onClick={() => handleCardClick(product)} className={`bg-white rounded-xl border overflow-hidden flex flex-col cursor-pointer transition-all hover:shadow-lg group ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 transform scale-[0.98]' : 'hover:border-fuchsia-200'} ${outOfStock ? 'grayscale opacity-75' : ''} ${expired && !outOfStock ? 'border-orange-300 bg-orange-50/30' : ''}`}>
+                      <div key={product.id} onClick={() => handleCardClick(product)} className={`bg-white rounded-xl border overflow-hidden flex flex-col cursor-pointer transition-all hover:shadow-lg group relative ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 transform scale-[0.98]' : 'hover:border-fuchsia-200'} ${outOfStock ? 'grayscale opacity-75' : ''} ${hasExpirationAlert && !outOfStock ? (isExpired ? 'border-red-300 bg-red-50/30' : 'border-amber-200 bg-amber-50/30') : ''}`}>
                         <div className="aspect-square bg-slate-50 relative overflow-hidden">
-                          {product.image ? (
-                            <img src={product.image} alt={product.title} className="w-full h-full object-cover transition-transform group-hover:scale-110 duration-500" />
+                          {productImage ? (
+                            <img src={productImage} alt={product.title} loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover transition-transform group-hover:scale-110 duration-500" />
                           ) : (
                             <div className="w-full h-full flex flex-col items-center justify-center bg-slate-200/50 p-2 text-center group-hover:bg-slate-200 transition-colors">
                               <span className={`font-bold text-slate-500 uppercase leading-tight ${gridColumns > 6 ? 'text-[10px]' : 'text-xs'}`}>{product.title}</span>
                             </div>
                           )}
                           
-                          {expired && !outOfStock && (
-                             <div className="absolute inset-0 bg-red-500/10 flex items-center justify-center z-10 pointer-events-none backdrop-blur-[0.5px]">
-                               <span className="bg-red-600 text-white text-[10px] font-black px-2 py-1 rounded shadow-md border border-red-800 flex items-center gap-1">
-                                 <AlertTriangle size={10} /> VENCIDO
-                               </span>
-                             </div>
+                          {hasExpirationAlert && !outOfStock && (
+                            <div className={`absolute top-1 right-1 max-w-[calc(100%-0.5rem)] rounded-md border px-1.5 py-0.5 text-[9px] font-black shadow-sm flex items-center gap-1 z-20 truncate ${isExpired ? 'bg-red-100 text-red-700 border-red-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`} title={expirationInfo.label}>
+                              {isExpired ? <CalendarX size={9} /> : <CalendarClock size={9} />}
+                              <span className="truncate">{expirationInfo.label}</span>
+                            </div>
                           )}
 
                           {outOfStock && (
@@ -352,7 +374,7 @@ export default function InventoryView({
                             </div>
                           )}
                           
-                          {!outOfStock && !expired && ((isWeight && product.stock <= 200) || (!isWeight && product.stock <= 5)) && (
+                          {!outOfStock && !hasExpirationAlert && ((isWeight && product.stock <= 200) || (!isWeight && product.stock <= 5)) && (
                             <div className={`absolute top-1 right-1 bg-red-500 text-white font-bold rounded-full shadow-sm flex items-center justify-center z-20 ${gridColumns > 6 ? 'w-3 h-3 p-0' : 'px-2 py-0.5 text-[10px] gap-1'}`}>
                               {gridColumns > 6 ? '' : <AlertTriangle size={10} />}
                               {gridColumns > 6 ? '' : 'BAJO'}
@@ -375,7 +397,7 @@ export default function InventoryView({
                               </span>
                             </div>
                           )}
-                          <h3 className={`font-bold leading-tight mb-1 flex-1 ${gridColumns > 7 ? 'text-[10px] line-clamp-1' : 'text-sm line-clamp-2'} ${expired ? 'text-red-700' : 'text-slate-800'}`}>{product.title}</h3>
+                          <h3 className={`font-bold leading-tight mb-1 flex-1 ${gridColumns > 7 ? 'text-[10px] line-clamp-1' : 'text-sm line-clamp-2'} ${isExpired ? 'text-red-700' : 'text-slate-800'}`}>{product.title}</h3>
                           <div className={`flex justify-between items-end mt-auto ${gridColumns > 7 ? 'pt-1' : 'pt-2 border-t border-slate-100'}`}>
                             <div>
                               {gridColumns <= 6 && <p className="text-[10px] text-slate-400">Precio</p>}
@@ -406,28 +428,36 @@ export default function InventoryView({
                     const stockColor = getStockColorClass(product);
                     const outOfStock = isOutOfStock(product);
                     const isWeight = product.product_type === 'weight';
-                    const expired = isExpiringSoon(product.expiration_date);
+                    const expirationInfo = getExpirationInfo(product.expiration_date);
+                    const hasExpirationAlert = Boolean(expirationInfo?.isAlert);
+                    const isExpired = Boolean(expirationInfo?.isExpired);
+                    const productImage = product.imageThumb || product.image_thumb || product.image;
 
                     return (
-                      <div key={product.id} onClick={() => handleCardClick(product)} className={`bg-white rounded-lg border p-3 flex items-center gap-4 cursor-pointer transition-all hover:shadow-md ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 bg-fuchsia-50' : 'hover:border-fuchsia-200'} ${outOfStock ? 'grayscale opacity-75' : ''} ${expired && !outOfStock ? 'bg-orange-50/50 border-orange-200' : ''}`}>
+                      <div key={product.id} onClick={() => handleCardClick(product)} className={`bg-white rounded-lg border p-3 flex items-center gap-4 cursor-pointer transition-all hover:shadow-md relative ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 bg-fuchsia-50' : 'hover:border-fuchsia-200'} ${outOfStock ? 'grayscale opacity-75' : ''} ${hasExpirationAlert && !outOfStock ? (isExpired ? 'bg-red-50/40 border-red-200' : 'bg-amber-50/50 border-amber-200') : ''}`}>
+                        {hasExpirationAlert && !outOfStock && (
+                          <div className={`absolute -top-2 right-3 max-w-[180px] rounded-md border px-1.5 py-0.5 text-[9px] font-black shadow-sm flex items-center gap-1 z-20 truncate ${isExpired ? 'bg-red-100 text-red-700 border-red-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`} title={expirationInfo.label}>
+                            {isExpired ? <CalendarX size={9} /> : <CalendarClock size={9} />}
+                            <span className="truncate">{expirationInfo.label}</span>
+                          </div>
+                        )}
                         <div className="w-12 h-12 rounded-md bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border relative">
-                          {product.image ? (
-                            <img src={product.image} alt="" className="w-full h-full object-cover" />
+                          {productImage ? (
+                            <img src={productImage} alt="" loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover" />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center bg-slate-200 text-[8px] font-bold text-center text-slate-500 leading-none p-1">{product.title.slice(0,10)}...</div>
                           )}
                           {outOfStock && (<div className="absolute inset-0 bg-white/60 flex items-center justify-center z-10"><X size={16} className="text-red-500"/></div>)}
-                          {expired && !outOfStock && (
-                            <div className="absolute inset-0 bg-red-600/20 flex items-center justify-center backdrop-blur-[1px] z-10 pointer-events-none">
-                               <AlertTriangle size={16} className="text-red-600 drop-shadow-md" />
+                          {isExpired && !outOfStock && (
+                            <div className="absolute inset-0 bg-red-600/15 flex items-center justify-center backdrop-blur-[1px] z-10 pointer-events-none">
+                               <CalendarX size={16} className="text-red-600 drop-shadow-md" />
                             </div>
                           )}
                           {isWeight && !outOfStock && (<div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-0.5 py-0.5 z-20"><Scale size={7} className="text-white" /></div>)}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <h4 className={`font-bold truncate ${expired ? 'text-red-700' : 'text-slate-800'}`}>
+                          <h4 className={`font-bold truncate ${hasExpirationAlert ? 'pr-28' : ''} ${isExpired ? 'text-red-700' : 'text-slate-800'}`}>
                              {product.title}
-                             {expired && <span className="ml-2 text-[8px] bg-red-100 text-red-700 border border-red-200 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider align-middle">Vencido</span>}
                           </h4>
                           <div className="flex items-center gap-2 mt-1">
                             <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded text-slate-500 font-bold border border-slate-200">
@@ -469,7 +499,9 @@ export default function InventoryView({
       {/* PANEL LATERAL */}
       {selectedProduct && (() => {
         const isWeight = selectedProduct.product_type === 'weight';
-        const expired = isExpiringSoon(selectedProduct.expiration_date);
+        const expirationInfo = getExpirationInfo(selectedProduct.expiration_date);
+        const hasExpirationAlert = Boolean(expirationInfo?.isAlert);
+        const isExpired = Boolean(expirationInfo?.isExpired);
 
         return (
         <div className="w-[356px] bg-white border-l shadow-2xl flex flex-col shrink-0 animate-in slide-in-from-right duration-300 relative z-20">
@@ -485,9 +517,9 @@ export default function InventoryView({
             
             {/* Preview */}
             <div className="text-center">
-              <div className={`w-40 h-40 bg-slate-100 rounded-xl mx-auto overflow-hidden border shadow-sm relative group ${expired ? 'ring-2 ring-red-500' : ''}`}>
+              <div className={`w-48 h-48 bg-slate-100 rounded-xl mx-auto overflow-hidden border shadow-sm relative group ${hasExpirationAlert ? (isExpired ? 'ring-2 ring-red-400' : 'ring-2 ring-amber-300') : ''}`}>
                 {selectedProduct.image ? (
-                  <img src={selectedProduct.image} alt="" className="w-full h-full object-cover" />
+                  <img src={selectedProduct.image} alt="" decoding="async" className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center bg-slate-200 text-slate-500 font-bold p-2 text-sm">{selectedProduct.title}</div>
                 )}
@@ -495,7 +527,7 @@ export default function InventoryView({
                   <button onClick={() => setEditingProduct(selectedProduct)} className="absolute inset-0 bg-black/40 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity font-bold text-xs"><Edit size={16} className="mr-1" /> Cambiar</button>
                 )}
               </div>
-              <div className="mt-2.5">
+              <div className="mt-2">
                 <h2 className="font-bold text-base text-slate-800 leading-tight mb-2 break-words">{selectedProduct.title}</h2>
               <div className="flex justify-center gap-1.5 flex-wrap mb-1">
                 {(selectedProduct.categories || []).map(cat => (
@@ -506,9 +538,9 @@ export default function InventoryView({
                     <Scale size={9} /> Peso
                   </span>
                 )}
-                {expired && (
-                  <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[9px] font-bold rounded-full border border-red-200 flex items-center gap-1">
-                    <CalendarX size={9} /> Vencido
+                {hasExpirationAlert && (
+                  <span className={`px-2 py-0.5 text-[9px] font-bold rounded-full border flex items-center gap-1 ${isExpired ? 'bg-red-100 text-red-700 border-red-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                    {isExpired ? <CalendarX size={9} /> : <CalendarClock size={9} />} {expirationInfo.label}
                   </span>
                 )}
               </div>
@@ -564,7 +596,7 @@ export default function InventoryView({
               {selectedProduct.expiration_date && (
                 <div className="flex justify-between items-center text-[13px] border-b border-slate-200 pb-2">
                   <span className="text-slate-500 flex items-center gap-2"><CalendarX size={13} /> Vencimiento</span>
-                  <span className={`font-bold ${expired ? 'text-red-600' : 'text-slate-700'}`}>
+                  <span className={`font-bold ${isExpired ? 'text-red-600' : 'text-slate-700'}`}>
                     {new Date(selectedProduct.expiration_date).toLocaleDateString('es-AR')}
                   </span>
                 </div>

@@ -22,9 +22,26 @@ import {
   ArrowUpDown 
 } from 'lucide-react';
 import { formatNumber, isTestRecord } from '../utils/helpers'; // ✨ Importado isTestRecord
+import AsyncActionButton from '../components/AsyncActionButton';
 import { FancyPrice } from '../components/FancyPrice';
 import { hasPermission } from '../utils/userPermissions';
 import useIncrementalFeed from '../hooks/useIncrementalFeed';
+import usePendingAction from '../hooks/usePendingAction';
+
+const sanitizeOptionalMemberField = (value) => {
+  if (value === undefined || value === null) return '';
+  return String(value).trim();
+};
+
+const sanitizeMemberFormData = (data = {}) => ({
+  ...data,
+  name: String(data.name || '').trim(),
+  dni: sanitizeOptionalMemberField(data.dni),
+  phone: sanitizeOptionalMemberField(data.phone),
+  email: sanitizeOptionalMemberField(data.email),
+  extraInfo: sanitizeOptionalMemberField(data.extraInfo),
+  points: Number(data.points) || 0,
+});
 
 export default function ClientsView({ 
   members, 
@@ -60,6 +77,7 @@ export default function ClientsView({
 
   const [isDrawerEditMode, setIsDrawerEditMode] = useState(false);
   const [drawerFormData, setDrawerFormData] = useState({});
+  const { isPending, runAction } = usePendingAction();
 
   const formatShortDate = (isoString) => {
     if (!isoString) return '--/--/----';
@@ -301,29 +319,33 @@ export default function ClientsView({
     setIsModalOpen(true);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (modalMode === 'create') {
-      addMember(formData);
-    } else {
-      updateMember(formData.id, formData);
-      if (selectedMember && selectedMember.id === formData.id) {
-         setSelectedMember({ ...selectedMember, ...formData });
+    await runAction(`member-form:${modalMode}`, async () => {
+      const cleanData = sanitizeMemberFormData(formData);
+      if (!cleanData.name) return;
+
+      if (modalMode === 'create') {
+        await addMember(cleanData);
+      } else {
+        await updateMember(formData.id, cleanData);
+        if (selectedMember && selectedMember.id === formData.id) {
+           setSelectedMember({ ...selectedMember, ...cleanData });
+        }
       }
-    }
-    setIsModalOpen(false);
+      setIsModalOpen(false);
+    });
   };
 
-  const handleDrawerEditSubmit = (e) => {
+  const handleDrawerEditSubmit = async (e) => {
     e.preventDefault();
     // 🔧 Convertir points a número antes de enviar
-    const cleanData = {
-      ...drawerFormData,
-      points: Number(drawerFormData.points) || 0
-    };
-    updateMember(selectedMember.id, cleanData);
-    setSelectedMember({ ...selectedMember, ...cleanData });
-    setIsDrawerEditMode(false);
+    await runAction(`member-drawer:${selectedMember?.id || 'unknown'}`, async () => {
+      const cleanData = sanitizeMemberFormData(drawerFormData);
+      await updateMember(selectedMember.id, cleanData);
+      setSelectedMember({ ...selectedMember, ...cleanData });
+      setIsDrawerEditMode(false);
+    });
   };
 
   const startDrawerEdit = () => {
@@ -343,14 +365,16 @@ export default function ClientsView({
     setIsDeleteModalOpen(true);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (memberToDelete) {
-      deleteMember(memberToDelete.id);
-      setIsDeleteModalOpen(false);
-      setMemberToDelete(null);
-      if (selectedMember?.id === memberToDelete.id) {
-        setSelectedMember(null);
-      }
+      await runAction(`delete-member:${memberToDelete.id}`, async () => {
+        await deleteMember(memberToDelete.id);
+        setIsDeleteModalOpen(false);
+        setMemberToDelete(null);
+        if (selectedMember?.id === memberToDelete.id) {
+          setSelectedMember(null);
+        }
+      });
     }
   };
 
@@ -379,10 +403,12 @@ export default function ClientsView({
     }
   };
 
-  const handleRunAudit = () => {
+  const handleRunAudit = async () => {
     if (window.confirm("🛡️ AUDITORÍA RETROACTIVA\n\nSe buscarán puntos con más de 6 meses de antigüedad en todo el historial y se eliminarán del saldo actual.\n\n¿Confirmar limpieza?")) {
       if (checkExpirations) {
-        checkExpirations(); 
+        await runAction('clients-audit', async () => {
+          await checkExpirations();
+        }); 
         alert("✅ Auditoría completada. Los saldos han sido actualizados.");
       }
     }
@@ -445,14 +471,16 @@ export default function ClientsView({
           </div>
 
           {checkExpirations && canAuditClients && (
-            <button
-              onClick={handleRunAudit}
+            <AsyncActionButton
+              onAction={handleRunAudit}
+              pending={isPending('clients-audit')}
+              loadingLabel="Auditando..."
               className="py-1.5 px-3 text-slate-600 bg-white border border-slate-200 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
               title="Auditoría Retroactiva (Limpiar puntos > 6 meses)"
             >
               <ClipboardCheck size={16} />
               <span className="hidden md:inline text-xs font-bold">Auditoría</span>
-            </button>
+            </AsyncActionButton>
           )}
 
           {canCreateClients && <button
@@ -646,7 +674,7 @@ export default function ClientsView({
                   <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Notas</label><textarea rows="3" className="w-full rounded-lg border p-2.5 outline-none focus:ring-2 focus:ring-blue-100 resize-none" value={drawerFormData.extraInfo} onChange={e => setDrawerFormData({...drawerFormData, extraInfo: e.target.value})} /></div>
                   <div className="flex gap-3 pt-2">
                     <button type="button" onClick={() => setIsDrawerEditMode(false)} className="flex-1 py-2.5 border rounded-lg font-bold text-gray-600 hover:bg-white">Cancelar</button>
-                    <button type="submit" className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 shadow-md">Guardar Cambios</button>
+                    <AsyncActionButton type="submit" pending={isPending(`member-drawer:${selectedMember?.id || 'unknown'}`)} loadingLabel="Guardando..." className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 shadow-md disabled:opacity-60 disabled:cursor-wait">Guardar Cambios</AsyncActionButton>
                   </div>
                 </form>
               ) : (
@@ -911,7 +939,7 @@ export default function ClientsView({
               <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Notas / Extra</label><textarea rows="2" className="w-full rounded-lg border border-gray-300 p-2.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-sm resize-none" placeholder="Información adicional..." value={formData.extraInfo} onChange={(e) => setFormData({...formData, extraInfo: e.target.value})}></textarea></div>
               <div className="pt-2 flex gap-3">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-bold transition-colors">Cancelar</button>
-                <button type="submit" className="flex-1 px-4 py-2.5 bg-slate-900 text-white rounded-lg hover:bg-slate-800 font-bold shadow-md transition-colors flex justify-center items-center gap-2"><Save size={18} />{modalMode === 'create' ? 'Registrar Socio' : 'Guardar Cambios'}</button>
+                <AsyncActionButton type="submit" pending={isPending(`member-form:${modalMode}`)} loadingLabel="Guardando..." className="flex-1 px-4 py-2.5 bg-slate-900 text-white rounded-lg hover:bg-slate-800 font-bold shadow-md transition-colors flex justify-center items-center gap-2 disabled:opacity-60 disabled:cursor-wait"><Save size={18} />{modalMode === 'create' ? 'Registrar Socio' : 'Guardar Cambios'}</AsyncActionButton>
               </div>
             </form>
           </div>
@@ -928,7 +956,7 @@ export default function ClientsView({
               <p className="text-gray-500 text-sm mb-6">Estás a punto de eliminar a <span className="font-bold text-gray-800">{memberToDelete?.name}</span>. <br/>Esta acción no se puede deshacer y se perderán sus puntos e historial.</p>
               <div className="flex gap-3">
                 <button onClick={() => setIsDeleteModalOpen(false)} className="flex-1 py-2.5 border border-gray-300 rounded-lg font-bold text-gray-600 hover:bg-gray-50 transition-colors">Cancelar</button>
-                <button onClick={confirmDelete} className="flex-1 py-2.5 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 shadow-md transition-colors">Sí, Eliminar</button>
+                <AsyncActionButton onAction={confirmDelete} pending={isPending(`delete-member:${memberToDelete?.id || 'unknown'}`)} loadingLabel="Eliminando..." className="flex-1 py-2.5 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 shadow-md transition-colors disabled:opacity-60 disabled:cursor-wait">Sí, Eliminar</AsyncActionButton>
               </div>
             </div>
           </div>

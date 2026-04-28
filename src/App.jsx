@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Lock,
   Clock,
@@ -8,11 +8,12 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import Swal from 'sweetalert2';
+import logoRebuImg from './assets/logo-rebu.jpg';
 
-// --- CONEXIÃ“N A LA NUBE ---
+// --- CONEXIÓN A LA NUBE ---
 import { supabase } from './supabase/client';
-import { uploadProductImage, deleteProductImage } from './utils/storage';
-import { formatDateAR, formatTimeAR, formatTimeFullAR, isTestRecord } from './utils/helpers';
+import { uploadProductImage, deleteProductImage, uploadProductThumbFromSource } from './utils/storage';
+import { formatDateAR, formatNumber, formatTimeAR, formatTimeFullAR, isTestRecord } from './utils/helpers';
 import {
   mapAgendaContactRecord,
   mapAgendaContactRecords,
@@ -31,6 +32,17 @@ import {
   mapSaleRecords,
   safeCloudData,
 } from './utils/cloudMappers';
+import {
+  CLOUD_SELECTS,
+  DASHBOARD_LOG_LIMIT,
+  HISTORY_LOG_ACTIONS,
+} from './utils/cloudSelects';
+import {
+  extractSchemaMissingColumn,
+  fetchAllCloudRowsWithSelectFallback,
+  removeColumnFromSelect,
+  runSelectWithSchemaFallback,
+} from './utils/supabaseSchemaFallback';
 import { buildBudgetExportConfig, buildExportItemsFromSnapshot, deriveOrderStatus, hydrateBudgetSnapshot } from './utils/budgetHelpers';
 import { buildLegacyOfferPayload } from './utils/offerHelpers';
 import {
@@ -57,6 +69,18 @@ import {
   hasPermission,
 } from './utils/userPermissions';
 import { resolveUserPresentation } from './utils/userPresentation';
+import {
+  createOrderPaymentEntry,
+  createOrderPaymentLine,
+  flattenOrderPaymentHistory,
+  getPaymentBreakdownTotals,
+  getPaymentMethodTotals,
+  getOrderPaymentHistorySummary,
+  getPaymentSummary,
+  getPrimaryPaymentInfo,
+  normalizePaymentBreakdown,
+  normalizeOrderPaymentHistory,
+} from './utils/paymentBreakdown';
 
 import { USERS } from './data';
 import Sidebar from './components/Sidebar';
@@ -107,41 +131,120 @@ import { ExportPdfLayout } from './components/ExportPdfLayout';
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 
 const OFFLINE_CORE_CACHE_KEY = 'party_cloud_snapshot_core_v2';
+const OFFLINE_TRANSACTIONS_CACHE_KEY = 'party_cloud_snapshot_transactions_v1';
 const OFFLINE_DASHBOARD_CACHE_KEY = 'party_cloud_snapshot_dashboard_v2';
+const OFFLINE_HISTORY_CACHE_KEY = 'party_cloud_snapshot_history_v1';
 const OFFLINE_ORDERS_CACHE_KEY = 'party_cloud_snapshot_orders_v2';
+const OFFLINE_REPORTS_CACHE_KEY = 'party_cloud_snapshot_reports_v1';
+const OFFLINE_SHARED_USERS_CACHE_KEY = 'party_shared_users_snapshot_v1';
+const OFFLINE_POS_CACHE_KEY = 'party_pos_snapshot_v1';
+const OFFLINE_LOGIN_CACHE_KEY = 'party_offline_login_verifiers_v1';
 const LEGACY_OFFLINE_CACHE_KEY = 'party_cloud_snapshot_v1';
 const USER_SETTINGS_KEY = 'party_user_settings_v1';
 const APP_TEXT_ENCODING_VERSION = 'utf8-clean';
 const CLOUD_FETCH_BATCH_SIZE = 200;
+const CLOUD_RECENT_SYNC_LIMIT = 250;
+const HISTORY_LOG_INITIAL_LIMIT = 50;
+const HISTORY_LOG_RECENT_SYNC_LIMIT = 50;
 const SESSION_ABSENT_MS = 10 * 60 * 1000;
 const SESSION_EXPIRED_MS = 60 * 60 * 1000;
 const SESSION_ACTIVITY_UPDATE_THROTTLE_MS = 5000;
 const APP_USERS_FRESHNESS_MS = 15 * 1000;
+const OFFLINE_BOOT_TIMEOUT_MS = 5500;
+const OFFLINE_LOGIN_TIMEOUT_MS = 6500;
+const REPORT_LOG_ACTIONS = ['Cierre de Caja', 'Cierre Automático'];
+
+const isBrowserOffline = () =>
+  typeof navigator !== 'undefined' && navigator.onLine === false;
+
+const withTimeout = (promise, timeoutMs, label = 'Operacion') =>
+  Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      window.setTimeout(() => {
+        reject(new Error(`${label} excedio el tiempo de espera offline.`));
+      }, timeoutMs);
+    }),
+  ]);
+
+const verifyCloudConnection = async () => {
+  if (isBrowserOffline()) return false;
+
+  const { error } = await withTimeout(
+    supabase.from('register_state').select('id').eq('id', 1).limit(1),
+    OFFLINE_LOGIN_TIMEOUT_MS,
+    'Reconexión'
+  );
+
+  if (error) throw error;
+  return true;
+};
+
+const isRecoverableCloudError = (error) => {
+  const errorText = [
+    error?.message,
+    error?.details,
+    error?.hint,
+    error?.code,
+    error?.name,
+  ].filter(Boolean).join(' ');
+
+  return (
+    isBrowserOffline() ||
+    /timeout|tiempo de espera|failed to fetch|network|load failed|abort|402|egress|quota|restricted/i.test(errorText)
+  );
+};
+
+const shouldIgnoreNestedTestDetectionForLog = (action) => {
+  const normalizedAction = String(action || '').toLowerCase();
+  return normalizedAction.includes('cierre de caja') || normalizedAction.includes('cierre autom');
+};
 
 const MODULE_LOAD_DEFAULT_STATE = {
   core: { status: 'idle', lastLoadedAt: 0, dirty: false },
+  transactions: { status: 'idle', lastLoadedAt: 0, dirty: false },
   dashboard: { status: 'idle', lastLoadedAt: 0, dirty: false },
+  history: { status: 'idle', lastLoadedAt: 0, dirty: false },
   orders: { status: 'idle', lastLoadedAt: 0, dirty: false },
+  reports: { status: 'idle', lastLoadedAt: 0, dirty: false },
+};
+
+const MODULE_FRESHNESS_MS = {
+  core: 10 * 60 * 1000,
+  transactions: 15 * 60 * 1000,
+  dashboard: 10 * 60 * 1000,
+  history: 15 * 60 * 1000,
+  orders: 15 * 60 * 1000,
+  reports: 20 * 60 * 1000,
 };
 
 const TAB_TO_DATA_MODULE = {
   dashboard: 'dashboard',
-  clients: 'dashboard',
-  history: 'dashboard',
-  logs: 'dashboard',
-  reports: 'dashboard',
-  sessions: 'dashboard',
+  clients: 'transactions',
+  history: 'history',
+  reports: 'reports',
   orders: 'orders',
 };
 
 const sharedUsersCache = {
   promise: null,
   users: null,
+  scope: 'active',
   authMode: 'legacy',
   loadedAt: 0,
 };
 
 let initialBootstrapPromise = null;
+
+const canServeSharedUsersScope = (cachedScope, requestedScope) =>
+  cachedScope === 'all' || cachedScope === requestedScope;
+
+const isModuleStateFresh = (state, maxAgeMs) => {
+  if (!state || state.status !== 'loaded' || state.dirty) return false;
+  const lastLoadedAt = Number(state.lastLoadedAt || 0);
+  if (lastLoadedAt <= 0) return false;
+  return Date.now() - lastLoadedAt < maxAgeMs;
+};
 
 const fetchAllCloudRows = async (buildQuery, batchSize = CLOUD_FETCH_BATCH_SIZE) => {
   const rows = [];
@@ -161,7 +264,204 @@ const fetchAllCloudRows = async (buildQuery, batchSize = CLOUD_FETCH_BATCH_SIZE)
   return { data: rows, error: null };
 };
 
+const fetchRecentRowsWithSelectFallback = async (
+  buildQuery,
+  selectColumns,
+  limit = CLOUD_RECENT_SYNC_LIMIT
+) =>
+  runSelectWithSchemaFallback(
+    (safeSelect) => buildQuery(safeSelect).limit(limit),
+    selectColumns
+  );
+
+const fetchRecentRowsWithOptionalActiveFilter = async ({
+  table,
+  selectColumns,
+  orderBy,
+  orderDirection = 'desc',
+  additionalOrders = [],
+  limit = CLOUD_RECENT_SYNC_LIMIT,
+}) => {
+  let useActiveFilter = true;
+
+  while (true) {
+    const result = await runSelectWithSchemaFallback(
+      (safeSelect) => {
+        let query = supabase.from(table).select(safeSelect);
+        if (useActiveFilter) {
+          query = query.eq('is_active', true);
+        }
+
+        query = query.order(orderBy, { ascending: orderDirection === 'asc' });
+        additionalOrders.forEach((entry) => {
+          query = query.order(entry.column, { ascending: entry.ascending !== false });
+        });
+        return query.limit(limit);
+      },
+      selectColumns
+    );
+
+    if (!result.error) return result;
+
+    const missingColumn = extractSchemaMissingColumn(result.error);
+    if (missingColumn === 'is_active' && useActiveFilter) {
+      useActiveFilter = false;
+      continue;
+    }
+
+    return result;
+  }
+};
+
+const getLatestCreatedAt = (records = []) =>
+  (Array.isArray(records) ? records : []).reduce((latest, record) => {
+    const candidate = record?.createdAt || record?.created_at || null;
+    if (!candidate) return latest;
+    if (!latest) return candidate;
+    return new Date(candidate).getTime() > new Date(latest).getTime() ? candidate : latest;
+  }, null);
+
+const fetchRowsCreatedAfterWithSelectFallback = async (
+  buildQuery,
+  selectColumns,
+  createdAfter
+) =>
+  runSelectWithSchemaFallback(
+    (safeSelect) => buildQuery(safeSelect).gt('created_at', createdAfter),
+    selectColumns
+  );
+
+const fetchRowsCreatedAfterWithOptionalActiveFilter = async ({
+  table,
+  selectColumns,
+  createdAfter,
+  orderBy = 'created_at',
+  orderDirection = 'desc',
+  additionalOrders = [],
+}) => {
+  let useActiveFilter = true;
+
+  while (true) {
+    const result = await runSelectWithSchemaFallback(
+      (safeSelect) => {
+        let query = supabase.from(table).select(safeSelect).gt('created_at', createdAfter);
+        if (useActiveFilter) {
+          query = query.eq('is_active', true);
+        }
+
+        query = query.order(orderBy, { ascending: orderDirection === 'asc' });
+        additionalOrders.forEach((entry) => {
+          query = query.order(entry.column, { ascending: entry.ascending !== false });
+        });
+        return query;
+      },
+      selectColumns
+    );
+
+    if (!result.error) return result;
+
+    const missingColumn = extractSchemaMissingColumn(result.error);
+    if (missingColumn === 'is_active' && useActiveFilter) {
+      useActiveFilter = false;
+      continue;
+    }
+
+    return result;
+  }
+};
+
+const mergeLatestRecords = (existingRecords, incomingRecords) => {
+  const existing = Array.isArray(existingRecords) ? existingRecords : [];
+  const incoming = Array.isArray(incomingRecords) ? incomingRecords : [];
+  if (incoming.length === 0) return existing;
+
+  const incomingIds = new Set(
+    incoming.map((record) => String(record?.id ?? '')).filter(Boolean)
+  );
+
+  return [
+    ...incoming,
+    ...existing.filter((record) => {
+      const key = String(record?.id ?? '');
+      return !key || !incomingIds.has(key);
+    }),
+  ];
+};
+
+const mapCashClosureReportFromLog = (log) => {
+  const details = log?.details && typeof log.details === 'object' ? log.details : {};
+
+  return {
+    id: details.id || `log:${log?.id || Date.now()}`,
+    logId: log?.id || null,
+    date: details.date || log?.date || '--/--/--',
+    openTime: details.openTime || '--:--',
+    closeTime: details.closeTime || details.closingTime || log?.timestamp || '--:--',
+    user: details.user || log?.user || 'Sistema',
+    userId: log?.userId || details.userId || null,
+    userRole: log?.userRole || details.userRole || null,
+    type:
+      details.type ||
+      (String(log?.action || '').includes('Autom') ? 'Automático' : 'Manual'),
+    openingBalance: Number(details.openingBalance || 0),
+    totalSales: Number(details.totalSales || 0),
+    finalBalance: Number(details.finalBalance || 0),
+    totalCost: Number(details.totalCost || 0),
+    totalExpenses: Number(details.totalExpenses || 0),
+    netProfit: Number(details.netProfit || 0),
+    salesCount: Number(details.salesCount || 0),
+    averageTicket: Number(details.averageTicket || 0),
+    paymentMethods: details.paymentMethods || {},
+    itemsSold: Array.isArray(details.itemsSold) ? details.itemsSold : [],
+    newClients: Array.isArray(details.newClients) ? details.newClients : [],
+    expensesSnapshot: Array.isArray(details.expensesSnapshot) ? details.expensesSnapshot : [],
+    transactionsSnapshot: Array.isArray(details.transactionsSnapshot) ? details.transactionsSnapshot : [],
+    hasDetail: true,
+    source: 'log',
+    createdAt: log?.created_at || null,
+  };
+};
+
 const hasUsableCloudResult = (result) => result.status === 'fulfilled' && !result.value?.error;
+
+const fetchRowsWithOptionalActiveFilter = async ({
+  table,
+  selectColumns,
+  orderBy,
+  orderDirection = 'asc',
+  additionalOrders = [],
+}) => {
+  let useActiveFilter = true;
+
+  while (true) {
+    const result = await fetchAllCloudRowsWithSelectFallback(
+      (safeSelect) => {
+        let query = supabase.from(table).select(safeSelect);
+        if (useActiveFilter) {
+          query = query.eq('is_active', true);
+        }
+
+        query = query.order(orderBy, { ascending: orderDirection === 'asc' });
+        additionalOrders.forEach((entry) => {
+          query = query.order(entry.column, { ascending: entry.ascending !== false });
+        });
+        return query;
+      },
+      selectColumns,
+      CLOUD_FETCH_BATCH_SIZE
+    );
+
+    if (!result.error) return result;
+
+    const missingColumn = extractSchemaMissingColumn(result.error);
+    if (missingColumn === 'is_active' && useActiveFilter) {
+      useActiveFilter = false;
+      continue;
+    }
+
+    return result;
+  }
+};
 
 const fetchCoreCloudPayload = async () => {
   const [
@@ -173,48 +473,44 @@ const fetchCoreCloudPayload = async () => {
     registerResult,
     offersResult,
   ] = await Promise.allSettled([
-    fetchAllCloudRows(() =>
-      supabase
-        .from('products')
-        .select('*')
-        .eq('is_active', true)
-        .order('title')
-        .order('id')
-    ),
-    fetchAllCloudRows(() =>
-      supabase
-        .from('clients')
-        .select('*')
-        .eq('is_active', true)
-        .order('name')
-        .order('id')
-    ),
+    fetchRowsWithOptionalActiveFilter({
+      table: 'products',
+      selectColumns: CLOUD_SELECTS.products,
+      orderBy: 'title',
+      additionalOrders: [{ column: 'id', ascending: true }],
+    }),
+    fetchRowsWithOptionalActiveFilter({
+      table: 'clients',
+      selectColumns: CLOUD_SELECTS.clients,
+      orderBy: 'name',
+      additionalOrders: [{ column: 'id', ascending: true }],
+    }),
     fetchAllCloudRows(() =>
       supabase
         .from('agenda_contacts')
-        .select('*')
+        .select(CLOUD_SELECTS.agendaContacts)
         .order('name')
         .order('id')
     ),
     fetchAllCloudRows(() =>
       supabase
         .from('categories')
-        .select('*')
+        .select(CLOUD_SELECTS.categories)
         .order('name')
         .order('id')
     ),
     fetchAllCloudRows(() =>
       supabase
         .from('rewards')
-        .select('*')
+        .select(CLOUD_SELECTS.rewards)
         .order('points_cost', { ascending: true })
         .order('id', { ascending: true })
     ),
-    supabase.from('register_state').select('*').eq('id', 1).maybeSingle(),
+    supabase.from('register_state').select(CLOUD_SELECTS.registerState).eq('id', 1).maybeSingle(),
     fetchAllCloudRows(() =>
       supabase
         .from('offers')
-        .select('*')
+        .select(CLOUD_SELECTS.offers)
         .eq('is_active', true)
         .order('created_at', { ascending: false })
         .order('id', { ascending: false })
@@ -247,7 +543,7 @@ const fetchCoreCloudPayload = async () => {
     const { data: newState, error: upsertErr } = await supabase
       .from('register_state')
       .upsert([{ id: 1, is_open: false, opening_balance: 0, closing_time: '21:00' }], { onConflict: 'id' })
-      .select()
+      .select(CLOUD_SELECTS.registerState)
       .maybeSingle();
 
     if (!upsertErr && newState) registerState = newState;
@@ -265,78 +561,496 @@ const fetchCoreCloudPayload = async () => {
   };
 };
 
-const fetchDashboardCloudPayload = async () => {
-  const [salesResult, logsResult, expResult, closureResult] = await Promise.allSettled([
-    fetchAllCloudRows(() =>
+const fetchTransactionsCloudPayload = async () => {
+  const salesResult = await fetchAllCloudRowsWithSelectFallback(
+    (selectColumns) =>
       supabase
         .from('sales')
-        .select('*, sale_items(*), clients(name, member_number)')
+        .select(selectColumns)
         .order('created_at', { ascending: false })
-        .order('id', { ascending: false })
-    ),
-    fetchAllCloudRows(() =>
-      supabase
-        .from('logs')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false })
-    ),
-    fetchAllCloudRows(() =>
-      supabase
-        .from('expenses')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false })
-    ),
-    fetchAllCloudRows(() =>
-      supabase
-        .from('cash_closures')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false })
-    ),
-  ]);
+        .order('id', { ascending: false }),
+    CLOUD_SELECTS.sales,
+    CLOUD_FETCH_BATCH_SIZE
+  );
 
-  const hasCloudConnection = [salesResult, logsResult, expResult, closureResult].some(hasUsableCloudResult);
+  const hasCloudConnection = !salesResult.error;
+  const salesData = salesResult.error ? null : salesResult.data || [];
 
-  const logsData = safeCloudData(logsResult, 'logs');
-  const parsedLogs = logsData ? mapLogRecords(logsData) : null;
-  const salesData = safeCloudData(salesResult, 'ventas');
-  const expData = safeCloudData(expResult, 'gastos');
-  const closureData = safeCloudData(closureResult, 'reportes');
+  if (salesResult.error) {
+    console.error('Error en tabla [ventas]:', salesResult.error);
+  }
 
   return {
     hasCloudConnection,
-    dailyLogs: parsedLogs,
-    transactions: salesData ? mapSaleRecords(salesData, parsedLogs || []) : null,
+    transactions: salesData ? mapSaleRecords(salesData, []) : null,
+  };
+};
+
+const fetchRecentTransactionsCloudPayload = async () => {
+  const salesResult = await fetchRecentRowsWithSelectFallback(
+    (selectColumns) =>
+      supabase
+        .from('sales')
+        .select(selectColumns)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false }),
+    CLOUD_SELECTS.sales,
+    CLOUD_RECENT_SYNC_LIMIT
+  );
+
+  const hasCloudConnection = !salesResult.error;
+  const salesData = salesResult.error ? null : salesResult.data || [];
+
+  if (salesResult.error) {
+    console.error('Error en tabla [ventas recientes]:', salesResult.error);
+  }
+
+  return {
+    hasCloudConnection,
+    transactions: salesData ? mapSaleRecords(salesData, []) : null,
+  };
+};
+
+const fetchTransactionsCloudPayloadSince = async (createdAfter) => {
+  const salesResult = await fetchRowsCreatedAfterWithSelectFallback(
+    (selectColumns) =>
+      supabase
+        .from('sales')
+        .select(selectColumns)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false }),
+    CLOUD_SELECTS.sales,
+    createdAfter
+  );
+
+  const hasCloudConnection = !salesResult.error;
+  const salesData = salesResult.error ? null : salesResult.data || [];
+
+  if (salesResult.error) {
+    console.error('Error en tabla [ventas incrementales]:', salesResult.error);
+  }
+
+  return {
+    hasCloudConnection,
+    transactions: salesData ? mapSaleRecords(salesData, []) : null,
+  };
+};
+
+const fetchDashboardCloudPayload = async () => {
+  const [logsResult, expResult, closuresResult] = await Promise.allSettled([
+    runSelectWithSchemaFallback(
+      (selectColumns) =>
+        supabase
+          .from('logs')
+          .select(selectColumns)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .limit(DASHBOARD_LOG_LIMIT),
+      CLOUD_SELECTS.logsSummary
+    ),
+    fetchAllCloudRowsWithSelectFallback(
+      (selectColumns) =>
+        supabase
+          .from('expenses')
+          .select(selectColumns)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false }),
+      CLOUD_SELECTS.expenses,
+      CLOUD_FETCH_BATCH_SIZE
+    ),
+    fetchAllCloudRowsWithSelectFallback(
+      (selectColumns) =>
+        supabase
+          .from('cash_closures')
+          .select(selectColumns)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false }),
+      CLOUD_SELECTS.cashClosuresSummary,
+      CLOUD_FETCH_BATCH_SIZE
+    ),
+  ]);
+
+  const hasCloudConnection = [logsResult, expResult, closuresResult].some(hasUsableCloudResult);
+
+  const logsData = safeCloudData(logsResult, 'logs');
+  const expData = safeCloudData(expResult, 'gastos');
+  const closuresData = safeCloudData(closuresResult, 'cash_closures');
+
+  return {
+    hasCloudConnection,
+    dailyLogs: logsData ? mapLogRecords(logsData) : null,
     expenses: expData ? mapExpenseRecords(expData) : null,
+    pastClosures: closuresData ? mapCashClosureRecords(closuresData) : null,
+  };
+};
+
+const fetchRecentDashboardCloudPayload = async () => {
+  const [logsResult, expResult, closuresResult] = await Promise.allSettled([
+    runSelectWithSchemaFallback(
+      (selectColumns) =>
+        supabase
+          .from('logs')
+          .select(selectColumns)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .limit(DASHBOARD_LOG_LIMIT),
+      CLOUD_SELECTS.logsSummary
+    ),
+    fetchRecentRowsWithSelectFallback(
+      (selectColumns) =>
+        supabase
+          .from('expenses')
+          .select(selectColumns)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false }),
+      CLOUD_SELECTS.expenses,
+      CLOUD_RECENT_SYNC_LIMIT
+    ),
+    fetchRecentRowsWithSelectFallback(
+      (selectColumns) =>
+        supabase
+          .from('cash_closures')
+          .select(selectColumns)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false }),
+      CLOUD_SELECTS.cashClosuresSummary,
+      CLOUD_RECENT_SYNC_LIMIT
+    ),
+  ]);
+
+  const hasCloudConnection = [logsResult, expResult, closuresResult].some(hasUsableCloudResult);
+  const logsData = safeCloudData(logsResult, 'logs recientes');
+  const expData = safeCloudData(expResult, 'gastos recientes');
+  const closuresData = safeCloudData(closuresResult, 'cash_closures recientes');
+
+  return {
+    hasCloudConnection,
+    dailyLogs: logsData ? mapLogRecords(logsData) : null,
+    expenses: expData ? mapExpenseRecords(expData) : null,
+    pastClosures: closuresData ? mapCashClosureRecords(closuresData) : null,
+  };
+};
+
+const fetchDashboardCloudPayloadSince = async ({ logsAfter, expensesAfter, closuresAfter }) => {
+  const [logsResult, expResult, closuresResult] = await Promise.allSettled([
+    logsAfter
+      ? fetchRowsCreatedAfterWithSelectFallback(
+          (selectColumns) =>
+            supabase
+              .from('logs')
+              .select(selectColumns)
+              .order('created_at', { ascending: false })
+              .order('id', { ascending: false }),
+          CLOUD_SELECTS.logsSummary,
+          logsAfter
+        )
+      : Promise.resolve({ data: [], error: null }),
+    expensesAfter
+      ? fetchRowsCreatedAfterWithSelectFallback(
+          (selectColumns) =>
+            supabase
+              .from('expenses')
+              .select(selectColumns)
+              .order('created_at', { ascending: false })
+              .order('id', { ascending: false }),
+          CLOUD_SELECTS.expenses,
+          expensesAfter
+        )
+      : fetchAllCloudRowsWithSelectFallback(
+          (selectColumns) =>
+            supabase
+              .from('expenses')
+              .select(selectColumns)
+              .order('created_at', { ascending: false })
+              .order('id', { ascending: false }),
+          CLOUD_SELECTS.expenses,
+          CLOUD_FETCH_BATCH_SIZE
+        ),
+    closuresAfter
+      ? fetchRowsCreatedAfterWithSelectFallback(
+          (selectColumns) =>
+            supabase
+              .from('cash_closures')
+              .select(selectColumns)
+              .order('created_at', { ascending: false })
+              .order('id', { ascending: false }),
+          CLOUD_SELECTS.cashClosuresSummary,
+          closuresAfter
+        )
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  const hasCloudConnection = [logsResult, expResult, closuresResult].some(hasUsableCloudResult);
+  const logsData = safeCloudData(logsResult, 'logs incrementales');
+  const expData = safeCloudData(expResult, 'gastos incrementales');
+  const closuresData = safeCloudData(closuresResult, 'cash_closures incrementales');
+
+  return {
+    hasCloudConnection,
+    dailyLogs: logsData ? mapLogRecords(logsData) : null,
+    expenses: expData ? mapExpenseRecords(expData) : null,
+    pastClosures: closuresData ? mapCashClosureRecords(closuresData) : null,
+  };
+};
+
+const fetchHistoryCloudPayload = async () => {
+  const historyLogsResult = await fetchRecentRowsWithSelectFallback(
+    (selectColumns) =>
+      supabase
+        .from('logs')
+        .select(selectColumns)
+        .in('action', HISTORY_LOG_ACTIONS)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false }),
+    CLOUD_SELECTS.logs,
+    HISTORY_LOG_INITIAL_LIMIT
+  );
+
+  const hasCloudConnection = !historyLogsResult.error;
+  const historyLogsData = historyLogsResult.error ? null : historyLogsResult.data || [];
+
+  return {
+    hasCloudConnection,
+    historyLogs: historyLogsData ? mapLogRecords(historyLogsData) : null,
+  };
+};
+
+const fetchRecentHistoryCloudPayload = async () => {
+  const historyLogsResult = await fetchRecentRowsWithSelectFallback(
+    (selectColumns) =>
+      supabase
+        .from('logs')
+        .select(selectColumns)
+        .in('action', HISTORY_LOG_ACTIONS)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false }),
+    CLOUD_SELECTS.logs,
+    HISTORY_LOG_RECENT_SYNC_LIMIT
+  );
+
+  const hasCloudConnection = !historyLogsResult.error;
+  const historyLogsData = historyLogsResult.error ? null : historyLogsResult.data || [];
+
+  return {
+    hasCloudConnection,
+    historyLogs: historyLogsData ? mapLogRecords(historyLogsData) : null,
+  };
+};
+
+const fetchHistoryCloudPayloadSince = async (createdAfter) => {
+  const historyLogsResult = await fetchRowsCreatedAfterWithSelectFallback(
+    (selectColumns) =>
+      supabase
+        .from('logs')
+        .select(selectColumns)
+        .in('action', HISTORY_LOG_ACTIONS)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false }),
+    CLOUD_SELECTS.logs,
+    createdAfter
+  );
+
+  const hasCloudConnection = !historyLogsResult.error;
+  const historyLogsData = historyLogsResult.error ? null : historyLogsResult.data || [];
+
+  return {
+    hasCloudConnection,
+    historyLogs: historyLogsData ? mapLogRecords(historyLogsData) : null,
+  };
+};
+
+const fetchReportsCloudPayload = async () => {
+  const closuresResult = await fetchAllCloudRowsWithSelectFallback(
+    (selectColumns) =>
+      supabase
+        .from('cash_closures')
+        .select(selectColumns)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false }),
+    CLOUD_SELECTS.cashClosuresSummary,
+    CLOUD_FETCH_BATCH_SIZE
+  );
+
+  const hasCloudConnection = !closuresResult.error;
+  const closureData = closuresResult.error ? null : closuresResult.data || [];
+
+  return {
+    hasCloudConnection,
     pastClosures: closureData ? mapCashClosureRecords(closureData) : null,
   };
 };
 
+const fetchRecentReportsCloudPayload = async () => {
+  const closuresResult = await fetchRecentRowsWithSelectFallback(
+    (selectColumns) =>
+      supabase
+        .from('cash_closures')
+        .select(selectColumns)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false }),
+    CLOUD_SELECTS.cashClosuresSummary,
+    CLOUD_RECENT_SYNC_LIMIT
+  );
+
+  const hasCloudConnection = !closuresResult.error;
+  const closureData = closuresResult.error ? null : closuresResult.data || [];
+
+  return {
+    hasCloudConnection,
+    pastClosures: closureData ? mapCashClosureRecords(closureData) : null,
+  };
+};
+
+const fetchReportsCloudPayloadSince = async (createdAfter) => {
+  const closuresResult = await fetchRowsCreatedAfterWithSelectFallback(
+    (selectColumns) =>
+      supabase
+        .from('cash_closures')
+        .select(selectColumns)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false }),
+    CLOUD_SELECTS.cashClosuresSummary,
+    createdAfter
+  );
+
+  const hasCloudConnection = !closuresResult.error;
+  const closureData = closuresResult.error ? null : closuresResult.data || [];
+
+  return {
+    hasCloudConnection,
+    pastClosures: closureData ? mapCashClosureRecords(closureData) : null,
+  };
+};
+
+const fetchCashClosureDetailById = async (closureId) => {
+  if (!closureId) return null;
+
+  try {
+    const { data: logData, error: logError } = await runSelectWithSchemaFallback(
+      (selectColumns) =>
+        supabase
+          .from('logs')
+          .select(selectColumns)
+          .in('action', REPORT_LOG_ACTIONS)
+          .contains('details', { id: closureId })
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      CLOUD_SELECTS.logs
+    );
+
+    if (!logError && logData) {
+      const mappedLog = mapLogRecords([logData])[0];
+      if (mappedLog?.details && typeof mappedLog.details === 'object') {
+        return mapCashClosureReportFromLog(mappedLog);
+      }
+    }
+  } catch (error) {
+    console.warn('No se pudo leer el reporte desde el log de acciones. Seguimos con cash_closures.', error);
+  }
+
+  const { data, error } = await runSelectWithSchemaFallback(
+    (selectColumns) =>
+      supabase
+        .from('cash_closures')
+        .select(selectColumns)
+        .eq('id', closureId)
+        .maybeSingle(),
+    CLOUD_SELECTS.cashClosuresDetail,
+  );
+
+  if (error) throw error;
+  return data ? mapCashClosureRecord(data) : null;
+};
+
 const fetchOrdersCloudPayload = async () => {
   const [budgetsResult, ordersResult] = await Promise.allSettled([
-    fetchAllCloudRows(() =>
-      supabase
-        .from('budgets')
-        .select('*')
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false })
-    ),
-    fetchAllCloudRows(() =>
-      supabase
-        .from('orders')
-        .select('*')
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false })
-    ),
+    fetchRowsWithOptionalActiveFilter({
+      table: 'budgets',
+      selectColumns: CLOUD_SELECTS.budgets,
+      orderBy: 'created_at',
+      orderDirection: 'desc',
+      additionalOrders: [{ column: 'id', ascending: false }],
+    }),
+    fetchRowsWithOptionalActiveFilter({
+      table: 'orders',
+      selectColumns: CLOUD_SELECTS.orders,
+      orderBy: 'created_at',
+      orderDirection: 'desc',
+      additionalOrders: [{ column: 'id', ascending: false }],
+    }),
   ]);
 
   const hasCloudConnection = [budgetsResult, ordersResult].some(hasUsableCloudResult);
   const budgetsData = safeCloudData(budgetsResult, 'presupuestos');
   const ordersData = safeCloudData(ordersResult, 'pedidos');
+
+  return {
+    hasCloudConnection,
+    budgets: budgetsData ? mapBudgetRecords(budgetsData) : null,
+    orders: ordersData ? mapOrderRecords(ordersData) : null,
+  };
+};
+
+const fetchRecentOrdersCloudPayload = async () => {
+  const [budgetsResult, ordersResult] = await Promise.allSettled([
+    fetchRecentRowsWithOptionalActiveFilter({
+      table: 'budgets',
+      selectColumns: CLOUD_SELECTS.budgets,
+      orderBy: 'created_at',
+      orderDirection: 'desc',
+      additionalOrders: [{ column: 'id', ascending: false }],
+      limit: CLOUD_RECENT_SYNC_LIMIT,
+    }),
+    fetchRecentRowsWithOptionalActiveFilter({
+      table: 'orders',
+      selectColumns: CLOUD_SELECTS.orders,
+      orderBy: 'created_at',
+      orderDirection: 'desc',
+      additionalOrders: [{ column: 'id', ascending: false }],
+      limit: CLOUD_RECENT_SYNC_LIMIT,
+    }),
+  ]);
+
+  const hasCloudConnection = [budgetsResult, ordersResult].some(hasUsableCloudResult);
+  const budgetsData = safeCloudData(budgetsResult, 'presupuestos recientes');
+  const ordersData = safeCloudData(ordersResult, 'pedidos recientes');
+
+  return {
+    hasCloudConnection,
+    budgets: budgetsData ? mapBudgetRecords(budgetsData) : null,
+    orders: ordersData ? mapOrderRecords(ordersData) : null,
+  };
+};
+
+const fetchOrdersCloudPayloadSince = async ({ budgetsAfter, ordersAfter }) => {
+  const [budgetsResult, ordersResult] = await Promise.allSettled([
+    budgetsAfter
+      ? fetchRowsCreatedAfterWithOptionalActiveFilter({
+          table: 'budgets',
+          selectColumns: CLOUD_SELECTS.budgets,
+          createdAfter: budgetsAfter,
+          orderBy: 'created_at',
+          orderDirection: 'desc',
+          additionalOrders: [{ column: 'id', ascending: false }],
+        })
+      : Promise.resolve({ data: [], error: null }),
+    ordersAfter
+      ? fetchRowsCreatedAfterWithOptionalActiveFilter({
+          table: 'orders',
+          selectColumns: CLOUD_SELECTS.orders,
+          createdAfter: ordersAfter,
+          orderBy: 'created_at',
+          orderDirection: 'desc',
+          additionalOrders: [{ column: 'id', ascending: false }],
+        })
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  const hasCloudConnection = [budgetsResult, ordersResult].some(hasUsableCloudResult);
+  const budgetsData = safeCloudData(budgetsResult, 'presupuestos incrementales');
+  const ordersData = safeCloudData(ordersResult, 'pedidos incrementales');
 
   return {
     hasCloudConnection,
@@ -431,11 +1145,91 @@ const loadOfflineSnapshot = () =>
 
 const saveOfflineSnapshot = (snapshot) => saveSnapshotToStorage(OFFLINE_CORE_CACHE_KEY, snapshot);
 
+const loadOfflineTransactionsSnapshot = () => loadSnapshotFromStorage(OFFLINE_TRANSACTIONS_CACHE_KEY);
+const saveOfflineTransactionsSnapshot = (snapshot) =>
+  saveSnapshotToStorage(OFFLINE_TRANSACTIONS_CACHE_KEY, snapshot);
+
 const loadOfflineDashboardSnapshot = () => loadSnapshotFromStorage(OFFLINE_DASHBOARD_CACHE_KEY);
 const saveOfflineDashboardSnapshot = (snapshot) => saveSnapshotToStorage(OFFLINE_DASHBOARD_CACHE_KEY, snapshot);
+const loadOfflineHistorySnapshot = () => loadSnapshotFromStorage(OFFLINE_HISTORY_CACHE_KEY);
+const saveOfflineHistorySnapshot = (snapshot) => saveSnapshotToStorage(OFFLINE_HISTORY_CACHE_KEY, snapshot);
 
 const loadOfflineOrdersSnapshot = () => loadSnapshotFromStorage(OFFLINE_ORDERS_CACHE_KEY);
 const saveOfflineOrdersSnapshot = (snapshot) => saveSnapshotToStorage(OFFLINE_ORDERS_CACHE_KEY, snapshot);
+const loadOfflineReportsSnapshot = () => loadSnapshotFromStorage(OFFLINE_REPORTS_CACHE_KEY);
+const saveOfflineReportsSnapshot = (snapshot) => saveSnapshotToStorage(OFFLINE_REPORTS_CACHE_KEY, snapshot);
+const loadOfflineSharedUsersSnapshot = () => loadSnapshotFromStorage(OFFLINE_SHARED_USERS_CACHE_KEY);
+const saveOfflineSharedUsersSnapshot = (snapshot) =>
+  saveSnapshotToStorage(OFFLINE_SHARED_USERS_CACHE_KEY, snapshot);
+const loadOfflinePosSnapshot = () => loadSnapshotFromStorage(OFFLINE_POS_CACHE_KEY);
+const saveOfflinePosSnapshot = (snapshot) => saveSnapshotToStorage(OFFLINE_POS_CACHE_KEY, snapshot);
+
+const loadOfflineLoginSnapshot = () => loadSnapshotFromStorage(OFFLINE_LOGIN_CACHE_KEY);
+const saveOfflineLoginSnapshot = (snapshot) =>
+  saveSnapshotToStorage(OFFLINE_LOGIN_CACHE_KEY, snapshot);
+
+const fallbackHashString = (value) => {
+  let hash = 2166136261;
+  const input = String(value || '');
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fallback:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+};
+
+const createOfflineLoginDigest = async (userId, password) => {
+  const source = `rebu-offline-login-v1:${String(userId || '')}:${String(password || '')}`;
+  const subtle = window.crypto?.subtle;
+  if (!subtle || typeof TextEncoder === 'undefined') {
+    return fallbackHashString(source);
+  }
+
+  const bytes = new TextEncoder().encode(source);
+  const digest = await subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+};
+
+const saveOfflineLoginVerifier = async (user, password) => {
+  if (!user?.id || !password) return;
+  try {
+    const currentSnapshot = loadOfflineLoginSnapshot() || {};
+    const verifiers =
+      currentSnapshot.verifiers && typeof currentSnapshot.verifiers === 'object'
+        ? currentSnapshot.verifiers
+        : {};
+    const userId = String(user.id);
+    verifiers[userId] = {
+      userId,
+      displayName: user.displayName || user.name || 'Usuario',
+      digest: await createOfflineLoginDigest(userId, password),
+      updatedAt: new Date().toISOString(),
+    };
+
+    saveOfflineLoginSnapshot({
+      savedAt: new Date().toISOString(),
+      verifiers,
+    });
+  } catch (error) {
+    console.warn('No se pudo guardar el acceso offline del usuario:', error);
+  }
+};
+
+const verifyOfflineLoginVerifier = async (user, password) => {
+  if (!user?.id || !password) return false;
+  try {
+    const snapshot = loadOfflineLoginSnapshot();
+    const verifier = snapshot?.verifiers?.[String(user.id)];
+    if (!verifier?.digest) return false;
+    const candidateDigest = await createOfflineLoginDigest(user.id, password);
+    return candidateDigest === verifier.digest;
+  } catch (error) {
+    console.warn('No se pudo validar el acceso offline del usuario:', error);
+    return false;
+  }
+};
 
 const loadUserSettings = () => {
   try {
@@ -477,22 +1271,6 @@ function PersistentTabPanel({ tab, activeTab, className = '', children }) {
   );
 }
 
-const extractSchemaMissingColumn = (error) => {
-  const errorText = [error?.message, error?.details, error?.hint].filter(Boolean).join(' ');
-  const patterns = [
-    /Could not find the '([^']+)' column/i,
-    /column ["`]?([a-z0-9_]+)["`]? does not exist/i,
-    /record ["`]?[^"'`]+["`]? has no field ["`]?([a-z0-9_]+)["`]?/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = errorText.match(pattern);
-    if (match?.[1]) return match[1];
-  }
-
-  return null;
-};
-
 const getCloudErrorMessage = (error, fallback = 'Error de sincronizacion con la nube.') => {
   const errorText = [error?.message, error?.details, error?.hint].filter(Boolean).join(' ');
 
@@ -507,39 +1285,82 @@ const getCloudErrorMessage = (error, fallback = 'Error de sincronizacion con la 
   return error?.message || error?.details || error?.hint || fallback;
 };
 
-const insertWithSchemaFallback = async (table, payload) => {
+const insertWithSchemaFallback = async (table, payload, selectColumns = '*') => {
   let safePayload = { ...payload };
+  let safeSelect = selectColumns;
 
   while (true) {
-    const { data, error } = await supabase.from(table).insert([safePayload]).select().single();
+    const { data, error } = await supabase.from(table).insert([safePayload]).select(safeSelect).single();
     if (!error) return { data, payload: safePayload };
 
     const missingColumn = extractSchemaMissingColumn(error);
-    if (!missingColumn || !(missingColumn in safePayload)) {
-      throw error;
+    if (missingColumn && missingColumn in safePayload) {
+      const nextPayload = { ...safePayload };
+      delete nextPayload[missingColumn];
+      safePayload = nextPayload;
+      continue;
     }
 
-    const nextPayload = { ...safePayload };
-    delete nextPayload[missingColumn];
-    safePayload = nextPayload;
+    const nextSelect = missingColumn ? removeColumnFromSelect(safeSelect, missingColumn) : '';
+    if (missingColumn && nextSelect && nextSelect !== safeSelect) {
+      safeSelect = nextSelect;
+      continue;
+    }
+
+    if (!missingColumn) {
+      throw error;
+    }
+    throw error;
   }
 };
 
-const updateWithSchemaFallback = async (table, id, payload) => {
-  let safePayload = { ...payload };
+const insertRowsWithSchemaFallback = async (table, rows) => {
+  let safeRows = (Array.isArray(rows) ? rows : [rows]).map((row) => ({ ...row }));
 
   while (true) {
-    const { data, error } = await supabase.from(table).update(safePayload).eq('id', id).select().single();
+    const { data, error } = await supabase.from(table).insert(safeRows);
+    if (!error) return { data, payload: safeRows };
+
+    const missingColumn = extractSchemaMissingColumn(error);
+    const canDropMissingColumn = missingColumn && safeRows.some((row) => missingColumn in row);
+    if (canDropMissingColumn) {
+      safeRows = safeRows.map((row) => {
+        const { [missingColumn]: _removed, ...rest } = row;
+        return rest;
+      });
+      continue;
+    }
+
+    throw error;
+  }
+};
+
+const updateWithSchemaFallback = async (table, id, payload, selectColumns = '*') => {
+  let safePayload = { ...payload };
+  let safeSelect = selectColumns;
+
+  while (true) {
+    const { data, error } = await supabase.from(table).update(safePayload).eq('id', id).select(safeSelect).single();
     if (!error) return { data, payload: safePayload };
 
     const missingColumn = extractSchemaMissingColumn(error);
-    if (!missingColumn || !(missingColumn in safePayload)) {
-      throw error;
+    if (missingColumn && missingColumn in safePayload) {
+      const nextPayload = { ...safePayload };
+      delete nextPayload[missingColumn];
+      safePayload = nextPayload;
+      continue;
     }
 
-    const nextPayload = { ...safePayload };
-    delete nextPayload[missingColumn];
-    safePayload = nextPayload;
+    const nextSelect = missingColumn ? removeColumnFromSelect(safeSelect, missingColumn) : '';
+    if (missingColumn && nextSelect && nextSelect !== safeSelect) {
+      safeSelect = nextSelect;
+      continue;
+    }
+
+    if (!missingColumn) {
+      throw error;
+    }
+    throw error;
   }
 };
 
@@ -557,6 +1378,7 @@ export default function PartySupplyApp() {
   const [isCloudLoading, setIsCloudLoading] = useState(false);
   const [isAuthBootLoading, setIsAuthBootLoading] = useState(true);
   const [isOfflineReadOnly, setIsOfflineReadOnly] = useState(false);
+  const [isReconnectAttempting, setIsReconnectAttempting] = useState(false);
   const [offlineSnapshotAt, setOfflineSnapshotAt] = useState(null);
 
   // ==========================================
@@ -567,6 +1389,7 @@ export default function PartySupplyApp() {
   const [rewards, setRewards] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [dailyLogs, setDailyLogs] = useState([]);
+  const [historyLogs, setHistoryLogs] = useState([]);
   const [members, setMembers] = useState([]);
   const [agendaContacts, setAgendaContacts] = useState([]);
   const [pastClosures, setPastClosures] = useState([]);
@@ -578,8 +1401,11 @@ export default function PartySupplyApp() {
   const moduleLoadStateRef = useRef(MODULE_LOAD_DEFAULT_STATE);
   const moduleLoadPromisesRef = useRef({
     core: null,
+    transactions: null,
     dashboard: null,
+    history: null,
     orders: null,
+    reports: null,
   });
   const activeTabRef = useRef('pos');
   const dataStateRef = useRef({});
@@ -646,16 +1472,35 @@ export default function PartySupplyApp() {
     const hasDashboardData =
       snapshot &&
       (
-        'transactions' in snapshot ||
         'dailyLogs' in snapshot ||
-        'pastClosures' in snapshot ||
-        'expenses' in snapshot
+        'expenses' in snapshot ||
+        'pastClosures' in snapshot
       );
     if (!hasDashboardData) return false;
-    setTransactions(Array.isArray(snapshot.transactions) ? snapshot.transactions : []);
     setDailyLogs(Array.isArray(snapshot.dailyLogs) ? snapshot.dailyLogs : []);
-    setPastClosures(Array.isArray(snapshot.pastClosures) ? snapshot.pastClosures : []);
     setExpenses(Array.isArray(snapshot.expenses) ? snapshot.expenses : []);
+    setPastClosures(Array.isArray(snapshot.pastClosures) ? snapshot.pastClosures : []);
+    return true;
+  };
+
+  const applyTransactionsSnapshot = (snapshot) => {
+    const hasTransactionsData = snapshot && 'transactions' in snapshot;
+    if (!hasTransactionsData) return false;
+    setTransactions(Array.isArray(snapshot.transactions) ? snapshot.transactions : []);
+    return true;
+  };
+
+  const applyHistorySnapshot = (snapshot) => {
+    const hasHistoryData = snapshot && 'historyLogs' in snapshot;
+    if (!hasHistoryData) return false;
+    setHistoryLogs(Array.isArray(snapshot.historyLogs) ? snapshot.historyLogs : []);
+    return true;
+  };
+
+  const applyReportsSnapshot = (snapshot) => {
+    const hasReportsData = snapshot && 'pastClosures' in snapshot;
+    if (!hasReportsData) return false;
+    setPastClosures(Array.isArray(snapshot.pastClosures) ? snapshot.pastClosures : []);
     return true;
   };
 
@@ -670,22 +1515,53 @@ export default function PartySupplyApp() {
   const applyOfflineSnapshot = (snapshot) => {
     if (!snapshot) return false;
     applyCoreSnapshot(snapshot);
+    applyTransactionsSnapshot(snapshot);
+    applyHistorySnapshot(snapshot);
     applyDashboardSnapshot(snapshot);
     applyOrdersSnapshot(snapshot);
+    applyReportsSnapshot(snapshot);
     if (snapshot.savedAt) setOfflineSnapshotAt(snapshot.savedAt);
     return true;
   };
 
-  const loadAppUsers = async ({ force = false } = {}) => {
+  const loadAppUsers = async ({ force = false, includeInactive = false } = {}) => {
+    const requestedScope = includeInactive ? 'all' : 'active';
+    const offlineSharedUsersSnapshot = loadOfflineSharedUsersSnapshot();
+
+    if (
+      isBrowserOffline() &&
+      offlineSharedUsersSnapshot &&
+      Array.isArray(offlineSharedUsersSnapshot.users) &&
+      canServeSharedUsersScope(offlineSharedUsersSnapshot.scope || 'active', requestedScope)
+    ) {
+      setAuthMode(offlineSharedUsersSnapshot.authMode || 'supabase');
+      setAppUsers(offlineSharedUsersSnapshot.users);
+      return offlineSharedUsersSnapshot.users;
+    }
+
+    if (isBrowserOffline()) {
+      const legacyUsers = buildLegacyUsers(USERS, userSettings);
+      setAuthMode('legacy');
+      setAppUsers(legacyUsers);
+      return legacyUsers;
+    }
+
     if (sharedUsersCache.promise) {
       const cachedResult = await sharedUsersCache.promise;
-      setAuthMode(cachedResult.authMode);
-      setAppUsers(cachedResult.users);
-      return cachedResult.users;
+      if (canServeSharedUsersScope(cachedResult.scope || 'active', requestedScope)) {
+        setAuthMode(cachedResult.authMode);
+        setAppUsers(cachedResult.users);
+        return cachedResult.users;
+      }
     }
 
     const cacheAge = Date.now() - Number(sharedUsersCache.loadedAt || 0);
-    if (!force && Array.isArray(sharedUsersCache.users) && cacheAge < APP_USERS_FRESHNESS_MS) {
+    if (
+      !force &&
+      Array.isArray(sharedUsersCache.users) &&
+      canServeSharedUsersScope(sharedUsersCache.scope || 'active', requestedScope) &&
+      cacheAge < APP_USERS_FRESHNESS_MS
+    ) {
       setAuthMode(sharedUsersCache.authMode || 'legacy');
       setAppUsers(sharedUsersCache.users);
       return sharedUsersCache.users;
@@ -693,20 +1569,72 @@ export default function PartySupplyApp() {
 
     sharedUsersCache.promise = (async () => {
       try {
-        let users = await fetchAppUsersPublic();
+        let users = await withTimeout(
+          fetchAppUsersPublic({
+            includeInactive,
+            includeAuditFields: includeInactive,
+          }),
+          OFFLINE_BOOT_TIMEOUT_MS,
+          'Carga de usuarios',
+        );
 
         if (users.length === 0) {
           const seed = buildLegacyBootstrapSeed(USERS, userSettings);
-          await bootstrapAppUsers(seed);
-          users = await fetchAppUsersPublic();
+          await withTimeout(bootstrapAppUsers(seed), OFFLINE_BOOT_TIMEOUT_MS, 'Inicializacion de usuarios');
+          users = await withTimeout(
+            fetchAppUsersPublic({
+              includeInactive,
+              includeAuditFields: includeInactive,
+            }),
+            OFFLINE_BOOT_TIMEOUT_MS,
+            'Recarga de usuarios',
+          );
         }
 
         if (users.length > 0) {
-          return { users, authMode: 'supabase' };
+          return { users, authMode: 'supabase', scope: requestedScope };
         }
 
         throw new Error('No se encontraron usuarios activos.');
       } catch (error) {
+        const cachedSnapshot = loadOfflineSharedUsersSnapshot();
+        const cachedUsers =
+          cachedSnapshot &&
+          Array.isArray(cachedSnapshot.users) &&
+          canServeSharedUsersScope(cachedSnapshot.scope || 'active', requestedScope)
+            ? cachedSnapshot.users
+            : null;
+        const inMemorySharedUsers =
+          Array.isArray(sharedUsersCache.users) &&
+          sharedUsersCache.authMode === 'supabase' &&
+          sharedUsersCache.users.length > 0
+            ? sharedUsersCache.users
+            : null;
+        const inMemoryRequestedScope = sharedUsersCache.scope || 'active';
+
+        if (cachedUsers && cachedUsers.length > 0) {
+          console.warn('No se pudo refrescar app_users desde Supabase. Seguimos con el cache local compartido.', error);
+          return {
+            users: cachedUsers,
+            authMode: 'supabase',
+            scope: cachedSnapshot.scope || requestedScope,
+          };
+        }
+
+        if (inMemorySharedUsers && inMemorySharedUsers.length > 0) {
+          console.warn(
+            'No se pudo refrescar app_users desde Supabase. Seguimos con los usuarios compartidos ya cargados en memoria.',
+            error,
+          );
+          return {
+            users: inMemorySharedUsers,
+            authMode: 'supabase',
+            scope: canServeSharedUsersScope(inMemoryRequestedScope, requestedScope)
+              ? inMemoryRequestedScope
+              : 'active',
+          };
+        }
+
         const isMissingSharedUsersSchema =
           error?.code === 'PGRST205' &&
           /app_users_public|app_users/i.test(String(error?.message || ''));
@@ -720,6 +1648,7 @@ export default function PartySupplyApp() {
         return {
           users: buildLegacyUsers(USERS, userSettings),
           authMode: 'legacy',
+          scope: 'active',
         };
       }
     })();
@@ -728,7 +1657,18 @@ export default function PartySupplyApp() {
       const result = await sharedUsersCache.promise;
       sharedUsersCache.users = result.users;
       sharedUsersCache.authMode = result.authMode;
+      sharedUsersCache.scope = result.scope || requestedScope;
       sharedUsersCache.loadedAt = Date.now();
+
+      if (result.authMode === 'supabase' && Array.isArray(result.users) && result.users.length > 0) {
+        saveOfflineSharedUsersSnapshot({
+          savedAt: new Date().toISOString(),
+          authMode: result.authMode,
+          scope: result.scope || requestedScope,
+          users: result.users,
+        });
+      }
+
       setAuthMode(result.authMode);
       setAppUsers(result.users);
       return result.users;
@@ -747,25 +1687,65 @@ export default function PartySupplyApp() {
     if (payload.registerState) syncRegisterState(payload.registerState);
   };
 
-  const applyDashboardPayload = (payload) => {
-    if (payload.dailyLogs !== null) setDailyLogs(payload.dailyLogs);
-    if (payload.transactions !== null) setTransactions(payload.transactions);
-    if (payload.expenses !== null) setExpenses(payload.expenses);
-    if (payload.pastClosures !== null) setPastClosures(payload.pastClosures);
+  const applyDashboardPayload = (payload, { merge = false } = {}) => {
+    if (payload.dailyLogs !== null) {
+      setDailyLogs((prev) => (merge ? mergeLatestRecords(prev, payload.dailyLogs) : payload.dailyLogs));
+    }
+    if (payload.expenses !== null) {
+      setExpenses((prev) => (merge ? mergeLatestRecords(prev, payload.expenses) : payload.expenses));
+    }
+    if (payload.pastClosures !== null) {
+      setPastClosures((prev) => (merge ? mergeLatestRecords(prev, payload.pastClosures) : payload.pastClosures));
+    }
   };
 
-  const applyOrdersPayload = (payload) => {
-    if (payload.budgets !== null) setBudgets(payload.budgets);
-    if (payload.orders !== null) setOrders(payload.orders);
+  const applyTransactionsPayload = (payload, { merge = false } = {}) => {
+    if (payload.transactions !== null) {
+      setTransactions((prev) => (merge ? mergeLatestRecords(prev, payload.transactions) : payload.transactions));
+    }
+  };
+
+  const applyHistoryPayload = (payload, { merge = false } = {}) => {
+    if (payload.historyLogs !== null) {
+      setHistoryLogs((prev) => (merge ? mergeLatestRecords(prev, payload.historyLogs) : payload.historyLogs));
+    }
+  };
+
+  const applyOrdersPayload = (payload, { merge = false } = {}) => {
+    if (payload.budgets !== null) {
+      setBudgets((prev) => (merge ? mergeLatestRecords(prev, payload.budgets) : payload.budgets));
+    }
+    if (payload.orders !== null) {
+      setOrders((prev) => (merge ? mergeLatestRecords(prev, payload.orders) : payload.orders));
+    }
+  };
+
+  const applyReportsPayload = (payload, { merge = false } = {}) => {
+    if (payload.pastClosures !== null) {
+      setPastClosures((prev) => (merge ? mergeLatestRecords(prev, payload.pastClosures) : payload.pastClosures));
+    }
   };
 
   const loadCoreCloudData = async ({ showSpinner = false, force = false } = {}) => {
+    if (isBrowserOffline()) {
+      const cachedSnapshot = loadOfflineSnapshot();
+      if (applyCoreSnapshot(cachedSnapshot)) {
+        setIsOfflineReadOnly(true);
+        setModuleState('core', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+        return true;
+      }
+
+      setIsOfflineReadOnly(true);
+      setModuleState('core', { status: 'error', dirty: true });
+      return false;
+    }
+
     if (moduleLoadPromisesRef.current.core) {
       return moduleLoadPromisesRef.current.core;
     }
 
     const currentState = moduleLoadStateRef.current.core;
-    if (!force && currentState.status === 'loaded' && !currentState.dirty) {
+    if (!force && isModuleStateFresh(currentState, MODULE_FRESHNESS_MS.core)) {
       return true;
     }
 
@@ -774,10 +1754,12 @@ export default function PartySupplyApp() {
       setModuleState('core', { status: 'loading', dirty: false });
 
       try {
+        const fetchCorePayloadWithTimeout = () =>
+          withTimeout(fetchCoreCloudPayload(), OFFLINE_BOOT_TIMEOUT_MS, 'Carga inicial');
         const payload =
           !force && currentState.status === 'idle'
-            ? await (initialBootstrapPromise ||= fetchCoreCloudPayload())
-            : await fetchCoreCloudPayload();
+            ? await (initialBootstrapPromise ||= fetchCorePayloadWithTimeout())
+            : await fetchCorePayloadWithTimeout();
 
         if (!payload?.hasCloudConnection) {
           const cachedSnapshot = loadOfflineSnapshot();
@@ -810,6 +1792,7 @@ export default function PartySupplyApp() {
         return true;
       } catch (error) {
         console.error('Error general de conexión (core):', error);
+        initialBootstrapPromise = null;
         const cachedSnapshot = loadOfflineSnapshot();
         if (applyCoreSnapshot(cachedSnapshot)) {
           setIsOfflineReadOnly(true);
@@ -830,21 +1813,116 @@ export default function PartySupplyApp() {
     return promise;
   };
 
+  const loadTransactionsCloudData = async ({ force = false } = {}) => {
+    if (moduleLoadPromisesRef.current.transactions) {
+      return moduleLoadPromisesRef.current.transactions;
+    }
+
+    const currentState = moduleLoadStateRef.current.transactions;
+    if (!force && isModuleStateFresh(currentState, MODULE_FRESHNESS_MS.transactions)) {
+      return true;
+    }
+
+    const run = async () => {
+      setModuleState('transactions', { status: 'loading', dirty: false });
+      const latestTransactionCreatedAt = getLatestCreatedAt(dataStateRef.current.transactions);
+      const useRecentSync =
+        !force &&
+        currentState.status === 'loaded' &&
+        Array.isArray(dataStateRef.current.transactions) &&
+        dataStateRef.current.transactions.length > 0;
+
+      try {
+        const payload = useRecentSync
+          ? latestTransactionCreatedAt
+            ? await fetchTransactionsCloudPayloadSince(latestTransactionCreatedAt)
+            : await fetchRecentTransactionsCloudPayload()
+          : await fetchTransactionsCloudPayload();
+
+        if (!payload?.hasCloudConnection) {
+          const cachedSnapshot =
+            loadOfflineTransactionsSnapshot() || loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
+          if (applyTransactionsSnapshot(cachedSnapshot)) {
+            setModuleState('transactions', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+            return true;
+          }
+
+          setModuleState('transactions', { status: 'error', dirty: true });
+          return false;
+        }
+
+        applyTransactionsPayload(payload, { merge: useRecentSync });
+        setIsOfflineReadOnly(false);
+        const nextTransactions =
+          payload.transactions === null
+            ? dataStateRef.current.transactions ?? []
+            : useRecentSync
+              ? mergeLatestRecords(dataStateRef.current.transactions, payload.transactions)
+              : payload.transactions;
+
+        const nextSnapshot = {
+          savedAt: new Date().toISOString(),
+          transactions: nextTransactions,
+        };
+        saveOfflineTransactionsSnapshot(nextSnapshot);
+        setModuleState('transactions', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+        return true;
+      } catch (error) {
+        console.error('Error general de conexión (transactions):', error);
+        const cachedSnapshot =
+          loadOfflineTransactionsSnapshot() || loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
+        if (applyTransactionsSnapshot(cachedSnapshot)) {
+          setModuleState('transactions', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+          return true;
+        }
+
+        setModuleState('transactions', { status: 'error', dirty: true });
+        return false;
+      } finally {
+        moduleLoadPromisesRef.current.transactions = null;
+      }
+    };
+
+    const promise = run();
+    moduleLoadPromisesRef.current.transactions = promise;
+    return promise;
+  };
+
   const loadDashboardCloudData = async ({ force = false } = {}) => {
     if (moduleLoadPromisesRef.current.dashboard) {
       return moduleLoadPromisesRef.current.dashboard;
     }
 
     const currentState = moduleLoadStateRef.current.dashboard;
-    if (!force && currentState.status === 'loaded' && !currentState.dirty) {
+    if (!force && isModuleStateFresh(currentState, MODULE_FRESHNESS_MS.dashboard)) {
       return true;
     }
 
     const run = async () => {
       setModuleState('dashboard', { status: 'loading', dirty: false });
+      const latestDashboardLogCreatedAt = getLatestCreatedAt(dataStateRef.current.dailyLogs);
+      const latestExpenseCreatedAt = getLatestCreatedAt(dataStateRef.current.expenses);
+      const latestClosureCreatedAt = getLatestCreatedAt(dataStateRef.current.pastClosures);
+      const useRecentSync =
+        !force &&
+        currentState.status === 'loaded' &&
+        (
+          (Array.isArray(dataStateRef.current.dailyLogs) && dataStateRef.current.dailyLogs.length > 0) ||
+          (Array.isArray(dataStateRef.current.expenses) && dataStateRef.current.expenses.length > 0) ||
+          (Array.isArray(dataStateRef.current.pastClosures) && dataStateRef.current.pastClosures.length > 0)
+        );
 
       try {
-        const payload = await fetchDashboardCloudPayload();
+        await loadTransactionsCloudData({ force });
+        const payload = useRecentSync
+          ? latestDashboardLogCreatedAt || latestExpenseCreatedAt || latestClosureCreatedAt
+            ? await fetchDashboardCloudPayloadSince({
+                logsAfter: latestDashboardLogCreatedAt,
+                expensesAfter: latestExpenseCreatedAt,
+                closuresAfter: latestClosureCreatedAt,
+              })
+            : await fetchRecentDashboardCloudPayload()
+          : await fetchDashboardCloudPayload();
 
         if (!payload?.hasCloudConnection) {
           const cachedSnapshot = loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
@@ -857,15 +1935,32 @@ export default function PartySupplyApp() {
           return false;
         }
 
-        applyDashboardPayload(payload);
+        applyDashboardPayload(payload, { merge: useRecentSync });
         setIsOfflineReadOnly(false);
+        const nextDailyLogs =
+          payload.dailyLogs === null
+            ? dataStateRef.current.dailyLogs ?? []
+            : useRecentSync
+              ? mergeLatestRecords(dataStateRef.current.dailyLogs, payload.dailyLogs)
+              : payload.dailyLogs;
+        const nextExpenses =
+          payload.expenses === null
+            ? dataStateRef.current.expenses ?? []
+            : useRecentSync
+              ? mergeLatestRecords(dataStateRef.current.expenses, payload.expenses)
+              : payload.expenses;
+        const nextClosures =
+          payload.pastClosures === null
+            ? dataStateRef.current.pastClosures ?? []
+            : useRecentSync
+              ? mergeLatestRecords(dataStateRef.current.pastClosures, payload.pastClosures)
+              : payload.pastClosures;
 
         const nextSnapshot = {
           savedAt: new Date().toISOString(),
-          transactions: payload.transactions ?? dataStateRef.current.transactions ?? [],
-          dailyLogs: payload.dailyLogs ?? dataStateRef.current.dailyLogs ?? [],
-          expenses: payload.expenses ?? dataStateRef.current.expenses ?? [],
-          pastClosures: payload.pastClosures ?? dataStateRef.current.pastClosures ?? [],
+          dailyLogs: nextDailyLogs,
+          expenses: nextExpenses,
+          pastClosures: nextClosures,
         };
         saveOfflineDashboardSnapshot(nextSnapshot);
         setModuleState('dashboard', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
@@ -890,21 +1985,105 @@ export default function PartySupplyApp() {
     return promise;
   };
 
+  const loadHistoryCloudData = async ({ force = false } = {}) => {
+    if (moduleLoadPromisesRef.current.history) {
+      return moduleLoadPromisesRef.current.history;
+    }
+
+    const currentState = moduleLoadStateRef.current.history;
+    if (!force && isModuleStateFresh(currentState, MODULE_FRESHNESS_MS.history)) {
+      return true;
+    }
+
+    const run = async () => {
+      setModuleState('history', { status: 'loading', dirty: false });
+      const latestHistoryLogCreatedAt = getLatestCreatedAt(dataStateRef.current.historyLogs);
+      const useRecentSync =
+        !force &&
+        currentState.status === 'loaded' &&
+        Array.isArray(dataStateRef.current.historyLogs) &&
+        dataStateRef.current.historyLogs.length > 0;
+
+      try {
+        const payload = useRecentSync
+          ? latestHistoryLogCreatedAt
+            ? await fetchHistoryCloudPayloadSince(latestHistoryLogCreatedAt)
+            : await fetchRecentHistoryCloudPayload()
+          : await fetchHistoryCloudPayload();
+
+        if (!payload?.hasCloudConnection) {
+          const cachedSnapshot = loadOfflineHistorySnapshot() || loadOfflineSnapshot();
+          if (applyHistorySnapshot(cachedSnapshot)) {
+            setModuleState('history', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+            return true;
+          }
+          setModuleState('history', { status: 'error', dirty: true });
+          return false;
+        }
+
+        applyHistoryPayload(payload, { merge: useRecentSync });
+        const nextHistoryLogs =
+          payload.historyLogs === null
+            ? dataStateRef.current.historyLogs ?? []
+            : useRecentSync
+              ? mergeLatestRecords(dataStateRef.current.historyLogs, payload.historyLogs)
+              : payload.historyLogs;
+        saveOfflineHistorySnapshot({
+          savedAt: new Date().toISOString(),
+          historyLogs: nextHistoryLogs,
+        });
+        setModuleState('history', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+        return true;
+      } catch (error) {
+        console.error('Error general de conexión (history):', error);
+        const cachedSnapshot = loadOfflineHistorySnapshot() || loadOfflineSnapshot();
+        if (applyHistorySnapshot(cachedSnapshot)) {
+          setModuleState('history', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+          return true;
+        }
+        setModuleState('history', { status: 'error', dirty: true });
+        return false;
+      } finally {
+        moduleLoadPromisesRef.current.history = null;
+      }
+    };
+
+    const promise = run();
+    moduleLoadPromisesRef.current.history = promise;
+    return promise;
+  };
+
   const loadOrdersCloudData = async ({ force = false } = {}) => {
     if (moduleLoadPromisesRef.current.orders) {
       return moduleLoadPromisesRef.current.orders;
     }
 
     const currentState = moduleLoadStateRef.current.orders;
-    if (!force && currentState.status === 'loaded' && !currentState.dirty) {
+    if (!force && isModuleStateFresh(currentState, MODULE_FRESHNESS_MS.orders)) {
       return true;
     }
 
     const run = async () => {
       setModuleState('orders', { status: 'loading', dirty: false });
+      const latestBudgetCreatedAt = getLatestCreatedAt(dataStateRef.current.budgets);
+      const latestOrderCreatedAt = getLatestCreatedAt(dataStateRef.current.orders);
+      const useRecentSync =
+        !force &&
+        currentState.status === 'loaded' &&
+        (
+          (Array.isArray(dataStateRef.current.budgets) && dataStateRef.current.budgets.length > 0) ||
+          (Array.isArray(dataStateRef.current.orders) && dataStateRef.current.orders.length > 0)
+        );
 
       try {
-        const payload = await fetchOrdersCloudPayload();
+        const payload = useRecentSync
+          ? latestBudgetCreatedAt || latestOrderCreatedAt
+            ? await fetchOrdersCloudPayloadSince({
+                budgetsAfter: latestBudgetCreatedAt,
+                ordersAfter: latestOrderCreatedAt,
+              })
+            : await fetchRecentOrdersCloudPayload()
+          : await fetchOrdersCloudPayload();
 
         if (!payload?.hasCloudConnection) {
           const cachedSnapshot = loadOfflineOrdersSnapshot() || loadOfflineSnapshot();
@@ -917,13 +2096,25 @@ export default function PartySupplyApp() {
           return false;
         }
 
-        applyOrdersPayload(payload);
+        applyOrdersPayload(payload, { merge: useRecentSync });
         setIsOfflineReadOnly(false);
+        const nextBudgets =
+          payload.budgets === null
+            ? dataStateRef.current.budgets ?? []
+            : useRecentSync
+              ? mergeLatestRecords(dataStateRef.current.budgets, payload.budgets)
+              : payload.budgets;
+        const nextOrders =
+          payload.orders === null
+            ? dataStateRef.current.orders ?? []
+            : useRecentSync
+              ? mergeLatestRecords(dataStateRef.current.orders, payload.orders)
+              : payload.orders;
 
         const nextSnapshot = {
           savedAt: new Date().toISOString(),
-          budgets: payload.budgets ?? dataStateRef.current.budgets ?? [],
-          orders: payload.orders ?? dataStateRef.current.orders ?? [],
+          budgets: nextBudgets,
+          orders: nextOrders,
         };
         saveOfflineOrdersSnapshot(nextSnapshot);
         setModuleState('orders', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
@@ -948,12 +2139,91 @@ export default function PartySupplyApp() {
     return promise;
   };
 
+  const loadReportsCloudData = async ({ force = false } = {}) => {
+    if (moduleLoadPromisesRef.current.reports) {
+      return moduleLoadPromisesRef.current.reports;
+    }
+
+    const currentState = moduleLoadStateRef.current.reports;
+    if (!force && isModuleStateFresh(currentState, MODULE_FRESHNESS_MS.reports)) {
+      return true;
+    }
+
+    const run = async () => {
+      setModuleState('reports', { status: 'loading', dirty: false });
+      const latestReportClosureCreatedAt = getLatestCreatedAt(dataStateRef.current.pastClosures);
+      const useRecentSync =
+        !force &&
+        currentState.status === 'loaded' &&
+        Array.isArray(dataStateRef.current.pastClosures) &&
+        dataStateRef.current.pastClosures.length > 0;
+
+      try {
+        const payload = useRecentSync
+          ? latestReportClosureCreatedAt
+            ? await fetchReportsCloudPayloadSince(latestReportClosureCreatedAt)
+            : await fetchRecentReportsCloudPayload()
+          : await fetchReportsCloudPayload();
+
+        if (!payload?.hasCloudConnection) {
+          const cachedSnapshot = loadOfflineReportsSnapshot() || loadOfflineSnapshot();
+          if (applyReportsSnapshot(cachedSnapshot)) {
+            setModuleState('reports', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+            return true;
+          }
+
+          setModuleState('reports', { status: 'error', dirty: true });
+          return false;
+        }
+
+        applyReportsPayload(payload, { merge: useRecentSync });
+        setIsOfflineReadOnly(false);
+        const nextClosures =
+          payload.pastClosures === null
+            ? dataStateRef.current.pastClosures ?? []
+            : useRecentSync
+              ? mergeLatestRecords(dataStateRef.current.pastClosures, payload.pastClosures)
+              : payload.pastClosures;
+
+        const nextSnapshot = {
+          savedAt: new Date().toISOString(),
+          pastClosures: nextClosures,
+        };
+        saveOfflineReportsSnapshot(nextSnapshot);
+        setModuleState('reports', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+        return true;
+      } catch (error) {
+        console.error('Error general de conexión (reports):', error);
+        const cachedSnapshot = loadOfflineReportsSnapshot() || loadOfflineSnapshot();
+        if (applyReportsSnapshot(cachedSnapshot)) {
+          setModuleState('reports', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+          return true;
+        }
+
+        setModuleState('reports', { status: 'error', dirty: true });
+        return false;
+      } finally {
+        moduleLoadPromisesRef.current.reports = null;
+      }
+    };
+
+    const promise = run();
+    moduleLoadPromisesRef.current.reports = promise;
+    return promise;
+  };
+
   const loadModuleForTab = async (tab, { force = false } = {}) => {
     switch (TAB_TO_DATA_MODULE[tab]) {
+      case 'transactions':
+        return loadTransactionsCloudData({ force });
       case 'dashboard':
         return loadDashboardCloudData({ force });
+      case 'history':
+        return loadHistoryCloudData({ force });
       case 'orders':
         return loadOrdersCloudData({ force });
+      case 'reports':
+        return loadReportsCloudData({ force });
       default:
         return true;
     }
@@ -976,10 +2246,16 @@ export default function PartySupplyApp() {
           : [];
 
       for (const moduleKey of new Set(nextModuleKeys)) {
-        if (moduleKey === 'dashboard') {
+        if (moduleKey === 'transactions') {
+          await loadTransactionsCloudData({ force });
+        } else if (moduleKey === 'dashboard') {
           await loadDashboardCloudData({ force });
+        } else if (moduleKey === 'history') {
+          await loadHistoryCloudData({ force });
         } else if (moduleKey === 'orders') {
           await loadOrdersCloudData({ force });
+        } else if (moduleKey === 'reports') {
+          await loadReportsCloudData({ force });
         }
       }
     } catch (error) {
@@ -994,17 +2270,71 @@ export default function PartySupplyApp() {
     let disposed = false;
     setIsAuthBootLoading(true);
 
-    const cachedCoreSnapshot = loadOfflineSnapshot();
-    if (cachedCoreSnapshot) {
-      applyCoreSnapshot(cachedCoreSnapshot);
+    const hydrateOfflineSnapshots = () => {
+      const cachedCoreSnapshot = loadOfflineSnapshot();
+      const cachedSharedUsersSnapshot = loadOfflineSharedUsersSnapshot();
+      const cachedTransactionsSnapshot = loadOfflineTransactionsSnapshot();
+      const cachedHistorySnapshot = loadOfflineHistorySnapshot();
+      const cachedDashboardSnapshot = loadOfflineDashboardSnapshot();
+      const cachedOrdersSnapshot = loadOfflineOrdersSnapshot();
+      const cachedReportsSnapshot = loadOfflineReportsSnapshot();
+      const cachedPosSnapshot = loadOfflinePosSnapshot();
+      const hasCoreSnapshot = cachedCoreSnapshot
+        ? ('transactions' in cachedCoreSnapshot || 'budgets' in cachedCoreSnapshot)
+          ? applyOfflineSnapshot(cachedCoreSnapshot)
+          : applyCoreSnapshot(cachedCoreSnapshot)
+        : false;
+      const hasTransactionsSnapshot = cachedTransactionsSnapshot ? applyTransactionsSnapshot(cachedTransactionsSnapshot) : false;
+      const hasHistorySnapshot = cachedHistorySnapshot ? applyHistorySnapshot(cachedHistorySnapshot) : false;
+      const hasDashboardSnapshot = cachedDashboardSnapshot ? applyDashboardSnapshot(cachedDashboardSnapshot) : false;
+      const hasOrdersSnapshot = cachedOrdersSnapshot ? applyOrdersSnapshot(cachedOrdersSnapshot) : false;
+      const hasReportsSnapshot = cachedReportsSnapshot ? applyReportsSnapshot(cachedReportsSnapshot) : false;
+      const hasPosSnapshot = cachedPosSnapshot ? applyPosSnapshot(cachedPosSnapshot) : false;
+      const hasSharedUsersSnapshot =
+        cachedSharedUsersSnapshot?.authMode === 'supabase' &&
+        Array.isArray(cachedSharedUsersSnapshot.users) &&
+        cachedSharedUsersSnapshot.users.length > 0;
+
+      if (hasSharedUsersSnapshot) {
+        setAuthMode('supabase');
+        setAppUsers(cachedSharedUsersSnapshot.users);
+      }
+
+      return Boolean(
+        hasCoreSnapshot ||
+          hasTransactionsSnapshot ||
+          hasHistorySnapshot ||
+          hasDashboardSnapshot ||
+          hasOrdersSnapshot ||
+          hasReportsSnapshot ||
+          hasPosSnapshot ||
+          hasSharedUsersSnapshot
+      );
+    };
+
+    const hydratedFromCache = hydrateOfflineSnapshots();
+    if (hydratedFromCache || isBrowserOffline()) {
+      setIsOfflineReadOnly(true);
     }
 
-    void loadCoreCloudData({ showSpinner: false });
-    void loadAppUsers().finally(() => {
-      if (!disposed) {
-        setIsAuthBootLoading(false);
-      }
-    });
+    if (isBrowserOffline()) {
+      setIsAuthBootLoading(false);
+    } else {
+      void loadCoreCloudData({ showSpinner: false });
+      void withTimeout(loadAppUsers(), OFFLINE_BOOT_TIMEOUT_MS, 'Carga inicial de usuarios')
+        .catch((error) => {
+          if (!isRecoverableCloudError(error)) {
+            console.error('No se pudieron cargar los usuarios compartidos:', error);
+          }
+          const recoveredFromCache = hydrateOfflineSnapshots();
+          if (recoveredFromCache) setIsOfflineReadOnly(true);
+        })
+        .finally(() => {
+          if (!disposed) {
+            setIsAuthBootLoading(false);
+          }
+        });
+    }
 
     const channel = supabase
       .channel('app_realtime_updates')
@@ -1023,10 +2353,10 @@ export default function PartySupplyApp() {
           const c = payload.new;
           if (c) {
              const newReport = mapCashClosureRecord(c);
-             if (moduleLoadStateRef.current.dashboard.status === 'loaded') {
+             if (moduleLoadStateRef.current.reports.status === 'loaded') {
                setPastClosures((prev) => [newReport, ...prev]);
              } else {
-               setModuleState('dashboard', (prev) => ({ ...prev, dirty: true }));
+               setModuleState('reports', (prev) => ({ ...prev, dirty: true }));
              }
           }
         }
@@ -1035,42 +2365,41 @@ export default function PartySupplyApp() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'app_users' },
         () => {
-          void loadAppUsers({ force: true });
+          void loadAppUsers({
+            force: true,
+            includeInactive: activeTabRef.current === 'user-management',
+          });
         }
       )
       .subscribe();
 
     let lastFetchTime = Date.now();
-    const MIN_RESYNC_INTERVAL = 15000; 
+    let lastVisibilityState = document.visibilityState;
+    const MIN_RESYNC_INTERVAL = 10 * 60 * 1000;
 
     const handleReSync = () => {
-      if (document.visibilityState !== 'visible') return;
+      const nextVisibilityState = document.visibilityState;
+      const becameVisible = lastVisibilityState !== 'visible' && nextVisibilityState === 'visible';
+      lastVisibilityState = nextVisibilityState;
+      if (!becameVisible) return;
 
       const elapsed = Date.now() - lastFetchTime;
       if (elapsed < MIN_RESYNC_INTERVAL) return;
 
       lastFetchTime = Date.now();
-      void fetchCloudData(false, { force: true });
+      void fetchCloudData(false, { force: false });
     };
 
     const handleBrowserOffline = () => {
-      const cachedCoreSnapshot = loadOfflineSnapshot();
-      const cachedDashboardSnapshot = loadOfflineDashboardSnapshot();
-      const cachedOrdersSnapshot = loadOfflineOrdersSnapshot();
-      const hasCoreSnapshot = cachedCoreSnapshot
-        ? ('transactions' in cachedCoreSnapshot || 'budgets' in cachedCoreSnapshot)
-          ? applyOfflineSnapshot(cachedCoreSnapshot)
-          : applyCoreSnapshot(cachedCoreSnapshot)
-        : false;
-      if (cachedDashboardSnapshot) applyDashboardSnapshot(cachedDashboardSnapshot);
-      if (cachedOrdersSnapshot) applyOrdersSnapshot(cachedOrdersSnapshot);
-      if (hasCoreSnapshot || cachedDashboardSnapshot || cachedOrdersSnapshot) {
+      const recoveredFromCache = hydrateOfflineSnapshots();
+      if (recoveredFromCache || isBrowserOffline()) {
         setIsOfflineReadOnly(true);
       }
     };
 
     const handleBrowserOnline = () => {
-      void fetchCloudData(false, { force: true });
+      lastFetchTime = Date.now();
+      void fetchCloudData(false, { force: false });
     };
 
     window.addEventListener('visibilitychange', handleReSync);
@@ -1091,14 +2420,25 @@ export default function PartySupplyApp() {
   const [currentSessionMeta, setCurrentSessionMeta] = useState(null);
   const [activeTab, setActiveTab] = useState('pos');
   const [userSettings, setUserSettings] = useState(() => loadUserSettings());
-  const [authMode, setAuthMode] = useState('legacy');
-  const [appUsers, setAppUsers] = useState(() => buildLegacyUsers(USERS, loadUserSettings()));
+  const [authMode, setAuthMode] = useState(() =>
+    loadOfflineSharedUsersSnapshot()?.authMode === 'supabase' ? 'supabase' : 'legacy'
+  );
+  const [appUsers, setAppUsers] = useState(() => {
+    const cachedSharedUsersSnapshot = loadOfflineSharedUsersSnapshot();
+    if (cachedSharedUsersSnapshot?.authMode === 'supabase' && Array.isArray(cachedSharedUsersSnapshot.users)) {
+      return cachedSharedUsersSnapshot.users;
+    }
+    return buildLegacyUsers(USERS, loadUserSettings());
+  });
   const currentUserRef = useRef(null);
   const currentSessionMetaRef = useRef(null);
   const forcedDisabledUserLogoutRef = useRef(null);
   const forcedPermissionsLogoutRef = useRef(null);
   const writeLogEntryRef = useRef(null);
   const showNotificationRef = useRef(null);
+  const productThumbBackfillInFlightRef = useRef(false);
+  const productThumbBackfillDisabledRef = useRef(false);
+  const productThumbBackfillFailedIdsRef = useRef(new Set());
   activeTabRef.current = activeTab;
   dataStateRef.current = {
     inventory,
@@ -1106,6 +2446,7 @@ export default function PartySupplyApp() {
     rewards,
     transactions,
     dailyLogs,
+    historyLogs,
     members,
     agendaContacts,
     pastClosures,
@@ -1130,6 +2471,14 @@ export default function PartySupplyApp() {
   const [selectedUserIdForLogin, setSelectedUserIdForLogin] = useState(null);
   const [passwordInput, setPasswordInput] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [systemLogoTapCount, setSystemLogoTapCount] = useState(0);
+  const systemLogoTapTimeoutRef = useRef(null);
+
+  useEffect(() => () => {
+    if (systemLogoTapTimeoutRef.current) {
+      clearTimeout(systemLogoTapTimeoutRef.current);
+    }
+  }, []);
 
   const userCatalog = useMemo(() => buildUserCatalog(appUsers), [appUsers]);
   const activeLoginUsers = useMemo(
@@ -1168,9 +2517,9 @@ export default function PartySupplyApp() {
   }, [activeTab, currentUser]);
 
   useEffect(() => {
-    if (activeTab !== 'user-management' || !canViewUserManagement || authMode === 'supabase') return;
-    void loadAppUsers({ force: true });
-  }, [activeTab, canViewUserManagement, authMode]);
+    if (activeTab !== 'user-management' || !canViewUserManagement) return;
+    void loadAppUsers({ force: true, includeInactive: true });
+  }, [activeTab, canViewUserManagement]);
 
   useEffect(() => {
     if (authMode !== 'supabase' || !currentUser?.id) {
@@ -1297,6 +2646,42 @@ export default function PartySupplyApp() {
 
   // ? ESTADOS PARA PERSISTENCIA DE PRESUPUESTO EN BULK EDITOR
   const [bulkExportItems, setBulkExportItems] = useState([]);
+
+  useEffect(() => {
+    setCart((prevCart) => {
+      if (!Array.isArray(prevCart) || prevCart.length === 0) return prevCart;
+
+      const baseTotal = prevCart.reduce((total, item) => {
+        if (item?.isDiscount) return total;
+        return total + (Number(item?.price) || 0) * (Number(item?.quantity) || 0);
+      }, 0);
+
+      let hasChanges = false;
+
+      const nextCart = prevCart.map((item) => {
+        if (!item?.isDiscount || String(item?.discountMode || '').toLowerCase() !== 'percentage') {
+          return item;
+        }
+
+        const percentage = Number(item?.discountPercent) || 0;
+        const nextDiscountAmount =
+          percentage > 0 && baseTotal > 0 ? Math.min(baseTotal, Math.round((baseTotal * percentage) / 100)) : 0;
+        const nextPrice = -nextDiscountAmount;
+
+        if ((Number(item?.price) || 0) === nextPrice) {
+          return item;
+        }
+
+        hasChanges = true;
+        return {
+          ...item,
+          price: nextPrice,
+        };
+      });
+
+      return hasChanges ? nextCart : prevCart;
+    });
+  }, [cart]);
   const [bulkExportConfig, setBulkExportConfig] = useState({
     isForClient: true,
     documentTitle: '', 
@@ -1334,7 +2719,7 @@ export default function PartySupplyApp() {
 
   const [newItem, setNewItem] = useState({
     title: '', brand: '', price: '', purchasePrice: '', stock: '',
-    categories: [], image: '', barcode: '',
+    categories: [], image: '', image_thumb: '', barcode: '',
     product_type: 'quantity',
     expiration_date: '' 
   });
@@ -1356,7 +2741,48 @@ export default function PartySupplyApp() {
   const [posGridColumns, setPosGridColumns] = useState(4);
   const [inventoryGridColumns, setInventoryGridColumns] = useState(5);
 
+  const applyPosSnapshot = (snapshot) => {
+    const hasPosData =
+      snapshot &&
+      (
+        'cart' in snapshot ||
+        'selectedClient' in snapshot ||
+        'selectedPayment' in snapshot ||
+        'installments' in snapshot ||
+        'posSearch' in snapshot ||
+        'selectedCategory' in snapshot ||
+        'posViewMode' in snapshot
+      );
+
+    if (!hasPosData) return false;
+
+    setCart(Array.isArray(snapshot.cart) ? snapshot.cart : []);
+    setPosSelectedClient(snapshot.selectedClient || null);
+    setSelectedPayment(snapshot.selectedPayment || 'Efectivo');
+    setInstallments(Number(snapshot.installments || 1) || 1);
+    setPosSearch(snapshot.posSearch || '');
+    setPosSelectedCategory(snapshot.selectedCategory || 'Todas');
+    setPosViewMode(snapshot.posViewMode || 'grid');
+    if (snapshot.savedAt) setOfflineSnapshotAt(snapshot.savedAt);
+    return true;
+  };
+
   const [notification, setNotification] = useState({ isOpen: false, type: 'info', title: '', message: '' });
+
+  useEffect(() => {
+    const nextPosSnapshot = {
+      savedAt: new Date().toISOString(),
+      cart: Array.isArray(cart) ? cart : [],
+      selectedClient: posSelectedClient || null,
+      selectedPayment: selectedPayment || 'Efectivo',
+      installments: Number(installments || 1) || 1,
+      posSearch: posSearch || '',
+      selectedCategory: posSelectedCategory || 'Todas',
+      posViewMode: posViewMode || 'grid',
+    };
+
+    saveOfflinePosSnapshot(nextPosSnapshot);
+  }, [cart, posSelectedClient, selectedPayment, installments, posSearch, posSelectedCategory, posViewMode]);
 
   const showNotification = (type, title, message) => {
     setNotification({ isOpen: true, type, title, message });
@@ -1443,9 +2869,38 @@ export default function PartySupplyApp() {
     );
     return true;
   };
+
+  const handleReconnectCloud = async () => {
+    if (isReconnectAttempting) return;
+
+    setIsReconnectAttempting(true);
+    try {
+      const isReachable = await verifyCloudConnection();
+      if (!isReachable) {
+        setIsOfflineReadOnly(true);
+        showNotification('info', 'Seguis sin conexion', 'Todavia no hay internet disponible para sincronizar.');
+        return;
+      }
+
+      await fetchCloudData(false, { force: true, includeActiveModule: true });
+      setIsOfflineReadOnly(false);
+      showNotification('success', 'Reconectado', 'La conexion con Supabase se restablecio correctamente.');
+    } catch (error) {
+      console.error('No se pudo reconectar:', error);
+      setIsOfflineReadOnly(true);
+      showNotification(
+        'warning',
+        'No se pudo reconectar',
+        error?.message || 'La nube todavia no responde. Podes volver a intentarlo en unos segundos.'
+      );
+    } finally {
+      setIsReconnectAttempting(false);
+    }
+  };
+
   const handleSoftReload = () => {
-    fetchCloudData(false);
-    showNotification('info', 'Recarga suave', 'Actualizamos los datos visibles sin reiniciar la app.');
+    fetchCloudData(false, { force: false });
+    showNotification('info', 'Recarga suave', 'Revalidamos el modulo visible y los datos vencidos sin rehacer toda la nube.');
   };
   const handleForceReload = () => {
     window.location.reload();
@@ -1479,7 +2934,7 @@ export default function PartySupplyApp() {
            isTestRecord(transactionSearch);
   }, [cart, posSelectedClient, posSearch, newItem, editingProduct, editingTransaction, transactionSearch]);
 
-  const writeLogEntry = async ({ action, details, reason = '', userName }) => {
+  const writeLogEntry = async ({ action, details, reason = '', userName, skipCloud = false }) => {
     const now = new Date();
     const actor = getActorContext(userName);
     const normalizedDetails =
@@ -1503,20 +2958,31 @@ export default function PartySupplyApp() {
       created_at: new Date().toISOString()
     };
     
-    newLog.isTest = isTestRecord({ action, details, reason });
-    setDailyLogs((prev) => [newLog, ...prev]);
+    newLog.isTest = shouldIgnoreNestedTestDetectionForLog(action)
+      ? Boolean(normalizedDetails?.isTest || normalizedDetails?.testMarker === 'test')
+      : isTestRecord({ action, details, reason });
+    setDailyLogs((prev) => [newLog, ...prev].slice(0, DASHBOARD_LOG_LIMIT));
+    if (HISTORY_LOG_ACTIONS.includes(action)) {
+      setHistoryLogs((prev) => [newLog, ...prev]);
+    }
+
+    if (skipCloud || isBrowserOffline()) {
+      setIsOfflineReadOnly(true);
+      return;
+    }
 
     try {
-      await insertWithSchemaFallback('logs', {
-        action,
-        details: normalizedDetails,
-        user: actor.userName,
-        user_id: actor.userId,
-        user_role: actor.userRole,
-        user_name: actor.userName,
-        reason,
-        created_at: new Date().toISOString()
-      });
+      await withTimeout(
+        insertWithSchemaFallback('logs', {
+          action,
+          details: normalizedDetails,
+          user: actor.userName,
+          reason,
+          created_at: new Date().toISOString()
+        }, 'id'),
+        OFFLINE_BOOT_TIMEOUT_MS,
+        'Guardado de log',
+      );
     } catch (e) {
       console.error("Error guardando log en nube", e);
     }
@@ -1727,6 +3193,14 @@ export default function PartySupplyApp() {
         }
         return log;
       }));
+      setHistoryLogs((prev) =>
+        prev.map((log) => {
+          if (log.id !== logId) return log;
+          const updatedLog = { ...log, reason: newNote };
+          updatedLog.isTest = isTestRecord({ action: updatedLog.action, details: updatedLog.details, reason: updatedLog.reason });
+          return updatedLog;
+        })
+      );
       
       showNotification('success', 'Nota Actualizada', 'La nota ha sido guardada correctamente.');
     } catch (err) {
@@ -1775,12 +3249,12 @@ export default function PartySupplyApp() {
           }
         } else {
           window.print();
-          showNotification('info', 'Vista de impresión abierta', 'No se detectó Electron; usó "Guardar como PDF" desde el diálogo del navegador');
+          showNotification('info', 'Vista de impresión abierta', 'No se detectó Electron; usá "Guardar como PDF" desde el diálogo del navegador');
         }
       } catch (e) {
         console.error('Error IPC:', e);
         window.print();
-        showNotification('info', 'Vista de impresión abierta', 'Falló la conexión con Windows; usó "Guardar como PDF" desde el diálogo del navegador');
+        showNotification('info', 'Vista de impresión abierta', 'Falló la conexión con Windows; usá "Guardar como PDF" desde el diálogo del navegador');
       }
       
       setTimeout(() => setExportPdfData(null), 500);
@@ -1819,12 +3293,12 @@ export default function PartySupplyApp() {
           }
         } else {
           window.print();
-          showNotification('info', 'Vista de impresión abierta', 'No se detectó Electron; usó "Guardar como PDF" desde el diálogo del navegador.');
+          showNotification('info', 'Vista de impresión abierta', 'No se detectó Electron; usá "Guardar como PDF" desde el diálogo del navegador.');
         }
       } catch (e) {
         console.error('Error IPC:', e);
         window.print();
-        showNotification('info', 'Vista de impresión abierta', 'Falló la conexión con Windows; usó "Guardar como PDF" desde el diálogo del navegador.');
+        showNotification('info', 'Vista de impresión abierta', 'Falló la conexión con Windows; usá "Guardar como PDF" desde el diálogo del navegador.');
       }
       
       setTimeout(() => setExportPdfData(null), 500);
@@ -1849,7 +3323,11 @@ export default function PartySupplyApp() {
         expiration_date: null
       };
       
-      const { data, error } = await supabase.from('products').insert([payload]).select().single();
+      const { data, error } = await supabase
+        .from('products')
+        .insert([payload])
+        .select(CLOUD_SELECTS.products)
+        .single();
       if (error) throw error;
       
       const itemFormatted = { 
@@ -1879,12 +3357,15 @@ export default function PartySupplyApp() {
         customer_note: budgetData.customerNote || '',
         document_title: budgetData.documentTitle || 'PRESUPUESTO',
         event_label: budgetData.eventLabel || '',
+        payment_method: budgetData.paymentMethod || 'Efectivo',
+        payment_breakdown: budgetData.paymentBreakdown || null,
+        installments: Number(budgetData.installments || 0),
         items_snapshot: budgetData.itemsSnapshot || [],
         total_amount: Number(budgetData.totalAmount || 0),
         is_active: true,
       };
 
-      const { data } = await insertWithSchemaFallback('budgets', payload);
+      const { data } = await insertWithSchemaFallback('budgets', payload, CLOUD_SELECTS.budgets);
 
       const newBudget = mapBudgetRecords([data])[0];
       setBudgets((prev) => [newBudget, ...prev]);
@@ -1925,11 +3406,14 @@ export default function PartySupplyApp() {
         customer_note: budgetData.customerNote || '',
         document_title: budgetData.documentTitle || 'PRESUPUESTO',
         event_label: budgetData.eventLabel || '',
+        payment_method: budgetData.paymentMethod || 'Efectivo',
+        payment_breakdown: budgetData.paymentBreakdown || null,
+        installments: Number(budgetData.installments || 0),
         items_snapshot: budgetData.itemsSnapshot || [],
         total_amount: Number(budgetData.totalAmount || 0),
       };
 
-      const { data } = await updateWithSchemaFallback('budgets', id, payload);
+      const { data } = await updateWithSchemaFallback('budgets', id, payload, CLOUD_SELECTS.budgets);
       const updatedBudget = mapBudgetRecords([data])[0];
 
       setBudgets((prev) =>
@@ -1972,6 +3456,10 @@ export default function PartySupplyApp() {
       }
 
       const nextTotalAmount = Number(orderData.totalAmount || 0);
+      if (nextTotalAmount < Number(previousOrder.paidTotal || 0)) {
+        showNotification('warning', 'Total inválido', 'El total del pedido no puede quedar por debajo del dinero ya registrado.');
+        return;
+      }
       const nextPaidTotal = Math.min(Number(previousOrder.paidTotal || 0), nextTotalAmount);
       const nextDepositAmount = Math.min(Number(previousOrder.depositAmount || 0), nextPaidTotal);
       const nextRemainingAmount = Math.max(nextTotalAmount - nextPaidTotal, 0);
@@ -2037,7 +3525,7 @@ export default function PartySupplyApp() {
         status: nextStatus,
       };
 
-      const { data } = await updateWithSchemaFallback('orders', id, payload);
+      const { data } = await updateWithSchemaFallback('orders', id, payload, CLOUD_SELECTS.orders);
       const updatedOrder = mapOrderRecords([data])[0];
 
       setOrders((prev) =>
@@ -2089,9 +3577,12 @@ export default function PartySupplyApp() {
   const handleDeleteBudget = async (budgetRecord) => {
     if (blockIfOfflineReadonly('eliminar presupuestos')) return;
     try {
-      const { data } = await updateWithSchemaFallback('budgets', budgetRecord.id, {
-        is_active: false,
-      });
+      const { data } = await updateWithSchemaFallback(
+        'budgets',
+        budgetRecord.id,
+        { is_active: false },
+        CLOUD_SELECTS.budgets,
+      );
 
       const deletedBudget = mapBudgetRecords([data])[0];
       setBudgets((prev) => prev.filter((budget) => budget.id !== budgetRecord.id));
@@ -2161,17 +3652,11 @@ export default function PartySupplyApp() {
     };
   };
 
-  const hasFinalizedOrderSale = (orderId) =>
-    dailyLogs.some(
-      (log) =>
-        log.action === 'Venta Realizada' &&
-        String(log.details?.orderId) === String(orderId)
-    );
-
   const isOrderStockReserved = (orderRecord) =>
     Boolean(orderRecord) &&
     Number(orderRecord.paidTotal || 0) > 0 &&
-    !hasFinalizedOrderSale(orderRecord.id);
+    Number(orderRecord.remainingAmount || 0) > 0 &&
+    !['Retirado', 'Cancelado'].includes(String(orderRecord.status || ''));
 
   const applyOrderStockDelta = async (deltaByProduct = {}) => {
     const entries = Object.entries(deltaByProduct).filter(([, delta]) => Number(delta || 0) !== 0);
@@ -2304,12 +3789,58 @@ export default function PartySupplyApp() {
     return changes;
   };
 
-  const handleFinalizePaidOrder = async (orderRecord, { skipStockDeduction = false } = {}) => {
-    const alreadyLogged = dailyLogs.some(
-      (log) =>
-        log.action === 'Venta Realizada' &&
-        String(log.details?.orderId) === String(orderRecord.id)
+  const roundOrderPaymentValue = (value) => Math.round((Number(value) || 0) * 100) / 100;
+
+  const buildOrderPaymentRecord = (paymentPayload = {}, fallbackAmount = 0) => {
+    const amount = roundOrderPaymentValue(paymentPayload.amount ?? fallbackAmount);
+    const rawLines = Array.isArray(paymentPayload.paymentBreakdown) && paymentPayload.paymentBreakdown.length > 0
+      ? paymentPayload.paymentBreakdown
+      : [{
+          method: paymentPayload.paymentMethod || 'Efectivo',
+          amount,
+          installments: paymentPayload.installments || 0,
+          cashReceived: paymentPayload.cashReceived || 0,
+          cashChange: paymentPayload.cashChange || 0,
+        }];
+
+    const lines = rawLines
+      .map((line) => createOrderPaymentLine(line))
+      .filter((line) => Number(line.amount || 0) > 0);
+    const computedAmount = roundOrderPaymentValue(
+      amount > 0 ? amount : lines.reduce((sum, line) => sum + Number(line.amount || 0), 0)
     );
+    const summary = getPrimaryPaymentInfo(
+      lines,
+      paymentPayload.paymentMethod || 'Efectivo',
+      paymentPayload.installments || 0,
+      paymentPayload.cashReceived || 0,
+      paymentPayload.cashChange || 0,
+      computedAmount,
+    );
+
+    return {
+      amount: computedAmount,
+      paymentMethod: summary.payment,
+      primaryMethod: summary.primaryMethod,
+      installments: summary.installments,
+      cashReceived: summary.cashReceived,
+      cashChange: summary.cashChange,
+      paymentBreakdown: lines,
+    };
+  };
+
+  const getOrderPaymentState = (orderLike = {}) =>
+    getOrderPaymentHistorySummary(
+      orderLike.paymentHistory || orderLike.paymentBreakdown,
+      orderLike.paymentMethod || 'Pedido',
+      orderLike.installments || 0,
+      Number(orderLike.paidTotal || 0),
+      Number(orderLike.cashReceived || 0),
+      Number(orderLike.cashChange || 0),
+    );
+
+  const handleFinalizePaidOrder = async (orderRecord, { skipStockDeduction = false } = {}) => {
+    const alreadyLogged = transactions.some((tx) => String(tx.orderId || '') === String(orderRecord.id));
     if (alreadyLogged) return null;
 
     const { items, requiredStock, stockIssues } = getOrderStockIssues(orderRecord);
@@ -2322,18 +3853,31 @@ export default function PartySupplyApp() {
     const pointsEarned = clientId ? Math.floor(totalAmount / 500) : 0;
     const pointsSpent = 0;
     const actor = getActorContext();
+    const paymentState = getOrderPaymentState(orderRecord);
+    const inheritedPaymentBreakdown = paymentState.paymentBreakdown;
+    const paymentInfo = getPrimaryPaymentInfo(
+      inheritedPaymentBreakdown,
+      orderRecord.paymentMethod || 'Pedido',
+      orderRecord.installments || 0,
+      paymentState.cashReceived || 0,
+      paymentState.cashChange || 0,
+      totalAmount,
+    );
 
     const { data: sale, error: saleErr } = await insertWithSchemaFallback('sales', {
       total: totalAmount,
-      payment_method: 'Pedido',
-      installments: 0,
+      payment_method: paymentInfo.payment,
+      payment_breakdown: inheritedPaymentBreakdown,
+      installments: paymentInfo.installments || 0,
+      cash_received: Number(paymentInfo.cashReceived || 0),
+      cash_change: Number(paymentInfo.cashChange || 0),
       client_id: clientId,
       points_earned: clientId ? pointsEarned : 0,
       points_spent: 0,
       user_id: actor.userId,
       user_role: actor.userRole,
       user_name: actor.userName,
-    });
+    }, 'id');
 
     if (saleErr) throw saleErr;
 
@@ -2346,8 +3890,7 @@ export default function PartySupplyApp() {
       is_reward: false,
     }));
 
-    const { error: saleItemsErr } = await supabase.from('sale_items').insert(itemsPayload);
-    if (saleItemsErr) throw saleItemsErr;
+    await insertRowsWithSchemaFallback('sale_items', itemsPayload);
 
     let stockChanges = [];
     if (!skipStockDeduction) {
@@ -2436,8 +3979,11 @@ export default function PartySupplyApp() {
       userId: currentUser.id || null,
       userRole: currentUser.role || null,
       total: totalAmount,
-      payment: 'Pedido',
-      installments: 0,
+      payment: paymentInfo.payment,
+      paymentBreakdown: inheritedPaymentBreakdown,
+      installments: paymentInfo.installments || 0,
+      cashReceived: Number(paymentInfo.cashReceived || 0),
+      cashChange: Number(paymentInfo.cashChange || 0),
       items: historyItems,
       status: 'completed',
       client: txClient,
@@ -2484,8 +4030,12 @@ export default function PartySupplyApp() {
         memberId: clientId || null,
         total: totalAmount,
         items: logItems,
-        payment: 'Pedido',
-        installments: 0,
+        payment: paymentInfo.payment,
+        paymentBreakdown: inheritedPaymentBreakdown,
+        paymentHistory: paymentState.paymentHistory,
+        installments: paymentInfo.installments || 0,
+        cashReceived: Number(paymentInfo.cashReceived || 0),
+        cashChange: Number(paymentInfo.cashChange || 0),
         client: clientId ? (txClient?.name || fallbackClientName || null) : null,
         memberNumber: clientId ? (txClient?.memberNumber || null) : null,
         pointsEarned: clientId ? pointsEarned : 0,
@@ -2499,7 +4049,7 @@ export default function PartySupplyApp() {
     return tx;
   };
 
-  const handleConvertBudgetToOrder = async (budgetRecord, { pickupDate, depositAmount }) => {
+  const handleConvertBudgetToOrder = async (budgetRecord, { pickupDate, depositPayment }) => {
     if (blockIfOfflineReadonly('convertir presupuestos a pedidos')) return;
     try {
       const existingLinkedOrder = orders.find(
@@ -2511,9 +4061,25 @@ export default function PartySupplyApp() {
       }
 
       const totalAmount = Number(budgetRecord.totalAmount || 0);
-      const initialPayment = Math.min(Math.max(Number(depositAmount || 0), 0), totalAmount);
+      const normalizedDepositPayment = buildOrderPaymentRecord(depositPayment, depositPayment?.amount || 0);
+      const initialPayment = Math.min(Math.max(Number(normalizedDepositPayment.amount || 0), 0), totalAmount);
       const remainingAmount = Math.max(totalAmount - initialPayment, 0);
       const status = deriveOrderStatus({ paidTotal: initialPayment, totalAmount });
+      const paymentHistory = initialPayment > 0
+        ? [createOrderPaymentEntry({
+            entryType: 'deposit',
+            amount: initialPayment,
+            lines: normalizedDepositPayment.paymentBreakdown,
+          })]
+        : [];
+      const paymentHistoryState = getOrderPaymentHistorySummary(
+        paymentHistory,
+        normalizedDepositPayment.primaryMethod || 'Efectivo',
+        normalizedDepositPayment.installments || 0,
+        initialPayment,
+        normalizedDepositPayment.cashReceived || 0,
+        normalizedDepositPayment.cashChange || 0,
+      );
 
       if (initialPayment > 0) {
         const { stockIssues } = getOrderStockIssues(budgetRecord);
@@ -2531,6 +4097,9 @@ export default function PartySupplyApp() {
         customer_note: budgetRecord.customerNote || '',
         document_title: budgetRecord.documentTitle || 'PEDIDO',
         event_label: budgetRecord.eventLabel || '',
+        payment_method: paymentHistoryState.paymentMethod || null,
+        payment_breakdown: paymentHistory,
+        installments: paymentHistoryState.installments || 0,
         items_snapshot: budgetRecord.itemsSnapshot || [],
         total_amount: totalAmount,
         deposit_amount: initialPayment,
@@ -2541,7 +4110,7 @@ export default function PartySupplyApp() {
         is_active: true,
       };
 
-      const { data } = await insertWithSchemaFallback('orders', payload);
+      const { data } = await insertWithSchemaFallback('orders', payload, CLOUD_SELECTS.orders);
 
       const newOrder = mapOrderRecords([data])[0];
       setOrders((prev) => [newOrder, ...prev]);
@@ -2583,12 +4152,15 @@ export default function PartySupplyApp() {
           depositAmount: newOrder.depositAmount,
           paidTotal: newOrder.paidTotal,
           remainingAmount: newOrder.remainingAmount,
+          paymentMethod: newOrder.paymentMethod || null,
+          paymentBreakdown: newOrder.paymentBreakdown || null,
+          paymentHistory: newOrder.paymentHistory || [],
           pickupDate: newOrder.pickupDate,
           stockChanges: finalizedSale?.stockChanges || reservationChanges,
         },
         budgetRecord.eventLabel || 'Conversión desde presupuesto'
       );
-      showNotification('success', 'Pedido Creado', 'El presupuesto se convirtióen pedido.');
+      showNotification('success', 'Pedido Creado', 'El presupuesto se convirtió en pedido.');
       return newOrder;
     } catch (error) {
       console.error('Error convirtiendo presupuesto:', error);
@@ -2597,16 +4169,18 @@ export default function PartySupplyApp() {
     }
   };
 
-  const handleRegisterOrderPayment = async (orderRecord, paymentAmount) => {
+  const handleRegisterOrderPayment = async (orderRecord, paymentPayload) => {
     if (blockIfOfflineReadonly('registrar pagos de pedidos')) return;
     try {
+      const normalizedPayment = buildOrderPaymentRecord(paymentPayload, paymentPayload?.amount || 0);
+      const paymentAmount = Number(normalizedPayment.amount || 0);
       const isFirstPayment =
         Number(orderRecord.paidTotal || 0) <= 0 &&
-        Number(paymentAmount || 0) > 0;
+        paymentAmount > 0;
       const wasStockReserved = isOrderStockReserved(orderRecord);
       const isCrossingToFullyPaid =
         Number(orderRecord.paidTotal || 0) < Number(orderRecord.totalAmount || 0) &&
-        Number(orderRecord.paidTotal || 0) + Number(paymentAmount || 0) >= Number(orderRecord.totalAmount || 0);
+        Number(orderRecord.paidTotal || 0) + paymentAmount >= Number(orderRecord.totalAmount || 0);
 
       if (isFirstPayment || isCrossingToFullyPaid) {
         const { stockIssues } = getOrderStockIssues(orderRecord);
@@ -2618,7 +4192,7 @@ export default function PartySupplyApp() {
 
       const nextPaidTotal = Math.min(
         Number(orderRecord.totalAmount || 0),
-        Number(orderRecord.paidTotal || 0) + Number(paymentAmount || 0)
+        Number(orderRecord.paidTotal || 0) + paymentAmount
       );
       const nextRemaining = Math.max(Number(orderRecord.totalAmount || 0) - nextPaidTotal, 0);
       const status = deriveOrderStatus({
@@ -2626,14 +4200,42 @@ export default function PartySupplyApp() {
         totalAmount: Number(orderRecord.totalAmount || 0),
         currentStatus: orderRecord.status,
       });
+      const previousPaymentHistory = normalizeOrderPaymentHistory(
+        orderRecord.paymentHistory || orderRecord.paymentBreakdown,
+        orderRecord.paymentMethod || 'Pedido',
+        orderRecord.installments || 0,
+        Number(orderRecord.paidTotal || 0),
+        Number(orderRecord.cashReceived || 0),
+        Number(orderRecord.cashChange || 0),
+      );
+      const paymentEntry = createOrderPaymentEntry({
+        entryType: 'payment',
+        amount: paymentAmount,
+        lines: normalizedPayment.paymentBreakdown,
+      });
+      const nextPaymentHistory = [...previousPaymentHistory, paymentEntry];
+      const nextPaymentState = getOrderPaymentHistorySummary(
+        nextPaymentHistory,
+        normalizedPayment.primaryMethod || orderRecord.paymentMethod || 'Efectivo',
+        normalizedPayment.installments || orderRecord.installments || 0,
+        nextPaidTotal,
+      );
 
       const payload = {
+        payment_method: nextPaymentState.paymentMethod || orderRecord.paymentMethod || 'Pedido',
+        payment_breakdown: nextPaymentHistory,
+        installments: nextPaymentState.installments || 0,
         paid_total: nextPaidTotal,
         remaining_amount: nextRemaining,
         status,
       };
 
-      const { data } = await updateWithSchemaFallback('orders', orderRecord.id, payload);
+      const { data } = await updateWithSchemaFallback(
+        'orders',
+        orderRecord.id,
+        payload,
+        CLOUD_SELECTS.orders,
+      );
 
       setOrders((prev) =>
         prev.map((order) => (order.id === orderRecord.id ? mapOrderRecords([data])[0] : order))
@@ -2672,7 +4274,10 @@ export default function PartySupplyApp() {
           eventLabel: updatedOrder.eventLabel || '',
           documentTitle: updatedOrder.documentTitle || 'PEDIDO',
           totalAmount: Number(updatedOrder.totalAmount || 0),
-          amount: Number(paymentAmount || 0),
+          amount: paymentAmount,
+          paymentMethod: normalizedPayment.paymentMethod,
+          paymentBreakdown: normalizedPayment.paymentBreakdown,
+          paymentHistory: updatedOrder.paymentHistory || nextPaymentHistory,
           paidTotal: nextPaidTotal,
           remainingAmount: nextRemaining,
           pickupDate: updatedOrder.pickupDate || null,
@@ -2692,7 +4297,12 @@ export default function PartySupplyApp() {
   const handleMarkOrderRetired = async (orderRecord) => {
     if (blockIfOfflineReadonly('marcar pedidos como retirados')) return;
     try {
-      const { data } = await updateWithSchemaFallback('orders', orderRecord.id, { status: 'Retirado' });
+      const { data } = await updateWithSchemaFallback(
+        'orders',
+        orderRecord.id,
+        { status: 'Retirado' },
+        CLOUD_SELECTS.orders,
+      );
       const retiredOrder = mapOrderRecords([data])[0];
 
       setOrders((prev) =>
@@ -2743,13 +4353,55 @@ export default function PartySupplyApp() {
       const currentPaid = Number(orderRecord.paidTotal || 0);
       const retainedDeposit = keepDeposit ? Math.min(currentDeposit, currentPaid || currentDeposit) : 0;
       const refundedAmount = Math.max(currentPaid - retainedDeposit, 0);
+      const currentPaymentHistory = normalizeOrderPaymentHistory(
+        orderRecord.paymentHistory || orderRecord.paymentBreakdown,
+        orderRecord.paymentMethod || 'Pedido',
+        orderRecord.installments || 0,
+        currentPaid,
+      );
+      const firstEntryAmount = Number(currentPaymentHistory[0]?.amount || 0);
+      const retainedPaymentHistory = keepDeposit && retainedDeposit > 0 && currentPaymentHistory[0]
+        ? [createOrderPaymentEntry({
+            ...currentPaymentHistory[0],
+            amount: retainedDeposit,
+            lines: (currentPaymentHistory[0].lines || []).map((line) => ({
+              ...line,
+              amount: firstEntryAmount > 0
+                ? roundOrderPaymentValue((Number(line.amount || 0) / firstEntryAmount) * retainedDeposit)
+                : 0,
+              chargedAmount: firstEntryAmount > 0
+                ? roundOrderPaymentValue((Number(line.chargedAmount || line.amount || 0) / firstEntryAmount) * retainedDeposit)
+                : 0,
+              cashReceived: line.method === 'Efectivo'
+                ? (firstEntryAmount > 0
+                    ? roundOrderPaymentValue((Number(line.cashReceived || line.amount || 0) / firstEntryAmount) * retainedDeposit)
+                    : retainedDeposit)
+                : 0,
+              cashChange: 0,
+            })),
+          })]
+        : [];
+      const retainedPaymentState = getOrderPaymentHistorySummary(
+        retainedPaymentHistory,
+        orderRecord.paymentMethod || 'Pedido',
+        orderRecord.installments || 0,
+        retainedDeposit,
+      );
 
-      const { data } = await updateWithSchemaFallback('orders', orderRecord.id, {
-        status: 'Cancelado',
-        deposit_amount: retainedDeposit,
-        paid_total: retainedDeposit,
-        remaining_amount: 0,
-      });
+      const { data } = await updateWithSchemaFallback(
+        'orders',
+        orderRecord.id,
+        {
+          status: 'Cancelado',
+          payment_method: retainedPaymentState.paymentMethod || null,
+          payment_breakdown: retainedPaymentHistory,
+          installments: retainedPaymentState.installments || 0,
+          deposit_amount: retainedDeposit,
+          paid_total: retainedDeposit,
+          remaining_amount: 0,
+        },
+        CLOUD_SELECTS.orders,
+      );
 
       setOrders((prev) =>
         prev.map((order) => (order.id === orderRecord.id ? mapOrderRecords([data])[0] : order))
@@ -2803,9 +4455,12 @@ export default function PartySupplyApp() {
         restoredStockChanges = stockChanges;
       }
 
-      const { data } = await updateWithSchemaFallback('orders', orderRecord.id, {
-        is_active: false,
-      });
+      const { data } = await updateWithSchemaFallback(
+        'orders',
+        orderRecord.id,
+        { is_active: false },
+        CLOUD_SELECTS.orders,
+      );
 
       const deletedOrder = mapOrderRecords([data])[0];
       setOrders((prev) => prev.filter((order) => order.id !== orderRecord.id));
@@ -2927,7 +4582,11 @@ export default function PartySupplyApp() {
         created_by: currentUser?.name || 'Sistema'
       };
 
-      const { data, error } = await supabase.from('offers').insert([payload]).select().single();
+      const { data, error } = await supabase
+        .from('offers')
+        .insert([payload])
+        .select(CLOUD_SELECTS.offers)
+        .single();
       if (error) throw error;
 
       const newOffer = {
@@ -3086,33 +4745,39 @@ export default function PartySupplyApp() {
         user_name: actor.userName,
       };
 
-      const { data, error } = await insertWithSchemaFallback('expenses', payload);
-      if (error) throw error;
+      const { data } = await insertWithSchemaFallback('expenses', payload, CLOUD_SELECTS.expenses);
+      if (!data?.id) throw new Error('Supabase no devolvió el gasto creado.');
 
+      const createdAt = data.created_at || new Date().toISOString();
       const newExpense = {
         id: data.id,
-        description: data.description,
-        amount: data.amount,
-        category: data.category,
-        paymentMethod: data.payment_method,
-        date: formatDateAR(new Date(data.created_at)),
-        time: formatTimeFullAR(new Date(data.created_at)),
-        user: data.user_name
+        createdAt,
+        description: data.description || safeDescription,
+        amount: Number(data.amount ?? safeAmount) || 0,
+        category: data.category || payload.category,
+        paymentMethod: data.payment_method || payload.payment_method,
+        date: formatDateAR(createdAt),
+        time: formatTimeFullAR(createdAt),
+        user: data.user_name || actor.userName,
+        userId: data.user_id || actor.userId || null,
+        userRole: data.user_role || actor.userRole || 'seller'
       };
 
       newExpense.isTest = isTestRecord(newExpense);
-      setExpenses([newExpense, ...expenses]);
+      setExpenses((prev) => [newExpense, ...prev]);
       
-      addLog(
+      await addLog(
         'Nuevo Gasto', 
         { description: newExpense.description, amount: newExpense.amount, category: newExpense.category, paymentMethod: newExpense.paymentMethod }, 
         userTypedNote || 'Salida de dinero'
       );
       
       showNotification('success', 'Gasto Registrado', 'Se guardó correctamente en la nube.');
+      return newExpense;
     } catch (e) {
       console.error(e);
-      showNotification('error', 'Error', 'No se pudo guardar el gasto. Verifique los datos.');
+      showNotification('error', 'Error', getCloudErrorMessage(e, 'No se pudo guardar el gasto. Verifique los datos.'));
+      return null;
     }
   };
 
@@ -3120,32 +4785,74 @@ export default function PartySupplyApp() {
     if (blockIfOfflineReadonly('crear socios')) return;
     try {
        const memberNum = Math.floor(10000 + Math.random() * 90000);
+       const normalizedData = {
+         ...data,
+         name: String(data?.name || '').trim(),
+         dni: data?.dni?.trim() || null,
+         phone: data?.phone?.trim() || null,
+         email: data?.email?.trim() || null,
+         extraInfo: data?.extraInfo?.trim() || '',
+         points: Number(data?.points) || 0,
+       };
+
+       if (!normalizedData.name) {
+         showNotification('error', 'Nombre requerido', 'El nombre del socio no puede quedar vacío.');
+         return null;
+       }
        
        const payload = { 
-         name: data.name, 
-         dni: data.dni?.trim() || null, 
-         phone: data.phone?.trim() || null, 
-         email: data.email?.trim() || null, 
-         points: Number(data.points) || 0, 
+         name: normalizedData.name, 
+         dni: normalizedData.dni, 
+         phone: normalizedData.phone, 
+         email: normalizedData.email, 
+         points: normalizedData.points, 
          member_number: memberNum 
        };
 
-       const { data: newClient, error } = await supabase.from('clients').insert([payload]).select().single();
-       if (error) throw error;
+       const { data: newClient } = await insertWithSchemaFallback('clients', payload, CLOUD_SELECTS.clients);
        
-       const clientFormatted = { ...newClient, memberNumber: newClient.member_number };
-       setMembers([...members, clientFormatted]);
+       const clientFormatted = {
+         ...newClient,
+         memberNumber: newClient.member_number,
+         createdAt: newClient.created_at || newClient.createdAt || null,
+       };
+       setMembers((prev) => {
+         const nextMembers = Array.isArray(prev) ? prev : [];
+         const existingIndex = nextMembers.findIndex((member) => String(member.id) === String(clientFormatted.id));
+         if (existingIndex === -1) {
+           return [...nextMembers, clientFormatted];
+         }
+
+         return nextMembers.map((member, index) => (
+           index === existingIndex
+             ? {
+                 ...member,
+                 ...clientFormatted,
+                 memberNumber: clientFormatted.memberNumber || member.memberNumber || member.member_number,
+                 created_at: clientFormatted.created_at || member.created_at || member.createdAt || null,
+                 createdAt: clientFormatted.createdAt || member.createdAt || member.created_at || null,
+               }
+             : member
+         ));
+       });
        
-       addLog('Nuevo Socio', { name: clientFormatted.name, number: clientFormatted.memberNumber }, data.extraInfo || 'Registro manual');
+       addLog('Nuevo Socio', { name: clientFormatted.name, number: clientFormatted.memberNumber }, normalizedData.extraInfo || 'Registro manual');
        
        showNotification('success', 'Socio Creado', `#${memberNum}`);
        return clientFormatted;
     } catch (e) { 
        console.error(e);
-       if (e.message?.includes('clients_dni_key') || e.code === '23505') {
+       const constraint = String(e?.message || e?.details || e?.hint || '').toLowerCase();
+       if (constraint.includes('clients_dni_key')) {
          showNotification('error', 'DNI Duplicado', 'Ese DNI ya pertenece a otro socio.');
+       } else if (constraint.includes('clients_phone_key')) {
+         showNotification('error', 'Teléfono Duplicado', 'Ese teléfono ya pertenece a otro socio.');
+       } else if (constraint.includes('clients_email_key')) {
+         showNotification('error', 'Email Duplicado', 'Ese email ya pertenece a otro socio.');
+       } else if (e.code === '23505') {
+         showNotification('error', 'Dato Duplicado', 'Uno de los datos únicos del socio ya existe. Revisa DNI, teléfono y email.');
        } else {
-         showNotification('error', 'Error', 'No se pudo crear el socio.'); 
+         showNotification('error', 'Error', `No se pudo crear el socio. ${getCloudErrorMessage(e)}`); 
        }
     }
   };
@@ -3153,25 +4860,54 @@ export default function PartySupplyApp() {
   const handleUpdateMemberWithLog = async (id, updates) => {
     if (blockIfOfflineReadonly('editar socios')) return;
     try {
+      const normalizedInput = {
+        ...updates,
+        name: updates.name !== undefined ? String(updates.name || '').trim() : updates.name,
+        dni: updates.dni !== undefined ? updates.dni?.trim() || null : updates.dni,
+        phone: updates.phone !== undefined ? updates.phone?.trim() || null : updates.phone,
+        email: updates.email !== undefined ? updates.email?.trim() || null : updates.email,
+        extraInfo: updates.extraInfo !== undefined ? updates.extraInfo?.trim() || '' : updates.extraInfo,
+        points: updates.points !== undefined ? Number(updates.points) || 0 : updates.points,
+      };
+
+      if (normalizedInput.name !== undefined && !normalizedInput.name) {
+        showNotification('error', 'Nombre requerido', 'El nombre del socio no puede quedar vacío.');
+        return null;
+      }
+
       // Buscar miembro anterior para comparar cambios
       const oldMember = members.find(m => m.id === id) || {};
       
       const dbUpdates = {};
-      if (updates.name !== undefined) dbUpdates.name = updates.name;
+      if (normalizedInput.name !== undefined) dbUpdates.name = normalizedInput.name;
       
-      if (updates.dni !== undefined) dbUpdates.dni = updates.dni?.trim() || null;
-      if (updates.phone !== undefined) dbUpdates.phone = updates.phone?.trim() || null;
-      if (updates.email !== undefined) dbUpdates.email = updates.email?.trim() || null;
+      if (normalizedInput.dni !== undefined) dbUpdates.dni = normalizedInput.dni;
+      if (normalizedInput.phone !== undefined) dbUpdates.phone = normalizedInput.phone;
+      if (normalizedInput.email !== undefined) dbUpdates.email = normalizedInput.email;
       
-      if (updates.points !== undefined) dbUpdates.points = Number(updates.points) || 0;
-      if (updates.memberNumber !== undefined) dbUpdates.member_number = updates.memberNumber;
+      if (normalizedInput.points !== undefined) dbUpdates.points = normalizedInput.points;
+      if (normalizedInput.memberNumber !== undefined) dbUpdates.member_number = normalizedInput.memberNumber;
       
-      const { error } = await supabase.from('clients').update(dbUpdates).eq('id', id);
-      if (error) throw error;
+      await updateWithSchemaFallback('clients', id, dbUpdates, CLOUD_SELECTS.clients);
       
       // ?? Normalizar updates: convertir points a número antes de actualizar estado
-      const normalizedUpdates = { ...updates, points: Number(updates.points) || 0 };
-      setMembers(members.map(m => m.id === id ? { ...m, ...normalizedUpdates } : m));
+      const normalizedUpdates = normalizedInput;
+      setMembers((prev) =>
+        prev.map((member) => {
+          if (member.id !== id) return member;
+
+          return {
+            ...member,
+            ...normalizedUpdates,
+            memberNumber:
+              normalizedUpdates.memberNumber !== undefined
+                ? normalizedUpdates.memberNumber
+                : member.memberNumber || member.member_number,
+            created_at: member.created_at || member.createdAt || null,
+            createdAt: member.createdAt || member.created_at || null,
+          };
+        }),
+      );
       
       // ?? MEJORADO: Detectar cambios específicos para el log
       const pointsDelta = normalizedUpdates.points !== undefined ? Number(normalizedUpdates.points) - Number(oldMember.points || 0) : 0;
@@ -3210,10 +4946,17 @@ export default function PartySupplyApp() {
       showNotification('success', 'Socio Actualizado', 'Cambios guardados.');
     } catch (e) { 
       console.error(e);
-      if (e.message?.includes('clients_dni_key') || e.code === '23505') {
+      const constraint = String(e?.message || e?.details || e?.hint || '').toLowerCase();
+      if (constraint.includes('clients_dni_key')) {
         showNotification('error', 'DNI Duplicado', 'Ese DNI ya pertenece a otro socio.');
+      } else if (constraint.includes('clients_phone_key')) {
+        showNotification('error', 'Teléfono Duplicado', 'Ese teléfono ya pertenece a otro socio.');
+      } else if (constraint.includes('clients_email_key')) {
+        showNotification('error', 'Email Duplicado', 'Ese email ya pertenece a otro socio.');
+      } else if (e.code === '23505') {
+        showNotification('error', 'Dato Duplicado', 'Uno de los datos únicos del socio ya existe. Revisa DNI, teléfono y email.');
       } else {
-        showNotification('error', 'Error', 'Fallo al actualizar el socio.'); 
+        showNotification('error', 'Error', `Fallo al actualizar el socio. ${getCloudErrorMessage(e)}`); 
       }
     }
   };
@@ -3271,7 +5014,7 @@ export default function PartySupplyApp() {
       const { data: createdContact, error } = await supabase
         .from('agenda_contacts')
         .insert([payload])
-        .select()
+        .select(CLOUD_SELECTS.agendaContacts)
         .single();
 
       if (error) throw error;
@@ -3313,7 +5056,7 @@ export default function PartySupplyApp() {
         .from('agenda_contacts')
         .update(payload)
         .eq('id', id)
-        .select()
+        .select(CLOUD_SELECTS.agendaContacts)
         .single();
 
       if (error) throw error;
@@ -3352,7 +5095,7 @@ export default function PartySupplyApp() {
         .from('agenda_contacts')
         .update({ is_active: false })
         .eq('id', id)
-        .select()
+        .select(CLOUD_SELECTS.agendaContacts)
         .single();
 
       if (error) throw error;
@@ -3402,11 +5145,15 @@ export default function PartySupplyApp() {
     }
   };
 
-  const calculateTotal = () => {
+  const calculateTotal = (paymentLines = null) => {
     const subtotal = cart.reduce(
       (t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0),
       0
     );
+    if (Array.isArray(paymentLines) && paymentLines.length > 0) {
+      const totals = getPaymentBreakdownTotals(paymentLines);
+      return totals.baseTotal > 0 ? totals.chargedTotal : subtotal;
+    }
     if (selectedPayment === 'Credito') {
       return subtotal * 1.1;
     }
@@ -3448,6 +5195,11 @@ export default function PartySupplyApp() {
         const timeClean = exp.time.split(' ')[0];
         return new Date(fullYear, parseInt(month, 10) - 1, parseInt(day, 10),
           ...timeClean.split(':').map(Number));
+      }
+      const rawDate = exp.createdAt || exp.created_at || null;
+      if (rawDate) {
+        const parsedDate = new Date(rawDate);
+        return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
       }
       return null;
     } catch { return null; }
@@ -3699,14 +5451,36 @@ export default function PartySupplyApp() {
     return true;
   };
 
-  const handleBarcodeScanWithInventoryEdit = (scannedCode) => {
-    if (activeTab === 'inventory' && editingProduct) {
+  const handleInventoryCreateBarcodeScan = (scannedCode, matchedProduct) => {
+    if (matchedProduct) {
+      playBeep(false);
+      handleDuplicateBarcodeDetected(matchedProduct, scannedCode);
+      return true;
+    }
+
+    playBeep(true);
+    setBarcodeNotFoundModal({ isOpen: false, code: '' });
+    setNewItem((prev) => ({ ...prev, barcode: scannedCode }));
+    showNotification('success', 'Código asignado', 'El código se cargó en el nuevo producto.');
+    return true;
+  };
+
+  const handleBarcodeScanWithInventoryEdit = (scannedCode, wasInInput = false) => {
+    if (activeTab === 'inventory' && wasInInput) {
       const matchedProduct = inventory.find(
         (p) => String(p.barcode) === scannedCode
       );
 
-      if (handleInventoryEditBarcodeScan(scannedCode, matchedProduct)) {
-        return;
+      if (editingProduct) {
+        if (handleInventoryEditBarcodeScan(scannedCode, matchedProduct)) {
+          return;
+        }
+      }
+
+      if (isModalOpen) {
+        if (handleInventoryCreateBarcodeScan(scannedCode, matchedProduct)) {
+          return;
+        }
       }
     }
 
@@ -3723,7 +5497,7 @@ export default function PartySupplyApp() {
     setBarcodeNotFoundModal({ isOpen: false, code: '' });
     setNewItem({
       title: '', brand: '', price: '', purchasePrice: '', stock: '',
-      categories: [], image: '', barcode: barcode,
+      categories: [], image: '', image_thumb: '', barcode: barcode,
       product_type: 'quantity',
       expiration_date: ''
     });
@@ -3754,6 +5528,52 @@ export default function PartySupplyApp() {
     setLoginError('');
   };
 
+  const finalizeLogin = async (verifiedUser, { offline = false } = {}) => {
+    const nextSession = buildSessionMeta(verifiedUser);
+    setCurrentUser(verifiedUser);
+    setCurrentSessionMeta(nextSession);
+    setActiveTab(getDefaultTabForUser(verifiedUser));
+    setLoginStep('select');
+    setSelectedUserIdForLogin(null);
+    setPasswordInput('');
+    setLoginError('');
+    await writeLogEntry({
+      action: 'Sesion Iniciada',
+      details: nextSession,
+      reason: 'Ingreso al sistema',
+      userName: verifiedUser.displayName || verifiedUser.name,
+      skipCloud: offline,
+    });
+  };
+
+  const handleSystemLogoAccess = () => {
+    if (!systemLoginUser) return;
+
+    const nextTapCount = systemLogoTapCount + 1;
+    setSystemLogoTapCount(nextTapCount);
+
+    if (systemLogoTapTimeoutRef.current) {
+      clearTimeout(systemLogoTapTimeoutRef.current);
+    }
+
+    if (nextTapCount >= 3) {
+      setSystemLogoTapCount(0);
+      systemLogoTapTimeoutRef.current = null;
+      handleSelectLoginUser(systemLoginUser.id);
+      return;
+    }
+
+    systemLogoTapTimeoutRef.current = setTimeout(() => {
+      setSystemLogoTapCount(0);
+      systemLogoTapTimeoutRef.current = null;
+    }, 1200);
+  };
+
+  const handleSystemCornerBypass = async () => {
+    if (!selectedLoginUser || selectedLoginUser.role !== 'system') return;
+    await finalizeLogin(selectedLoginUser, { offline: isBrowserOffline() || isOfflineReadOnly });
+  };
+
   const handleSubmitLogin = async (e) => {
     e.preventDefault();
     const loginUser = selectedLoginUser;
@@ -3764,12 +5584,33 @@ export default function PartySupplyApp() {
 
     try {
       let verifiedUser = null;
+      let shouldSkipCloudLoginLog = isBrowserOffline() || isOfflineReadOnly;
 
       if (authMode === 'supabase') {
-        verifiedUser = await verifyAppUserLogin({
-          userId: loginUser.id,
-          password: passwordInput,
-        });
+        try {
+          verifiedUser = await withTimeout(
+            verifyAppUserLogin({
+              userId: loginUser.id,
+              password: passwordInput,
+            }),
+            OFFLINE_LOGIN_TIMEOUT_MS,
+            'Verificacion de usuario',
+          );
+          if (verifiedUser) {
+            await saveOfflineLoginVerifier(verifiedUser, passwordInput);
+          }
+        } catch (error) {
+          if (!isRecoverableCloudError(error)) throw error;
+          const canLoginOffline = await verifyOfflineLoginVerifier(loginUser, passwordInput);
+          if (canLoginOffline) {
+            verifiedUser = loginUser;
+            shouldSkipCloudLoginLog = true;
+            setIsOfflineReadOnly(true);
+          } else {
+            setLoginError('Sin conexion: inicia una vez con internet para habilitar este usuario offline.');
+            return;
+          }
+        }
       } else {
         const legacySeed = buildLegacyBootstrapSeed(USERS, userSettings);
         const legacyPassword =
@@ -3786,19 +5627,7 @@ export default function PartySupplyApp() {
         return;
       }
 
-      const nextSession = buildSessionMeta(verifiedUser);
-      setCurrentUser(verifiedUser);
-      setCurrentSessionMeta(nextSession);
-      setActiveTab(getDefaultTabForUser(verifiedUser));
-      setLoginStep('select');
-      setPasswordInput('');
-      setLoginError('');
-      await writeLogEntry({
-        action: 'Sesion Iniciada',
-        details: nextSession,
-        reason: 'Ingreso al sistema',
-        userName: verifiedUser.displayName || verifiedUser.name,
-      });
+      await finalizeLogin(verifiedUser, { offline: shouldSkipCloudLoginLog });
     } catch (error) {
       console.error('No se pudo iniciar sesión:', error);
       setLoginError(error?.message || 'No se pudo iniciar sesión.');
@@ -3807,7 +5636,7 @@ export default function PartySupplyApp() {
 
   const handleRetrySharedUsersSetup = async () => {
     try {
-      const users = await loadAppUsers({ force: true });
+      const users = await loadAppUsers({ force: true, includeInactive: true });
       const isSharedEnabled = Array.isArray(users) && users.some((user) => user?.source === 'supabase');
 
       if (isSharedEnabled) {
@@ -3924,7 +5753,7 @@ export default function PartySupplyApp() {
       theme: payload.theme,
     });
 
-    await loadAppUsers({ force: true });
+    await loadAppUsers({ force: true, includeInactive: true });
     setAuthMode('supabase');
 
     await writeLogEntry({
@@ -3969,7 +5798,7 @@ export default function PartySupplyApp() {
       });
     }
 
-    await loadAppUsers({ force: true });
+    await loadAppUsers({ force: true, includeInactive: true });
 
     await writeLogEntry({
       action: 'Usuario Editado',
@@ -4003,7 +5832,7 @@ export default function PartySupplyApp() {
       isActive: nextActive,
     });
 
-    await loadAppUsers({ force: true });
+    await loadAppUsers({ force: true, includeInactive: true });
 
     await writeLogEntry({
       action: nextActive ? 'Usuario Reactivado' : 'Usuario Desactivado',
@@ -4038,7 +5867,7 @@ export default function PartySupplyApp() {
       applyNow,
     });
 
-    const refreshedUsers = await loadAppUsers({ force: true });
+    const refreshedUsers = await loadAppUsers({ force: true, includeInactive: true });
     setAuthMode('supabase');
 
     const refreshedTargetUser =
@@ -4141,21 +5970,88 @@ export default function PartySupplyApp() {
 
     try {
       setIsUploadingImage(true);
-      const publicUrl = await uploadProductImage(file);
+      const uploadedImage = await uploadProductImage(file);
 
       if (isEditing) {
-        setEditingProduct((prev) => prev ? { ...prev, image: publicUrl } : prev);
+        setEditingProduct((prev) => prev ? { ...prev, image: uploadedImage.image, image_thumb: uploadedImage.imageThumb, imageThumb: uploadedImage.imageThumb } : prev);
       } else {
-        setNewItem((prev) => ({ ...prev, image: publicUrl }));
+        setNewItem((prev) => ({ ...prev, image: uploadedImage.image, image_thumb: uploadedImage.imageThumb, imageThumb: uploadedImage.imageThumb }));
       }
       showNotification('success', 'Imagen subida', 'Se cargó correctamente a la nube.');
     } catch (err) {
       console.error('Error subiendo imagen:', err);
-      showNotification('error', 'Error al subir', 'No se pudo subir la imagen. Intentó de nuevo.');
+      showNotification('error', 'Error al subir', 'No se pudo subir la imagen. Intentá de nuevo.');
     } finally {
       setIsUploadingImage(false);
     }
   };
+
+  useEffect(() => {
+    if (!canUseAdminArea) return;
+    if (isOfflineReadOnly) return;
+    if (moduleLoadState.core.status !== 'loaded') return;
+    if (productThumbBackfillDisabledRef.current) return;
+    if (productThumbBackfillInFlightRef.current) return;
+
+    const candidates = inventory
+      .filter((product) => {
+        const productId = String(product?.id || '');
+        if (!productId) return false;
+        if (!product?.image) return false;
+        if (product.imageThumb || product.image_thumb) return false;
+        if (productThumbBackfillFailedIdsRef.current.has(productId)) return false;
+        return true;
+      })
+      .slice(0, 6);
+
+    if (candidates.length === 0) return;
+
+    let cancelled = false;
+    productThumbBackfillInFlightRef.current = true;
+
+    const run = async () => {
+      try {
+        for (const product of candidates) {
+          if (cancelled) break;
+
+          try {
+            const thumbUrl = await uploadProductThumbFromSource(product.image);
+            const result = await updateWithSchemaFallback(
+              'products',
+              product.id,
+              { image_thumb: thumbUrl },
+              CLOUD_SELECTS.products
+            );
+
+            if (!('image_thumb' in (result?.payload || {}))) {
+              productThumbBackfillDisabledRef.current = true;
+              break;
+            }
+
+            if (result?.data) {
+              const formattedProduct = mapInventoryRecords([result.data])[0];
+              setInventory((prev) =>
+                prev.map((currentProduct) =>
+                  String(currentProduct.id) === String(product.id) ? formattedProduct : currentProduct
+                )
+              );
+            }
+          } catch (error) {
+            console.warn('No se pudo generar image_thumb para un producto existente:', product?.id, error);
+            productThumbBackfillFailedIdsRef.current.add(String(product.id));
+          }
+        }
+      } finally {
+        productThumbBackfillInFlightRef.current = false;
+      }
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canUseAdminArea, inventory, isOfflineReadOnly, moduleLoadState.core.status]);
 
   const handleEditTransactionRequest = (tx) => {
     const safeTx = JSON.parse(JSON.stringify(tx));
@@ -4169,10 +6065,19 @@ export default function PartySupplyApp() {
     const normalizedCashReceived = Number.isFinite(existingCashReceived) && existingCashReceived > 0
       ? existingCashReceived
       : safeTotal;
-    safeTx.cashReceived = safeTx.payment === 'Efectivo' ? normalizedCashReceived : 0;
-    safeTx.cashChange = safeTx.payment === 'Efectivo'
-      ? Math.max(0, safeTx.cashReceived - safeTotal)
-      : 0;
+    const paymentInfo = getPrimaryPaymentInfo(
+      safeTx.paymentBreakdown ?? safeTx.payment_breakdown,
+      safeTx.payment,
+      safeTx.installments,
+      normalizedCashReceived,
+      safeTx.cashChange ?? safeTx.cash_change,
+      safeTotal,
+    );
+    safeTx.paymentBreakdown = paymentInfo.paymentBreakdown;
+    safeTx.payment = paymentInfo.payment;
+    safeTx.cashReceived = paymentInfo.cashReceived;
+    safeTx.cashChange = paymentInfo.cashChange;
+    safeTx.installments = paymentInfo.installments;
     setEditingTransaction(safeTx);
     setTransactionSearch('');
     setEditReason('');
@@ -4259,28 +6164,55 @@ export default function PartySupplyApp() {
 
     const paymentMethodsSummary = {};
     cycleTransactions.forEach(tx => {
-      const method = tx.payment || 'Otros';
-      if (!paymentMethodsSummary[method]) paymentMethodsSummary[method] = 0;
-      paymentMethodsSummary[method] += Number(tx.total);
+      const perMethodTotals = getPaymentMethodTotals(
+        tx.paymentBreakdown,
+        tx.primaryPaymentMethod || tx.payment,
+        tx.installments,
+        tx.cashReceived,
+        tx.cashChange,
+        tx.total,
+      );
+      Object.entries(perMethodTotals).forEach(([method, amount]) => {
+        if (!paymentMethodsSummary[method]) paymentMethodsSummary[method] = 0;
+        paymentMethodsSummary[method] += Number(amount || 0);
+      });
     });
 
     const totalExpenses = cycleExpenses.reduce((acc, curr) => acc + Number(curr.amount), 0);
     const cashExpenses = cycleExpenses.filter(e => e.paymentMethod === 'Efectivo').reduce((acc, curr) => acc + Number(curr.amount), 0);
     const averageTicket = cycleSalesCount > 0 ? (cycleTotalSales / cycleSalesCount) : 0;
     const netProfit = cycleTotalSales - totalCost - totalExpenses;
-    const cashSales = cycleTransactions.filter(t => t.payment === 'Efectivo').reduce((acc, t) => acc + Number(t.total), 0);
+    const cashSales = cycleTransactions.reduce((acc, tx) => {
+      const perMethodTotals = getPaymentMethodTotals(
+        tx.paymentBreakdown,
+        tx.primaryPaymentMethod || tx.payment,
+        tx.installments,
+        tx.cashReceived,
+        tx.cashChange,
+        tx.total,
+      );
+      return acc + Number(perMethodTotals.Efectivo || 0);
+    }, 0);
     const finalPhysicalBalance = openingBalance + cashSales - cashExpenses;
 
-    const cycleNewClients = cycleStart
-      ? dailyLogs.filter(l => {
-          if (l.action !== 'Nuevo Socio') return false;
-          const logDate = l.created_at ? new Date(l.created_at) : null;
-          return logDate && logDate >= cycleStart;
-        }).map(l => ({ name: l.details?.name, number: l.details?.number, time: l.timestamp || l.time }))
-      : (() => {
-          const todayStr = closeDate.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-          return dailyLogs.filter(l => l.date === todayStr && l.action === 'Nuevo Socio').map(l => ({ name: l.details?.name, number: l.details?.number, time: l.timestamp || l.time }));
-        })();
+    const cycleNewClients = (members || [])
+      .filter((member) => {
+        const createdAt = member?.createdAt || member?.created_at;
+        if (!createdAt) return false;
+        const createdDate = new Date(createdAt);
+        if (Number.isNaN(createdDate.getTime())) return false;
+
+        if (cycleStart) {
+          return createdDate >= cycleStart && createdDate <= closeDate;
+        }
+
+        return formatDateAR(createdDate) === formatDateAR(closeDate);
+      })
+      .map((member) => ({
+        name: member.name || 'Socio',
+        number: member.memberNumber || member.member_number || '---',
+        time: formatTimeFullAR(member.createdAt || member.created_at),
+      }));
 
     let shouldSaveReport = true;
     
@@ -4321,7 +6253,7 @@ export default function PartySupplyApp() {
             })
             .eq('id', 1)
             .eq('is_open', true)
-            .select();
+            .select(CLOUD_SELECTS.registerState);
 
         if (lockError) throw lockError;
 
@@ -4336,9 +6268,9 @@ export default function PartySupplyApp() {
             return;
         }
 
-        const openTime = registerOpenedAt 
+        const openTime = registerOpenedAt
           ? formatTimeFullAR(new Date(registerOpenedAt))
-          : (dailyLogs.find(l => l.action === 'Apertura de Caja')?.timestamp || '--:--');
+          : '--:--';
         const closeTime = formatTimeFullAR(closeDate);
         const actor = getActorContext(isAuto ? 'Automático' : null);
         const user = actor.userName;
@@ -4390,13 +6322,17 @@ export default function PartySupplyApp() {
         };
 
         if (shouldSaveReport) {
-            const { data: savedReport, error } = await insertWithSchemaFallback('cash_closures', closurePayload);
+            const { data: savedReport, error } = await insertWithSchemaFallback(
+              'cash_closures',
+              closurePayload,
+              CLOUD_SELECTS.cashClosuresDetail,
+            );
             if (error) throw error;
 
             const adaptedReport = mapCashClosureRecord(savedReport);
-            setPastClosures([adaptedReport, ...pastClosures]);
+            setPastClosures((prev) => [adaptedReport, ...prev]);
             closureLogDetails.id = savedReport.id;
-        }
+          }
         
         setIsRegisterClosed(true);
         setRegisterOpenedAt(null);
@@ -4499,7 +6435,7 @@ export default function PartySupplyApp() {
       try {
         await supabase.from('categories').delete().eq('name', name);
         setCategories(categories.filter((c) => c !== name));
-        addLog('CategorÃ­a', { name, type: 'delete' });
+        addLog('Categoría', { name, type: 'delete' });
       } catch (e) {
         console.error(e);
         showNotification('error', 'Error', 'No se pudo eliminar de la nube.');
@@ -4508,7 +6444,7 @@ export default function PartySupplyApp() {
   };
 
   const handleEditCategory = async (oldName, newName) => {
-    if (blockIfOfflineReadonly('editar categorÃ­as')) return;
+    if (blockIfOfflineReadonly('editar categorías')) return;
     try {
       const { error: catError } = await supabase
         .from('categories')
@@ -4533,16 +6469,16 @@ export default function PartySupplyApp() {
         return p;
       }));
       
-      addLog('Editar CategorÃ­a', { old: oldName, new: newName });
-      showNotification('success', 'CategorÃ­a Actualizada', 'Nombre y productos actualizados.');
+      addLog('Editar Categoría', { old: oldName, new: newName });
+      showNotification('success', 'Categoría Actualizada', 'Nombre y productos actualizados.');
     } catch (e) {
       console.error(e);
-      showNotification('error', 'Error', 'No se pudo renombrar la categorÃ­a.');
+      showNotification('error', 'Error', 'No se pudo renombrar la categoría.');
     }
   };
 
   const handleBatchUpdateProductCategory = async (changes) => {
-    if (blockIfOfflineReadonly('editar categorÃ­as de productos')) return;
+    if (blockIfOfflineReadonly('editar categorías de productos')) return;
     try {
       const promises = changes.map(async (change) => {
         const { productId, categoryName, action } = change;
@@ -4574,7 +6510,7 @@ export default function PartySupplyApp() {
         return p;
       }));
 
-      addLog('Actualización Masiva', { count: changes.length, category: changes[0]?.categoryName }, 'Gestor de CategorÃ­as');
+      addLog('Actualización Masiva', { count: changes.length, category: changes[0]?.categoryName }, 'Gestor de Categorías');
       showNotification('success', 'Productos Actualizados', `${changes.length} productos modificados.`);
 
     } catch (e) {
@@ -4585,11 +6521,11 @@ export default function PartySupplyApp() {
 
   const handleAddItem = async (e, overrideData = null) => {
     if (blockIfOfflineReadonly('agregar productos al inventario')) return;
-    e.preventDefault();
+    e?.preventDefault?.();
     const itemData = overrideData || newItem;
     
     if (itemData.categories.length === 0) {
-      showNotification('warning', 'Faltan datos', 'Por favor selecciona al menos una categorÃ­a.');
+      showNotification('warning', 'Faltan datos', 'Por favor selecciona al menos una categoría.');
       return;
     }
     
@@ -4603,17 +6539,13 @@ export default function PartySupplyApp() {
         category: itemData.categories.join(', '), 
         barcode: itemData.barcode || null,
         image: itemData.image || '',
+        image_thumb: itemData.image_thumb || itemData.imageThumb || '',
         product_type: itemData.product_type || 'quantity',
         expiration_date: itemData.expiration_date || null
       };
       
-      const { data, error } = await supabase.from('products').insert([payload]).select().single();
-      if (error) throw error;
-      
-      const itemFormatted = { 
-          ...data, 
-          categories: data.category ? data.category.split(',').map(c => c.trim()).filter(Boolean) : [] 
-      };
+      const { data } = await insertWithSchemaFallback('products', payload, CLOUD_SELECTS.products);
+      const itemFormatted = mapInventoryRecords([data])[0];
       setInventory([...inventory, itemFormatted]);
       
       const logDetails = {
@@ -4626,7 +6558,7 @@ export default function PartySupplyApp() {
       
       setNewItem({
         title: '', brand: '', price: '', purchasePrice: '', stock: '',
-        categories: [], image: '', barcode: '',
+        categories: [], image: '', image_thumb: '', barcode: '',
         product_type: 'quantity', expiration_date: '' 
       });
       setIsModalOpen(false);
@@ -4639,7 +6571,7 @@ export default function PartySupplyApp() {
 
   const saveEditProduct = async (e, overrideData = null) => {
     if (blockIfOfflineReadonly('editar productos')) return;
-    e.preventDefault();
+    e?.preventDefault?.();
     const productData = overrideData || editingProduct;
     if (!productData) return;
     
@@ -4647,6 +6579,7 @@ export default function PartySupplyApp() {
       const originalProduct = inventory.find(p => p.id === productData.id);
       if (originalProduct && originalProduct.image !== productData.image) {
         await deleteProductImage(originalProduct.image).catch(() => {});
+        await deleteProductImage(originalProduct.image_thumb || originalProduct.imageThumb).catch(() => {});
       }
 
       const payload = {
@@ -4657,19 +6590,93 @@ export default function PartySupplyApp() {
         category: Array.isArray(productData.categories) ? productData.categories.join(', ') : productData.category,
         barcode: productData.barcode || null,
         image: productData.image || '',
+        image_thumb: productData.image_thumb || productData.imageThumb || '',
         product_type: productData.product_type || 'quantity',
         expiration_date: productData.expiration_date || null
       };
 
-      const { error } = await supabase.from('products').update(payload).eq('id', productData.id);
-      if (error) throw error;
-      setInventory(inventory.map(p => p.id === productData.id ? { ...productData } : p));
+      const { data } = await updateWithSchemaFallback('products', productData.id, payload, CLOUD_SELECTS.products);
+      const formattedProduct = mapInventoryRecords([data])[0];
+      setInventory(inventory.map(p => p.id === productData.id ? formattedProduct : p));
+
+      const getCategoryLabel = (product) => {
+        if (Array.isArray(product?.categories) && product.categories.length > 0) {
+          return product.categories.join(', ');
+        }
+        return product?.category || '';
+      };
+
+      const getProductTypeLabel = (productType) => (
+        productType === 'weight' ? 'Por peso (kg/g)' : 'Por unidad'
+      );
+
+      const formatStockValue = (stockValue, productType) => (
+        `${formatNumber(Number(stockValue || 0))} ${productType === 'weight' ? 'g' : 'uds'}`
+      );
+
+      const normalizeTextValue = (value, fallback = '--') => {
+        if (value === null || value === undefined) return fallback;
+        const text = String(value).trim();
+        return text === '' ? fallback : text;
+      };
+
+      const originalSnapshot = {
+        title: originalProduct?.title || '',
+        category: getCategoryLabel(originalProduct),
+        price: Number(originalProduct?.price || 0),
+        purchasePrice: Number(originalProduct?.purchasePrice || 0),
+        stock: Number(originalProduct?.stock || 0),
+        stockLabel: formatStockValue(originalProduct?.stock, originalProduct?.product_type),
+        product_type: originalProduct?.product_type || 'quantity',
+        productTypeLabel: getProductTypeLabel(originalProduct?.product_type || 'quantity'),
+        barcode: normalizeTextValue(originalProduct?.barcode),
+        expiration_date: normalizeTextValue(originalProduct?.expiration_date),
+        imageState: originalProduct?.image ? 'Cargada' : 'Sin imagen',
+      };
+
+      const updatedSnapshot = {
+        title: productData.title || '',
+        category: getCategoryLabel(productData),
+        price: Number(productData.price || 0),
+        purchasePrice: Number(productData.purchasePrice || 0),
+        stock: Number(productData.stock || 0),
+        stockLabel: formatStockValue(productData.stock, productData.product_type),
+        product_type: productData.product_type || 'quantity',
+        productTypeLabel: getProductTypeLabel(productData.product_type || 'quantity'),
+        barcode: normalizeTextValue(productData.barcode),
+        expiration_date: normalizeTextValue(productData.expiration_date),
+        imageState: productData.image ? 'Cargada' : 'Sin imagen',
+      };
+
+      const productChanges = [];
+      const pushProductChange = (field, oldValue, newValue, extra = {}) => {
+        if (oldValue === newValue) return;
+        productChanges.push({ field, old: oldValue, new: newValue, ...extra });
+      };
+
+      pushProductChange('Nombre', normalizeTextValue(originalSnapshot.title), normalizeTextValue(updatedSnapshot.title));
+      pushProductChange('Categoría', normalizeTextValue(originalSnapshot.category), normalizeTextValue(updatedSnapshot.category));
+      pushProductChange('Precio Venta', originalSnapshot.price, updatedSnapshot.price, { isPrice: true });
+      pushProductChange('Precio Costo', originalSnapshot.purchasePrice, updatedSnapshot.purchasePrice, { isPrice: true });
+      pushProductChange('Stock', originalSnapshot.stockLabel, updatedSnapshot.stockLabel);
+      pushProductChange('Tipo', originalSnapshot.productTypeLabel, updatedSnapshot.productTypeLabel);
+      pushProductChange('Código', originalSnapshot.barcode, updatedSnapshot.barcode);
+      pushProductChange('Vencimiento', originalSnapshot.expiration_date, updatedSnapshot.expiration_date);
+      pushProductChange('Imagen', originalSnapshot.imageState, updatedSnapshot.imageState);
+
       addLog('Edición Producto', {
-        id: productData.id, product: productData.title,
-        price: productData.price, stock: productData.stock,
-        category: productData.categories?.[0] || '',
+        id: productData.id,
+        product: productData.title,
+        title: productData.title,
+        price: productData.price,
+        stock: productData.stock,
+        category: getCategoryLabel(productData),
+        purchasePrice: Number(productData.purchasePrice || 0),
         product_type: productData.product_type,
-        imageChanged: originalProduct?.image !== productData.image ? 'SÃ­' : 'No'
+        imageChanged: originalProduct?.image !== productData.image ? 'Sí' : 'No',
+        before: originalSnapshot,
+        after: updatedSnapshot,
+        changes: productChanges,
       }, editReason);
       
       setEditingProduct(null);
@@ -4755,7 +6762,7 @@ export default function PartySupplyApp() {
 
   const confirmDeleteProduct = async (e) => {
     if (blockIfOfflineReadonly('eliminar productos')) return;
-    e.preventDefault();
+    e?.preventDefault?.();
     if (productToDelete) {
       try {
         const { error } = await supabase
@@ -4766,6 +6773,7 @@ export default function PartySupplyApp() {
 
         if (productToDelete.image) {
           await deleteProductImage(productToDelete.image).catch(() => {});
+          await deleteProductImage(productToDelete.image_thumb || productToDelete.imageThumb).catch(() => {});
         }
 
         setInventory(inventory.filter((x) => x.id !== productToDelete.id));
@@ -4792,18 +6800,13 @@ export default function PartySupplyApp() {
           ? originalProduct.categories.join(', ') 
           : originalProduct.category || '',
         barcode: null,       
-        image: '',           
+        image: '',
+        image_thumb: '',
         product_type: originalProduct.product_type || 'quantity'
       };
 
-      const { data, error } = await supabase.from('products').insert([payload]).select().single();
-      if (error) throw error;
-
-      const newProduct = {
-        ...data,
-        categories: data.category ? data.category.split(',').map(c => c.trim()).filter(Boolean) : [],
-        purchasePrice: data.purchasePrice || 0
-      };
+      const { data } = await insertWithSchemaFallback('products', payload, CLOUD_SELECTS.products);
+      const newProduct = mapInventoryRecords([data])[0];
 
       setInventory(prev => [...prev, newProduct]);
 
@@ -4829,12 +6832,15 @@ export default function PartySupplyApp() {
       showNotification('error', 'Error', 'No hay cliente seleccionado para el canje.');
       return;
     }
+    const isDiscountReward = reward.type === 'discount';
     const rewardItem = {
       id: reward.id, 
       title: `CANJE: ${reward.title}`,
       price: -Number(reward.discountAmount), 
       quantity: 1,
       isReward: true, 
+      isDiscount: isDiscountReward,
+      type: isDiscountReward ? 'discount' : 'reward',
       pointsCost: Number(reward.pointsCost), 
       image: 'reward' 
     };
@@ -4892,13 +6898,33 @@ export default function PartySupplyApp() {
 
   const handleCheckout = async (checkoutOptions = {}) => {
     if (blockIfOfflineReadonly('registrar ventas')) return;
-    const total = calculateTotal();
-    const cashReceived = selectedPayment === 'Efectivo'
-      ? Number(checkoutOptions.cashReceived ?? total)
-      : null;
-    const cashChange = selectedPayment === 'Efectivo'
-      ? Math.max(0, Number(checkoutOptions.cashChange ?? 0))
-      : 0;
+    const subtotal = cart.reduce(
+      (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
+      0,
+    );
+    const normalizedPaymentBreakdown = normalizePaymentBreakdown(
+      checkoutOptions.paymentLines,
+      selectedPayment,
+      installments,
+      checkoutOptions.cashReceived,
+      checkoutOptions.cashChange,
+      calculateTotal(),
+    );
+    const paymentTotals = getPaymentBreakdownTotals(normalizedPaymentBreakdown);
+    const paymentInfo = getPrimaryPaymentInfo(
+      normalizedPaymentBreakdown,
+      selectedPayment,
+      installments,
+      checkoutOptions.cashReceived,
+      checkoutOptions.cashChange,
+      paymentTotals.chargedTotal,
+    );
+    const total = paymentTotals.chargedTotal || calculateTotal();
+    const cashReceived = paymentInfo.cashReceived || null;
+    const cashChange = paymentInfo.cashChange || 0;
+    const paymentSummary = paymentInfo.payment;
+    const primaryPaymentMethod = paymentInfo.primaryMethod;
+    const primaryInstallments = paymentInfo.installments;
     
     // ? MAGIA: Agrupamos todo el stock requerido (productos sueltos + los que están adentro de combos)
     const requiredStock = {};
@@ -4907,7 +6933,12 @@ export default function PartySupplyApp() {
       
       if (c.isCombo && c.productsIncluded) {
         c.productsIncluded.forEach(includedItem => {
-          requiredStock[includedItem.id] = (requiredStock[includedItem.id] || 0) + c.quantity;
+          const includedQuantity = Number(
+            includedItem.quantity ??
+            includedItem.qty ??
+            (includedItem.product_type === 'weight' ? 1000 : 1)
+          ) || (includedItem.product_type === 'weight' ? 1000 : 1);
+          requiredStock[includedItem.id] = (requiredStock[includedItem.id] || 0) + (includedQuantity * Number(c.quantity || 1));
         });
       } else if (!c.isCombo) {
         requiredStock[c.id] = (requiredStock[c.id] || 0) + c.quantity;
@@ -4941,8 +6972,9 @@ export default function PartySupplyApp() {
 
       const salePayload = {
         total,
-        payment_method: selectedPayment,
-        installments,
+        payment_method: paymentSummary,
+        payment_breakdown: normalizedPaymentBreakdown,
+        installments: primaryInstallments,
         client_id: clientId,
         points_earned: clientId ? pointsEarned : 0,
         points_spent: pointsSpent,
@@ -4952,19 +6984,31 @@ export default function PartySupplyApp() {
         cash_received: cashReceived,
         cash_change: cashChange,
       };
-      const { data: sale, error: saleErr } = await insertWithSchemaFallback('sales', salePayload);
+      const { data: sale, error: saleErr } = await insertWithSchemaFallback('sales', salePayload, 'id');
       if (saleErr) throw saleErr;
 
-      const itemsPayload = cart.map(i => ({
-          sale_id: sale.id, 
-          // Evitamos error FK: Si es combo o personalizado, no pasamos el ID como UUID de producto
-          product_id: (i.isCustom || i.isCombo) ? null : i.id, 
-          product_title: i.title, 
-          quantity: i.quantity, 
-          price: i.price, 
-          is_reward: !!i.isReward
-        }));
-        await supabase.from('sale_items').insert(itemsPayload);
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const itemsPayload = cart.map(i => {
+        let productId = i.productId || i.id;
+        if (i.isCustom || i.isCombo || i.isDiscount || i.isReward || !uuidRegex.test(String(productId || ''))) {
+          productId = null;
+        }
+
+        return {
+          sale_id: sale.id,
+          product_id: productId,
+          product_title: i.title,
+          quantity: i.quantity,
+          price: i.price,
+          is_reward: !!i.isReward,
+          product_type: i.product_type || 'quantity',
+        };
+      });
+      try {
+        await insertRowsWithSchemaFallback('sale_items', itemsPayload);
+      } catch (saleItemsErr) {
+        throw new Error(`Supabase rechaz\u00f3 los productos de la venta: ${saleItemsErr.message}`);
+      }
 
       const stockChanges = Object.entries(requiredStock)
         .map(([id, qtyToDeduct]) => {
@@ -5001,8 +7045,30 @@ export default function PartySupplyApp() {
 
           await supabase.from('clients').update({ points: newPoints }).eq('id', clientId);
           
-          updatedClientForTicket = { ...posSelectedClient, points: newPoints, currentPoints: newPoints };
-          setMembers(members.map(m => m.id === clientId ? updatedClientForTicket : m));
+          updatedClientForTicket = {
+            ...posSelectedClient,
+            points: newPoints,
+            currentPoints: newPoints,
+            memberNumber: posSelectedClient?.memberNumber || posSelectedClient?.member_number || null,
+            created_at: posSelectedClient?.created_at || posSelectedClient?.createdAt || null,
+            createdAt: posSelectedClient?.createdAt || posSelectedClient?.created_at || null,
+          };
+          setMembers((prev) =>
+            prev.map((member) =>
+              member.id === clientId
+                ? {
+                    ...member,
+                    ...updatedClientForTicket,
+                    memberNumber:
+                      updatedClientForTicket.memberNumber || member.memberNumber || member.member_number,
+                    created_at:
+                      updatedClientForTicket.created_at || member.created_at || member.createdAt || null,
+                    createdAt:
+                      updatedClientForTicket.createdAt || member.createdAt || member.created_at || null,
+                  }
+                : member,
+            ),
+          );
       }
 
       // ? Actualizamos el inventario local en React
@@ -5019,8 +7085,10 @@ export default function PartySupplyApp() {
         userId: currentUser.id || null,
         userRole: currentUser.role || null,
         total,
-        payment: selectedPayment,
-        installments: selectedPayment === 'Credito' ? installments : 0,
+        payment: paymentSummary,
+        primaryPaymentMethod,
+        paymentBreakdown: normalizedPaymentBreakdown,
+        installments: primaryInstallments,
         cashReceived,
         cashChange,
         items: cart,
@@ -5044,14 +7112,19 @@ export default function PartySupplyApp() {
             ? Number(item.quantity || 0) / 1000
             : Number(item.quantity || 0)),
         isReward: item.isReward || false,
+        isDiscount: item.isDiscount || false,
+        type: item.type || (item.isDiscount ? 'discount' : undefined),
         product_type: item.product_type || 'quantity',
         isCustom: item.isCustom || false,
         isCombo: item.isCombo || false,
-        isDiscount: item.isDiscount || false,
         productsIncluded: (item.productsIncluded || []).map((includedItem) => ({
           id: includedItem.id,
           title: includedItem.title,
-          quantity: Number(includedItem.quantity || includedItem.qty || 1),
+          quantity: Number(
+            includedItem.quantity ??
+            includedItem.qty ??
+            (includedItem.product_type === 'weight' ? 1000 : 1)
+          ) || (includedItem.product_type === 'weight' ? 1000 : 1),
           product_type: includedItem.product_type || 'quantity',
         })),
       }));
@@ -5060,8 +7133,11 @@ export default function PartySupplyApp() {
       
       addLog('Venta Realizada', { 
         transactionId: tx.id, total: total, items: logItems,
-        payment: selectedPayment, 
-        installments: selectedPayment === 'Credito' ? installments : 0,
+        subtotal,
+        payment: paymentSummary,
+        primaryPaymentMethod,
+        paymentBreakdown: normalizedPaymentBreakdown,
+        installments: primaryInstallments,
         cashReceived,
         cashChange,
         client: isGuest ? null : posSelectedClient.name,
@@ -5089,7 +7165,7 @@ export default function PartySupplyApp() {
   
   const handleConfirmRefund = async (e) => {
     if (blockIfOfflineReadonly('anular o eliminar ventas')) return;
-    e.preventDefault();
+    e?.preventDefault?.();
     const tx = transactionToRefund;
     if (!tx) return;
     
@@ -5112,6 +7188,7 @@ export default function PartySupplyApp() {
             transactionId: tx.id,
             total: tx.total,
             payment: tx.payment,
+            paymentBreakdown: tx.paymentBreakdown || null,
             installments: tx.installments || 0,
             isTest: tx.isTest || false,
             testMarker: tx.isTest ? 'test' : 'normal',
@@ -5135,7 +7212,7 @@ export default function PartySupplyApp() {
       }
 
       // ==========================================
-      // 2. FLUJO DE ANULACIÃ“N NORMAL
+      // 2. FLUJO DE ANULACIÓN NORMAL
       // ==========================================
       Swal.fire({ title: 'Anulando...', text: 'Paso 1: Devolviendo stock...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       const updatedInventory = [...inventory];
@@ -5207,14 +7284,36 @@ export default function PartySupplyApp() {
 
       const logDetails = {
         id: tx.id,
+        originalDate: tx.date || null,
+        originalTimestamp: tx.timestamp || tx.time || null,
+        originalFullDate: tx.fullDate || null,
+        originalCreatedAt: tx.createdAt || tx.created_at || null,
         total: tx.total,
         payment: tx.payment,
+        paymentBreakdown: tx.paymentBreakdown || null,
         installments: tx.installments || 0,
         client: clientName === 'No asociado' ? null : clientName,
         memberNumber: clientMemberNumber,
         pointsEarned: tx.pointsEarned || 0,
         pointsSpent: tx.pointsSpent || 0,
         pointsChange: pointsChange,
+        cashReceived: tx.cashReceived || 0,
+        cashChange: tx.cashChange || 0,
+        items: (tx.items || []).map((i) => ({
+          id: i.id,
+          productId: i.productId || i.id,
+          title: i.title,
+          qty: i.qty || i.quantity,
+          quantity: i.qty || i.quantity,
+          price: i.price,
+          isReward: !!i.isReward,
+          isCustom: !!i.isCustom,
+          isCombo: !!i.isCombo,
+          product_type: i.product_type || 'quantity',
+          category: i.category || null,
+          categories: Array.isArray(i.categories) ? i.categories : null,
+          productsIncluded: Array.isArray(i.productsIncluded) ? i.productsIncluded : undefined,
+        })),
         itemsReturned: tx.items.map(i => ({
           title: i.title,
           quantity: i.quantity || i.qty
@@ -5238,7 +7337,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Venta Anulada', 'El stock y los puntos han sido restaurados.');
 
     } catch (error) {
-      console.error("? ERROR CRÃTICO EN ANULACIÃ“N:", error);
+      console.error("? ERROR CRÍTICO EN ANULACIÓN:", error);
       Swal.fire({
         icon: 'error',
         title: 'Error de Anulación',
@@ -5252,13 +7351,13 @@ export default function PartySupplyApp() {
   const handleRestoreTransaction = async (tx) => {
     if (blockIfOfflineReadonly('restaurar ventas')) return;
     const result = await Swal.fire({
-      title: 'Â¿Restaurar Venta?',
-      text: 'Se volverá a registrar la venta en el sistema, ocupará su fecha original, se descontará el stock nuevamente y se le devolverán los puntos al socio. Â¿Estás seguro?',
+      title: '¿Restaurar Venta?',
+      text: 'Se volverá a registrar la venta en el sistema, ocupará su fecha original, se descontará el stock nuevamente y se le devolverán los puntos al socio. ¿Estás seguro?',
       icon: 'warning',
       showCancelButton: true,
       confirmButtonColor: '#10b981',
       cancelButtonColor: '#64748b',
-      confirmButtonText: 'SÃ­, restaurar venta',
+      confirmButtonText: 'Sí, restaurar venta',
       cancelButtonText: 'Cancelar'
     });
 
@@ -5319,6 +7418,7 @@ export default function PartySupplyApp() {
       const salePayload = {
           total: tx.total,
           payment_method: (tx.payment && tx.payment !== 'N/A') ? tx.payment : 'Efectivo',
+          payment_breakdown: tx.paymentBreakdown || null,
           installments: tx.installments || 0,
           client_id: clientId,
           points_earned: tx.pointsEarned || 0,
@@ -5329,8 +7429,7 @@ export default function PartySupplyApp() {
       if (origCreatedAt) salePayload.created_at = origCreatedAt;
       if (uuidRegex.test(tx.id)) salePayload.id = tx.id;
 
-      const { data: newSale, error: saleErr } = await supabase.from('sales').insert(salePayload).select().single();
-      if (saleErr) throw saleErr;
+      const { data: newSale } = await insertWithSchemaFallback('sales', salePayload, 'id');
 
       const itemsPayload = tx.items.map(i => {
           const prod = inventory.find(p => 
@@ -5353,8 +7452,7 @@ export default function PartySupplyApp() {
       });
       
       if (itemsPayload.length > 0) {
-          const { error: itemsErr } = await supabase.from('sale_items').insert(itemsPayload);
-          if (itemsErr) throw itemsErr;
+          await insertRowsWithSchemaFallback('sale_items', itemsPayload);
       }
 
       const updatedInventory = [...inventory];
@@ -5383,7 +7481,18 @@ export default function PartySupplyApp() {
           pointsChange = { previous: previousPoints, new: newPoints, diff: newPoints - previousPoints };
           
           await supabase.from('clients').update({ points: newPoints }).eq('id', clientDb.id);
-          setMembers(members.map(m => m.id === clientDb.id ? { ...m, points: newPoints } : m));
+          setMembers((prev) =>
+            prev.map((member) =>
+              member.id === clientDb.id
+                ? {
+                    ...member,
+                    points: newPoints,
+                    created_at: member.created_at || member.createdAt || null,
+                    createdAt: member.createdAt || member.created_at || null,
+                  }
+                : member,
+            ),
+          );
       }
 
       let clientName = null;
@@ -5398,6 +7507,7 @@ export default function PartySupplyApp() {
          oldTransactionId: tx.id,
          total: tx.total, 
          payment: salePayload.payment_method,
+         paymentBreakdown: tx.paymentBreakdown || null,
          installments: salePayload.installments,
          client: clientName === 'No asociado' ? null : clientName,
          memberNumber: clientNum,
@@ -5430,6 +7540,7 @@ export default function PartySupplyApp() {
          isHistoric: false,
          isRestored: true,
          payment: salePayload.payment_method,
+         paymentBreakdown: tx.paymentBreakdown || null,
          installments: salePayload.installments,
          restoredAt: `${formatDateAR(now)} ${formatTimeFullAR(now)}`
       };
@@ -5483,7 +7594,7 @@ export default function PartySupplyApp() {
     if (!editingTransaction) return;
     const updatedItems = editingTransaction.items.filter((item, idx) => idx !== itemIndex);
     if (updatedItems.length === 0) {
-      showNotification('warning', 'Operación Inválida', 'No puedes dejar la orden vacÃ­a.');
+      showNotification('warning', 'Operación Inválida', 'No puedes dejar la orden vacía.');
       return;
     }
     const subtotal = updatedItems.reduce((acc, item) => acc + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
@@ -5525,11 +7636,12 @@ export default function PartySupplyApp() {
 
   const handleSaveEditedTransaction = async (e) => {
     if (blockIfOfflineReadonly('editar ventas')) return;
-    e.preventDefault();
+    e?.preventDefault?.();
     if (!editingTransaction) return;
 
-    const originalTx = transactions.find((t) => t.id === editingTransaction.id);
-    if (!originalTx) return;
+    const originalTx =
+      transactions.find((t) => String(t.id) === String(editingTransaction.id)) ||
+      editingTransaction;
 
     const safeCashReceived = editingTransaction.payment === 'Efectivo'
       ? Number(editingTransaction.cashReceived ?? editingTransaction.total ?? 0)
@@ -5603,18 +7715,23 @@ export default function PartySupplyApp() {
       }
 
       // ==========================================
-      // INICIO TRANSACCIÃ“N A LA NUBE (BLINDADA)
+      // INICIO TRANSACCIÓN A LA NUBE (BLINDADA)
       // ==========================================
       
       // A. Actualizar Venta
-      await updateWithSchemaFallback('sales', editingTransaction.id, {
-        total: editingTransaction.total,
-        payment_method: editingTransaction.payment,
-        installments: editingTransaction.installments || 0,
-        points_earned: pointsChange ? pointsChange.new : originalTx.pointsEarned,
-        cash_received: safeCashReceived,
-        cash_change: safeCashChange
-      });
+      await updateWithSchemaFallback(
+        'sales',
+        editingTransaction.id,
+        {
+          total: editingTransaction.total,
+          payment_method: editingTransaction.payment,
+          installments: editingTransaction.installments || 0,
+          points_earned: pointsChange ? pointsChange.new : originalTx.pointsEarned,
+          cash_received: safeCashReceived,
+          cash_change: safeCashChange
+        },
+        'id',
+      );
 
       // B. Borrar items viejos
       const { error: delErr } = await supabase.from('sale_items').delete().eq('sale_id', editingTransaction.id);
@@ -5636,8 +7753,11 @@ export default function PartySupplyApp() {
         };
       });
       
-      const { error: insertErr } = await supabase.from('sale_items').insert(newItemsPayload);
-      if (insertErr) throw new Error("Supabase rechazó los productos: " + insertErr.message); 
+      try {
+        await insertRowsWithSchemaFallback('sale_items', newItemsPayload);
+      } catch (insertErr) {
+        throw new Error("Supabase rechazó los productos: " + insertErr.message);
+      }
 
       // D. Actualizar Stock
       for (const change of productChanges) {
@@ -5655,7 +7775,18 @@ export default function PartySupplyApp() {
          if (clientDb) {
             const finalPoints = clientDb.points + pointsChange.diff;
             await supabase.from('clients').update({ points: finalPoints }).eq('id', clientDb.id);
-            setMembers(members.map(m => m.id === clientDb.id ? { ...m, points: finalPoints } : m));
+            setMembers((prev) =>
+              prev.map((member) =>
+                member.id === clientDb.id
+                  ? {
+                      ...member,
+                      points: finalPoints,
+                      created_at: member.created_at || member.createdAt || null,
+                      createdAt: member.createdAt || member.created_at || null,
+                    }
+                  : member,
+              ),
+            );
          }
       }
 
@@ -5670,7 +7801,12 @@ export default function PartySupplyApp() {
       
       finalTx.isTest = isTestRecord(finalTx);
       
-      setTransactions(transactions.map((t) => (t.id === editingTransaction.id ? finalTx : t)));
+      setTransactions((prev) => {
+        const exists = prev.some((t) => String(t.id) === String(editingTransaction.id));
+        return exists
+          ? prev.map((t) => (String(t.id) === String(editingTransaction.id) ? finalTx : t))
+          : [finalTx, ...prev];
+      });
 
       setInventory(inventory.map(p => {
          const change = productChanges.find(c => String(c.id) === String(p.id));
@@ -5695,7 +7831,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Pedido Actualizado', 'Modificación exitosa.');
 
     } catch (error) {
-      console.error("Error crÃ­tico al actualizar:", error);
+      console.error("Error crítico al actualizar:", error);
       Swal.fire({
         icon: 'error',
         title: 'Error de Sincronización',
@@ -5720,7 +7856,11 @@ export default function PartySupplyApp() {
         stock: Number(rewardData.stock) || 0
       };
 
-      const { data, error } = await supabase.from('rewards').insert([payload]).select().single();
+      const { data, error } = await supabase
+        .from('rewards')
+        .insert([payload])
+        .select(CLOUD_SELECTS.rewards)
+        .single();
       if (error) throw error;
 
       const newReward = {
@@ -5735,7 +7875,7 @@ export default function PartySupplyApp() {
 
       setRewards([...rewards, newReward]);
       addLog('Nuevo Premio', { title: newReward.title, description: newReward.description, pointsCost: newReward.pointsCost, type: newReward.type, stock: newReward.stock }, 'Gestión Catálogo');
-      showNotification('success', 'Premio Creado', 'Se ha aÃ±adido al catálogo.');
+      showNotification('success', 'Premio Creado', 'Se ha añadido al catálogo.');
     } catch (e) {
       console.error(e);
       showNotification('error', 'Error', 'No se pudo crear el premio.');
@@ -5794,7 +7934,15 @@ export default function PartySupplyApp() {
     [userSettings],
   );
 
-  const visibleLoginUsers = activeLoginUsers.length > 0 ? activeLoginUsers : fallbackLoginUsers;
+  const loginUsers = activeLoginUsers.length > 0 ? activeLoginUsers : fallbackLoginUsers;
+  const systemLoginUser = useMemo(
+    () => loginUsers.find((user) => user.role === 'system') || null,
+    [loginUsers],
+  );
+  const visibleLoginUsers = useMemo(
+    () => loginUsers.filter((user) => user.role !== 'system'),
+    [loginUsers],
+  );
 
   const hasLoginUsers = visibleLoginUsers.length > 0;
   const isCoreHydratingForSession =
@@ -5806,7 +7954,9 @@ export default function PartySupplyApp() {
     rewards.length === 0 &&
     offers.length === 0;
   const isDashboardModuleLoading = moduleLoadState.dashboard.status === 'loading';
+  const isHistoryModuleLoading = moduleLoadState.history.status === 'loading';
   const isOrdersModuleLoading = moduleLoadState.orders.status === 'loading';
+  const isReportsModuleLoading = moduleLoadState.reports.status === 'loading';
   const dashboardOfflineEmptyMessage =
     isOfflineReadOnly &&
     moduleLoadState.dashboard.status !== 'loaded' &&
@@ -5815,6 +7965,13 @@ export default function PartySupplyApp() {
     expenses.length === 0
       ? 'Sin conexión y sin snapshot local para este módulo. Volvé a intentarlo con internet.'
       : '';
+  const historyOfflineEmptyMessage =
+    isOfflineReadOnly &&
+    moduleLoadState.history.status !== 'loaded' &&
+    transactions.length === 0 &&
+    historyLogs.length === 0
+      ? 'Sin conexión y sin snapshot local del historial. Volvé a intentarlo con internet.'
+      : '';
   const ordersOfflineEmptyMessage =
     isOfflineReadOnly &&
     moduleLoadState.orders.status !== 'loaded' &&
@@ -5822,18 +7979,27 @@ export default function PartySupplyApp() {
     orders.length === 0
       ? 'Sin conexión y sin snapshot local de pedidos. Volvé a intentarlo con internet.'
       : '';
+  const reportsOfflineEmptyMessage =
+    isOfflineReadOnly &&
+    moduleLoadState.reports.status !== 'loaded' &&
+    pastClosures.length === 0
+      ? 'Sin conexión y sin snapshot local de reportes. Volvé a intentarlo con internet.'
+      : '';
   const cloudStatusMeta = (() => {
     const isAnyModuleLoading =
       moduleLoadState.core.status === 'loading' ||
+      moduleLoadState.transactions.status === 'loading' ||
       moduleLoadState.dashboard.status === 'loading' ||
-      moduleLoadState.orders.status === 'loading';
+      moduleLoadState.history.status === 'loading' ||
+      moduleLoadState.orders.status === 'loading' ||
+      moduleLoadState.reports.status === 'loading';
 
-    if (isAuthBootLoading || isCloudLoading || isAnyModuleLoading) {
+    if (isAuthBootLoading || isCloudLoading || isAnyModuleLoading || isReconnectAttempting) {
       return {
         dotClass: 'bg-amber-500 shadow-[0_0_0_4px_rgba(245,158,11,0.15)]',
         badgeClass: 'border-amber-200 bg-amber-50 text-amber-700',
         title: 'Cargando',
-        detail: 'Sincronizando...',
+        detail: isReconnectAttempting ? 'Reconectando...' : 'Sincronizando...',
       };
     }
 
@@ -5888,7 +8054,15 @@ export default function PartySupplyApp() {
       const user = selectedLoginUser;
       return (
         <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-6 py-10">
-          <div className="w-full max-w-md rounded-[34px] border border-slate-200/80 bg-white/95 p-6 shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur">
+          <div className="relative w-full max-w-md rounded-[34px] border border-slate-200/80 bg-white/95 p-6 shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur">
+            {user?.role === 'system' && (
+              <button
+                type="button"
+                onClick={handleSystemCornerBypass}
+                className="absolute left-0 top-0 h-14 w-14 rounded-tl-[34px] opacity-0"
+                aria-label="Acceso directo a sistema"
+              />
+            )}
             <div className="mb-5 flex items-center justify-between">
               <button
                 onClick={() => setLoginStep('select')}
@@ -5918,12 +8092,12 @@ export default function PartySupplyApp() {
               <form onSubmit={handleSubmitLogin} className="border-t border-slate-200 bg-white px-6 pb-6 pt-5">
                 <label className="block">
                   <span className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
-                    ContraseÃ±a
+                    Contraseña
                   </span>
                   <input
                     autoFocus
                     type="password"
-                    placeholder="Ingresar contraseÃ±a"
+                    placeholder="Ingresar contraseña"
                     className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-center text-base font-bold tracking-[0.2em] text-slate-800 outline-none placeholder:text-slate-400 focus:border-fuchsia-300 focus:bg-white focus:ring-2 focus:ring-fuchsia-200"
                     value={passwordInput}
                     onChange={(e) => setPasswordInput(e.target.value)}
@@ -5947,9 +8121,14 @@ export default function PartySupplyApp() {
       <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-6 py-10">
         <div className="w-full max-w-5xl rounded-[34px] border border-slate-200/80 bg-white/95 p-8 text-center shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur">
           <div className="mb-5 flex justify-center">
-            <div className="rounded-[20px] bg-white p-2 shadow-[0_12px_28px_rgba(15,23,42,0.12)] ring-1 ring-slate-200">
-              <img src="/rebu-logo.png" alt="Rebu" className="h-24 w-24 object-contain" />
-            </div>
+            <button
+              type="button"
+              onClick={handleSystemLogoAccess}
+              className="rounded-[20px] bg-white p-2 shadow-[0_12px_28px_rgba(15,23,42,0.12)] ring-1 ring-slate-200 transition hover:scale-[1.01]"
+              aria-label="Logo de Rebu"
+            >
+              <img src={logoRebuImg} alt="Rebu" className="h-24 w-24 object-contain" />
+            </button>
           </div>
           <h1 className="mb-1 text-2xl font-black text-slate-800">Rebu Cotillón</h1>
           <p className="mb-8 text-sm font-medium text-slate-500">Seleccioná tu usuario para continuar</p>
@@ -6037,12 +8216,30 @@ export default function PartySupplyApp() {
                 <button
                   onClick={canManageRegister ? toggleRegisterStatus : undefined}
                   className={`flex items-center gap-2 rounded border px-3 py-1.5 transition-colors ${isRegisterClosed ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'} ${canManageRegister ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
-                  title={canUseAdminArea ? '' : 'Solo Sistema o un DueÃ±o pueden cambiar el estado de la caja'}
+                  title={canUseAdminArea ? '' : 'Solo Sistema o un Dueño pueden cambiar el estado de la caja'}
                 >
                   <Lock size={14} />
                   <span className="text-xs font-bold">{isRegisterClosed ? 'CAJA CERRADA' : 'CAJA ABIERTA'}</span>
                 </button>
                 {!isRegisterClosed && closingTime && (<div className="flex items-center gap-1 px-2 py-1 bg-amber-50 border border-amber-200 rounded text-amber-700"><Clock size={12} /><span className="text-[10px] font-bold">Cierre: {closingTime}</span></div>)}
+                <button
+                  type="button"
+                  onClick={handleSoftReload}
+                  className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-black uppercase tracking-[0.08em] text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                  title="Recarga datos vencidos y el modulo visible sin reiniciar"
+                >
+                  <RefreshCw size={12} />
+                  Soft Reload
+                </button>
+                <button
+                  type="button"
+                  onClick={handleForceReload}
+                  className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-black uppercase tracking-[0.08em] text-slate-600 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+                  title="Recarga completa de la aplicacion"
+                >
+                  <RefreshCw size={12} />
+                  Force Reload
+                </button>
               </div>
               <div className="text-right hidden sm:block">
                 <p className="text-xs font-bold" style={currentUserPresentation?.textStyle}>
@@ -6055,14 +8252,23 @@ export default function PartySupplyApp() {
             </div>
           </header>
           {isOfflineReadOnly && (
-            <div className="border-b border-amber-200 bg-[linear-gradient(180deg,#fffbeb_0%,#fef3c7_100%)] px-5 py-2 text-[11px] font-semibold text-amber-900 shadow-sm">
+            <div className="flex flex-wrap items-center gap-2 border-b border-amber-200 bg-[linear-gradient(180deg,#fffbeb_0%,#fef3c7_100%)] px-5 py-2 text-[11px] font-semibold text-amber-900 shadow-sm">
               <span className="font-black uppercase tracking-[0.08em]">Modo sin conexión</span>
-              <span className="mx-2">â€¢</span>
-              <span>PodÃ©s seguir consultando datos, pero no hacer cambios.</span>
+              <button
+                type="button"
+                onClick={handleReconnectCloud}
+                disabled={isReconnectAttempting}
+                className="inline-flex h-6 items-center gap-1.5 rounded-full border border-amber-300 bg-white/80 px-2.5 text-[10px] font-black uppercase tracking-[0.08em] text-amber-800 shadow-sm transition hover:border-amber-400 hover:bg-white disabled:cursor-wait disabled:opacity-70"
+              >
+                <RefreshCw size={12} className={isReconnectAttempting ? 'animate-spin' : ''} />
+                {isReconnectAttempting ? 'Reconectando' : 'Reconectar'}
+              </button>
+              <span className="text-amber-700">•</span>
+              <span>Podés seguir consultando datos, pero no hacer cambios.</span>
               {offlineSnapshotAt && (
                 <>
-                  <span className="mx-2">â€¢</span>
-                  <span>Ãšltimo snapshot: {formatDateAR(offlineSnapshotAt)} {formatTimeAR(offlineSnapshotAt)}</span>
+                  <span className="text-amber-700">•</span>
+                  <span>Último snapshot: {formatDateAR(offlineSnapshotAt)} {formatTimeAR(offlineSnapshotAt)}</span>
                 </>
               )}
             </div>
@@ -6112,7 +8318,7 @@ export default function PartySupplyApp() {
               </PersistentTabPanel>
             )}
             {canAccessTab(currentUser, 'inventory') && <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} closeDetailsToken={inventoryPanelCloseToken} navigationRequest={inventoryNavigationRequest} /></PersistentTabPanel>}
-            <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{canUseAdminArea ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">Sistema o un DueÃ±o deben abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} offers={offers} currentUser={currentUser} userCatalog={userCatalog} />)}</PersistentTabPanel>
+            <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{canUseAdminArea ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">Sistema o un Dueño deben abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} offers={offers} currentUser={currentUser} userCatalog={userCatalog} />)}</PersistentTabPanel>
             <PersistentTabPanel tab="clients" activeTab={activeTab} className="h-full min-h-0"><ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={() => {}} /></PersistentTabPanel>
             {canViewAgenda && (
               <PersistentTabPanel tab="agenda" activeTab={activeTab} className="h-full min-h-0">
@@ -6127,10 +8333,10 @@ export default function PartySupplyApp() {
               </PersistentTabPanel>
             )}
             <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} offers={offers} currentUser={currentUser} userCatalog={userCatalog} isLoading={isOrdersModuleLoading && budgets.length === 0 && orders.length === 0} emptyStateMessage={ordersOfflineEmptyMessage} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onUpdateOrder={handleUpdateOrder} onDeleteBudget={handleDeleteBudget} onDeleteOrder={handleDeleteOrder} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
-            <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={dailyLogs} inventory={inventory} currentUser={currentUser} userCatalog={userCatalog} members={members} isLoading={isDashboardModuleLoading && transactions.length === 0 && dailyLogs.length === 0} emptyStateMessage={dashboardOfflineEmptyMessage} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setDailyLogs} navigationRequest={historyNavigationRequest} /></PersistentTabPanel>
-            {canViewReports && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members} isLoading={isDashboardModuleLoading && pastClosures.length === 0} emptyStateMessage={dashboardOfflineEmptyMessage} /></PersistentTabPanel>)}
-            {canViewLogs && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView dailyLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} userCatalog={userCatalog} isLoading={isDashboardModuleLoading && dailyLogs.length === 0} emptyStateMessage={dashboardOfflineEmptyMessage} /></PersistentTabPanel>)}
-            {canViewSessions && (<PersistentTabPanel tab="sessions" activeTab={activeTab} className="h-full min-h-0"><SessionsView dailyLogs={dailyLogs} currentSessionMeta={currentSessionMeta} userCatalog={userCatalog} isLoading={isDashboardModuleLoading && dailyLogs.length === 0} emptyStateMessage={dashboardOfflineEmptyMessage} /></PersistentTabPanel>)}
+            <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={historyLogs} inventory={inventory} currentUser={currentUser} userCatalog={userCatalog} members={members} isLoading={isHistoryModuleLoading && transactions.length === 0 && historyLogs.length === 0} emptyStateMessage={historyOfflineEmptyMessage} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setHistoryLogs} navigationRequest={historyNavigationRequest} onSoftReload={() => Promise.all([loadHistoryCloudData({ force: true }), loadTransactionsCloudData({ force: true })])} isActive={activeTab === 'history'} /></PersistentTabPanel>
+            {canViewReports && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members} isLoading={isReportsModuleLoading && pastClosures.length === 0} emptyStateMessage={reportsOfflineEmptyMessage} onLoadReportDetail={fetchCashClosureDetailById} /></PersistentTabPanel>)}
+            {canViewLogs && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView initialLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} userCatalog={userCatalog} isActive={activeTab === 'logs'} /></PersistentTabPanel>)}
+            {canViewSessions && (<PersistentTabPanel tab="sessions" activeTab={activeTab} className="h-full min-h-0"><SessionsView initialLogs={dailyLogs} currentSessionMeta={currentSessionMeta} userCatalog={userCatalog} /></PersistentTabPanel>)}
             {canViewUserManagement && (
               <PersistentTabPanel tab="user-management" activeTab={activeTab} className="h-full min-h-0">
                 <UserManagementView
@@ -6193,16 +8399,11 @@ export default function PartySupplyApp() {
               </>
             )}
           </main>
-          <footer className="shrink-0 border-t border-slate-200 bg-slate-100 px-5 py-1.5">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-              Módulo actual: {activeTabTitles[activeTab] || activeTab}
-            </div>
-          </footer>
         </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* ? ZONA DE IMPRESIÃ“N (SIN LÃMITES DE TAMAÃ‘O, SOLO SE VE AL IMPRIMIR) */}
+      {/* ? ZONA DE IMPRESIÓN (SIN LÍMITES DE TAMAÑO, SOLO SE VE AL IMPRIMIR) */}
       {/* ========================================================================= */}
       <div className="hidden print:block w-full h-auto bg-white">
         {exportPdfData ? (
@@ -6223,7 +8424,7 @@ export default function PartySupplyApp() {
         <ImageModal isOpen={isImageModalOpen} image={selectedImage} onClose={() => setIsImageModalOpen(false)} />
         <RefundModal  transaction={transactionToRefund}  onClose={() => {   setTransactionToRefund(null);   setRefundReason('');  }}   refundReason={refundReason}  setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />
         <CloseCashModal isOpen={isClosingCashModalOpen} onClose={() => setIsClosingCashModalOpen(false)} salesCount={cycleSalesCount} totalSales={cycleTotalSales} totalExpenses={cycleTotalExpenses} cashExpenses={cycleCashExpenses} cashSales={cycleCashSales} openingBalance={openingBalance} onConfirm={handleConfirmCloseCash} />
-        <SaleSuccessModal transaction={saleSuccessModal} onClose={() => setSaleSuccessModal(null)} onViewTicket={() => { const tx = saleSuccessModal; setSaleSuccessModal(null); setTicketToView(tx); }} />
+        <SaleSuccessModal transaction={saleSuccessModal} onClose={() => setSaleSuccessModal(null)} onPrint={handlePrintTicket} />
         <TicketModal transaction={ticketToView} onClose={() => setTicketToView(null)} onPrint={handlePrintTicket} />
         <AutoCloseAlertModal isOpen={isAutoCloseAlertOpen} onClose={() => setIsAutoCloseAlertOpen(false)} closingTime={closingTime} />
         <DeleteProductModal product={productToDelete} onClose={() => { setProductToDelete(null); setDeleteProductReason(''); }} reason={deleteProductReason} setReason={setDeleteProductReason} onConfirm={confirmDeleteProduct} />
@@ -6267,6 +8468,9 @@ export default function PartySupplyApp() {
     </>
   );
 }
+
+
+
 
 
 

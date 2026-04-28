@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { RefreshCcw, Shield, Sparkles } from 'lucide-react';
+import AsyncActionButton from './AsyncActionButton';
 import {
   APP_PERMISSION_GROUPS,
   APP_PERMISSION_KEYS,
@@ -49,7 +50,7 @@ export default function UserPermissionsEditor({
   if (!user) {
     return (
       <div className="rounded-[22px] border border-slate-200 bg-white/90 p-5 text-sm font-semibold text-slate-500 shadow-sm">
-        Seleccioná un usuario para editar sus permisos.
+        SeleccionÃƒÂ¡ un usuario para editar sus permisos.
       </div>
     );
   }
@@ -95,7 +96,7 @@ export default function UserPermissionsEditor({
               Permisos de {user.displayName || user.name}
             </h3>
             <p className="mt-1 text-sm font-medium text-slate-500">
-              Ajustá módulos y acciones sensibles del sistema.
+              Ajusta módulos y acciones sensibles del sistema.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -202,22 +203,26 @@ export default function UserPermissionsEditor({
 
       {canEdit && (
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <button
+          <AsyncActionButton
             type="button"
-            onClick={() => onSave?.(false)}
+            onAction={() => onSave?.(false)}
+            pending={isSaving}
             disabled={isSaving}
+            loadingLabel="Guardando..."
             className="rounded-[14px] border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSaving ? 'Guardando...' : 'Guardar próxima sesión'}
-          </button>
-          <button
+          </AsyncActionButton>
+          <AsyncActionButton
             type="button"
-            onClick={() => onSave?.(true)}
+            onAction={() => onSave?.(true)}
+            pending={isSaving}
             disabled={isSaving}
+            loadingLabel="Aplicando..."
             className="rounded-[14px] border border-fuchsia-200 bg-fuchsia-600 px-4 py-2 text-sm font-black text-white transition hover:bg-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSaving ? 'Aplicando...' : 'Guardar y aplicar ahora'}
-          </button>
+          </AsyncActionButton>
         </div>
       )}
     </div>

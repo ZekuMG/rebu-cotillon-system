@@ -22,6 +22,7 @@ import {
 import { canAccessTab } from '../utils/userPermissions';
 import { hexToRgba, resolveUserPresentation } from '../utils/userPresentation';
 import UserAvatar from './UserAvatar';
+import logoRebuImg from '../assets/logo-rebu.jpg';
 
 const SidebarButton = ({ onClick, isActive, icon: Icon, label, accentColor = '#c026d3' }) => {
   const [showTooltip, setShowTooltip] = useState(false);
@@ -91,7 +92,7 @@ export default function Sidebar({ activeTab, setActiveTab, currentUser, onLogout
     <div className="relative z-40 flex w-16 flex-col items-center gap-4 bg-slate-900 py-4 shadow-xl">
       <div className="mb-2">
         <img
-          src="/rebu-logo.png"
+          src={logoRebuImg}
           alt="Rebu"
           className="h-10 w-10 rounded-xl object-contain drop-shadow-[0_4px_12px_rgba(236,72,153,0.35)]"
         />

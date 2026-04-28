@@ -15,6 +15,10 @@ export const DEFAULT_BUDGET_CONFIG = {
   customerName: '',
   customerPhone: '',
   customerNote: '',
+  paymentMethod: 'Efectivo',
+  installments: 1,
+  isSplitPayment: false,
+  paymentLines: [],
 };
 
 export const createEmptyBudgetItem = (overrides = {}) => {

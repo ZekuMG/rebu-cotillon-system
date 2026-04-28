@@ -1,64 +1,170 @@
-// src/views/ReportsHistoryView.jsx
-
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  FileText,
-  Search,
+  AlertTriangle,
   Calendar,
+  ChevronDown,
+  ChevronRight,
   Clock,
   DollarSign,
-  ChevronRight,
+  FileText,
+  Filter,
+  Folder,
+  FolderOpen,
+  Search,
   TrendingUp,
   User,
-  Filter
 } from 'lucide-react';
-// ♻️ FIX: Importamos normalizeDate de helpers y FancyPrice para la UI
 import { normalizeDate } from '../utils/helpers';
 import { FancyPrice } from '../components/FancyPrice';
 import { DailyReportModal } from '../components/modals/DailyReportModal';
 import useIncrementalFeed from '../hooks/useIncrementalFeed';
 
-export default function ReportsHistoryView({ pastClosures, members, isLoading = false, emptyStateMessage = '' }) {
+const getCanonicalType = (rawType) => {
+  const normalized = String(rawType || '').toLowerCase();
+  return normalized.includes('autom') ? 'Automatico' : 'Manual';
+};
+
+const getTypeLabel = (rawType) => (getCanonicalType(rawType) === 'Automatico' ? 'AUTO' : 'MANUAL');
+
+const getDayKey = (report) => {
+  const normalized = normalizeDate(report?.date);
+  if (normalized && !Number.isNaN(normalized.getTime())) {
+    return normalized.toISOString().slice(0, 10);
+  }
+  return String(report?.date || report?.id || 'sin-fecha');
+};
+
+const sortReportsDesc = (reports) =>
+  [...reports].sort((a, b) => {
+    const dateA = normalizeDate(a?.date) || new Date(0);
+    const dateB = normalizeDate(b?.date) || new Date(0);
+
+    if (dateA.getTime() !== dateB.getTime()) {
+      return dateB.getTime() - dateA.getTime();
+    }
+
+    const idA = parseInt(String(a?.id || '').replace(/\D/g, ''), 10) || 0;
+    const idB = parseInt(String(b?.id || '').replace(/\D/g, ''), 10) || 0;
+    return idB - idA;
+  });
+
+export default function ReportsHistoryView({
+  pastClosures,
+  members,
+  isLoading = false,
+  emptyStateMessage = '',
+  onLoadReportDetail,
+}) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedReport, setSelectedReport] = useState(null);
   const [typeFilter, setTypeFilter] = useState('Todas');
+  const [loadingReportId, setLoadingReportId] = useState(null);
+  const [detailError, setDetailError] = useState('');
+  const [expandedDays, setExpandedDays] = useState({});
 
-  // --- ORDENAMIENTO Y FILTRADO ---
   const sortedAndFilteredClosures = useMemo(() => {
     const safeClosures = Array.isArray(pastClosures) ? pastClosures : [];
+    const term = searchTerm.toLowerCase().trim();
 
-    // 1. Ordenar: Más reciente primero
-    const sorted = [...safeClosures].sort((a, b) => {
-      const dateA = normalizeDate(a.date) || new Date(0);
-      const dateB = normalizeDate(b.date) || new Date(0);
-      
-      if (dateA.getTime() !== dateB.getTime()) {
-        return dateB.getTime() - dateA.getTime();
-      }
-      
-      const timeB = parseInt(String(b.id).replace(/\D/g, '')) || 0;
-      const timeA = parseInt(String(a.id).replace(/\D/g, '')) || 0;
-      return timeB - timeA;
-    });
+    return sortReportsDesc(safeClosures).filter((report) => {
+      const canonicalType = getCanonicalType(report?.type);
+      const matchesType = typeFilter === 'Todas' || canonicalType === typeFilter;
+      const matchesSearch =
+        !term ||
+        String(report?.date || '').toLowerCase().includes(term) ||
+        String(report?.user || '').toLowerCase().includes(term) ||
+        String(report?.id || '').toLowerCase().includes(term);
 
-    // 2. Filtrar
-    return sorted.filter(report => {
-      const term = searchTerm.toLowerCase();
-      const matchesSearch = 
-        (report.date?.toLowerCase().includes(term)) ||
-        (report.user?.toLowerCase().includes(term)) ||
-        (String(report.id).toLowerCase().includes(term));
-      
-      const matchesType = 
-        typeFilter === 'Todas' || 
-        report.type === typeFilter;
-
-      return matchesSearch && matchesType;
+      return matchesType && matchesSearch;
     });
   }, [pastClosures, searchTerm, typeFilter]);
+
   const visibleReportsFeed = useIncrementalFeed(sortedAndFilteredClosures, {
     resetKey: `${searchTerm}|${typeFilter}|${sortedAndFilteredClosures.length}`,
   });
+
+  const groupedVisibleClosures = useMemo(() => {
+    const groupsMap = new Map();
+
+    visibleReportsFeed.visibleItems.forEach((report) => {
+      const dayKey = getDayKey(report);
+      const existingGroup = groupsMap.get(dayKey);
+
+      if (existingGroup) {
+        existingGroup.reports.push(report);
+        existingGroup.totalSales += Number(report?.totalSales || 0);
+        existingGroup.netProfit += Number(report?.netProfit || 0);
+        existingGroup.closuresCount += 1;
+        existingGroup.newClientsCount += Number(report?.newClientsCount || report?.newClients?.length || 0);
+        return;
+      }
+
+      groupsMap.set(dayKey, {
+        key: dayKey,
+        date: report?.date || '--/--/--',
+        dateValue: normalizeDate(report?.date) || new Date(0),
+        reports: [report],
+        totalSales: Number(report?.totalSales || 0),
+        netProfit: Number(report?.netProfit || 0),
+        closuresCount: 1,
+        newClientsCount: Number(report?.newClientsCount || report?.newClients?.length || 0),
+      });
+    });
+
+    return [...groupsMap.values()].sort((a, b) => b.dateValue.getTime() - a.dateValue.getTime());
+  }, [visibleReportsFeed.visibleItems]);
+
+  useEffect(() => {
+    if (groupedVisibleClosures.length === 0) {
+      setExpandedDays({});
+      return;
+    }
+
+    setExpandedDays((prev) => {
+      const next = {};
+
+      groupedVisibleClosures.forEach((group, index) => {
+        next[group.key] = prev[group.key] ?? index === 0;
+      });
+
+      const hasAnyOpen = groupedVisibleClosures.some((group) => next[group.key]);
+      if (!hasAnyOpen) {
+        next[groupedVisibleClosures[0].key] = true;
+      }
+
+      return next;
+    });
+  }, [groupedVisibleClosures]);
+
+  const handleToggleDay = (dayKey) => {
+    setExpandedDays((prev) => ({
+      ...prev,
+      [dayKey]: !prev[dayKey],
+    }));
+  };
+
+  const handleOpenReport = async (report) => {
+    if (!report) return;
+
+    setDetailError('');
+
+    if (!onLoadReportDetail || report.hasDetail) {
+      setSelectedReport(report);
+      return;
+    }
+
+    setLoadingReportId(report.id);
+
+    try {
+      const detailedReport = await onLoadReportDetail(report.id);
+      setSelectedReport(detailedReport || report);
+    } catch (error) {
+      console.error('No se pudo cargar el detalle del cierre:', error);
+      setDetailError(error?.message || 'No pudimos cargar el detalle del cierre.');
+    } finally {
+      setLoadingReportId(null);
+    }
+  };
 
   if (isLoading && (!pastClosures || pastClosures.length === 0)) {
     return (
@@ -83,140 +189,216 @@ export default function ReportsHistoryView({ pastClosures, members, isLoading = 
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-slate-100">
-      
-      {/* HEADER (ESTILO INVENTARIO) */}
-      <div className="p-4 bg-white border-b shrink-0 flex flex-wrap gap-3 justify-between items-center z-30 relative shadow-sm">
-        <div className="flex items-center gap-2 flex-1 min-w-[300px]">
-          {/* Buscador */}
-          <div className="relative flex-1 max-w-md">
+    <div className="flex h-full flex-col overflow-hidden bg-slate-100">
+      <div className="relative z-30 flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-white p-4 shadow-sm">
+        <div className="flex min-w-[300px] flex-1 items-center gap-2">
+          <div className="relative max-w-md flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-            <input 
-              type="text" 
-              placeholder="Buscar por fecha, ID o usuario..." 
-              className="w-full pl-10 pr-4 py-2 border rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-fuchsia-500 outline-none transition-all text-sm" 
-              value={searchTerm} 
-              onChange={(e) => setSearchTerm(e.target.value)} 
+            <input
+              type="text"
+              placeholder="Buscar por fecha, ID o usuario..."
+              className="w-full rounded-lg border bg-slate-50 py-2 pl-10 pr-4 text-sm outline-none transition-all focus:bg-white focus:ring-2 focus:ring-fuchsia-500"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
             />
           </div>
-          {/* Filtro de Tipo (Símil Categoría) */}
           <div className="relative">
             <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <select 
-              className="pl-9 pr-8 py-2 border rounded-lg bg-slate-50 text-sm focus:ring-2 focus:ring-fuchsia-500 outline-none appearance-none cursor-pointer"
+            <select
+              className="cursor-pointer appearance-none rounded-lg border bg-slate-50 py-2 pl-9 pr-8 text-sm outline-none focus:ring-2 focus:ring-fuchsia-500"
               value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
+              onChange={(event) => setTypeFilter(event.target.value)}
             >
               <option value="Todas">Todos los tipos</option>
               <option value="Manual">Manual</option>
-              <option value="Automático">Automático</option>
+              <option value="Automatico">Automatico</option>
             </select>
           </div>
         </div>
 
-        {/* Título de Vista */}
-        <div className="hidden md:flex items-center gap-3 px-4 py-2 bg-fuchsia-50 rounded-lg border border-fuchsia-100">
-           <FileText className="text-fuchsia-600" size={18} />
-           <span className="text-sm font-bold text-fuchsia-900 uppercase tracking-tight">Registro de Cierres</span>
+        <div className="hidden items-center gap-3 rounded-lg border border-fuchsia-100 bg-fuchsia-50 px-4 py-2 md:flex">
+          <FolderOpen className="text-fuchsia-600" size={18} />
+          <span className="text-sm font-bold uppercase tracking-tight text-fuchsia-900">Reportes por dia</span>
         </div>
       </div>
 
-      {/* CUERPO / GRID DE REPORTES */}
-      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar" onScroll={visibleReportsFeed.handleScroll}>
-        {sortedAndFilteredClosures.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-400">
-            <FileText size={64} className="mb-4 text-slate-300" />
-            <p className="text-lg font-medium">No se encontraron reportes</p>
-            <p className="text-sm">Intenta ajustar los filtros de búsqueda</p>
+      {detailError && (
+        <div className="mx-4 mt-4 rounded-[18px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={16} />
+            <span>{detailError}</span>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-8">
-            {visibleReportsFeed.visibleItems.map((report) => (
-              <button
-                key={report.id}
-                onClick={() => setSelectedReport(report)}
-                className="bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col cursor-pointer transition-all hover:shadow-xl hover:border-fuchsia-300 group relative"
-              >
-                {/* Tipo de Cierre Badge */}
-                <div className={`absolute top-0 right-0 px-2 py-1 rounded-bl-lg text-[10px] font-bold text-white shadow-sm
-                  ${report.type === 'Automático' ? 'bg-amber-500' : 'bg-slate-700'}`}>
-                    {report.type === 'Automático' ? 'AUTO' : 'MANUAL'}
-                </div>
-
-                {/* Header Card */}
-                <div className="p-4 border-b border-slate-50 bg-slate-50/50 flex justify-between items-start">
-                  <div>
-                    <div className="flex items-center gap-1.5 text-fuchsia-700 font-bold mb-1 text-sm">
-                      <Calendar size={16} />
-                      <span>{report.date}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5 text-xs text-slate-500">
-                      <Clock size={12} />
-                      <span>{report.closeTime || '??:??'}</span>
-                    </div>
-                  </div>
-                  <div className="bg-white text-slate-400 p-1.5 rounded-lg border shadow-sm group-hover:text-fuchsia-500 transition-colors">
-                    <FileText size={18} />
-                  </div>
-                </div>
-
-                {/* Body Card */}
-                <div className="p-4 space-y-4 flex-1 w-full text-left">
-                  <div className="flex justify-between items-end">
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Ventas</span>
-                    {/* ♻️ FIX: Aplicamos FancyPrice al Total Ventas */}
-                    <span className="text-2xl font-black text-slate-800 leading-none">
-                      <FancyPrice amount={report.totalSales} />
-                    </span>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-2 pt-3 border-t border-dashed border-slate-100">
-                    <div>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase mb-1">Operaciones</p>
-                      <div className="flex items-center gap-1 text-sm font-bold text-slate-700">
-                        <TrendingUp size={14} className="text-blue-500" /> {report.salesCount}
-                      </div>
-                    </div>
-                    <div>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase mb-1">Ganancia Neta</p>
-                      <div className={`flex items-center gap-1 text-sm font-bold ${report.netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                        {/* ♻️ FIX: Aplicamos FancyPrice a la Ganancia Neta */}
-                        <DollarSign size={14} className="shrink-0" />
-                        <FancyPrice amount={report.netProfit} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Footer Card */}
-                <div className="px-4 py-3 w-full bg-slate-50 border-t border-slate-100 flex justify-between items-center text-xs">
-                  <div className="flex items-center gap-1.5 text-slate-500 font-bold">
-                    <User size={12} className="text-slate-400" />
-                    {report.user || 'Sistema'}
-                  </div>
-                  <span className="text-fuchsia-600 font-bold flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0">
-                    Ver Detalle <ChevronRight size={14} />
-                  </span>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      {sortedAndFilteredClosures.length > 0 && (
-        <div className="border-t border-slate-200 bg-white px-4 py-2 text-[11px] font-semibold text-slate-500">
-          Mostrando <span className="font-black text-slate-700">{visibleReportsFeed.visibleCount}</span> de <span className="font-black text-slate-700">{sortedAndFilteredClosures.length}</span> cierres
         </div>
       )}
 
-      {/* MODAL DETALLE */}
-      <DailyReportModal 
-        isOpen={!!selectedReport} 
-        onClose={() => setSelectedReport(null)} 
-        report={selectedReport} 
-        members={members} 
-      />
+      <div className="custom-scrollbar flex-1 overflow-y-auto p-4" onScroll={visibleReportsFeed.handleScroll}>
+        {sortedAndFilteredClosures.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center text-slate-400">
+            <FileText size={64} className="mb-4 text-slate-300" />
+            <p className="text-lg font-medium">No se encontraron reportes</p>
+            <p className="text-sm">Intenta ajustar los filtros de busqueda</p>
+          </div>
+        ) : (
+          <div className="space-y-3 pb-8">
+            {groupedVisibleClosures.map((group) => {
+              const isExpanded = Boolean(expandedDays[group.key]);
 
+              return (
+                <div
+                  key={group.key}
+                  className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleToggleDay(group.key)}
+                    className="flex w-full items-center gap-4 border-b border-slate-200 bg-slate-50/80 px-4 py-3 text-left transition-colors hover:bg-slate-100/80"
+                  >
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-fuchsia-100 bg-fuchsia-50 text-fuchsia-600">
+                        {isExpanded ? <FolderOpen size={20} /> : <Folder size={20} />}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[15px] font-black text-slate-900">{group.date}</span>
+                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                            {group.closuresCount} cierres
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-[11px] font-medium text-slate-500">
+                          Reportes agrupados del dia seleccionado
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="hidden items-center gap-5 md:flex">
+                      <div className="text-right">
+                        <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Ventas del dia</p>
+                        <div className="mt-1 text-lg font-black text-slate-900">
+                          <FancyPrice amount={group.totalSales} />
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Ganancia neta</p>
+                        <div className={`mt-1 text-lg font-black ${group.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          <FancyPrice amount={group.netProfit} />
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Nuevos socios</p>
+                        <div className="mt-1 text-lg font-black text-sky-600">
+                          {group.newClientsCount}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500">
+                      {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                    </div>
+                  </button>
+
+                  {isExpanded && (
+                    <div className="space-y-2 bg-white p-3">
+                      {group.reports.map((report) => (
+                        <button
+                          key={report.id}
+                          type="button"
+                          onClick={() => void handleOpenReport(report)}
+                          disabled={loadingReportId === report.id}
+                          className="relative flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-left transition-all hover:border-fuchsia-300 hover:shadow-sm disabled:cursor-wait"
+                        >
+                          {loadingReportId === report.id && (
+                            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-white/85 text-xs font-black uppercase tracking-[0.12em] text-fuchsia-700">
+                              Cargando detalle...
+                            </div>
+                          )}
+
+                          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                            getCanonicalType(report.type) === 'Automatico'
+                              ? 'bg-amber-50 text-amber-600'
+                              : 'bg-slate-100 text-slate-700'
+                          }`}>
+                            <FileText size={18} />
+                          </div>
+
+                          <div className="grid min-w-0 flex-1 gap-2 md:grid-cols-[1.1fr_0.7fr_0.7fr_0.7fr_0.8fr_0.7fr]">
+                            <div className="min-w-0">
+                              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Cierre</p>
+                              <div className="mt-1 flex items-center gap-2 text-sm font-black text-slate-900">
+                                <Calendar size={13} className="shrink-0 text-fuchsia-500" />
+                                <span>{report.date}</span>
+                                <Clock size={13} className="shrink-0 text-slate-400" />
+                                <span>{report.closeTime || '--:--'}</span>
+                              </div>
+                            </div>
+
+                            <div>
+                              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Tipo</p>
+                              <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] ${
+                                getCanonicalType(report.type) === 'Automatico'
+                                  ? 'bg-amber-100 text-amber-700'
+                                  : 'bg-slate-100 text-slate-700'
+                              }`}>
+                                {getTypeLabel(report.type)}
+                              </span>
+                            </div>
+
+                            <div>
+                              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Ventas</p>
+                              <div className="mt-1 text-sm font-black text-slate-900">
+                                <FancyPrice amount={report.totalSales} />
+                              </div>
+                            </div>
+
+                            <div>
+                              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Ganancia</p>
+                              <div className={`mt-1 text-sm font-black ${report.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                <FancyPrice amount={report.netProfit} />
+                              </div>
+                            </div>
+
+                            <div>
+                              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Usuario</p>
+                              <div className="mt-1 flex items-center gap-1.5 text-sm font-bold text-slate-700">
+                                <User size={13} className="shrink-0 text-slate-400" />
+                                <span className="truncate">{report.user || 'Sistema'}</span>
+                              </div>
+                            </div>
+
+                            <div>
+                              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Nuevos socios</p>
+                              <div className="mt-1 text-sm font-black text-sky-600">
+                                {Number(report?.newClientsCount || report?.newClients?.length || 0)}
+                              </div>
+                            </div>
+                          </div>
+
+                          <span className="hidden shrink-0 items-center gap-1 text-xs font-bold text-fuchsia-600 md:inline-flex">
+                            Ver detalle <ChevronRight size={14} />
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {sortedAndFilteredClosures.length > 0 && (
+        <div className="border-t border-slate-200 bg-white px-4 py-2 text-[11px] font-semibold text-slate-500">
+          Mostrando <span className="font-black text-slate-700">{visibleReportsFeed.visibleCount}</span> de{' '}
+          <span className="font-black text-slate-700">{sortedAndFilteredClosures.length}</span> cierres
+        </div>
+      )}
+
+      <DailyReportModal
+        isOpen={!!selectedReport}
+        onClose={() => setSelectedReport(null)}
+        report={selectedReport}
+        members={members}
+      />
     </div>
   );
 }

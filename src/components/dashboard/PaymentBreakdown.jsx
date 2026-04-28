@@ -8,12 +8,12 @@ import { FancyPrice } from '../FancyPrice';
 
 export const PaymentBreakdown = ({ paymentStats, totalGross, globalFilter }) => {
   return (
-    <div className="bg-white p-5 rounded-xl shadow-sm border h-full">
-      <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-4">
+    <div className="bg-white p-4 rounded-xl shadow-sm border h-full">
+      <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-3">
         <DollarSign size={18} className="text-green-500" />
         Pagos ({globalFilter === 'day' ? 'Hoy' : globalFilter === 'week' ? 'Semana' : globalFilter === 'year' ? 'Año' : 'Mes'})
       </h3>
-      <div className="space-y-3">
+      <div className="space-y-2.5">
         {paymentStats.map((m) => {
           const percent = totalGross > 0 ? (m.total / totalGross) * 100 : 0;
 
@@ -29,9 +29,9 @@ export const PaymentBreakdown = ({ paymentStats, totalGross, globalFilter }) => 
                   <FancyPrice amount={m.total} />
                 </span>
               </div>
-              <div className="w-full bg-slate-100 rounded-full h-2">
+              <div className="w-full bg-slate-100 rounded-full h-1.5">
                 <div
-                  className={`h-2 rounded-full transition-all duration-700 ${m.total > 0 ? 'bg-green-500' : 'bg-transparent'}`}
+                  className={`h-1.5 rounded-full transition-all duration-700 ${m.total > 0 ? 'bg-green-500' : 'bg-transparent'}`}
                   style={{ width: `${percent}%` }}
                 />
               </div>
@@ -40,7 +40,7 @@ export const PaymentBreakdown = ({ paymentStats, totalGross, globalFilter }) => 
         })}
       </div>
       {totalGross === 0 && (
-        <p className="text-center text-xs text-slate-400 mt-6 italic">No hay pagos registrados en este período</p>
+        <p className="text-center text-xs text-slate-400 mt-5 italic">No hay pagos registrados en este período</p>
       )}
     </div>
   );

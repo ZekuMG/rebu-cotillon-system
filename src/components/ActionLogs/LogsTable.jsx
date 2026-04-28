@@ -35,9 +35,34 @@ const getManagedUserRoleLabel = (role) => {
     .toLowerCase();
 
   if (['system', 'sistema', 'admin'].includes(normalized)) return 'Sistema';
-  if (['owner', 'dueno', 'duenio'].includes(normalized)) return 'Due\u00f1o';
+  if (['owner', 'dueno', 'duenio'].includes(normalized)) return 'Caja';
   if (['seller', 'vendedor', 'caja'].includes(normalized)) return 'Caja';
   return role || 'Usuario';
+};
+const getActionLogBadgeUser = (log) => {
+  const normalizedRole = String(log?.userRole || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+  const normalizedName = String(log?.user || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+  const isLegacyCajaLike =
+    !log?.userId &&
+    (
+      ['owner', 'seller'].includes(normalizedRole) ||
+      ['dueno', 'duenio', 'dueño', 'vendedor', 'caja', 'seller'].includes(normalizedName)
+    );
+
+  if (isLegacyCajaLike) {
+    return { role: 'seller', name: 'Caja' };
+  }
+
+  return { id: log?.userId, role: log?.userRole, name: log?.user };
 };
 const getPermissionsOverrideCount = (details = {}) => {
   const override = details.permissionsOverride || details.permissions_override || {};
@@ -640,12 +665,12 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
         );
       }
 
-      case 'Actualizaci\u00f3n Masiva':
-      case 'Edici\u00f3n Masiva Categor\u00edas': {
+      case 'Actualización Masiva':
+      case 'Edición Masiva Categor\u00edas': {
         const affectedCount = d.count || (d.details && d.details.length) || (d.changes && d.changes.length) || 0;
         return (
           <div className={s.sr}>
-            <span className={`${s.b} ${c.ba}`}>Edici\u00f3n Masiva</span>
+            <span className={`${s.b} ${c.ba}`}>Edición Masiva</span>
             <div className={s.ss}></div>
             <span className={s.se}>{affectedCount} productos actualizados</span>
             {getLogReasonUI(log)}
@@ -653,12 +678,12 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
         );
       }
 
-      case 'Edici\u00f3n Masiva': {
+      case 'Edición Masiva': {
         const affectedCount = d.count || (Array.isArray(d.items) ? d.items.length : 0);
         const previewItems = Array.isArray(d.items) ? d.items.filter(Boolean).slice(0, 2) : [];
         return (
           <div className={s.sr}>
-            <span className={`${s.b} ${c.ba}`}>Edici\u00f3n Masiva</span>
+            <span className={`${s.b} ${c.ba}`}>Edición Masiva</span>
             <div className={s.ss}></div>
             <span className={s.se}>{affectedCount} productos actualizados</span>
             {previewItems.length > 0 && <><div className={s.ss}></div><span className={s.se}>{previewItems.join(', ')}{affectedCount > previewItems.length ? '...' : ''}</span></>}
@@ -690,7 +715,7 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
         const roleLabel = getManagedUserRoleLabel(d.role);
         return (
           <div className={s.sr}>
-            <span className={`${s.b} ${isCreated ? c.bg : c.bb}`}>{isCreated ? 'Alta' : 'Edici\u00f3n'}</span>
+            <span className={`${s.b} ${isCreated ? c.bg : c.bb}`}>{isCreated ? 'Alta' : 'Edición'}</span>
             <div className={s.ss}></div>
             <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{displayName}</span>
             <div className={s.ss}></div>
@@ -833,7 +858,7 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
                 </td>
                 <td className={s.td}>
                   <UserDisplayBadge
-                    user={{ id: log.userId, role: log.userRole, name: log.user }}
+                    user={getActionLogBadgeUser(log)}
                     userCatalog={userCatalog}
                     size="sm"
                   />

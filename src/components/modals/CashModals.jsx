@@ -8,10 +8,13 @@ import {
   AlertTriangle,
   Lock,
 } from 'lucide-react';
+import AsyncActionButton from '../AsyncActionButton';
+import usePendingAction from '../../hooks/usePendingAction';
 // ✨ NUEVO: Importamos el componente global
 import { FancyPrice } from '../FancyPrice';
 
 export const OpeningBalanceModal = ({ isOpen, onClose, tempOpeningBalance, setTempOpeningBalance, tempClosingTime, setTempClosingTime, onSave }) => {
+  const { isPending, runAction } = usePendingAction();
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
@@ -43,7 +46,7 @@ export const OpeningBalanceModal = ({ isOpen, onClose, tempOpeningBalance, setTe
           </div>
           <div className="flex gap-3">
             <button type="button" onClick={onClose} className="flex-1 py-3 rounded-lg font-bold border-2 border-slate-200 text-slate-600 hover:bg-slate-50">Cancelar</button>
-            <button onClick={onSave} disabled={!tempOpeningBalance || !tempClosingTime} className="flex-1 bg-green-600 text-white py-3 rounded-lg font-bold hover:bg-green-700 disabled:bg-slate-300 disabled:cursor-not-allowed">Abrir Caja</button>
+            <AsyncActionButton onAction={() => runAction('cash-opening-save', onSave)} pending={isPending('cash-opening-save')} disabled={!tempOpeningBalance || !tempClosingTime || isPending('cash-opening-save')} loadingLabel="Abriendo..." className="flex-1 bg-green-600 text-white py-3 rounded-lg font-bold hover:bg-green-700 disabled:bg-slate-300 disabled:cursor-not-allowed">Abrir Caja</AsyncActionButton>
           </div>
         </div>
       </div>
@@ -52,13 +55,14 @@ export const OpeningBalanceModal = ({ isOpen, onClose, tempOpeningBalance, setTe
 };
 
 export const ClosingTimeModal = ({ isOpen, onClose: _onClose, closingTime, setClosingTime, onSave }) => {
+  const { isPending, runAction } = usePendingAction();
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-xs p-5 text-center">
         <h3 className="font-bold text-slate-800 mb-4">Configurar Hora de Cierre</h3>
         <input type="time" className="w-full text-center text-2xl font-bold p-2 border rounded mb-4" value={closingTime} onChange={(e) => setClosingTime(e.target.value)} />
-        <button onClick={onSave} className="w-full bg-slate-800 text-white py-2 rounded-lg font-bold">Guardar</button>
+        <AsyncActionButton onAction={() => runAction('cash-closing-time-save', onSave)} pending={isPending('cash-closing-time-save')} loadingLabel="Guardando..." className="w-full bg-slate-800 text-white py-2 rounded-lg font-bold disabled:opacity-60 disabled:cursor-wait">Guardar</AsyncActionButton>
       </div>
     </div>
   );
@@ -66,6 +70,7 @@ export const ClosingTimeModal = ({ isOpen, onClose: _onClose, closingTime, setCl
 
 
 export const CloseCashModal = ({ isOpen, onClose, salesCount, totalSales, totalExpenses = 0, cashExpenses = 0, cashSales = 0, openingBalance, onConfirm }) => {
+  const { isPending, runAction } = usePendingAction();
   if (!isOpen) return null;
   
   const finalCashBalance = openingBalance + cashSales - cashExpenses;
@@ -144,7 +149,7 @@ export const CloseCashModal = ({ isOpen, onClose, salesCount, totalSales, totalE
         
         <div className="p-5 bg-slate-50 border-t border-slate-200 flex gap-3 justify-end">
           <button onClick={onClose} className="px-5 py-2.5 text-sm font-bold text-slate-500 hover:bg-slate-200 hover:text-slate-700 rounded-xl transition-colors">Cancelar</button>
-          <button onClick={onConfirm} className="px-6 py-2.5 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-xl transition-all shadow-md hover:shadow-lg flex items-center gap-2 transform active:scale-[0.98]"><Lock size={16} /> Procesar Cierre</button>
+          <AsyncActionButton onAction={() => runAction('cash-close-confirm', onConfirm)} pending={isPending('cash-close-confirm')} loadingLabel="Procesando..." className="px-6 py-2.5 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-xl transition-all shadow-md hover:shadow-lg flex items-center gap-2 transform active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait"><Lock size={16} /> Procesar Cierre</AsyncActionButton>
         </div>
       </div>
     </div>

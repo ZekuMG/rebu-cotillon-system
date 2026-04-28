@@ -168,6 +168,46 @@ export function getOfferWizardGuide(offerLike) {
   }
 }
 
+const formatOfferDecimal = (value, maximumFractionDigits = 1) => {
+  const numericValue = Number(value) || 0;
+  return numericValue.toLocaleString('es-AR', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits,
+  });
+};
+
+export function getComboProductLineDisplay(product = {}) {
+  const isWeight = product.product_type === 'weight';
+  const quantity = Number(product.quantity ?? product.qty ?? (isWeight ? 1000 : 1)) || (isWeight ? 1000 : 1);
+  const price = Number(product.price || 0);
+  const totalAmount = price * quantity;
+
+  if (isWeight) {
+    const quantityLabel = quantity >= 1000
+      ? `${formatOfferDecimal(quantity / 1000, 1)}kg`
+      : `${formatOfferDecimal(quantity, 0)}g`;
+    const usesKgReference = quantity >= 1000;
+
+    return {
+      isWeight: true,
+      quantity,
+      quantityLabel,
+      referenceAmount: usesKgReference ? price * 1000 : price * 100,
+      referenceUnitLabel: usesKgReference ? '/kg' : '/100g',
+      totalAmount,
+    };
+  }
+
+  return {
+    isWeight: false,
+    quantity,
+    quantityLabel: `${formatOfferDecimal(quantity, 0)} u.`,
+    referenceAmount: price,
+    referenceUnitLabel: 'c/u',
+    totalAmount,
+  };
+}
+
 export function inferOfferScope(offer = {}, productsByCategory = {}, inventory = []) {
   const productIds = new Set((offer.productsIncluded || []).map((product) => String(product.id)));
   if (productIds.size === 0) {
@@ -298,6 +338,9 @@ export function buildLegacyOfferPayload(offerForm, productsByCategory = {}, inve
     title: product.title,
     price: product.price,
     image: product.image,
+    stock: product.stock,
+    product_type: product.product_type || 'quantity',
+    quantity: Number(product.quantity ?? product.qty ?? (product.product_type === 'weight' ? 1000 : 1)) || (product.product_type === 'weight' ? 1000 : 1),
   }));
 
   const payload = {
@@ -388,6 +431,13 @@ export function validateOfferWizardForm(offerForm, productsByCategory = {}, inve
 
   if (offerForm.benefitType === 'combo' && offerForm.scopeMode !== 'products') {
     return 'Combo solo puede trabajar con productos seleccionados.';
+  }
+
+  if (
+    (offerForm.benefitType === 'combo' || offerForm.benefitType === 'fixed_price') &&
+    (offerForm.productsIncluded || []).some((product) => Number(product.quantity ?? product.qty ?? 0) <= 0)
+  ) {
+    return 'Todos los productos del combo deben tener cantidad o peso mayor a cero.';
   }
 
   if (offerForm.benefitType === 'fixed_price' && !Number(offerForm.offerPrice)) {

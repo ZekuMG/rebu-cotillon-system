@@ -6,6 +6,7 @@ import {
 } from '../utils/appUsers';
 import UserAvatar from '../components/UserAvatar';
 import ColorSpectrumPicker from '../components/ColorSpectrumPicker';
+import AsyncActionButton from '../components/AsyncActionButton';
 
 export default function UserSettingsView({
   currentUser,
@@ -98,15 +99,17 @@ export default function UserSettingsView({
           </p>
         </div>
 
-        <button
+        <AsyncActionButton
           type="button"
-          onClick={handleSave}
+          onAction={handleSave}
+          pending={isSaving}
           disabled={isSaving}
+          loadingLabel="Guardando..."
           className="inline-flex items-center gap-2 rounded-[16px] border border-fuchsia-200 bg-fuchsia-600 px-4 py-2 text-sm font-black text-white shadow-sm transition hover:bg-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Save size={15} />
-          {isSaving ? 'Guardando...' : 'Guardar cambios'}
-        </button>
+          Guardar cambios
+        </AsyncActionButton>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">

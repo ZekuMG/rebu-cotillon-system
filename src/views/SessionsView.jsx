@@ -1,28 +1,13 @@
-import React, { useMemo, useState } from 'react';
-import { Monitor, Search, UserRound, Wifi } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, Monitor, RefreshCw, Search, UserRound, Wifi } from 'lucide-react';
 import UserDisplayBadge from '../components/UserDisplayBadge';
 import { resolveUserPresentation } from '../utils/userPresentation';
-import useIncrementalFeed from '../hooks/useIncrementalFeed';
+import useDebouncedValue from '../hooks/useDebouncedValue';
+import useLogsFeed from '../hooks/useLogsFeed';
+import { SESSION_LOG_ACTIONS, SESSIONS_PAGE_SIZE } from '../utils/cloudSelects';
 
 const SESSION_ABSENT_MS = 10 * 60 * 1000;
 const SESSION_EXPIRED_MS = 60 * 60 * 1000;
-const SESSION_ACTIONS = new Set([
-  'Sesion Iniciada',
-  'Sesion Cerrada',
-  'Sesion Ausente',
-  'Sesion Reanudada',
-  'Sesion Expirada',
-  'Sesión Iniciada',
-  'Sesión Cerrada',
-  'Sesión Ausente',
-  'Sesión Reanudada',
-  'Sesión Expirada',
-  'Inicio de Sesión',
-  'Cierre de Sesión',
-  'Ausencia de Sesión',
-  'Reanudación de Sesión',
-  'Expiración de Sesión',
-]);
 
 const parseSessionTime = (value) => {
   if (!value) return 0;
@@ -43,20 +28,12 @@ const formatDateTime = (value, fallbackDate = '--/--/--', fallbackTime = '--:--'
   return `${dateLabel} ${timeLabel}`;
 };
 
-const getRoleLabel = (role) => {
-  if (role === 'admin') return 'Dueño';
-  if (role === 'seller') return 'Caja';
-  return 'Usuario';
-};
-
 const getSessionRoleLabel = (role) => {
   if (role === 'system') return 'Sistema';
   if (role === 'owner' || role === 'admin') return 'Dueño';
   if (role === 'seller') return 'Caja';
   return 'Usuario';
 };
-
-void getRoleLabel;
 
 const matchesSessionDay = (session, dayFilter) => {
   if (!dayFilter) return true;
@@ -112,7 +89,7 @@ const getStatusMeta = (session, status) => {
       secondary: `Sin movimiento desde ${formatDateTime(
         session.absentAt || session.lastActivityAt,
         session.date,
-        session.timestamp,
+        session.timestamp
       )}`,
     };
   }
@@ -167,14 +144,71 @@ function MiniStat({ label, value, tone = 'slate' }) {
   );
 }
 
-export default function SessionsView({ dailyLogs = [], currentSessionMeta = null, userCatalog = null, isLoading = false, emptyStateMessage = '' }) {
+export default function SessionsView({
+  initialLogs = [],
+  currentSessionMeta = null,
+  userCatalog = null,
+}) {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('Todos');
   const [dayFilter, setDayFilter] = useState('');
+  const [page, setPage] = useState(1);
+  const [loadedLogs, setLoadedLogs] = useState([]);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const debouncedSearch = useDebouncedValue(searchTerm, 300);
+  const queryKey = `${dayFilter}|${debouncedSearch}`;
+
+  const {
+    logs: pageLogs,
+    isLoading,
+    error,
+    hasNextPage,
+  } = useLogsFeed({
+    page,
+    pageSize: SESSIONS_PAGE_SIZE,
+    reloadKey,
+    filters: {
+      actions: SESSION_LOG_ACTIONS,
+      dateStart: dayFilter,
+      dateEnd: dayFilter,
+      search: debouncedSearch,
+    },
+  });
+
+  useEffect(() => {
+    setPage(1);
+    setLoadedLogs([]);
+  }, [queryKey]);
+
+  useEffect(() => {
+    if (pageLogs.length === 0 && page !== 1) return;
+
+    setLoadedLogs((prev) => {
+      if (page === 1) return pageLogs;
+
+      const seenIds = new Set(prev.map((log) => String(log.id)));
+      const nextRows = pageLogs.filter((log) => !seenIds.has(String(log.id)));
+      return [...prev, ...nextRows];
+    });
+  }, [page, pageLogs, queryKey]);
+
+  const fallbackLogs = useMemo(
+    () =>
+      (Array.isArray(initialLogs) ? initialLogs : []).filter((log) =>
+        SESSION_LOG_ACTIONS.includes(log?.action)
+      ),
+    [initialLogs]
+  );
+
+  const sourceLogs = useMemo(() => {
+    if (loadedLogs.length > 0) return loadedLogs;
+    if (page === 1 && (isLoading || error)) return fallbackLogs;
+    return loadedLogs;
+  }, [error, fallbackLogs, isLoading, loadedLogs, page]);
 
   const sessions = useMemo(() => {
-    const logs = (Array.isArray(dailyLogs) ? dailyLogs : [])
-      .filter((log) => SESSION_ACTIONS.has(log?.action))
+    const logs = (Array.isArray(sourceLogs) ? sourceLogs : [])
       .slice()
       .sort((a, b) => parseSessionTime(a?.created_at) - parseSessionTime(b?.created_at));
 
@@ -289,7 +323,7 @@ export default function SessionsView({ dailyLogs = [], currentSessionMeta = null
       }))
       .filter((session) => !isHiddenTestSession(session))
       .sort((a, b) => parseSessionTime(b.startedAt) - parseSessionTime(a.startedAt));
-  }, [dailyLogs, currentSessionMeta]);
+  }, [currentSessionMeta, sourceLogs]);
 
   const filteredSessions = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -316,9 +350,6 @@ export default function SessionsView({ dailyLogs = [], currentSessionMeta = null
       return searchableFields.includes(normalizedSearch);
     });
   }, [dayFilter, searchTerm, sessions, statusFilter]);
-  const visibleSessionsFeed = useIncrementalFeed(filteredSessions, {
-    resetKey: `${searchTerm}|${statusFilter}|${dayFilter}|${filteredSessions.length}`,
-  });
 
   const activeSessions = filteredSessions.filter((session) => session.derivedStatus === 'Activa');
   const sessionsForDayCount = useMemo(() => {
@@ -326,43 +357,54 @@ export default function SessionsView({ dailyLogs = [], currentSessionMeta = null
     return source.length;
   }, [dayFilter, sessions]);
 
-  if (isLoading && (!dailyLogs || dailyLogs.length === 0)) {
-    return (
-      <div className="flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white shadow-sm">
-        <div className="text-center">
-          <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Cargando sesiones</p>
-          <p className="mt-2 text-sm font-medium text-slate-500">Estamos trayendo el historial de sesiones y actividad.</p>
-        </div>
-      </div>
-    );
-  }
+  const handleScroll = (event) => {
+    const element = event.currentTarget;
+    const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (remaining > 240) return;
+    if (!hasNextPage || isLoading) return;
+    setPage((prev) => prev + 1);
+  };
 
-  if (emptyStateMessage && (!dailyLogs || dailyLogs.length === 0)) {
+  if (error && filteredSessions.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white shadow-sm">
-        <div className="max-w-md text-center">
-          <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Sesiones no disponibles</p>
-          <p className="mt-2 text-sm font-medium text-slate-500">{emptyStateMessage}</p>
-        </div>
+      <div className="flex h-full flex-col items-center justify-center rounded-[28px] border border-rose-200 bg-white px-6 text-center shadow-sm">
+        <AlertTriangle size={32} className="text-rose-500" />
+        <p className="mt-3 text-sm font-black uppercase tracking-[0.18em] text-rose-500">
+          Error cargando sesiones
+        </p>
+        <p className="mt-2 max-w-md text-sm font-medium text-slate-500">
+          La consulta de sesiones falló y quedó sin reintentos automáticos para evitar loops contra Supabase.
+        </p>
+        <button
+          type="button"
+          onClick={() => setReloadKey((prev) => prev + 1)}
+          className="mt-4 inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black uppercase tracking-[0.08em] text-slate-600 transition hover:bg-slate-50"
+        >
+          <RefreshCw size={13} />
+          Reintentar
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="h-full overflow-y-auto rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(248,250,252,0.98)_100%)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_18px_36px_rgba(15,23,42,0.06)]" onScroll={visibleSessionsFeed.handleScroll}>
+    <div
+      className="h-full overflow-y-auto rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(248,250,252,0.98)_100%)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_18px_36px_rgba(15,23,42,0.06)]"
+      onScroll={handleScroll}
+    >
       <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
             Gestor de Sesiones
           </p>
           <p className="mt-1 text-[13px] font-medium text-slate-500">
-            Ingreso, cierre, estado y última actividad de cada usuario.
+            Ingreso, cierre, estado y última actividad por usuario.
           </p>
         </div>
 
         <div className="grid grid-cols-2 gap-2">
           <MiniStat label="Activas" value={activeSessions.length} tone="emerald" />
-          <MiniStat label={dayFilter ? 'Sesiones fecha' : 'Sesiones del día'} value={sessionsForDayCount} />
+          <MiniStat label={dayFilter ? 'Sesiones fecha' : 'Sesiones cargadas'} value={sessionsForDayCount} />
         </div>
       </div>
 
@@ -406,6 +448,10 @@ export default function SessionsView({ dailyLogs = [], currentSessionMeta = null
         </div>
       </div>
 
+      <div className="mb-3 rounded-[18px] border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-semibold text-slate-500">
+        {isLoading ? 'Consultando sesiones en Supabase...' : 'Carga incremental de eventos de sesión'}
+      </div>
+
       <div className="overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-sm">
         <div className="grid grid-cols-[1.2fr_0.9fr_1fr_1fr_1fr_0.8fr] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
           <span>Usuario</span>
@@ -418,12 +464,12 @@ export default function SessionsView({ dailyLogs = [], currentSessionMeta = null
 
         <div className="divide-y divide-slate-100">
           {filteredSessions.length > 0 ? (
-            visibleSessionsFeed.visibleItems.map((session) => {
+            filteredSessions.map((session) => {
               const status = session.derivedStatus;
               const statusMeta = getStatusMeta(session, status);
               const userPresentation = resolveUserPresentation(
                 { name: session.userName, role: session.role },
-                userCatalog,
+                userCatalog
               );
 
               return (
@@ -443,7 +489,7 @@ export default function SessionsView({ dailyLogs = [], currentSessionMeta = null
                       />
                       <span
                         className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] ${getStatusTone(
-                          status,
+                          status
                         )}`}
                       >
                         {status}
@@ -522,11 +568,21 @@ export default function SessionsView({ dailyLogs = [], currentSessionMeta = null
           )}
         </div>
       </div>
-      {filteredSessions.length > 0 && (
-        <div className="mt-3 border-t border-slate-200 pt-3 text-[11px] font-semibold text-slate-500">
-          Mostrando <span className="font-black text-slate-700">{visibleSessionsFeed.visibleCount}</span> de <span className="font-black text-slate-700">{filteredSessions.length}</span> sesiones
-        </div>
-      )}
+
+      <div className="mt-3 border-t border-slate-200 pt-3 text-[11px] font-semibold text-slate-500 flex items-center justify-between gap-3">
+        <span>
+          Cargadas <span className="font-black text-slate-700">{sourceLogs.length}</span> entradas de sesión
+          {hasNextPage && <span className="ml-2 text-slate-400">deslizá para traer más</span>}
+        </span>
+        <button
+          type="button"
+          onClick={() => setReloadKey((prev) => prev + 1)}
+          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.08em] text-slate-600 transition hover:bg-slate-50"
+        >
+          <RefreshCw size={12} />
+          Actualizar
+        </button>
+      </div>
     </div>
   );
 }

@@ -8,6 +8,8 @@ import {
   Save,
   TrendingDown
 } from 'lucide-react';
+import AsyncActionButton from '../AsyncActionButton';
+import usePendingAction from '../../hooks/usePendingAction';
 import { PAYMENT_METHODS } from '../../data';
 
 // Categorías de gastos definidas según tus requisitos
@@ -19,6 +21,7 @@ const EXPENSE_CATEGORIES = [
 ];
 
 export const ExpenseModal = ({ isOpen, onClose, onSave }) => {
+  const { isPending, runAction } = usePendingAction();
   const [amount, setAmount] = useState('');
   const [category, setCategory] = useState(EXPENSE_CATEGORIES[0]);
   const [paymentMethod, setPaymentMethod] = useState('Efectivo');
@@ -26,17 +29,19 @@ export const ExpenseModal = ({ isOpen, onClose, onSave }) => {
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     const value = parseFloat(amount);
     if (!value || value <= 0) return;
 
-    onSave({
+    const savedExpense = await onSave({
       amount: value,
       category,
       paymentMethod,
       note
     });
+
+    if (!savedExpense) return;
 
     // Resetear formulario y cerrar
     setAmount('');
@@ -67,7 +72,7 @@ export const ExpenseModal = ({ isOpen, onClose, onSave }) => {
         </div>
 
         {/* BODY */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-5 overflow-y-auto">
+        <form onSubmit={(e) => void runAction('expense-modal-save', () => handleSubmit(e))} className="p-6 space-y-5 overflow-y-auto">
           
           {/* Monto */}
           <div>
@@ -148,13 +153,15 @@ export const ExpenseModal = ({ isOpen, onClose, onSave }) => {
           </div>
 
           {/* Botón Guardar */}
-          <button
+          <AsyncActionButton
             type="submit"
+            pending={isPending('expense-modal-save')}
+            disabled={isPending('expense-modal-save')}
             className="w-full py-3.5 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold shadow-lg shadow-red-200 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
           >
             <Save size={20} />
             Confirmar Gasto
-          </button>
+          </AsyncActionButton>
 
         </form>
       </div>

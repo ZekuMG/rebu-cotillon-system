@@ -1,10 +1,21 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { CalendarRange, CheckCircle2, ClipboardList, CreditCard, FileText, Package, Plus, ReceiptText, Search, Trash2, Wallet, X } from 'lucide-react';
 import Swal from 'sweetalert2';
 import BudgetBuilderModal from '../components/BudgetBuilderModal';
+import AsyncActionButton from '../components/AsyncActionButton';
 import { FancyPrice } from '../components/FancyPrice';
+import usePendingAction from '../hooks/usePendingAction';
 import { calculateBudgetLineSubtotal, deriveOrderStatus, formatBudgetItemQuantity, hydrateBudgetSnapshot } from '../utils/budgetHelpers';
 import { formatCurrency, formatDateAR } from '../utils/helpers';
+import {
+  createPaymentLine,
+  getPaymentBreakdownDisplayItems,
+  getPaymentLineCashChange,
+  getPaymentLineCashMissing,
+  getPaymentLineCashReceived,
+  getPaymentMethodLabel,
+  getPaymentSummary,
+} from '../utils/paymentBreakdown';
 import { hasPermission } from '../utils/userPermissions';
 import useIncrementalFeed from '../hooks/useIncrementalFeed';
 
@@ -22,6 +33,13 @@ const PRIMARY_BUTTON_CLASS = 'inline-flex items-center gap-1 rounded-xl border b
 const NEUTRAL_BUTTON_CLASS = 'inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40';
 const DANGER_BUTTON_CLASS = 'inline-flex items-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40';
 const SUCCESS_BUTTON_CLASS = 'inline-flex items-center gap-1 rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40';
+const ORDER_PAYMENT_METHODS = [
+  { id: 'Efectivo', label: 'Efectivo', icon: Wallet },
+  { id: 'Debito', label: 'Débito', icon: CreditCard },
+  { id: 'Credito', label: 'Crédito', icon: CreditCard },
+  { id: 'MercadoPago', label: 'Mercado Pago', icon: CreditCard },
+];
+const roundOrderPaymentValue = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
 const normalizeLegacyOrderStatus = (value = '') => String(value || '').replace('Se?ado', 'Se\u00f1ado').replace('Se?ado', 'Se\u00f1ado');
 const formatPickupDate = (pickupDate) => (!pickupDate ? 'Sin fecha' : formatDateAR(`${pickupDate}T12:00:00`));
@@ -33,6 +51,101 @@ const getSharedRecordId = (recordOrType, id, budgetId) => {
 };
 const formatRecordCode = (recordOrType, id, budgetId) =>
   `ID-${String(getSharedRecordId(recordOrType, id, budgetId) || '').slice(0, 8).toUpperCase() || 'SINID'}`;
+
+const createOrderPaymentDraft = (amount = 0, preferredMethod = 'Efectivo') => ({
+  amountInput: amount > 0 ? String(roundOrderPaymentValue(amount)) : '',
+  isSplitPayment: false,
+  activeLineIndex: 0,
+  paymentLines: [
+    createPaymentLine({
+      id: 'order_primary',
+      method: preferredMethod,
+      amount: roundOrderPaymentValue(amount),
+      installments: preferredMethod === 'Credito' ? 1 : 0,
+      cashReceived: '',
+    }),
+  ],
+});
+
+const getDraftBaseLine = (line, fallbackMethod = 'Efectivo', fallbackAmount = 0) =>
+  createPaymentLine({
+    id: line?.id,
+    method: line?.method || fallbackMethod,
+    amount: roundOrderPaymentValue(line?.amount ?? fallbackAmount),
+    installments: (line?.method || fallbackMethod) === 'Credito' ? Number(line?.installments || 1) || 1 : 0,
+    cashReceived: line?.cashReceived ?? '',
+  });
+
+const getNormalizedOrderDraftLines = (draft) => {
+  const totalAmount = Math.max(roundOrderPaymentValue(draft?.amountInput || 0), 0);
+  const configuredLines = Array.isArray(draft?.paymentLines) ? draft.paymentLines : [];
+  const primaryBase = getDraftBaseLine(configuredLines[0], 'Efectivo', totalAmount);
+
+  if (!draft?.isSplitPayment) {
+    return [getDraftBaseLine(primaryBase, primaryBase.method || 'Efectivo', totalAmount)];
+  }
+
+  const secondaryBase = getDraftBaseLine(
+    configuredLines[1],
+    primaryBase.method === 'Efectivo' ? 'Debito' : 'Efectivo',
+    0,
+  );
+  const primaryAmount = Math.min(Math.max(roundOrderPaymentValue(primaryBase.amount || 0), 0), totalAmount);
+  const secondaryAmount = Math.max(roundOrderPaymentValue(totalAmount - primaryAmount), 0);
+
+  return [
+    getDraftBaseLine({ ...primaryBase, amount: primaryAmount }, primaryBase.method || 'Efectivo', primaryAmount),
+    getDraftBaseLine({ ...secondaryBase, amount: secondaryAmount }, secondaryBase.method || 'Debito', secondaryAmount),
+  ];
+};
+
+const buildOrderPaymentPayload = (draft, maxAmount) => {
+  const amount = Math.max(roundOrderPaymentValue(draft?.amountInput || 0), 0);
+  const normalizedLines = getNormalizedOrderDraftLines(draft)
+    .filter((line) => Number(line.amount || 0) > 0)
+    .map((line) => ({
+      id: line.id,
+      method: line.method,
+      amount: roundOrderPaymentValue(line.amount || 0),
+      installments: line.method === 'Credito' ? Number(line.installments || 1) || 1 : 0,
+      cashReceived: line.method === 'Efectivo' ? getPaymentLineCashReceived(line) : 0,
+      cashChange: line.method === 'Efectivo' ? getPaymentLineCashChange(line) : 0,
+    }));
+
+  if (amount <= 0) {
+    return { error: 'Ingresá un monto mayor a cero.' };
+  }
+  if (Number.isFinite(maxAmount) && amount > Number(maxAmount || 0)) {
+    return { error: 'El monto no puede superar el saldo restante del pedido.' };
+  }
+
+  const linesTotal = roundOrderPaymentValue(
+    normalizedLines.reduce((sum, line) => sum + Number(line.amount || 0), 0)
+  );
+  if (roundOrderPaymentValue(linesTotal) !== roundOrderPaymentValue(amount)) {
+    return { error: 'La suma de métodos debe coincidir con el monto del abono.' };
+  }
+
+  const cashLineWithMissing = normalizedLines.find(
+    (line) => line.method === 'Efectivo' && roundOrderPaymentValue(line.cashReceived || 0) < roundOrderPaymentValue(line.amount || 0)
+  );
+  if (cashLineWithMissing) {
+    return { error: `El efectivo debe cubrir ${getPaymentMethodLabel(cashLineWithMissing.method)}.` };
+  }
+
+  return {
+    amount,
+    paymentBreakdown: normalizedLines,
+    paymentMethod: getPaymentSummary(normalizedLines, normalizedLines[0]?.method || 'Efectivo', normalizedLines[0]?.installments || 0),
+    installments: normalizedLines.find((line) => line.method === 'Credito')?.installments || 0,
+    cashReceived: normalizedLines
+      .filter((line) => line.method === 'Efectivo')
+      .reduce((sum, line) => sum + Number(line.cashReceived || 0), 0),
+    cashChange: normalizedLines
+      .filter((line) => line.method === 'Efectivo')
+      .reduce((sum, line) => sum + Number(line.cashChange || 0), 0),
+  };
+};
 
 const buildRecordView = (record, membersMap, type) => {
   const member = record.memberId ? membersMap.get(String(record.memberId)) : null;
@@ -90,6 +203,273 @@ function RecordCard({ record, isActive, onSelect }) {
   );
 }
 
+function OrderPaymentEditor({ draft, onChange, maxAmount, title = 'Abono', hint = '' }) {
+  const normalizedLines = useMemo(() => getNormalizedOrderDraftLines(draft), [draft]);
+  const totalAmount = Math.max(roundOrderPaymentValue(draft?.amountInput || 0), 0);
+  const paymentSummary = getPaymentSummary(
+    normalizedLines.filter((line) => Number(line.amount || 0) > 0),
+    normalizedLines[0]?.method || 'Efectivo',
+    normalizedLines.find((line) => line.method === 'Credito')?.installments || 0,
+  );
+
+  const updateDraft = (updater) => {
+    onChange((prev) => {
+      const nextDraft = typeof updater === 'function' ? updater(prev) : updater;
+      return {
+        ...nextDraft,
+        paymentLines: Array.isArray(nextDraft.paymentLines) ? nextDraft.paymentLines : [],
+      };
+    });
+  };
+
+  const handleMethodSelect = (methodId) => {
+    updateDraft((prev) => {
+      const nextLines = getNormalizedOrderDraftLines(prev).map((line) => ({ ...line }));
+      const targetIndex = prev.isSplitPayment ? (prev.activeLineIndex === 1 ? 1 : 0) : 0;
+      nextLines[targetIndex] = {
+        ...nextLines[targetIndex],
+        method: methodId,
+        installments: methodId === 'Credito' ? Number(nextLines[targetIndex].installments || 1) || 1 : 0,
+        cashReceived: methodId === 'Efectivo' ? nextLines[targetIndex].cashReceived : '',
+      };
+
+      return {
+        ...prev,
+        paymentLines: nextLines,
+      };
+    });
+  };
+
+  const handleSplitToggle = () => {
+    updateDraft((prev) => {
+      const nextLines = getNormalizedOrderDraftLines(prev);
+      if (prev.isSplitPayment) {
+        return {
+          ...prev,
+          isSplitPayment: false,
+          activeLineIndex: 0,
+          paymentLines: [nextLines[0]],
+        };
+      }
+
+      return {
+        ...prev,
+        isSplitPayment: true,
+        activeLineIndex: 0,
+        paymentLines: [
+          nextLines[0],
+          nextLines[1] || createPaymentLine({ id: 'order_secondary', method: nextLines[0]?.method === 'Efectivo' ? 'Debito' : 'Efectivo', amount: 0 }),
+        ],
+      };
+    });
+  };
+
+  const handlePrimaryAmountChange = (value) => {
+    updateDraft((prev) => {
+      const nextLines = getNormalizedOrderDraftLines(prev).map((line, index) => (
+        index === 0
+          ? { ...line, amount: Math.min(Math.max(roundOrderPaymentValue(value), 0), totalAmount) }
+          : line
+      ));
+      return {
+        ...prev,
+        paymentLines: nextLines,
+      };
+    });
+  };
+
+  const handleInstallmentsChange = (lineIndex, value) => {
+    updateDraft((prev) => {
+      const nextLines = getNormalizedOrderDraftLines(prev).map((line, index) => (
+        index === lineIndex ? { ...line, installments: Number(value || 1) || 1 } : line
+      ));
+      return {
+        ...prev,
+        paymentLines: nextLines,
+      };
+    });
+  };
+
+  const handleCashReceivedChange = (lineIndex, value) => {
+    updateDraft((prev) => {
+      const nextLines = getNormalizedOrderDraftLines(prev).map((line, index) => (
+        index === lineIndex ? { ...line, cashReceived: value } : line
+      ));
+      return {
+        ...prev,
+        paymentLines: nextLines,
+      };
+    });
+  };
+
+  const activeMethod = draft?.isSplitPayment
+    ? normalizedLines[draft.activeLineIndex === 1 ? 1 : 0]?.method || normalizedLines[0]?.method || 'Efectivo'
+    : normalizedLines[0]?.method || 'Efectivo';
+
+  return (
+    <div className="space-y-3">
+      <label className="block rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+        <span className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
+          <Wallet size={11} />
+          {title}
+        </span>
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          value={draft?.amountInput || ''}
+          onChange={(e) => onChange((prev) => ({ ...prev, amountInput: e.target.value }))}
+          className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none"
+          placeholder="0"
+        />
+        <div className="mt-1 flex items-center justify-between text-[11px] font-semibold text-slate-500">
+          <span>Máximo disponible</span>
+          <span className="font-black text-slate-700">{formatCurrency(maxAmount || 0)}</span>
+        </div>
+      </label>
+
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Métodos de pago</p>
+            <p className="mt-0.5 text-[12px] font-black text-slate-800">{paymentSummary}</p>
+            {hint ? <p className="mt-1 text-[11px] font-medium text-slate-500">{hint}</p> : null}
+          </div>
+          <button
+            type="button"
+            onClick={handleSplitToggle}
+            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] transition ${
+              draft?.isSplitPayment
+                ? 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700'
+                : 'border-slate-200 bg-white text-slate-500 hover:border-fuchsia-200 hover:bg-fuchsia-50 hover:text-fuchsia-700'
+            }`}
+          >
+            <Plus size={11} />
+            {draft?.isSplitPayment ? 'Quitar pago extra' : 'Dividir en 2'}
+          </button>
+        </div>
+
+        <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+          {ORDER_PAYMENT_METHODS.map(({ id, label, icon: Icon }) => {
+            const isActive = activeMethod === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => handleMethodSelect(id)}
+                className={`inline-flex items-center justify-center gap-1 rounded-xl border px-2 py-2 text-[10px] font-black uppercase tracking-[0.08em] transition ${
+                  isActive
+                    ? 'border-sky-200 bg-sky-50 text-sky-700'
+                    : 'border-slate-200 bg-white text-slate-500 hover:border-sky-200 hover:bg-sky-50 hover:text-sky-700'
+                }`}
+              >
+                <Icon size={12} />
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className={`mt-3 grid gap-2 ${draft?.isSplitPayment ? 'md:grid-cols-2' : ''}`}>
+          {normalizedLines.map((line, index) => {
+            const cashMissing = line.method === 'Efectivo' ? getPaymentLineCashMissing(line) : 0;
+            const cashChange = line.method === 'Efectivo' ? getPaymentLineCashChange(line) : 0;
+
+            return (
+              <div
+                key={line.id || `order_line_${index}`}
+                className={`rounded-2xl border p-3 ${
+                  draft?.isSplitPayment && draft?.activeLineIndex === index
+                    ? 'border-sky-200 bg-white shadow-sm'
+                    : 'border-slate-200 bg-white'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">
+                      {index === 0 ? (draft?.isSplitPayment ? 'Método 1' : 'Método') : 'Método 2'}
+                    </p>
+                    <p className="mt-0.5 text-[12px] font-black text-slate-800">{getPaymentMethodLabel(line.method)}</p>
+                  </div>
+                  {draft?.isSplitPayment ? (
+                    <button
+                      type="button"
+                      onClick={() => onChange((prev) => ({ ...prev, activeLineIndex: index }))}
+                      className={`rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-[0.08em] ${
+                        draft?.activeLineIndex === index
+                          ? 'border-sky-200 bg-sky-50 text-sky-700'
+                          : 'border-slate-200 bg-slate-50 text-slate-500'
+                      }`}
+                    >
+                      Editar
+                    </button>
+                  ) : null}
+                </div>
+
+                <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Monto</p>
+                  {draft?.isSplitPayment && index === 0 ? (
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={line.amount}
+                      onChange={(e) => handlePrimaryAmountChange(e.target.value)}
+                      className="mt-1 w-full bg-transparent text-sm font-black text-slate-800 outline-none"
+                    />
+                  ) : (
+                    <p className="mt-1 text-sm font-black text-slate-800">{formatCurrency(line.amount || 0)}</p>
+                  )}
+                </div>
+
+                {line.method === 'Credito' ? (
+                  <select
+                    className="mt-2 w-full rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-700 outline-none"
+                    value={Number(line.installments || 1)}
+                    onChange={(e) => handleInstallmentsChange(index, e.target.value)}
+                  >
+                    <option value={1}>1 pago</option>
+                    <option value={3}>3 cuotas</option>
+                    <option value={6}>6 cuotas</option>
+                    <option value={12}>12 cuotas</option>
+                  </select>
+                ) : null}
+
+                {line.method === 'Efectivo' ? (
+                  <div className="mt-2 space-y-2">
+                    <label className="block rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                      <span className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Monto recibido</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={line.cashReceived === '' ? '' : Number(line.cashReceived || 0)}
+                        onChange={(e) => handleCashReceivedChange(index, e.target.value)}
+                        placeholder="Ingresar efectivo recibido"
+                        className="mt-1 w-full bg-transparent text-sm font-black text-slate-800 outline-none"
+                      />
+                    </label>
+                    <div className="grid grid-cols-2 gap-2 text-[11px] font-semibold">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                        <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Cambio</p>
+                        <p className="mt-1 font-black text-emerald-700">{formatCurrency(cashChange)}</p>
+                      </div>
+                      <div className={`rounded-xl border px-3 py-2 ${cashMissing > 0 ? 'border-rose-200 bg-rose-50' : 'border-slate-200 bg-slate-50'}`}>
+                        <p className={`text-[9px] font-black uppercase tracking-[0.1em] ${cashMissing > 0 ? 'text-rose-400' : 'text-slate-400'}`}>Falta</p>
+                        <p className={`mt-1 font-black ${cashMissing > 0 ? 'text-rose-700' : 'text-slate-700'}`}>{formatCurrency(cashMissing)}</p>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OrdersView({ budgets, orders, members, inventory, categories, offers, currentUser = null, isLoading = false, emptyStateMessage = '', onCreateBudget, onUpdateBudget, onUpdateOrder, onDeleteBudget, onDeleteOrder, onConvertBudgetToOrder, onRegisterOrderPayment, onCancelOrder, onMarkOrderRetired, onPrintRecord }) {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
@@ -100,11 +480,16 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
   const [isSavingBudget, setIsSavingBudget] = useState(false);
   const [convertTarget, setConvertTarget] = useState(null);
   const [pickupDate, setPickupDate] = useState('');
-  const [depositAmount, setDepositAmount] = useState('');
+  const [convertPaymentDraft, setConvertPaymentDraft] = useState(() => createOrderPaymentDraft(0));
   const [isConverting, setIsConverting] = useState(false);
   const [paymentTarget, setPaymentTarget] = useState(null);
-  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentDraft, setPaymentDraft] = useState(() => createOrderPaymentDraft(0));
   const [isSavingPayment, setIsSavingPayment] = useState(false);
+  const depositAmount = convertPaymentDraft.amountInput;
+  const setDepositAmount = (value) => setConvertPaymentDraft((prev) => ({ ...prev, amountInput: value }));
+  const paymentAmount = paymentDraft.amountInput;
+  const setPaymentAmount = (value) => setPaymentDraft((prev) => ({ ...prev, amountInput: value }));
+  const { isPending, runAction } = usePendingAction();
   const canCreateBudget = hasPermission(currentUser, 'orders.createBudget');
   const canEditBudget = hasPermission(currentUser, 'orders.editBudget');
   const canDeleteBudget = hasPermission(currentUser, 'orders.deleteBudget');
@@ -157,16 +542,18 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
   const visibleRecordsFeed = useIncrementalFeed(filteredRecords, {
     resetKey: `${search}|${typeFilter}|${statusFilter}|${filteredRecords.length}`,
   });
-
   useEffect(() => {
-    if (filteredRecords.length === 0) return void setSelectedKey(null);
+    if (filteredRecords.length === 0) {
+      if (selectedKey !== null) setSelectedKey(null);
+      return;
+    }
     const hasSelected = filteredRecords.some((record) => `${record.type}-${record.id}` === selectedKey);
-    if (!hasSelected) setSelectedKey(`${filteredRecords[0].type}-${filteredRecords[0].id}`);
+    if (!hasSelected) {
+      setSelectedKey(`${filteredRecords[0].type}-${filteredRecords[0].id}`);
+    }
   }, [filteredRecords, selectedKey]);
-
   const selectedRecord = filteredRecords.find((record) => `${record.type}-${record.id}` === selectedKey) || null;
   const hasSourceRecords = (budgets?.length || 0) > 0 || (orders?.length || 0) > 0;
-
   if (isLoading && !hasSourceRecords) {
     return (
       <div className="flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white shadow-sm">
@@ -189,6 +576,9 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
     );
   }
   const linkedOrderForBudget = selectedRecord?.type === 'budget' ? orders.find((order) => String(order.budgetId) === String(selectedRecord.id) && order.isActive !== false) : null;
+  const selectedRecordPaymentItems = selectedRecord ? getPaymentBreakdownDisplayItems(selectedRecord.paymentBreakdown, selectedRecord.paymentMethod || 'Efectivo', selectedRecord.installments || 0, 0, 0, selectedRecord.totalAmount || 0) : [];
+  const selectedRecordPaymentSummary = selectedRecord ? getPaymentSummary(selectedRecord.paymentBreakdown, selectedRecord.paymentMethod || 'Efectivo', selectedRecord.installments || 0) : 'Efectivo';
+  const selectedOrderPaymentHistory = selectedRecord?.type === 'order' ? (selectedRecord.paymentHistory || []) : [];
   const resolveRecordItemProduct = (item) => {
     if (item?.productId !== null && item?.productId !== undefined) {
       const productFromId = inventoryById.get(String(item.productId));
@@ -215,6 +605,10 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
 
   const handleConvertBudget = async () => {
     if (!convertTarget) return;
+    const normalizedDepositPayload = buildOrderPaymentPayload(convertPaymentDraft, convertTarget.totalAmount || 0);
+    if (convertPaymentDraft.amountInput && normalizedDepositPayload.error) {
+      return void Swal.fire('Seña inválida', normalizedDepositPayload.error, 'warning');
+    }
     const normalizedDeposit = Math.max(Number(depositAmount || 0), 0);
     const missingFields = [];
     if (!pickupDate) missingFields.push('fecha de retiro');
@@ -234,25 +628,30 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
     }
     setIsConverting(true);
     try {
-      const newOrder = await onConvertBudgetToOrder(convertTarget, { pickupDate: pickupDate || null, depositAmount: normalizedDeposit });
+      const newOrder = await onConvertBudgetToOrder(convertTarget, {
+        pickupDate: pickupDate || null,
+        depositPayment: normalizedDeposit > 0 ? normalizedDepositPayload : { amount: 0, paymentBreakdown: [] },
+      });
       if (newOrder?.id) {
         setSelectedKey(`order-${newOrder.id}`);
       }
       setConvertTarget(null);
       setPickupDate('');
-      setDepositAmount('');
+      setConvertPaymentDraft(createOrderPaymentDraft(0));
     } finally {
       setIsConverting(false);
     }
   };
 
   const handleSavePayment = async () => {
+    const normalizedPayment = buildOrderPaymentPayload(paymentDraft, paymentTarget?.remainingAmount || 0);
+    if (normalizedPayment.error) return void Swal.fire('Monto inválido', normalizedPayment.error, 'warning');
     if (!paymentTarget || Number(paymentAmount) <= 0) return void Swal.fire('Monto inválido', 'Ingresá un pago mayor a cero para continuar.', 'warning');
     setIsSavingPayment(true);
     try {
-      await onRegisterOrderPayment(paymentTarget, Number(paymentAmount));
+      await onRegisterOrderPayment(paymentTarget, normalizedPayment);
       setPaymentTarget(null);
-      setPaymentAmount('');
+      setPaymentDraft(createOrderPaymentDraft(0));
     } finally {
       setIsSavingPayment(false);
     }
@@ -364,15 +763,15 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                     <button type="button" onClick={() => onPrintRecord(selectedRecord)} className={NEUTRAL_BUTTON_CLASS}><FileText size={12} />Generar PDF</button>
                     {selectedRecord.type === 'budget' && <>
                       {canEditBudget && <button type="button" onClick={() => { setEditingBudget(selectedRecord); setIsBudgetModalOpen(true); }} className={NEUTRAL_BUTTON_CLASS}><FileText size={12} />Editar</button>}
-                      {canCreateOrder && <button type="button" onClick={() => { setConvertTarget(selectedRecord); setPickupDate(''); setDepositAmount(''); }} disabled={Boolean(linkedOrderForBudget)} className={PRIMARY_BUTTON_CLASS}><ReceiptText size={12} />{linkedOrderForBudget ? 'Pedido ya creado' : 'Convertir a pedido'}</button>}
-                      {canDeleteBudget && <button type="button" onClick={() => handleDeleteSelectedBudget(selectedRecord)} className={DANGER_BUTTON_CLASS}><Trash2 size={12} />Eliminar</button>}
+                      {canCreateOrder && <button type="button" onClick={() => { setConvertTarget(selectedRecord); setPickupDate(''); setConvertPaymentDraft(createOrderPaymentDraft(0)); }} disabled={Boolean(linkedOrderForBudget)} className={PRIMARY_BUTTON_CLASS}><ReceiptText size={12} />{linkedOrderForBudget ? 'Pedido ya creado' : 'Convertir a pedido'}</button>}
+                      {canDeleteBudget && <AsyncActionButton type="button" onAction={() => runAction(`delete-budget:${selectedRecord.id}`, () => handleDeleteSelectedBudget(selectedRecord))} pending={isPending(`delete-budget:${selectedRecord.id}`)} loadingContent={<Trash2 size={12} className="animate-pulse" />} className={DANGER_BUTTON_CLASS}><Trash2 size={12} />Eliminar</AsyncActionButton>}
                     </>}
                     {selectedRecord.type === 'order' && <>
                       {!['Pagado', 'Retirado', 'Cancelado'].includes(selectedRecord.status) && canEditOrder && <button type="button" onClick={() => { setEditingBudget(selectedRecord); setIsBudgetModalOpen(true); }} className={NEUTRAL_BUTTON_CLASS}><FileText size={12} />Editar</button>}
-                      {!['Pagado', 'Retirado', 'Cancelado'].includes(selectedRecord.status) && canRegisterOrderPayment && <button type="button" onClick={() => { setPaymentTarget(selectedRecord); setPaymentAmount(''); }} className={PRIMARY_BUTTON_CLASS}><Wallet size={12} />Registrar pago</button>}
-                      {!['Retirado', 'Cancelado'].includes(selectedRecord.status) && canCancelOrder && <button type="button" onClick={() => handleCancelSelectedOrder(selectedRecord)} className={DANGER_BUTTON_CLASS}><X size={12} />Cancelar pedido</button>}
-                      {!['Retirado', 'Cancelado'].includes(selectedRecord.status) && canMarkRetired && <button type="button" onClick={() => handleRetireOrder(selectedRecord)} className={SUCCESS_BUTTON_CLASS}><CheckCircle2 size={12} />Marcar retirado</button>}
-                      {canDeleteOrder && <button type="button" onClick={() => handleDeleteSelectedOrder(selectedRecord)} className={DANGER_BUTTON_CLASS}><Trash2 size={12} />Eliminar pedido</button>}
+                      {!['Pagado', 'Retirado', 'Cancelado'].includes(selectedRecord.status) && canRegisterOrderPayment && <button type="button" onClick={() => { setPaymentTarget(selectedRecord); setPaymentDraft(createOrderPaymentDraft(selectedRecord.remainingAmount || 0)); }} className={PRIMARY_BUTTON_CLASS}><Wallet size={12} />Registrar pago</button>}
+                      {!['Retirado', 'Cancelado'].includes(selectedRecord.status) && canCancelOrder && <AsyncActionButton type="button" onAction={() => runAction(`cancel-order:${selectedRecord.id}`, () => handleCancelSelectedOrder(selectedRecord))} pending={isPending(`cancel-order:${selectedRecord.id}`)} loadingContent={<X size={12} className="animate-pulse" />} className={DANGER_BUTTON_CLASS}><X size={12} />Cancelar pedido</AsyncActionButton>}
+                      {!['Retirado', 'Cancelado'].includes(selectedRecord.status) && canMarkRetired && <AsyncActionButton type="button" onAction={() => runAction(`retire-order:${selectedRecord.id}`, () => handleRetireOrder(selectedRecord))} pending={isPending(`retire-order:${selectedRecord.id}`)} loadingContent={<CheckCircle2 size={12} className="animate-pulse" />} className={SUCCESS_BUTTON_CLASS}><CheckCircle2 size={12} />Marcar retirado</AsyncActionButton>}
+                      {canDeleteOrder && <AsyncActionButton type="button" onAction={() => runAction(`delete-order:${selectedRecord.id}`, () => handleDeleteSelectedOrder(selectedRecord))} pending={isPending(`delete-order:${selectedRecord.id}`)} loadingContent={<Trash2 size={12} className="animate-pulse" />} className={DANGER_BUTTON_CLASS}><Trash2 size={12} />Eliminar pedido</AsyncActionButton>}
                     </>}
                   </div>
                 </div>
@@ -395,6 +794,13 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                     <p className="mt-0.5 text-[13px] font-black text-slate-800">{selectedRecord.customerName}</p>
                     <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{selectedRecord.customerPhone}</p>
                     <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{selectedRecord.customerKind}</p>
+                    {selectedRecord.type === 'budget' && <><p className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Pago previsto</p><p className="mt-0.5 text-[12px] font-black text-slate-800">{selectedRecordPaymentSummary}</p>{selectedRecordPaymentItems.length > 1 && <div className="mt-1 flex flex-wrap gap-1">{selectedRecordPaymentItems.map((item) => (<span key={item.key} className="rounded-full border border-fuchsia-200 bg-fuchsia-50 px-2 py-0.5 text-[9px] font-black text-fuchsia-700">{item.title}</span>))}</div>}</>}
+                    {selectedRecord.type === 'order' && <>
+                      <p className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Pagos registrados</p>
+                      <p className="mt-0.5 text-[12px] font-black text-slate-800">{selectedRecordPaymentSummary}</p>
+                      {selectedRecordPaymentItems.length > 0 && <div className="mt-1 flex flex-wrap gap-1">{selectedRecordPaymentItems.map((item) => (<span key={item.key} className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] font-black text-sky-700">{item.title}</span>))}</div>}
+                      {selectedOrderPaymentHistory.length > 0 && <div className="mt-2 space-y-1.5">{selectedOrderPaymentHistory.map((entry) => (<div key={entry.id} className="rounded-xl border border-slate-200 bg-white px-2.5 py-2"><div className="flex items-center justify-between gap-2"><p className="text-[10px] font-black uppercase tracking-[0.08em] text-slate-500">{entry.entryType === 'deposit' ? 'Seña inicial' : entry.entryType === 'legacy' ? 'Pago previo' : 'Pago'}</p><p className="text-[10px] font-black text-slate-700">{entry.createdAt ? formatDateAR(entry.createdAt) : 'Sin fecha'}</p></div><p className="mt-1 text-[12px] font-black text-slate-800">{formatCurrency(entry.amount || 0)}</p><div className="mt-1 flex flex-wrap gap-1">{(entry.lines || []).map((line, lineIndex) => (<span key={line.id || `${entry.id}_${lineIndex}`} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-black text-slate-600">{getPaymentMethodLabel(line.method)}{line.method === 'Credito' && Number(line.installments) > 1 ? ` · ${line.installments} cuotas` : ''}{line.method === 'Efectivo' && Number(line.cashChange || 0) > 0 ? ` · cambio ${formatCurrency(line.cashChange || 0)}` : ''}</span>))}</div></div>))}</div>}
+                    </>}
                     {selectedRecord.customerNote && <><p className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Nota</p><p className="mt-0.5 text-[12px] font-medium text-slate-600">{selectedRecord.customerNote}</p></>}
                     {linkedOrderForBudget && <><p className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Pedido vinculado</p><p className="mt-0.5 font-mono text-[12px] font-semibold text-slate-600">{formatRecordCode(linkedOrderForBudget)}</p></>}
                   </div>
@@ -405,7 +811,7 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                     {selectedRecord.items.map((item) => {
                       const subtotal = calculateBudgetLineSubtotal(item);
                       const linkedProduct = resolveRecordItemProduct(item);
-                      const itemImage = linkedProduct?.image;
+                      const itemImage = linkedProduct?.imageThumb || linkedProduct?.image_thumb || linkedProduct?.image;
                       const resolvedCategory = linkedProduct?.category || item.category || 'Sin categoría';
                       const stockLabel =
                         linkedProduct?.stock !== undefined
@@ -419,7 +825,7 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                       return <div key={item.id} className="overflow-hidden rounded-[16px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(241,245,249,0.98)_100%)] shadow-[0_8px_20px_rgba(148,163,184,0.1)]">
                         <div className="relative aspect-[16/10] overflow-hidden border-b border-slate-200 bg-slate-100">
                           {itemImage ? (
-                            <img src={itemImage} alt={item.title} className="h-full w-full object-cover" />
+                            <img src={itemImage} alt={item.title} loading="lazy" decoding="async" fetchpriority="low" className="h-full w-full object-cover" />
                           ) : (
                             <div className="flex h-full w-full flex-col items-center justify-center bg-[radial-gradient(circle_at_top,rgba(224,231,255,0.95),rgba(226,232,240,0.98))] px-3 text-center text-slate-500">
                               <Package size={22} className="mb-1.5 text-slate-400" />
@@ -485,25 +891,30 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
 
       <BudgetBuilderModal isOpen={isBudgetModalOpen} onClose={() => { setIsBudgetModalOpen(false); setEditingBudget(null); }} inventory={inventory} categories={categories} members={members} offers={offers} initialRecord={editingBudget} onSave={handleSaveBudget} isSaving={isSavingBudget} />
 
-      {convertTarget && <MiniModal title="Convertir a pedido" onClose={() => setConvertTarget(null)}><div className="space-y-3">
+      {convertTarget && <MiniModal title="Convertir a pedido" onClose={() => { setConvertTarget(null); setConvertPaymentDraft(createOrderPaymentDraft(0)); }}><div className="space-y-3">
         <label className="block rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2"><span className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400"><CalendarRange size={11} />Fecha de retiro</span><input type="date" value={pickupDate} onChange={(e) => setPickupDate(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none" /></label>
         <label className="block rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2"><span className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400"><CreditCard size={11} />Seña inicial</span><input type="number" min="0" step="0.01" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none" /></label>
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-semibold text-slate-600">Total del presupuesto: <span className="font-black text-slate-800">{formatCurrency(convertTarget.totalAmount)}</span></div>
+        <OrderPaymentEditor draft={convertPaymentDraft} onChange={setConvertPaymentDraft} maxAmount={convertTarget.totalAmount || 0} title="Seña inicial" hint="Cada seña puede cobrarse con uno o dos métodos." />
         <div className="flex gap-2 pt-1">
-          <button type="button" onClick={() => setConvertTarget(null)} className="flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-100">Cancelar</button>
-          <button type="button" onClick={handleConvertBudget} disabled={isConverting} className="flex-1 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-black text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60">{isConverting ? 'Convirtiendo...' : 'Crear pedido'}</button>
+          <button type="button" onClick={() => { setConvertTarget(null); setConvertPaymentDraft(createOrderPaymentDraft(0)); }} className="flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-100">Cancelar</button>
+          <AsyncActionButton type="button" onAction={handleConvertBudget} pending={isConverting} disabled={isConverting} loadingLabel="Convirtiendo..." className="flex-1 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-black text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60">Crear pedido</AsyncActionButton>
         </div>
       </div></MiniModal>}
 
-      {paymentTarget && <MiniModal title="Registrar pago" onClose={() => setPaymentTarget(null)}><div className="space-y-3">
+      {paymentTarget && <MiniModal title="Registrar pago" onClose={() => { setPaymentTarget(null); setPaymentDraft(createOrderPaymentDraft(0)); }}><div className="space-y-3">
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-semibold text-slate-600">Restante actual: <span className="font-black text-slate-800">{formatCurrency(paymentTarget.remainingAmount)}</span></div>
+        <OrderPaymentEditor draft={paymentDraft} onChange={setPaymentDraft} maxAmount={paymentTarget.remainingAmount || 0} title="Monto a registrar" hint="Podés repartir este abono entre dos métodos si hace falta." />
         <label className="block rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2"><span className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400"><Wallet size={11} />Monto a registrar</span><input type="number" min="0" step="0.01" value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none" /></label>
         <div className="flex gap-2 pt-1">
-          <button type="button" onClick={() => setPaymentTarget(null)} className="flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-100">Cancelar</button>
-          <button type="button" onClick={handleSavePayment} disabled={isSavingPayment} className="flex-1 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-black text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60">{isSavingPayment ? 'Guardando...' : 'Aplicar pago'}</button>
+          <button type="button" onClick={() => { setPaymentTarget(null); setPaymentDraft(createOrderPaymentDraft(0)); }} className="flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-100">Cancelar</button>
+          <AsyncActionButton type="button" onAction={handleSavePayment} pending={isSavingPayment} disabled={isSavingPayment} loadingLabel="Guardando..." className="flex-1 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-black text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60">Aplicar pago</AsyncActionButton>
         </div>
       </div></MiniModal>}
     </>
   );
 }
+
+
+
 

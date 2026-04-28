@@ -14,9 +14,11 @@ import {
 // ♻️ FIX: Importamos formatNumber y FancyPrice
 import { formatNumber } from '../../utils/helpers';
 import { hasOwnerAccess } from '../../utils/appUsers';
+import { hasPermission } from '../../utils/userPermissions';
 import { FancyPrice } from '../FancyPrice';
 
 export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, currentUser, setTempOpeningBalance, setIsOpeningBalanceModalOpen, globalFilter, expenses = [], onOpenExpenseModal }) => {
+  const canManageExpenses = hasPermission(currentUser, 'extras.expenses.manage');
   const getPeriodText = (prefix) => {
     if (globalFilter === 'day') return `${prefix} del Dia`;
     if (globalFilter === 'week') return `${prefix} Semanal`;
@@ -111,7 +113,7 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
         <div className="bg-white p-4 rounded-xl shadow-sm border border-red-100 relative overflow-hidden flex flex-col justify-between h-32">
           <div className="flex justify-between items-start z-10">
             <span className="text-[15px] font-bold text-red-400 uppercase">{getPeriodText('Gastos')}</span>
-            {onOpenExpenseModal && hasOwnerAccess(currentUser) && (
+            {onOpenExpenseModal && canManageExpenses && (
               <button
                 onClick={onOpenExpenseModal}
                 className="text-red-400 hover:text-red-600 bg-red-50 hover:bg-red-100 p-1 rounded transition"

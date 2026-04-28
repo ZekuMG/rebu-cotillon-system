@@ -13,6 +13,8 @@ import UserDisplayBadge from '../components/UserDisplayBadge';
 import UserAvatar from '../components/UserAvatar';
 import ColorSpectrumPicker from '../components/ColorSpectrumPicker';
 import UserPermissionsEditor from '../components/UserPermissionsEditor';
+import AsyncActionButton from '../components/AsyncActionButton';
+import usePendingAction from '../hooks/usePendingAction';
 
 const DEFAULT_FORM = {
   displayName: '',
@@ -203,15 +205,17 @@ function UserFormCard({ mode = 'create', value, onChange, onSubmit, onCancel, is
             Cancelar
           </button>
         )}
-        <button
+        <AsyncActionButton
           type="button"
-          onClick={onSubmit}
+          onAction={onSubmit}
+          pending={isSaving}
           disabled={isSaving}
+          loadingLabel="Guardando..."
           className="inline-flex items-center gap-2 rounded-[14px] border border-fuchsia-200 bg-fuchsia-600 px-4 py-2 text-sm font-black text-white transition hover:bg-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Plus size={14} />
-          {isSaving ? 'Guardando...' : mode === 'create' ? 'Crear usuario' : 'Guardar cambios'}
-        </button>
+          {mode === 'create' ? 'Crear usuario' : 'Guardar cambios'}
+        </AsyncActionButton>
       </div>
     </div>
   );
@@ -239,6 +243,7 @@ export default function UserManagementView({
   const [isSavingData, setIsSavingData] = useState(false);
   const [isSavingPermissions, setIsSavingPermissions] = useState(false);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
+  const { isPending, runAction } = usePendingAction();
 
   const canCreateUsers = hasPermission(currentUser, 'userManagement.createUsers');
   const isCurrentUserSystem = isSystemUser(currentUser);
@@ -587,16 +592,20 @@ export default function UserManagementView({
                       </button>
                     )}
                     {!isSystemRow && canToggleActive && (
-                      <button
+                      <AsyncActionButton
                         type="button"
-                        onClick={async () => {
-                          try {
-                            await onToggleUserActive?.(user);
-                          } catch {
-                            // manejado arriba
-                          }
-                        }}
+                        onAction={() =>
+                          runAction(`toggle-user:${user.id}`, async () => {
+                            try {
+                              await onToggleUserActive?.(user);
+                            } catch {
+                              // manejado arriba
+                            }
+                          })
+                        }
+                        pending={isPending(`toggle-user:${user.id}`)}
                         disabled={!isSharedUsersEnabled}
+                        loadingLabel={user.isActive ? 'Desactivando...' : 'Reactivando...'}
                         className={`inline-flex items-center gap-1 rounded-[12px] border px-3 py-1.5 text-[11px] font-bold transition disabled:cursor-not-allowed disabled:opacity-60 ${
                           user.isActive
                             ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
@@ -605,7 +614,7 @@ export default function UserManagementView({
                       >
                         <Power size={12} />
                         {user.isActive ? 'Desactivar' : 'Reactivar'}
-                      </button>
+                      </AsyncActionButton>
                     )}
                   </div>
                 </div>

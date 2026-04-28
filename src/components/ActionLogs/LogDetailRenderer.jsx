@@ -1,6 +1,7 @@
-// src/components/ActionLogs/LogDetailRenderer.jsx
+﻿// src/components/ActionLogs/LogDetailRenderer.jsx
 import React, { useState } from 'react';
 import { ArrowRight, CheckCircle, Edit3, Plus, Save, AlertTriangle, FileText, Download } from 'lucide-react';
+import AsyncActionButton from '../AsyncActionButton';
 import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
 import { HintIcon } from '../HintIcon';
@@ -51,7 +52,7 @@ const getManagedUserDisplayName = (details = {}) => details.displayName || detai
 const getManagedUserRoleLabel = (role) => {
   const normalized = String(role || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
   if (['system', 'sistema', 'admin'].includes(normalized)) return 'Sistema';
-  if (['owner', 'dueno', 'duenio'].includes(normalized)) return 'Dueño';
+  if (['owner', 'dueno', 'duenio'].includes(normalized)) return 'Caja';
   if (['seller', 'vendedor', 'caja'].includes(normalized)) return 'Caja';
   return role || 'Usuario';
 };
@@ -61,9 +62,9 @@ const getManagedUserRoleLabel = (role) => {
 // ════════════════════════════════════════════
 
 const Card = ({ icon, title, children }) => (
-  <div className="bg-white border border-[#d4d9e3] rounded-[14px] p-4 shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
-    <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-3 flex items-center gap-2">
-      <span className="text-sm">{icon}</span> {title}
+  <div className="bg-white border border-[#d4d9e3] rounded-[14px] p-3.5 shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
+    <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-2.5 flex items-center gap-2">
+      <span className="text-[13px] leading-none">{icon}</span> {title}
     </div>
     <div className="space-y-1.5">
       {children}
@@ -72,25 +73,43 @@ const Card = ({ icon, title, children }) => (
 );
 
 const Item = ({ label, value, children, className = '' }) => (
-  <div className={`flex justify-between items-center px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1] ${className}`}>
-    <span className="text-slate-500 font-medium">{label}</span>
+  <div className={`flex justify-between items-center px-3 py-1.5 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1] ${className}`}>
+    <span className="text-slate-500 font-medium pr-3">{label}</span>
     <span className="font-bold text-slate-800 text-right">{children || value}</span>
   </div>
 );
 
-const ProductItem = ({ qty, name, totalAmount, isWeight }) => (
-  <div className="flex justify-between items-center px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1]">
-    <span className="text-slate-500 font-medium flex items-center truncate flex-1 mr-2">
-      <span className="font-mono text-[9px] font-bold bg-[#e0e4eb] text-slate-600 px-1.5 py-0.5 rounded mr-2 whitespace-nowrap">
-        {isWeight ? `${qty}g` : `${qty}x`}
-      </span>
-      <span className="truncate">{name}</span>
-    </span>
-    <span className="font-bold text-slate-800 whitespace-nowrap">
-      {totalAmount === 'GRATIS' ? 'GRATIS' : <FancyPrice amount={totalAmount} />}
-    </span>
-  </div>
+const isRedemptionDiscountItem = (item = {}) => (
+  item.isDiscount ||
+  item.type === 'discount' ||
+  Number(item.price || 0) < 0
 );
+
+const getLoggedItemTotal = (item = {}, qty = 1) => {
+  const price = Number(item.price || 0);
+  const safeQty = Number(qty) || 1;
+  if (isRedemptionDiscountItem(item)) return price * safeQty;
+  if (item.isReward) return 'GRATIS';
+  return price * safeQty;
+};
+
+const ProductItem = ({ qty, name, totalAmount, isWeight }) => {
+  const isDiscountAmount = totalAmount !== 'GRATIS' && Number(totalAmount) < 0;
+
+  return (
+    <div className="flex justify-between items-center px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1]">
+      <span className="text-slate-500 font-medium flex items-center truncate flex-1 mr-2">
+        <span className="font-mono text-[9px] font-bold bg-[#e0e4eb] text-slate-600 px-1.5 py-0.5 rounded mr-2 whitespace-nowrap">
+          {isWeight ? `${qty}g` : `${qty}x`}
+        </span>
+        <span className="truncate">{name}</span>
+      </span>
+      <span className={`font-bold whitespace-nowrap ${isDiscountAmount ? 'text-red-600' : 'text-slate-800'}`}>
+        {totalAmount === 'GRATIS' ? 'GRATIS' : <FancyPrice amount={totalAmount} />}
+      </span>
+    </div>
+  );
+};
 
 const StockChangeItem = ({ title, quantitySold, beforeStock, afterStock, isWeight }) => (
   <div className="flex justify-between items-center px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1]">
@@ -340,13 +359,15 @@ const EditableReasonCard = ({ note, logId, onUpdateNote }) => {
           >
             Cancelar
           </button>
-          <button 
-            onClick={handleSave}
+          <AsyncActionButton
+            onAction={handleSave}
+            pending={isSaving}
             disabled={isSaving}
+            loadingLabel="Guardando..."
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
           >
             {isSaving ? 'Guardando...' : <><Save size={12} /> Guardar Nota</>}
-          </button>
+          </AsyncActionButton>
         </div>
       </div>
     );
@@ -670,7 +691,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
           {items.map((item, idx) => {
             const q = item.quantity || item.qty || 0;
             const isWeight = item.product_type === 'weight' || item.isWeight || (q >= 20 && item.price < 50);
-            const totalMonto = item.isReward ? 'GRATIS' : (item.price || 0) * q;
+            const totalMonto = getLoggedItemTotal(item, q);
             return (
               <ProductItem
                 key={idx}
@@ -1052,7 +1073,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
             {items.map((item, idx) => {
               const q = item.quantity || item.qty || 0;
               const isWeight = item.product_type === 'weight' || item.isWeight || (q >= 20 && item.price < 50);
-              const totalMonto = item.isReward ? 'GRATIS' : (item.price || 0) * q;
+              const totalMonto = getLoggedItemTotal(item, q);
               
               return (
                 <ProductItem
@@ -1226,7 +1247,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
               {itemsSnapshot.map((item, idx) => {
                  const q = item.qty || item.quantity || 0;
                  const isWeight = item.product_type === 'weight' || item.isWeight || (q >= 20 && item.price < 50);
-                 const totalMonto = item.isReward ? 'GRATIS' : (item.price || 0) * q;
+                 const totalMonto = getLoggedItemTotal(item, q);
                  return (
                   <ProductItem
                     key={idx}
@@ -1541,29 +1562,147 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
 
     case 'Edición Producto': {
       const productName = details.product || details.title || details.name || 'Producto';
+      const formatProductSnapshotValue = (value, fallback = '--') => {
+        if (value === null || value === undefined) return fallback;
+        const text = String(value).trim();
+        return text === '' ? fallback : text;
+      };
+      const mapChangeFieldToSnapshotKey = (field) => {
+        const normalized = String(field || '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim()
+          .toLowerCase();
 
-      if (details.changes && typeof details.changes === 'object' && !Array.isArray(details.changes) && Object.keys(details.changes).length > 0) {
-        const fieldNames = {
-          title: 'Nombre', purchasePrice: 'Costo', price: 'Precio',
-          stock: 'Stock', category: 'Categoría', brand: 'Marca',
-          barcode: 'Código', weight: 'Peso', product: 'Nombre'
-        };
+        if (['nombre', 'title', 'product'].includes(normalized)) return 'title';
+        if (['categoria', 'category'].includes(normalized)) return 'category';
+        if (['precio venta', 'price', 'precio'].includes(normalized)) return 'price';
+        if (['precio costo', 'purchaseprice', 'costo'].includes(normalized)) return 'purchasePrice';
+        if (['stock'].includes(normalized)) return 'stockLabel';
+        if (['tipo', 'product_type'].includes(normalized)) return 'productTypeLabel';
+        if (['codigo', 'barcode'].includes(normalized)) return 'barcode';
+        if (['vencimiento', 'expiration_date'].includes(normalized)) return 'expiration_date';
+        if (['imagen', 'imagestate'].includes(normalized)) return 'imageState';
+        return null;
+      };
+
+      const baseAfterSnapshot = {
+        title: details.title || details.product || details.name || '',
+        category: details.category || '',
+        price: Number(details.price || 0),
+        purchasePrice: Number(details.purchasePrice || 0),
+        stock: Number(details.stock || 0),
+        stockLabel: `${formatNumber(Number(details.stock || 0))} ${details.product_type === 'weight' ? 'g' : 'uds'}`,
+        product_type: details.product_type || 'quantity',
+        productTypeLabel: details.product_type === 'weight' ? 'Por peso (kg/g)' : 'Por unidad',
+        barcode: formatProductSnapshotValue(details.barcode),
+        expiration_date: formatProductSnapshotValue(details.expiration_date),
+        imageState: details.imageChanged === 'Sí' ? 'Cargada' : formatProductSnapshotValue(details.imageState || (details.image ? 'Cargada' : 'Sin imagen')),
+      };
+
+      const normalizedChanges = Array.isArray(details.changes)
+        ? details.changes
+        : (details.changes && typeof details.changes === 'object' && Object.keys(details.changes).length > 0)
+          ? Object.entries(details.changes).map(([key, val]) => {
+              const fieldNames = {
+                title: 'Nombre',
+                purchasePrice: 'Precio Costo',
+                price: 'Precio Venta',
+                stock: 'Stock',
+                category: 'Categoría',
+                brand: 'Marca',
+                barcode: 'Código',
+                weight: 'Peso',
+                product: 'Nombre',
+                expiration_date: 'Vencimiento',
+                product_type: 'Tipo',
+              };
+              return {
+                field: fieldNames[key] || key,
+                old: val.old,
+                new: val.new,
+                isPrice: key.toLowerCase().includes('price'),
+              };
+            })
+          : [];
+
+      const derivedBeforeSnapshot = normalizedChanges.length > 0
+        ? normalizedChanges.reduce((snapshot, change) => {
+            const targetKey = mapChangeFieldToSnapshotKey(change.field);
+            if (!targetKey) return snapshot;
+            return { ...snapshot, [targetKey]: change.old ?? snapshot[targetKey] };
+          }, { ...baseAfterSnapshot })
+        : null;
+
+      const derivedAfterSnapshot = normalizedChanges.length > 0
+        ? normalizedChanges.reduce((snapshot, change) => {
+            const targetKey = mapChangeFieldToSnapshotKey(change.field);
+            if (!targetKey) return snapshot;
+            return { ...snapshot, [targetKey]: change.new ?? snapshot[targetKey] };
+          }, { ...baseAfterSnapshot })
+        : null;
+
+      const beforeSnapshot = (details.before && typeof details.before === 'object' ? details.before : null) || derivedBeforeSnapshot;
+      const afterSnapshot = (details.after && typeof details.after === 'object' ? details.after : null) || derivedAfterSnapshot;
+
+      if (beforeSnapshot || afterSnapshot || normalizedChanges.length > 0) {
         return (
           <div className="space-y-4">
             <Card icon="📦" title="Producto Modificado">
               <Item label="Producto" value={productName} />
+              {details.id && <Item label="ID" value={`#${details.id}`} />}
             </Card>
-            <Card icon="🔄" title="Cambios Realizados">
-              {Object.entries(details.changes).map(([key, val]) => (
-                <ChangeRow
-                  key={key}
-                  field={fieldNames[key] || key}
-                  oldVal={val.old}
-                  newVal={val.new}
-                  isPrice={key.toLowerCase().includes('price')}
-                />
-              ))}
-            </Card>
+
+            {(beforeSnapshot || afterSnapshot) && (
+              <Card icon="🔄" title="Antes y Después">
+                <div className="grid gap-3 md:grid-cols-2">
+                  {beforeSnapshot && (
+                    <div className="rounded-[12px] border border-[#fecaca] bg-[#fff1f2] p-3 space-y-2">
+                      <div className="text-[10px] font-extrabold uppercase tracking-wider text-[#b91c1c]">Antes</div>
+                      <Item label="Nombre" value={formatProductSnapshotValue(beforeSnapshot.title)} className="!bg-white/80 !border-[#fecdd3]" />
+                      <Item label="Categoría" value={formatProductSnapshotValue(beforeSnapshot.category)} className="!bg-white/80 !border-[#fecdd3]" />
+                      <Item label="Precio Venta" className="!bg-white/80 !border-[#fecdd3]"><FancyPrice amount={Number(beforeSnapshot.price || 0)} /></Item>
+                      <Item label="Precio Costo" className="!bg-white/80 !border-[#fecdd3]"><FancyPrice amount={Number(beforeSnapshot.purchasePrice || 0)} /></Item>
+                      <Item label="Stock" value={formatProductSnapshotValue(beforeSnapshot.stockLabel || beforeSnapshot.stock)} className="!bg-white/80 !border-[#fecdd3]" />
+                      <Item label="Tipo" value={formatProductSnapshotValue(beforeSnapshot.productTypeLabel || beforeSnapshot.product_type)} className="!bg-white/80 !border-[#fecdd3]" />
+                      <Item label="Código" value={formatProductSnapshotValue(beforeSnapshot.barcode)} className="!bg-white/80 !border-[#fecdd3]" />
+                      <Item label="Vencimiento" value={formatProductSnapshotValue(beforeSnapshot.expiration_date)} className="!bg-white/80 !border-[#fecdd3]" />
+                      <Item label="Imagen" value={formatProductSnapshotValue(beforeSnapshot.imageState)} className="!bg-white/80 !border-[#fecdd3]" />
+                    </div>
+                  )}
+
+                  {afterSnapshot && (
+                    <div className="rounded-[12px] border border-[#bbf7d0] bg-[#f0fdf4] p-3 space-y-2">
+                      <div className="text-[10px] font-extrabold uppercase tracking-wider text-[#15803d]">Después</div>
+                      <Item label="Nombre" value={formatProductSnapshotValue(afterSnapshot.title)} className="!bg-white/80 !border-[#d1fae5]" />
+                      <Item label="Categoría" value={formatProductSnapshotValue(afterSnapshot.category)} className="!bg-white/80 !border-[#d1fae5]" />
+                      <Item label="Precio Venta" className="!bg-white/80 !border-[#d1fae5]"><FancyPrice amount={Number(afterSnapshot.price || 0)} /></Item>
+                      <Item label="Precio Costo" className="!bg-white/80 !border-[#d1fae5]"><FancyPrice amount={Number(afterSnapshot.purchasePrice || 0)} /></Item>
+                      <Item label="Stock" value={formatProductSnapshotValue(afterSnapshot.stockLabel || afterSnapshot.stock)} className="!bg-white/80 !border-[#d1fae5]" />
+                      <Item label="Tipo" value={formatProductSnapshotValue(afterSnapshot.productTypeLabel || afterSnapshot.product_type)} className="!bg-white/80 !border-[#d1fae5]" />
+                      <Item label="Código" value={formatProductSnapshotValue(afterSnapshot.barcode)} className="!bg-white/80 !border-[#d1fae5]" />
+                      <Item label="Vencimiento" value={formatProductSnapshotValue(afterSnapshot.expiration_date)} className="!bg-white/80 !border-[#d1fae5]" />
+                      <Item label="Imagen" value={formatProductSnapshotValue(afterSnapshot.imageState)} className="!bg-white/80 !border-[#d1fae5]" />
+                    </div>
+                  )}
+                </div>
+              </Card>
+            )}
+
+            {normalizedChanges.length > 0 && (
+              <Card icon="🔄" title="Cambios Realizados">
+                {normalizedChanges.map((change, idx) => (
+                  <ChangeRow
+                    key={`${change.field || 'cambio'}-${idx}`}
+                    field={change.field || 'Cambio'}
+                    oldVal={change.old ?? '—'}
+                    newVal={change.new ?? '—'}
+                    isPrice={change.isPrice === true}
+                  />
+                ))}
+              </Card>
+            )}
+
             <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
           </div>
         );
@@ -1571,21 +1710,32 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
 
       return (
         <div className="space-y-4">
-          <Card icon="📦" title="Estado Actual del Producto">
+          <Card icon="📦" title="Producto Modificado">
             <Item label="Producto" value={productName} />
+            {details.id && <Item label="ID" value={`#${details.id}`} />}
+          </Card>
+          <Card icon="🔄" title="Después">
+            <Item label="Nombre" value={productName} />
             <Item label="Categoría">
               <Badge color="fuchsia">{details.category || '-'}</Badge>
             </Item>
-            <Item label="Precio">
+            <Item label="Precio Venta">
               <span className="text-[#059669] font-bold"><FancyPrice amount={details.price} /></span>
             </Item>
+            {details.purchasePrice !== undefined && details.purchasePrice !== null && (
+              <Item label="Precio Costo">
+                <FancyPrice amount={details.purchasePrice} />
+              </Item>
+            )}
             <Item label="Stock">
               <Badge color="blue">{formatNumber(details.stock)} {details.product_type === 'weight' ? 'g' : 'uds'}</Badge>
             </Item>
             {details.product_type && (
               <Item label="Tipo" value={details.product_type === 'weight' ? 'Por peso (kg/g)' : 'Por unidad'} />
             )}
+            {details.barcode && <Item label="Código" value={details.barcode} />}
           </Card>
+          <WarnCard>Este registro es legacy. El estado anterior no quedó guardado en ese momento.</WarnCard>
           <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );
@@ -1673,8 +1823,8 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
       );
     }
 
-    case 'Actualizaci\u00f3n Masiva':
-    case 'Edici\u00f3n Masiva Categor\u00edas': {
+    case 'Actualización Masiva':
+    case 'Edición Masiva Categor\u00edas': {
       const changeList = details.changes || details.details || [];
       return (
         <div className="space-y-4">
@@ -1720,7 +1870,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
       );
     }
 
-    case 'Edici\u00f3n Masiva': {
+    case 'Edición Masiva': {
       const items = Array.isArray(details.items) ? details.items : [];
       return (
         <div className="space-y-4">

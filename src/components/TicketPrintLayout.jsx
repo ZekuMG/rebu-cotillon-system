@@ -1,6 +1,7 @@
 import React from 'react';
 // ♻️ FIX: Importamos formatCurrency y formatNumber
 import { formatCurrency, formatNumber, formatTime24 } from '../utils/helpers';
+import { getPaymentBreakdownDisplayItems, getPaymentSummary } from '../utils/paymentBreakdown';
 
 // =============================================
 // VERSIÓN A: 24 Caracteres por línea
@@ -35,6 +36,20 @@ const divider = () => '-'.repeat(LINE_WIDTH);
 
 export const TicketPrintLayout = ({ transaction }) => {
   if (!transaction) return null;
+
+  const paymentItems = getPaymentBreakdownDisplayItems(
+    transaction.paymentBreakdown,
+    transaction.payment,
+    transaction.installments,
+    transaction.cashReceived,
+    transaction.cashChange,
+    transaction.total,
+  );
+  const paymentSummary = getPaymentSummary(
+    transaction.paymentBreakdown,
+    transaction.payment,
+    transaction.installments,
+  );
 
   // --- 1. PREPARACIÓN DE DATOS ---
   const formattedId = String(transaction.id).padStart(6, '0');
@@ -77,13 +92,13 @@ export const TicketPrintLayout = ({ transaction }) => {
   const lines = [];
 
   // HEADER
-  lines.push(center('COTILLON REBU'));
-  lines.push(center('Art. para Fiestas'));
+  lines.push(center('REBU COTILLON'));
+  lines.push(center('Articulos para Fiestas'));
   lines.push(divider());
   lines.push(center('Calle 158 4440'));
   lines.push(center('Berazategui'));
-  lines.push(center('Tel: 11-5483-0409'));
-  lines.push(center('IG: @rebucotillon'));
+  lines.push(center('Número: 11 6638-4715'));
+  lines.push(center('Insta: @rebucotillon'));
   lines.push(divider());
 
   // SECCIÓN SOCIO
@@ -152,11 +167,13 @@ export const TicketPrintLayout = ({ transaction }) => {
     
     lines.push(line('TOTAL', formatCurrency(transaction.total)));
     
-    lines.push(`PAGO: ${String(transaction.payment).toUpperCase()}`);
-    
-    if (transaction.payment === 'Credito' && transaction.installments > 1) {
-       lines.push(`CUOTAS: ${transaction.installments}`); 
-    }
+    lines.push(`PAGO: ${String(paymentSummary).toUpperCase()}`);
+    paymentItems.forEach((paymentItem) => {
+      lines.push(line(paymentItem.title.toUpperCase(), formatCurrency(paymentItem.chargedAmount || 0)));
+      if (paymentItem.method === 'Efectivo' && Number(paymentItem.cashChange || 0) > 0) {
+        lines.push(line('DEVOLUCION', formatCurrency(paymentItem.cashChange || 0)));
+      }
+    });
   }
 
   // FOOTER

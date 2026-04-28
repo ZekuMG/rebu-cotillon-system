@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Search,
   ShoppingCart,
@@ -27,11 +27,55 @@ import {
 import Swal from 'sweetalert2'; // Para las alertas inteligentes
 import { PAYMENT_METHODS } from '../data';
 import { formatWeight } from '../utils/helpers';
+import AsyncActionButton from '../components/AsyncActionButton';
 import { FancyPrice } from '../components/FancyPrice';
 import { HintIcon } from '../components/HintIcon';
+import usePendingAction from '../hooks/usePendingAction';
 import { normalizeLegacyOffer } from '../utils/offerHelpers';
+import {
+  createPaymentLine,
+  getPaymentBreakdownTotals,
+  getPaymentLineCashChange,
+  getPaymentLineCashMissing,
+  getPaymentLineCashReceived,
+  getPaymentLineChargedTotal,
+  getPaymentLineSurcharge,
+  getPaymentMethodLabel,
+  getPaymentSummary,
+  normalizePaymentBreakdown,
+} from '../utils/paymentBreakdown';
 
 const POS_BATCH_SIZE = 50;
+const POS_CART_DEFAULT_WIDTH = 384;
+const POS_CART_MIN_WIDTH = 352;
+const POS_CART_MAX_WIDTH = 520;
+
+const clampCartWidth = (value) => Math.min(POS_CART_MAX_WIDTH, Math.max(POS_CART_MIN_WIDTH, value));
+
+const formatComboIncludedQty = (quantity, productType) => {
+  const safeQuantity = Number(quantity || 0);
+  return productType === 'weight' ? formatWeight(safeQuantity) : `x${safeQuantity}`;
+};
+
+const getComboIncludedUnitPrice = (item) => {
+  const price = Number(item?.price || 0);
+  if (!price) return null;
+  return item?.product_type === 'weight' ? price * 1000 : price;
+};
+
+const normalizePaymentInputValue = (value) => {
+  const normalizedValue = String(value ?? '').replace(',', '.').replace(/[^\d.]/g, '');
+  const [integerPart, ...decimalParts] = normalizedValue.split('.');
+  if (decimalParts.length === 0) return integerPart;
+  return `${integerPart}.${decimalParts.join('').slice(0, 2)}`;
+};
+
+const getEditableCashInputValue = (line) => {
+  if (!line || line.method !== 'Efectivo') return '';
+  if (line.cashReceived === null || line.cashReceived === undefined) return '';
+  if (line.cashReceived === 0) return '';
+  return String(line.cashReceived);
+};
 
 const isProductExpired = (dateString) => {
   if (!dateString) return false;
@@ -50,6 +94,7 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
   const quickAmounts = [50, 100, 250, 500, 1000];
   
   const expired = isProductExpired(product.expiration_date);
+  const productImage = product.imageThumb || product.image_thumb || product.image;
 
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
@@ -64,8 +109,8 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
         <div className="p-5 space-y-4">
           <div className="flex items-center gap-3">
             <div className="w-14 h-14 rounded-lg bg-slate-100 overflow-hidden border shrink-0 relative">
-              {product.image ? (
-                <img src={product.image} alt="" className="w-full h-full object-cover" />
+              {productImage ? (
+                <img src={productImage} alt="" decoding="async" className="w-full h-full object-cover" />
               ) : (
                 <div className="w-full h-full flex items-center justify-center bg-slate-200 text-[9px] font-bold text-slate-400 text-center p-1">{product.title.slice(0, 12)}</div>
               )}
@@ -77,7 +122,7 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
               </h4>
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-xs text-amber-600 font-bold"><FancyPrice amount={product.price * 1000} />/kg</span>
-                <span className="text-[10px] text-slate-400">•</span>
+                <span className="text-[10px] text-slate-400">·</span>
                 <span className="text-[10px] text-slate-500">Disponible: {formatWeight(effectiveStock)}</span>
               </div>
             </div>
@@ -100,7 +145,7 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
             <div className="bg-slate-50 rounded-xl p-3 border text-center">
               <p className="text-[10px] text-slate-400 uppercase font-bold">Total estimado</p>
               <p className="text-2xl font-black text-slate-900"><FancyPrice amount={totalPrice} /></p>
-              <p className="text-[10px] text-slate-500">{formatWeight(gramsNum)} × <FancyPrice amount={product.price * 1000} />/kg</p>
+              <p className="text-[10px] text-slate-500">{formatWeight(gramsNum)} x <FancyPrice amount={product.price * 1000} />/kg</p>
             </div>
           )}
           <div className="flex gap-3">
@@ -265,7 +310,6 @@ export default function POSView({
   userCatalog: _userCatalog = null,
 }) {
   const [showGridMenu, setShowGridMenu] = useState(false);
-  const cashReceivedInputRef = useRef(null);
   const [weightModalProduct, setWeightModalProduct] = useState(null);
   const [editingWeightItemId, setEditingWeightItemId] = useState(null);
   const [editingWeightValue, setEditingWeightValue] = useState('');
@@ -276,7 +320,32 @@ export default function POSView({
   const [isDiscountDrawerOpen, setIsDiscountDrawerOpen] = useState(false);
   const [customDiscountPercent, setCustomDiscountPercent] = useState('');
   const [visibleCount, setVisibleCount] = useState(POS_BATCH_SIZE);
-  const [cashReceivedInput, setCashReceivedInput] = useState('');
+  const [paymentLines, setPaymentLines] = useState([createPaymentLine({ method: selectedPayment || 'Efectivo', installments: installments || 1, cashReceived: '' })]);
+  const [isSplitPaymentMode, setIsSplitPaymentMode] = useState(false);
+  const [activeSplitLineIndex, setActiveSplitLineIndex] = useState(0);
+  const { isPending, runAction } = usePendingAction();
+  const [cartPanelWidth, setCartPanelWidth] = useState(() => {
+    if (typeof window === 'undefined') return POS_CART_DEFAULT_WIDTH;
+    const storedWidth = Number(window.localStorage.getItem('rebu-pos-cart-width'));
+    return Number.isFinite(storedWidth) ? clampCartWidth(storedWidth) : POS_CART_DEFAULT_WIDTH;
+  });
+
+  const startCartResize = (event) => {
+    event.preventDefault();
+
+    const handlePointerMove = (moveEvent) => {
+      const nextWidth = clampCartWidth(window.innerWidth - moveEvent.clientX);
+      setCartPanelWidth(nextWidth);
+    };
+
+    const stopResize = () => {
+      window.removeEventListener('mousemove', handlePointerMove);
+      window.removeEventListener('mouseup', stopResize);
+    };
+
+    window.addEventListener('mousemove', handlePointerMove);
+    window.addEventListener('mouseup', stopResize);
+  };
 
   const openMemberSelectPanel = () => {
     if (onOpenMemberPanel) {
@@ -307,22 +376,17 @@ export default function POSView({
   }, [posSearch, selectedCategory]);
 
   useEffect(() => {
-    if (selectedPayment === 'Efectivo') {
-      setCashReceivedInput('');
-      setTimeout(() => cashReceivedInputRef.current?.focus(), 0);
-      return;
+    if (cart.length === 0) {
+      setIsSplitPaymentMode(false);
+      setActiveSplitLineIndex(0);
+      setPaymentLines([createPaymentLine({ method: 'Efectivo', installments: 1, cashReceived: '' })]);
     }
-
-    if (selectedPayment !== 'Efectivo') {
-      setCashReceivedInput('');
-    }
-  }, [selectedPayment]);
+  }, [cart.length]);
 
   useEffect(() => {
-    if (cart.length === 0 && selectedPayment === 'Efectivo') {
-      setCashReceivedInput('');
-    }
-  }, [cart.length, selectedPayment]);
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('rebu-pos-cart-width', String(cartPanelWidth));
+  }, [cartPanelWidth]);
 
   const extractCouponCodeFromItem = (item) => {
     const title = String(item?.title || '');
@@ -432,6 +496,8 @@ export default function POSView({
       quantity: 1,
       isCustom: true,
       isDiscount: true,
+      discountMode: 'percentage',
+      discountPercent: percentage,
       product_type: 'quantity',
       description: `${percentage}% sobre el pedido actual`,
       stock: 999999
@@ -480,6 +546,8 @@ export default function POSView({
       isCustom: true,
       isDiscount: true,
       originalOfferId: offerId,
+      discountMode: canonical.discountMode === 'percentage' ? 'percentage' : 'fixed',
+      discountPercent: canonical.discountMode === 'percentage' ? configuredDiscountValue : 0,
       product_type: 'quantity',
       description:
         canonical.discountMode === 'percentage'
@@ -522,9 +590,13 @@ export default function POSView({
   const getComboAvailability = (offer) => {
     const requiredByProduct = (offer?.productsIncluded || []).reduce((acc, product) => {
       const productId = String(product.id);
+      const requiredQuantity = Math.max(
+        Number(product.quantity ?? product.qty ?? (product.product_type === 'weight' ? 1000 : 1)) || 0,
+        0
+      );
       acc[productId] = {
         product,
-        requiredQty: (acc[productId]?.requiredQty || 0) + 1,
+        requiredQty: (acc[productId]?.requiredQty || 0) + requiredQuantity,
       };
       return acc;
     }, {});
@@ -569,7 +641,7 @@ export default function POSView({
     const comboId = `combo_${Date.now()}`;
     const comboItem = {
       id: comboId,
-      title: `🎫 ${offer.name} (${offer.type})`,
+      title: `?? ${offer.name} (${offer.type})`,
       price: Number(offer.offerPrice),
       quantity: 1,
       isCombo: true,
@@ -595,7 +667,7 @@ export default function POSView({
   };
 
   // AUTO-CHEQUEO INTELIGENTE DE OFERTAS
-  const checkSmartDiscounts = () => {
+  const checkSmartDiscounts = async () => {
     const applicableOffers = [];
 
     // 1. Agrupamos cantidades del carrito por ID (ignorando premios o combos ya armados)
@@ -648,7 +720,7 @@ export default function POSView({
            if (discountAmount > 0) {
              applicableOffers.push({
                id: `desc_${offer.id}_${Date.now()}`,
-               title: `🎁 Promo ${offer.type}: ${offer.name}`,
+               title: `?? Promo ${offer.type}: ${offer.name}`,
                price: -discountAmount, // Precio negativo para restar al total
                quantity: 1,
                isCustom: true, // Ignora validación de stock
@@ -672,7 +744,7 @@ export default function POSView({
                   const discountAmount = diff * cartQtyMap[op.id];
                   applicableOffers.push({
                      id: `desc_mayo_${op.id}_${Date.now()}`,
-                     title: `💎 Mayorista: ${op.title}`,
+                     title: `?? Mayorista: ${op.title}`,
                      price: -discountAmount,
                      quantity: 1,
                      isCustom: true,
@@ -692,11 +764,11 @@ export default function POSView({
     if (applicableOffers.length > 0) {
        let htmlContent = '<ul style="text-align:left; font-size:14px; margin-top:10px; color:#475569;">';
        applicableOffers.forEach(o => {
-          htmlContent += `<li style="margin-bottom:4px;">✅ <b>${o.description}</b></li>`;
+          htmlContent += `<li style="margin-bottom:4px;">? <b>${o.description}</b></li>`;
        });
        htmlContent += '</ul>';
 
-       Swal.fire({
+       const result = await Swal.fire({
           title: '¡Ofertas Detectadas!',
           html: `El sistema detectó descuentos aplicables a este carrito:${htmlContent}`,
           icon: 'info',
@@ -705,14 +777,14 @@ export default function POSView({
           cancelButtonText: 'No, continuar así',
           confirmButtonColor: '#8b5cf6', 
           cancelButtonColor: '#94a3b8'
-       }).then((result) => {
-          if (result.isConfirmed) {
-             // Inyectamos los descuentos al carrito
+       });
+       if (result.isConfirmed) {
+          // Inyectamos los descuentos al carrito
              applicableOffers.forEach(discountItem => {
                 addToCart(discountItem);
              });
-             // Mensaje de éxito e interrupción para que el Usuario de Caja vea el carrito actualizado
-             Swal.fire({
+             // Mensaje de éxito e interrupción para que el usuario de caja vea el carrito actualizado
+             await Swal.fire({
                title: '¡Aplicado!',
                text: 'Revisa el total actualizado y presiona Cobrar nuevamente.',
                icon: 'success',
@@ -721,33 +793,191 @@ export default function POSView({
              });
           } else if (result.dismiss === Swal.DismissReason.cancel) {
              // El usuario decidió no aplicarlos, seguimos al cobro normal
-             proceedToCheckoutFlow();
+             await proceedToCheckoutFlow();
           }
-       });
        return true; // Retornamos true para pausar el handlePreCheckout
     }
     return false; // No hay ofertas, sigue de largo
   };
 
-  const proceedToCheckoutFlow = () => {
-    if (selectedPayment === 'Efectivo' && cashReceivedInput.trim() !== '' && cashReceivedAmount < total) {
-      Swal.fire('Monto insuficiente', 'El monto recibido en efectivo debe cubrir el total de la compra.', 'warning');
+  const proceedToCheckoutFlow = async () => {
+    if (hasOverassignedPayments) {
+      Swal.fire('Montos excedidos', 'La suma asignada supera el subtotal del pedido. Ajusta los tramos antes de cobrar.', 'warning');
+      return;
+    }
+    if (Math.abs(remainingBaseAmount) > 0.009) {
+      Swal.fire('Pago incompleto', 'Todavía falta asignar parte del pedido a un método de pago.', 'warning');
+      return;
+    }
+    if (cashMissingAmount > 0) {
+      Swal.fire('Monto insuficiente', 'El efectivo recibido debe cubrir el tramo en efectivo de la compra.', 'warning');
       return;
     }
     if (cart.length > 0 && !selectedClient) {
       openGuestPanel();
     } else {
-      handleCheckout({
-        cashReceived: selectedPayment === 'Efectivo' ? cashReceivedAmount : null,
-        cashChange: selectedPayment === 'Efectivo' ? cashChangeAmount : 0,
+      await handleCheckout?.({
+        paymentLines: normalizedPaymentLines,
+        cashReceived: cashReceivedAmount || null,
+        cashChange: cashChangeAmount || 0,
       });
     }
   };
 
-  const handlePreCheckout = () => {
-    const hasDiscountsPending = checkSmartDiscounts();
+  const handlePreCheckout = async () => {
+    const hasDiscountsPending = await checkSmartDiscounts();
     if (hasDiscountsPending) return; // Pausa
-    proceedToCheckoutFlow(); // Sigue
+    await proceedToCheckoutFlow(); // Sigue
+  };
+
+  const roundPaymentValue = (value) => Math.round((Number(value) || 0) * 100) / 100;
+  const getDefaultSplitSecondaryMethod = (primaryMethod) => (primaryMethod === 'Efectivo' ? 'MercadoPago' : 'Efectivo');
+
+  const buildTwoPaymentLines = (primaryInput = {}, secondaryInput = {}) => {
+    const safeSubtotal = Math.max(0, roundPaymentValue(subtotal));
+    const primaryMethod = primaryInput.method || selectedPayment || 'Efectivo';
+    const secondaryMethod = secondaryInput.method || getDefaultSplitSecondaryMethod(primaryMethod);
+    const primaryAmount = Math.min(Math.max(0, roundPaymentValue(primaryInput.amount)), safeSubtotal);
+    const secondaryAmount = Math.max(0, roundPaymentValue(safeSubtotal - primaryAmount));
+
+    return [
+      createPaymentLine({
+        id: primaryInput.id || 'split_primary',
+        method: primaryMethod,
+        amount: primaryAmount,
+        installments: primaryMethod === 'Credito' ? Number(primaryInput.installments || 1) : 1,
+        cashReceived: primaryMethod === 'Efectivo' ? getEditableCashInputValue({ ...primaryInput, method: primaryMethod }) : '',
+      }),
+      createPaymentLine({
+        id: secondaryInput.id || 'split_secondary',
+        method: secondaryMethod,
+        amount: secondaryAmount,
+        installments: secondaryMethod === 'Credito' ? Number(secondaryInput.installments || 1) : 1,
+        cashReceived: secondaryMethod === 'Efectivo' ? getEditableCashInputValue({ ...secondaryInput, method: secondaryMethod }) : '',
+      }),
+    ];
+  };
+
+  const handleToggleSplitPaymentMode = () => {
+    if (cart.length === 0 || subtotal <= 0) return;
+
+    if (isSplitPaymentMode) {
+      const primaryLine = paymentLines[0] || createPaymentLine({ method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
+      const nextInstallments = primaryLine.method === 'Credito' ? Number(primaryLine.installments || 1) : 1;
+      setPaymentLines([
+        createPaymentLine({
+          method: primaryLine.method || 'Efectivo',
+          amount: subtotal,
+          installments: nextInstallments,
+          cashReceived: primaryLine.method === 'Efectivo' ? getEditableCashInputValue(primaryLine) : '',
+        }),
+      ]);
+      setSelectedPayment?.(primaryLine.method || 'Efectivo');
+      setInstallments?.(nextInstallments);
+      setActiveSplitLineIndex(0);
+      setIsSplitPaymentMode(false);
+      return;
+    }
+
+    const primaryLine = paymentLines[0] || createPaymentLine({ method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
+    const secondarySeed = createPaymentLine({
+      id: 'split_secondary',
+      method: getDefaultSplitSecondaryMethod(primaryLine.method),
+      amount: 0,
+    });
+    const nextLines = buildTwoPaymentLines(
+      { ...primaryLine, id: 'split_primary', amount: subtotal },
+      secondarySeed,
+    );
+
+    setPaymentLines(nextLines);
+    setActiveSplitLineIndex(0);
+    setIsSplitPaymentMode(true);
+  };
+
+  const handleSelectPaymentMethod = (methodId) => {
+    if (isSplitPaymentMode) {
+      handleSplitMethodChange(activeSplitLineIndex, methodId);
+      return;
+    }
+    const nextInstallments = methodId === 'Credito' ? Number(installments || 1) : 1;
+    setSelectedPayment?.(methodId);
+    if (methodId !== 'Credito') {
+      setInstallments?.(1);
+    }
+    setPaymentLines([
+      createPaymentLine({
+        method: methodId,
+        amount: subtotal,
+        installments: nextInstallments,
+        cashReceived: methodId === 'Efectivo' ? '' : '',
+      }),
+    ]);
+  };
+
+  const handleInstallmentsChange = (value) => {
+    const nextInstallments = Number(value) || 1;
+    setInstallments?.(nextInstallments);
+    setPaymentLines((prev) => {
+      const currentLine = prev[0] || createPaymentLine({ method: 'Credito', amount: subtotal });
+      return [{ ...currentLine, method: 'Credito', amount: subtotal, installments: nextInstallments }];
+    });
+  };
+
+  const handleCashReceivedChange = (value) => {
+    const nextValue = normalizePaymentInputValue(value);
+    setPaymentLines((prev) => {
+      const currentLine = prev[0] || createPaymentLine({ method: 'Efectivo', amount: subtotal, cashReceived: '' });
+      return [{ ...currentLine, method: 'Efectivo', amount: subtotal, cashReceived: nextValue }];
+    });
+  };
+
+  const handleSplitMethodChange = (lineIndex, methodId) => {
+    setPaymentLines((prev) => {
+      const currentPrimary = prev[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
+      const currentSecondary = prev[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(currentPrimary.method), amount: 0, cashReceived: '' });
+      const nextPrimary = lineIndex === 0 ? { ...currentPrimary, method: methodId, installments: methodId === 'Credito' ? Number(currentPrimary.installments || 1) : 1, cashReceived: methodId === 'Efectivo' ? (currentPrimary.cashReceived ?? '') : '' } : currentPrimary;
+      const nextSecondary = lineIndex === 1 ? { ...currentSecondary, method: methodId, installments: methodId === 'Credito' ? Number(currentSecondary.installments || 1) : 1, cashReceived: methodId === 'Efectivo' ? (currentSecondary.cashReceived ?? '') : '' } : currentSecondary;
+      setActiveSplitLineIndex(lineIndex);
+      if (lineIndex === 0) {
+        setSelectedPayment?.(methodId);
+        setInstallments?.(methodId === 'Credito' ? Number(nextPrimary.installments || 1) : 1);
+      }
+      return buildTwoPaymentLines(nextPrimary, nextSecondary);
+    });
+  };
+
+  const handleSplitPrimaryAmountChange = (value) => {
+    setPaymentLines((prev) => {
+      const currentPrimary = prev[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
+      const currentSecondary = prev[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(currentPrimary.method), amount: 0, cashReceived: '' });
+      return buildTwoPaymentLines({ ...currentPrimary, amount: value === '' ? 0 : value }, currentSecondary);
+    });
+  };
+
+  const handleSplitInstallmentsChange = (lineIndex, value) => {
+    const nextInstallments = Number(value) || 1;
+    setPaymentLines((prev) => {
+      const currentPrimary = prev[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
+      const currentSecondary = prev[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(currentPrimary.method), amount: 0, cashReceived: '' });
+      const nextPrimary = lineIndex === 0 ? { ...currentPrimary, installments: nextInstallments } : currentPrimary;
+      const nextSecondary = lineIndex === 1 ? { ...currentSecondary, installments: nextInstallments } : currentSecondary;
+      if (lineIndex === 0) {
+        setInstallments?.(nextPrimary.method === 'Credito' ? nextInstallments : 1);
+      }
+      return buildTwoPaymentLines(nextPrimary, nextSecondary);
+    });
+  };
+
+  const handleSplitCashReceivedChange = (lineIndex, value) => {
+    const nextValue = normalizePaymentInputValue(value);
+    setPaymentLines((prev) => {
+      const currentPrimary = prev[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
+      const currentSecondary = prev[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(currentPrimary.method), amount: 0, cashReceived: '' });
+      const nextPrimary = lineIndex === 0 ? { ...currentPrimary, cashReceived: nextValue } : currentPrimary;
+      const nextSecondary = lineIndex === 1 ? { ...currentSecondary, cashReceived: nextValue } : currentSecondary;
+      return buildTwoPaymentLines(nextPrimary, nextSecondary);
+    });
   };
 
   const filteredProducts = useMemo(() => {
@@ -848,21 +1078,89 @@ export default function POSView({
   };
 
   const subtotal = cart.reduce((t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
-  const total = calculateTotal();
-  const hasTypedCashAmount = cashReceivedInput.trim() !== '';
-  const cashReceivedAmount = selectedPayment === 'Efectivo'
-    ? (!hasTypedCashAmount ? total : Number(cashReceivedInput || 0))
-    : total;
-  const cashChangeAmount = selectedPayment === 'Efectivo'
-    ? Math.max(0, cashReceivedAmount - total)
-    : 0;
-  const cashMissingAmount = selectedPayment === 'Efectivo'
-    ? (hasTypedCashAmount ? Math.max(0, total - cashReceivedAmount) : 0)
-    : 0;
+  const cartDiscountTotal = cart.reduce(
+    (sum, item) => sum + ((item.isReward || item.isDiscount) ? Math.abs((Number(item.price) || 0) * (Number(item.quantity) || 0)) : 0),
+    0,
+  );
+  const displaySubtotal = subtotal + cartDiscountTotal;
+  const normalizedPaymentLines = normalizePaymentBreakdown(paymentLines);
+  const visiblePaymentLines = normalizedPaymentLines.filter((line) => Number(line.amount || 0) > 0.009);
+  const paymentLinesForDisplay = visiblePaymentLines.length > 0 ? visiblePaymentLines : normalizedPaymentLines.slice(0, 1);
+  const rawCurrentPaymentLine = paymentLines[0] || createPaymentLine({ method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
+  const rawSplitPrimaryLine = paymentLines[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
+  const rawSplitSecondaryLine = paymentLines[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(rawSplitPrimaryLine.method), amount: 0, cashReceived: '' });
+  const currentPaymentLine = normalizedPaymentLines[0] || createPaymentLine({ method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1 });
+  const splitPrimaryLine = normalizedPaymentLines[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1 });
+  const splitSecondaryLine = normalizedPaymentLines[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(splitPrimaryLine.method), amount: 0 });
+  const currentPaymentMethod = rawCurrentPaymentLine.method || currentPaymentLine.method || selectedPayment || 'Efectivo';
+  const currentInstallments = currentPaymentMethod === 'Credito' ? Number(currentPaymentLine.installments || installments || 1) : 1;
+  const currentCashInputValue = getEditableCashInputValue(rawCurrentPaymentLine);
+  const paymentTotals = getPaymentBreakdownTotals(paymentLinesForDisplay);
+  const assignedBaseTotal = paymentLinesForDisplay.reduce((sum, line) => sum + (Number(line.amount) || 0), 0);
+  const remainingBaseAmount = Math.round((subtotal - assignedBaseTotal) * 100) / 100;
+  const hasOverassignedPayments = remainingBaseAmount < 0;
+  const total = paymentTotals.chargedTotal;
+  const cashReceivedAmount = paymentTotals.cashReceivedTotal;
+  const cashChangeAmount = paymentTotals.cashChangeTotal;
+  const cashMissingAmount = paymentTotals.cashMissingTotal;
+  const paymentSummary = getPaymentSummary(paymentLinesForDisplay);
+  const hasTypedCashAmount = currentPaymentMethod === 'Efectivo' && currentCashInputValue !== '';
+  const splitSecondaryDisabled = Number(splitSecondaryLine.amount || 0) <= 0.009;
   const pointsToEarn = Math.floor(Math.max(0, total) / 500);
+  const pointsToSpend = cart.reduce((acc, item) => acc + (item.isReward ? Number(item.pointsCost || 0) : 0), 0);
+  const netPointsDelta = pointsToEarn - pointsToSpend;
   const discountBaseTotal = getDiscountBaseTotal();
   const isGuestSelectedClient = Boolean(selectedClient && (selectedClient.id === 'guest' || selectedClient.id === 0));
   const hasVisibleSelectedClient = Boolean(selectedClient);
+  const pointsHeaderTone = !hasVisibleSelectedClient
+    ? ''
+    : isGuestSelectedClient
+      ? 'border-amber-200 bg-amber-50 text-amber-700'
+      : netPointsDelta >= 0
+        ? 'border-green-200 bg-green-50 text-green-700'
+        : 'border-rose-200 bg-rose-50 text-rose-700';
+  const pointsHeaderText = !hasVisibleSelectedClient
+    ? ''
+    : isGuestSelectedClient
+      ? `Se pierden ${pointsToEarn} Puntos`
+      : netPointsDelta >= 0
+        ? `Puntos ganados: ${netPointsDelta}`
+        : `Puntos canjeados: ${Math.abs(netPointsDelta)}`;
+
+  useEffect(() => {
+    setPaymentLines((prev) => {
+      if (cart.length === 0) return prev;
+
+      const serializeLines = (items) => JSON.stringify(
+        items.map((line) => ({
+          id: line.id,
+          method: line.method,
+          amount: roundPaymentValue(line.amount || 0),
+          installments: Number(line.installments || 1),
+          cashReceived: line.cashReceived ?? '',
+        })),
+      );
+
+      if (isSplitPaymentMode) {
+        const nextLines = buildTwoPaymentLines(
+          prev[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' }),
+          prev[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(selectedPayment || 'Efectivo'), amount: 0, cashReceived: '' }),
+        );
+        return serializeLines(prev.slice(0, 2)) === serializeLines(nextLines) ? prev : nextLines;
+      }
+
+      const currentLine = prev[0] || createPaymentLine({ method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
+      const nextLine = createPaymentLine({
+        id: currentLine.id,
+        method: currentLine.method || selectedPayment || 'Efectivo',
+        amount: subtotal,
+        installments: currentLine.method === 'Credito' ? Number(currentLine.installments || installments || 1) : 1,
+        cashReceived: currentLine.method === 'Efectivo' ? getEditableCashInputValue(currentLine) : '',
+      });
+
+      return serializeLines([currentLine]) === serializeLines([nextLine]) ? prev : [nextLine];
+    });
+  }, [cart.length, isSplitPaymentMode, subtotal, selectedPayment, installments]);
 
   return (
     <div className="flex h-full overflow-hidden bg-slate-100 relative">
@@ -902,14 +1200,32 @@ export default function POSView({
 
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-            <input type="text" placeholder="Buscar producto, oferta o cupon..." className="w-full pl-10 pr-3 py-2.5 border rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-fuchsia-500 outline-none transition-all font-medium text-sm" value={posSearch} onChange={(e) => setPosSearch(e.target.value)} onKeyDown={handlePosSearchKeyDown} autoFocus />
+            <input
+              type="text"
+              placeholder="Buscar producto, oferta o cupon..."
+              className="w-full pl-10 pr-10 py-2.5 border rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-fuchsia-500 outline-none transition-all font-medium text-sm"
+              value={posSearch}
+              onChange={(e) => setPosSearch(e.target.value)}
+              onKeyDown={handlePosSearchKeyDown}
+              autoFocus
+            />
+            {posSearch.trim() !== '' && (
+              <button
+                type="button"
+                onClick={() => setPosSearch('')}
+                className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                title="Limpiar búsqueda"
+              >
+                <X size={16} />
+              </button>
+            )}
           </div>
           <div className="w-36 relative hidden sm:block">
             <select className="w-full px-3 py-2.5 border rounded-xl bg-slate-50 font-medium text-sm outline-none focus:ring-2 focus:ring-fuchsia-500 appearance-none cursor-pointer" value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)}>
               <option value="Todas">Categorías</option>
               {categories.map((c) => (<option key={c} value={c}>{c}</option>))}
             </select>
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">▼</div>
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">?</div>
           </div>
           <div className="flex items-center gap-2">
             {posViewMode === 'grid' && (
@@ -990,7 +1306,7 @@ export default function POSView({
                 <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm mb-2 text-fuchsia-500 group-hover:scale-110 transition-transform">
                   <Wand2 size={20} />
                 </div>
-                <span className={`font-bold text-fuchsia-700 leading-snug px-2 ${gridColumns > 6 ? 'text-[11px]' : 'text-sm'}`}>Artículo Libre</span>
+                <span className={`font-bold text-fuchsia-700 leading-snug px-2 ${gridColumns > 6 ? 'text-[11px]' : 'text-sm'}`}>Articulo Libre</span>
                 <span className={`text-fuchsia-500 mt-1 ${gridColumns > 6 ? 'text-[9px]' : 'text-[10px]'}`}>Precio manual</span>
               </button>
 
@@ -1001,11 +1317,12 @@ export default function POSView({
                 let stockBadgeClass = effectiveStock > (isWeight ? 500 : 10) ? 'bg-green-100 text-green-700' : effectiveStock > (isWeight ? 100 : 5) ? 'bg-amber-100 text-amber-700' : effectiveStock > 0 ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-500';
                 
                 const expired = isProductExpired(product.expiration_date);
+                const productImage = product.imageThumb || product.image_thumb || product.image;
 
                 return (
                   <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`group bg-white border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all text-left flex flex-col relative ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed' : 'hover:border-fuchsia-300 active:scale-[0.98]'}`}>
                     <div className="aspect-[4/3] bg-slate-50 relative overflow-hidden w-full">
-                      {product.image ? (<img src={product.image} alt={product.title} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-500" />) : (<div className="w-full h-full flex flex-col items-center justify-center bg-slate-200/50 p-2 text-center group-hover:bg-slate-200 transition-colors"><span className={`font-bold text-slate-500 uppercase leading-tight ${gridColumns > 6 ? 'text-[10px]' : 'text-xs'}`}>{product.title}</span></div>)}
+                      {productImage ? (<img src={productImage} alt={product.title} loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-500" />) : (<div className="w-full h-full flex flex-col items-center justify-center bg-slate-200/50 p-2 text-center group-hover:bg-slate-200 transition-colors"><span className={`font-bold text-slate-500 uppercase leading-tight ${gridColumns > 6 ? 'text-[10px]' : 'text-xs'}`}>{product.title}</span></div>)}
                       
                       {expired && !isOutOfStock && (
                         <div className="absolute inset-0 bg-red-500/10 flex items-center justify-center z-10 pointer-events-none backdrop-blur-[0.5px]">
@@ -1074,11 +1391,12 @@ export default function POSView({
                 const isWeight = product.product_type === 'weight';
                 
                 const expired = isProductExpired(product.expiration_date);
+                const productImage = product.imageThumb || product.image_thumb || product.image;
 
                 return (
                   <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`flex items-center gap-2.5 p-2.5 bg-white border rounded-xl shadow-sm hover:shadow-md transition-all text-left group ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed bg-slate-50' : 'hover:border-fuchsia-300 active:scale-[0.99]'}`}>
                     <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border relative">
-                      {product.image ? (<img src={product.image} alt="" className="w-full h-full object-cover" />) : (<div className="w-full h-full flex items-center justify-center bg-slate-200 text-[8px] font-bold text-slate-500 p-1 text-center leading-none">{product.title.slice(0, 8)}..</div>)}
+                      {productImage ? (<img src={productImage} alt="" loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover" />) : (<div className="w-full h-full flex items-center justify-center bg-slate-200 text-[8px] font-bold text-slate-500 p-1 text-center leading-none">{product.title.slice(0, 8)}..</div>)}
                       {isWeight && <div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-1 py-0.5 z-20"><Scale size={8} className="text-white" /></div>}
                       
                       {expired && !isOutOfStock && (
@@ -1122,17 +1440,35 @@ export default function POSView({
         </div>
       </div>
 
+      <div
+        onMouseDown={startCartResize}
+        className="relative z-30 hidden w-2 shrink-0 cursor-col-resize bg-transparent md:block"
+        title="Mover ancho de pedido actual"
+      >
+        <div className="absolute inset-y-0 left-1/2 w-[3px] -translate-x-1/2 rounded-full bg-slate-200 transition-colors hover:bg-fuchsia-300" />
+      </div>
+
       {/* COLUMNA DERECHA: CARRITO */}
-      <div className="w-[352px] bg-white border-l flex flex-col min-h-0 shadow-2xl z-20 shrink-0">
+      <div
+        style={{ width: `${cartPanelWidth}px` }}
+        className="bg-white border-l flex flex-col min-h-0 shadow-2xl z-20 shrink-0"
+      >
         
         <div className="border-b bg-white px-3 py-2.5">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="flex min-w-0 items-center gap-1.5 text-[15px] font-bold text-slate-800">
+            <h2 className="inline-flex h-6 min-w-0 items-center gap-1.5 text-[15px] font-bold leading-none text-slate-800">
               <ShoppingCart size={18} className="shrink-0 text-fuchsia-600" /> Pedido Actual
             </h2>
-            <span className="shrink-0 rounded-full bg-fuchsia-100 px-1.5 py-0.5 text-[11px] font-bold text-fuchsia-700">
-              {cart.reduce((acc, item) => acc + (item.product_type === 'weight' ? 1 : item.quantity), 0)} items
-            </span>
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              {pointsHeaderText && (
+                <span className={`inline-flex h-6 shrink-0 items-center rounded-full border px-2 text-[10px] font-bold leading-none ${pointsHeaderTone}`}>
+                  {pointsHeaderText}
+                </span>
+              )}
+              <span className="inline-flex h-6 shrink-0 items-center rounded-full bg-fuchsia-100 px-1.5 text-[11px] font-bold leading-none text-fuchsia-700">
+                {cart.reduce((acc, item) => acc + (item.product_type === 'weight' ? 1 : item.quantity), 0)} items
+              </span>
+            </div>
           </div>
           <div className="min-w-0">
             {hasVisibleSelectedClient ? (
@@ -1150,36 +1486,41 @@ export default function POSView({
                   </button>
                 </div>
               ) : (
-                <div className="mt-1.5 rounded-lg border border-fuchsia-200 bg-fuchsia-50/40 px-2.5 py-2 shadow-sm transition-colors">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
+                <div className="mt-1 rounded-lg border border-fuchsia-200 bg-fuchsia-50/40 px-2 py-1.5 shadow-sm transition-colors">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
                       <div>
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="truncate text-[13px] font-bold text-slate-800">
-                            {`#${selectedClient.memberNumber} - ${selectedClient.name}`}
-                          </span>
-                          <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
-                            {selectedClient.points} pts
-                          </span>
-                        </div>
-                        <div className="mt-1 text-[10px] font-bold text-green-600">
-                          +{pointsToEarn} pts por esta compra
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div className="flex min-w-0 flex-1 items-center gap-2">
+                            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white text-fuchsia-500 shadow-sm">
+                              <User size={11} />
+                            </span>
+                            <span className="truncate text-[13px] font-bold text-slate-800">
+                              {selectedClient.name}
+                              {selectedClient.memberNumber ? ` #${selectedClient.memberNumber}` : ''}
+                            </span>
+                          </div>
+                          <div className="ml-auto flex shrink-0 items-center justify-end">
+                            <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
+                              {selectedClient.points} Puntos
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </div>
                     <div className="flex shrink-0 gap-1.5">
                       <button
                         onClick={openMemberRedeemPanel}
-                        className="rounded-md border border-fuchsia-200 bg-white px-2 py-1 text-[10px] font-bold text-fuchsia-600 transition-colors hover:bg-fuchsia-50"
+                        className="rounded-md border border-fuchsia-200 bg-white px-1.5 py-0.5 text-[10px] font-bold text-fuchsia-600 transition-colors hover:bg-fuchsia-50"
                       >
                         Canjear
                       </button>
                       <button
                         onClick={() => setSelectedClient && setSelectedClient(null)}
-                        className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-400 transition-colors hover:text-red-500"
+                        className="rounded-md border border-slate-200 bg-white p-1 text-slate-400 transition-colors hover:text-red-500"
                         title="Quitar socio"
                       >
-                        <UserMinus size={12} />
+                        <UserMinus size={11} />
                       </button>
                     </div>
                   </div>
@@ -1214,13 +1555,30 @@ export default function POSView({
 
               const expired = isProductExpired(item.expiration_date);
 
+              const cartItemImage = item.imageThumb || item.image_thumb || item.image;
+              const comboIncludedItems = isCombo && Array.isArray(item.productsIncluded)
+                ? item.productsIncluded.map((includedItem) => {
+                    const baseQuantity = Number(
+                      includedItem.quantity ??
+                      includedItem.qty ??
+                      (includedItem.product_type === 'weight' ? 1000 : 1)
+                    ) || (includedItem.product_type === 'weight' ? 1000 : 1);
+                    return {
+                      ...includedItem,
+                      appliedQuantity: baseQuantity * Number(item.quantity || 1),
+                    };
+                  })
+                : [];
+
               return (
                 <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`group flex gap-2 rounded-lg border p-2 shadow-sm transition-colors ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : isDiscount ? 'bg-emerald-50/50 border-emerald-200' : isCustom ? 'bg-indigo-50/40 border-indigo-100' : isCombo ? 'bg-violet-50/50 border-violet-200' : 'bg-white hover:border-fuchsia-200'}`}>
-                  <div className={`relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border ${isCombo ? 'bg-violet-100' : isDiscount ? 'bg-emerald-100' : 'bg-slate-50'}`}>
-                    {item.image ? (
-                      <img src={item.image} alt="" className="w-full h-full object-cover" />
+                  <div className={`relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border ${item.isReward ? 'bg-fuchsia-100' : isCombo ? 'bg-violet-100' : isDiscount ? 'bg-emerald-100' : 'bg-slate-50'}`}>
+                    {cartItemImage ? (
+                      <img src={cartItemImage} alt="" loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover" />
                     ) : (
-                      isDiscount ? (
+                      item.isReward ? (
+                         <Gift size={17} className="text-fuchsia-500" />
+                      ) : isDiscount ? (
                          <TicketPercent size={16} className="text-emerald-500" />
                       ) : isCustom ? (
                          <Wand2 size={16} className="text-indigo-400" />
@@ -1242,6 +1600,33 @@ export default function POSView({
                       </h4>
                       <button onClick={() => removeFromCart(item.id)} className="text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={13} /></button>
                     </div>
+
+                    {comboIncludedItems.length > 0 && (
+                      <div className="mt-1.5 rounded-lg border border-violet-100 bg-white/70 px-2 py-1">
+                        <p className="mb-1 text-[8.5px] font-black uppercase tracking-[0.14em] text-violet-400">Incluye</p>
+                        <div className="space-y-0.5">
+                          {comboIncludedItems.slice(0, 3).map((includedItem, includedIndex) => {
+                            const unitPrice = getComboIncludedUnitPrice(includedItem);
+                            return (
+                              <div key={`${item.id}-${includedItem.id || includedIndex}`} className="flex items-center justify-between gap-1.5 text-[9px] leading-tight text-violet-700">
+                                <span className="min-w-0 truncate font-bold">{includedItem.title}</span>
+                                <span className="shrink-0 rounded bg-violet-50 px-1 py-0.5 font-black">
+                                  {formatComboIncludedQty(includedItem.appliedQuantity, includedItem.product_type)}
+                                </span>
+                                {unitPrice !== null && (
+                                  <span className="shrink-0 font-bold text-violet-500">
+                                    <FancyPrice amount={unitPrice} />{includedItem.product_type === 'weight' ? '/kg' : ' c/u'}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {comboIncludedItems.length > 3 && (
+                            <p className="text-[9px] font-bold text-violet-400">+{comboIncludedItems.length - 3} productos mas</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
                     
                     <div className="flex justify-between items-end">
                       {isWeight ? (
@@ -1271,14 +1656,18 @@ export default function POSView({
                               if (e.target.value === '') return;
                               updateCartItemQty(item.id, e.target.value);
                             }}
-                            className="h-5 w-11 rounded bg-white px-1 text-center text-[11px] font-bold text-slate-700 outline-none"
+                            className="h-5 w-11 rounded bg-white px-1 text-center text-[11px] font-bold text-slate-700 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                             disabled={item.isReward || isCombo || isDiscount}
                           />
                           <button onClick={() => updateCartItemQty(item.id, item.quantity + 1)} className="flex h-5 w-5 items-center justify-center rounded bg-white shadow-sm hover:text-green-500 disabled:opacity-50" disabled={item.isReward || isCombo || isDiscount}><Plus size={11} /></button>
                         </div>
                       )}
                       <p className={`text-[13px] font-bold ${item.isReward ? 'text-fuchsia-600' : isDiscount ? 'text-emerald-600' : isCombo ? 'text-violet-700' : 'text-slate-800'}`}>
-                        {item.isReward ? 'GRATIS' : isDiscount ? <span className="text-emerald-600 font-black">-${Math.abs(item.price * item.quantity).toLocaleString('es-AR')}</span> : <FancyPrice amount={item.price * item.quantity} />}
+                        {item.isReward ? (
+                          <span className="font-black text-fuchsia-600">-<FancyPrice amount={Math.abs(item.price * item.quantity)} /></span>
+                        ) : isDiscount ? (
+                          <span className="text-emerald-600 font-black">-<FancyPrice amount={Math.abs(item.price * item.quantity)} /></span>
+                        ) : <FancyPrice amount={item.price * item.quantity} />}
                       </p>
                     </div>
                   </div>
@@ -1289,94 +1678,166 @@ export default function POSView({
         </div>
 
         {/* Footer */}
-        <div className="space-y-2.5 border-t bg-slate-50/95 p-3">
-          {/* Pago */}
-          <div className="grid grid-cols-4 gap-1.5">
+        <div className="space-y-1.5 border-t bg-slate-50/95 p-2">
+          <div className="grid grid-cols-5 gap-1">
             {PAYMENT_METHODS.map((method) => {
-              const isSelected = selectedPayment === method.id;
+              const activeMethod = isSplitPaymentMode ? (activeSplitLineIndex === 1 ? rawSplitSecondaryLine.method : rawSplitPrimaryLine.method) : currentPaymentMethod;
+              const isSelected = activeMethod === method.id;
               return (
-                <button key={method.id} onClick={() => setSelectedPayment(method.id)} className={`flex h-14 flex-col items-center justify-center rounded-lg border p-2 text-[10px] font-bold transition-all ${isSelected ? 'scale-[1.03] border-slate-800 bg-slate-800 text-white shadow-md' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-100'}`}>
-                  {method.id === 'Efectivo' && <Banknote size={16} className="mb-1" />}
-                  {method.id === 'MercadoPago' && <Smartphone size={16} className="mb-1" />}
-                  {(method.id === 'Debito' || method.id === 'Credito') && <CreditCard size={16} className="mb-1" />}
+                <button
+                  key={method.id}
+                  onClick={() => handleSelectPaymentMethod(method.id)}
+                  className={`flex h-11 flex-col items-center justify-center rounded-lg border px-1 py-0.5 text-[10px] font-bold transition-all ${isSelected ? 'scale-[1.03] border-slate-800 bg-slate-800 text-white shadow-md' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-100'}`}
+                >
+                  {method.id === 'Efectivo' && <Banknote size={14} className="mb-0.5" />}
+                  {method.id === 'MercadoPago' && <Smartphone size={14} className="mb-0.5" />}
+                  {(method.id === 'Debito' || method.id === 'Credito') && <CreditCard size={14} className="mb-0.5" />}
                   <span className="text-center leading-tight">{method.label}</span>
                 </button>
               );
             })}
+            <button
+              type="button"
+              onClick={handleToggleSplitPaymentMode}
+              className={`flex h-11 flex-col items-center justify-center rounded-lg border px-1 py-0.5 text-[10px] font-bold transition-all ${isSplitPaymentMode ? 'scale-[1.03] border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700 shadow-md' : 'border-slate-200 bg-white text-slate-500 hover:border-fuchsia-200 hover:bg-fuchsia-50/50'}`}
+            >
+              <SlidersHorizontal size={14} className="mb-0.5" />
+              <span className="text-center leading-tight">Agregar otro pago</span>
+            </button>
           </div>
 
-          {selectedPayment === 'Credito' && (
-            <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 p-2 rounded-lg animate-in fade-in slide-in-from-bottom-2">
-              <span className="text-xs font-bold text-amber-700 whitespace-nowrap">Cuotas:</span>
-              <select className="flex-1 bg-white border border-amber-200 text-xs rounded p-1 outline-none font-bold text-slate-700" value={installments} onChange={(e) => setInstallments(Number(e.target.value))}>
-                <option value={1}>1 pago (10%)</option>
-                <option value={3}>3 cuotas</option>
-                <option value={6}>6 cuotas</option>
-                <option value={12}>12 cuotas</option>
-              </select>
+          {isSplitPaymentMode ? (
+            <div className="grid grid-cols-2 gap-1 animate-in fade-in slide-in-from-bottom-2">
+              {[
+                { key: 'primary', line: rawSplitPrimaryLine, normalizedLine: splitPrimaryLine, index: 0, amountEditable: true },
+                { key: 'secondary', line: rawSplitSecondaryLine, normalizedLine: splitSecondaryLine, index: 1, amountEditable: false },
+              ].map(({ key, line, normalizedLine, index, amountEditable }) => {
+                const isCredit = line.method === 'Credito';
+                const isCash = line.method === 'Efectivo';
+                const lineAmount = roundPaymentValue(normalizedLine.amount || line.amount || 0);
+                const lineDisabled = !amountEditable && splitSecondaryDisabled;
+                const lineCashInputValue = getEditableCashInputValue(line);
+                return (
+                  <div key={key} onClick={() => setActiveSplitLineIndex(index)} className={`rounded-xl border px-2 py-1.5 transition-all ${activeSplitLineIndex === index ? 'border-fuchsia-300 bg-fuchsia-50/30 shadow-sm ring-1 ring-fuchsia-200' : lineDisabled ? 'border-slate-200 bg-slate-100/80' : 'border-slate-200 bg-slate-50/90'}`}>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">{getPaymentMethodLabel(line.method)}</span>
+                      <HintIcon
+                        hint={index === 1 ? "Hace click en este bloque y despues elegi el metodo desde los botones de arriba. Este pago completa automaticamente el dinero restante del total." : "Hace click en este bloque y despues elegi el metodo desde los botones de arriba."}
+                        size={13}
+                        side="left"
+                        className="ml-auto shrink-0 rounded-full border border-slate-200 bg-white p-[1px] shadow-sm"
+                      />
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={lineAmount}
+                      placeholder="Monto"
+                      onChange={amountEditable ? (e) => handleSplitPrimaryAmountChange(e.target.value) : undefined}
+                      readOnly={!amountEditable}
+                      disabled={!amountEditable}
+                      className={`mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-[13px] font-black shadow-sm outline-none placeholder:text-[11px] placeholder:font-bold placeholder:text-slate-400 [appearance:textfield] focus:border-fuchsia-300 focus:ring-2 focus:ring-fuchsia-100 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${amountEditable ? 'text-slate-800' : 'cursor-not-allowed text-slate-500'}`}
+                    />
+                    {isCredit && (
+                      <select
+                        className="mt-1 w-full rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-700 outline-none focus:ring-2 focus:ring-amber-300"
+                        value={Number(line.installments || 1)}
+                        onChange={(e) => handleSplitInstallmentsChange(index, e.target.value)}
+                      >
+                        <option value={1}>1 pago</option>
+                        <option value={3}>3 cuotas</option>
+                        <option value={6}>6 cuotas</option>
+                        <option value={12}>12 cuotas</option>
+                      </select>
+                    )}
+                    {isCash && !lineDisabled && (
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={lineCashInputValue}
+                        placeholder="Efectivo recibido"
+                        onFocus={() => setActiveSplitLineIndex(index)}
+                        onChange={(e) => handleSplitCashReceivedChange(index, e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-emerald-200 bg-white px-2 py-1 text-[11px] font-black text-slate-800 shadow-sm outline-none placeholder:text-[10px] placeholder:font-bold placeholder:text-slate-400 focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          )}
-
-          {selectedPayment === 'Efectivo' && (
-            <div className="space-y-2 rounded-xl border border-emerald-300 bg-gradient-to-br from-emerald-50 via-emerald-100/80 to-white px-2.5 py-2.5 shadow-sm animate-in fade-in slide-in-from-bottom-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5">
-                  <label className="block text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700">
-                    Cobro en efectivo
-                  </label>
-                  <HintIcon
-                    hint="Carga el monto recibido para calcular la devolucion."
-                    size={13}
-                    side="left"
-                    className="rounded-full border border-emerald-200 bg-white/90 p-[1px] shadow-sm"
-                  />
+          ) : (
+            <>
+              {currentPaymentMethod === 'Credito' && (
+                <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2 animate-in fade-in slide-in-from-bottom-2">
+                  <span className="whitespace-nowrap text-xs font-bold text-amber-700">Cuotas:</span>
+                  <select
+                    className="flex-1 rounded border border-amber-200 bg-white p-1 text-xs font-bold text-slate-700 outline-none"
+                    value={currentInstallments}
+                    onChange={(e) => handleInstallmentsChange(e.target.value)}
+                  >
+                    <option value={1}>1 pago</option>
+                    <option value={3}>3 cuotas</option>
+                    <option value={6}>6 cuotas</option>
+                    <option value={12}>12 cuotas</option>
+                  </select>
                 </div>
-                <span className="rounded-full border border-emerald-200 bg-white/90 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-emerald-600 shadow-sm">
-                  Efectivo
-                </span>
-              </div>
-              <div className="rounded-lg border border-emerald-200 bg-white/90 px-3 py-2 shadow-sm transition-all focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-200">
-                <input
-                  ref={cashReceivedInputRef}
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={cashReceivedInput}
-                  onChange={(e) => setCashReceivedInput(e.target.value)}
-                  placeholder="Ingresar el total en efectivo"
-                  className="w-full appearance-none bg-transparent text-[15px] font-black text-slate-800 outline-none placeholder:text-slate-400 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                />
-              </div>
-
-              {hasTypedCashAmount && cashMissingAmount > 0 && (
-                <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-bold text-rose-600">
-                  Faltan <FancyPrice amount={cashMissingAmount} /> para completar el pago.
-                </p>
               )}
-            </div>
+
+              {currentPaymentMethod === 'Efectivo' && (
+                <div className="space-y-1.5 animate-in fade-in slide-in-from-bottom-2">
+                  <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-white/90 px-3 py-2 shadow-sm transition-all focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-200">
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={currentCashInputValue}
+                      onChange={(e) => handleCashReceivedChange(e.target.value)}
+                      placeholder="Ingresar el total en efectivo"
+                      className="w-full appearance-none bg-transparent text-[15px] font-black text-slate-800 outline-none placeholder:text-slate-400 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    />
+                    <HintIcon
+                      hint="Ingresa el monto total de efectivo recibido para calcular el cambio del pedido."
+                      size={13}
+                      side="center-left"
+                      tooltipClassName="w-[220px]"
+                      className="shrink-0 rounded-full border border-emerald-200 bg-white/90 p-[1px] shadow-sm"
+                    />
+                  </div>
+
+                  {hasTypedCashAmount && cashMissingAmount > 0 && (
+                    <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-bold text-rose-600">
+                      Faltan <FancyPrice amount={cashMissingAmount} /> para completar el pago.
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
-          <div className="space-y-1 border-t border-slate-200 pt-2">
-            <div className="flex justify-between text-xs text-slate-500"><span>Subtotal</span><span><FancyPrice amount={subtotal} /></span></div>
-            {selectedPayment === 'Credito' && (<div className="flex justify-between text-xs text-amber-600 font-bold"><span>Recargo (10%)</span><span>+<FancyPrice amount={subtotal * 0.1} /></span></div>)}
-            {selectedPayment === 'Efectivo' && (
-              <>
-                <div className="flex justify-between text-xs text-slate-500"><span>Efectivo recibido</span><span><FancyPrice amount={cashReceivedAmount} /></span></div>
-                <div className="flex justify-between text-xs font-bold text-emerald-600"><span>Devolución</span><span><FancyPrice amount={cashChangeAmount} /></span></div>
-              </>
+          <div className="space-y-1.5 border-t border-slate-200 pt-2">
+            <div className="flex justify-between text-xs text-slate-500"><span>Subtotal</span><span><FancyPrice amount={displaySubtotal} /></span></div>
+            {cartDiscountTotal > 0 && (
+              <div className="flex justify-between text-xs font-bold text-fuchsia-600">
+                <span>Descuentos</span>
+                <span>-<FancyPrice amount={cartDiscountTotal} /></span>
+              </div>
             )}
+            <div className="flex justify-between text-xs text-slate-500"><span>Pago</span><span>{paymentSummary}</span></div>
+            {paymentTotals.surchargeTotal > 0 && (<div className="flex justify-between text-xs font-bold text-amber-600"><span>Recargo credito</span><span>+<FancyPrice amount={paymentTotals.surchargeTotal} /></span></div>)}
+            {cashReceivedAmount > 0 && <div className="flex justify-between text-xs text-slate-500"><span>Efectivo recibido</span><span><FancyPrice amount={cashReceivedAmount} /></span></div>}
+            {cashChangeAmount > 0 && <div className="flex justify-between text-xs font-bold text-emerald-600"><span>Devolucion</span><span><FancyPrice amount={cashChangeAmount} /></span></div>}
             <div className="flex justify-between items-end pt-2">
               <span className="text-sm font-bold text-slate-800 uppercase">Total a Pagar</span>
               <span className="text-[24px] font-black text-slate-900"><FancyPrice amount={total} /></span>
             </div>
           </div>
 
-          <button onClick={handlePreCheckout} disabled={cart.length === 0 || (selectedPayment === 'Efectivo' && hasTypedCashAmount && cashMissingAmount > 0)} className="group flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-slate-900 to-slate-800 py-3 text-[15px] font-bold text-white shadow-lg transition-all hover:from-black hover:to-slate-900 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50">
+          <AsyncActionButton onAction={() => runAction('checkout:pos', handlePreCheckout)} pending={isPending('checkout:pos')} loadingLabel="Cobrando..." disabled={cart.length === 0 || Math.abs(remainingBaseAmount) > 0.009 || hasOverassignedPayments || cashMissingAmount > 0} className="group flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-slate-900 to-slate-800 py-3 text-[15px] font-bold text-white shadow-lg transition-all hover:from-black hover:to-slate-900 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50">
             <CheckCircle className="group-hover:scale-110 transition-transform" />
-            {cart.length === 0 ? 'CARRITO VACÍO' : 'COBRAR'}
-          </button>
+            {cart.length === 0 ? 'CARRITO VACIO' : 'COBRAR'}
+          </AsyncActionButton>
         </div>
-      </div>
+        </div>
 
       {/* Modales */}
       {weightModalProduct && (
@@ -1440,9 +1901,11 @@ export default function POSView({
                               <span className="truncate">{line.title}</span>
                             </div>
                             <div className="shrink-0 text-right">
-                              <p className="text-[10px] font-black text-slate-600">x{line.requiredQty}</p>
+                              <p className="text-[10px] font-black text-slate-600">
+                                {formatComboIncludedQty(line.requiredQty, line.product_type)}
+                              </p>
                               <p className={`text-[10px] font-bold ${line.hasStock ? 'text-slate-400' : 'text-red-500'}`}>
-                                Stock: {line.remainingStock}
+                                Stock: {line.product_type === 'weight' ? formatWeight(line.remainingStock) : line.remainingStock}
                               </p>
                             </div>
                           </li>
@@ -1596,5 +2059,13 @@ export default function POSView({
     </div>
   );
 }
+
+
+
+
+
+
+
+
 
 

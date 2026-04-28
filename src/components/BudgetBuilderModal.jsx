@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CalendarRange,
+  CreditCard,
   FileText,
   Package,
   Phone,
@@ -11,9 +12,11 @@ import {
   Trash2,
   User,
   Users,
+  Wallet,
   X,
 } from 'lucide-react';
 import Swal from 'sweetalert2';
+import AsyncActionButton from './AsyncActionButton';
 import { FancyPrice } from './FancyPrice';
 import { HintIcon } from './HintIcon';
 import {
@@ -28,8 +31,25 @@ import {
 } from '../utils/budgetHelpers';
 import { formatCurrency, formatWeight } from '../utils/helpers';
 import { normalizeLegacyOffer } from '../utils/offerHelpers';
+import {
+  createPaymentLine,
+  getPaymentBreakdownDisplayItems,
+  getPaymentMethodLabel,
+  getPaymentSummary,
+} from '../utils/paymentBreakdown';
 
 const ITEMS_STEP = 30;
+const BUDGET_PAYMENT_METHODS = [
+  { id: 'Efectivo', label: 'Efectivo', icon: Wallet },
+  { id: 'Debito', label: 'Débito', icon: CreditCard },
+  { id: 'Credito', label: 'Crédito', icon: CreditCard },
+  { id: 'MercadoPago', label: 'Mercado Pago', icon: TicketPercent },
+];
+
+const roundBudgetPaymentValue = (value) => {
+  const numeric = Number(value) || 0;
+  return Math.round(numeric * 100) / 100;
+};
 
 const getProductCategory = (product) => {
   if (Array.isArray(product.categories) && product.categories.length > 0) {
@@ -60,6 +80,19 @@ const buildDraftFromRecord = (record, members) => {
       customerName: record.customerName || '',
       customerPhone: record.customerPhone || '',
       customerNote: record.customerNote || '',
+      paymentMethod: record.paymentBreakdown?.[0]?.method || record.paymentMethod || 'Efectivo',
+      installments: Number(record.installments || 1) || 1,
+      isSplitPayment: (record.paymentBreakdown || []).length > 1,
+      paymentLines: Array.isArray(record.paymentBreakdown)
+        ? record.paymentBreakdown.map((line, index) =>
+            createPaymentLine({
+              id: line.id || `budget_line_${index}`,
+              method: line.method || 'Efectivo',
+              amount: Number(line.amount || 0),
+              installments: line.method === 'Credito' ? Number(line.installments || 1) : 1,
+            })
+          )
+        : [],
     },
     items: hydrateBudgetSnapshot(record.itemsSnapshot || []),
   };
@@ -84,6 +117,7 @@ export default function BudgetBuilderModal({
   const [catalogLimit, setCatalogLimit] = useState(ITEMS_STEP);
   const [showOffersPanel, setShowOffersPanel] = useState(false);
   const [offerView, setOfferView] = useState('combo');
+  const [activePaymentLineIndex, setActivePaymentLineIndex] = useState(0);
   const initialRecordKey = initialRecord?.id ? `edit-${initialRecord.id}` : 'new';
   const draftStorageKey = `rebu-budget-builder-${initialRecordKey}`;
   const initialDraftRef = useRef({ key: '', draft: { config: DEFAULT_BUDGET_CONFIG, items: [] } });
@@ -145,6 +179,11 @@ export default function BudgetBuilderModal({
   useEffect(() => {
     setCatalogLimit(ITEMS_STEP);
   }, [productSearch, selectedCategory]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setActivePaymentLineIndex(0);
+  }, [isOpen, initialRecordKey]);
 
   const filteredInventory = useMemo(() => {
     const searchWords = productSearch.toLowerCase().trim().split(/\s+/).filter(Boolean);
@@ -238,6 +277,90 @@ export default function BudgetBuilderModal({
       : null;
 
   const budgetTotal = calculateBudgetTotal(draftItems);
+  const normalizedBudgetPaymentLines = useMemo(() => {
+    const fallbackMethod = draftConfig.paymentMethod || 'Efectivo';
+    const fallbackInstallments = Number(draftConfig.installments || 1) || 1;
+    const normalizedTotal = roundBudgetPaymentValue(budgetTotal);
+
+    if (draftConfig.isSplitPayment) {
+      const configuredLines = Array.isArray(draftConfig.paymentLines) ? draftConfig.paymentLines : [];
+      const currentPrimary =
+        configuredLines[0] ||
+        createPaymentLine({
+          id: 'budget_primary',
+          method: fallbackMethod,
+          amount: normalizedTotal,
+          installments: fallbackInstallments,
+        });
+      const currentSecondary =
+        configuredLines[1] ||
+        createPaymentLine({
+          id: 'budget_secondary',
+          method: fallbackMethod === 'Efectivo' ? 'Debito' : 'Efectivo',
+          amount: 0,
+        });
+
+      const primaryAmount = Math.min(
+        normalizedTotal,
+        Math.max(0, roundBudgetPaymentValue(currentPrimary.amount || 0))
+      );
+      const remainingAmount = roundBudgetPaymentValue(Math.max(0, normalizedTotal - primaryAmount));
+
+      return [
+        createPaymentLine({
+          id: currentPrimary.id || 'budget_primary',
+          method: currentPrimary.method || fallbackMethod,
+          amount: primaryAmount,
+          installments:
+            (currentPrimary.method || fallbackMethod) === 'Credito'
+              ? Number(currentPrimary.installments || 1) || 1
+              : 1,
+        }),
+        createPaymentLine({
+          id: currentSecondary.id || 'budget_secondary',
+          method: currentSecondary.method || (fallbackMethod === 'Efectivo' ? 'Debito' : 'Efectivo'),
+          amount: remainingAmount,
+          installments:
+            (currentSecondary.method || '') === 'Credito'
+              ? Number(currentSecondary.installments || 1) || 1
+              : 1,
+        }),
+      ];
+    }
+
+    return [
+      createPaymentLine({
+        id: 'budget_single',
+        method: fallbackMethod,
+        amount: normalizedTotal,
+        installments: fallbackMethod === 'Credito' ? fallbackInstallments : 1,
+      }),
+    ];
+  }, [
+    budgetTotal,
+    draftConfig.installments,
+    draftConfig.isSplitPayment,
+    draftConfig.paymentLines,
+    draftConfig.paymentMethod,
+  ]);
+  const budgetPaymentSummary = getPaymentSummary(
+    normalizedBudgetPaymentLines,
+    draftConfig.paymentMethod || 'Efectivo',
+    draftConfig.installments || 0,
+  );
+  const budgetPaymentItems = getPaymentBreakdownDisplayItems(
+    normalizedBudgetPaymentLines,
+    draftConfig.paymentMethod || 'Efectivo',
+    draftConfig.installments || 0,
+    0,
+    0,
+    budgetTotal,
+  );
+  const splitPrimaryBudgetLine = normalizedBudgetPaymentLines[0] || null;
+  const splitSecondaryBudgetLine = normalizedBudgetPaymentLines[1] || null;
+  const activeBudgetMethod = draftConfig.isSplitPayment
+    ? normalizedBudgetPaymentLines[activePaymentLineIndex]?.method || normalizedBudgetPaymentLines[0]?.method || 'Efectivo'
+    : draftConfig.paymentMethod || 'Efectivo';
   const discountBaseTotal = calculateBudgetTotal(
     draftItems.filter((item) => Number(item.newPrice || 0) >= 0)
   );
@@ -260,6 +383,124 @@ export default function BudgetBuilderModal({
     if (scrollHeight - scrollTop <= clientHeight + 120 && catalogLimit < filteredInventory.length) {
       setCatalogLimit((prev) => prev + ITEMS_STEP);
     }
+  };
+
+  const handleToggleSplitPayment = () => {
+    setDraftConfig((prev) => {
+      if (prev.isSplitPayment) {
+        const primaryLine =
+          normalizedBudgetPaymentLines[0] ||
+          createPaymentLine({
+            method: prev.paymentMethod || 'Efectivo',
+            amount: budgetTotal,
+            installments: prev.installments || 1,
+          });
+        return {
+          ...prev,
+          isSplitPayment: false,
+          paymentMethod: primaryLine.method || prev.paymentMethod || 'Efectivo',
+          installments:
+            (primaryLine.method || prev.paymentMethod) === 'Credito'
+              ? Number(primaryLine.installments || 1) || 1
+              : 1,
+          paymentLines: [],
+        };
+      }
+
+      const primaryLine =
+        normalizedBudgetPaymentLines[0] ||
+        createPaymentLine({
+          method: prev.paymentMethod || 'Efectivo',
+          amount: budgetTotal,
+          installments: prev.installments || 1,
+        });
+
+      return {
+        ...prev,
+        isSplitPayment: true,
+        paymentLines: [
+          createPaymentLine({
+            id: 'budget_primary',
+            method: primaryLine.method || prev.paymentMethod || 'Efectivo',
+            amount: roundBudgetPaymentValue(budgetTotal),
+            installments:
+              (primaryLine.method || prev.paymentMethod) === 'Credito'
+                ? Number(primaryLine.installments || 1) || 1
+                : 1,
+          }),
+          createPaymentLine({
+            id: 'budget_secondary',
+            method: (primaryLine.method || prev.paymentMethod) === 'Efectivo' ? 'Debito' : 'Efectivo',
+            amount: 0,
+            installments: 1,
+          }),
+        ],
+      };
+    });
+    setActivePaymentLineIndex(0);
+  };
+
+  const handleSelectBudgetPaymentMethod = (methodId) => {
+    if (draftConfig.isSplitPayment) {
+      const nextLines = normalizedBudgetPaymentLines.map((line) => ({ ...line }));
+      const targetIndex = activePaymentLineIndex === 1 ? 1 : 0;
+      nextLines[targetIndex] = {
+        ...nextLines[targetIndex],
+        method: methodId,
+        installments: methodId === 'Credito' ? Number(nextLines[targetIndex].installments || 1) || 1 : 1,
+      };
+      setDraftConfig((prev) => ({
+        ...prev,
+        paymentMethod: nextLines[0]?.method || methodId,
+        installments:
+          (nextLines[0]?.method || methodId) === 'Credito'
+            ? Number(nextLines[0]?.installments || 1) || 1
+            : 1,
+        paymentLines: nextLines,
+      }));
+      return;
+    }
+
+    setDraftConfig((prev) => ({
+      ...prev,
+      paymentMethod: methodId,
+      installments: methodId === 'Credito' ? Number(prev.installments || 1) || 1 : 1,
+      paymentLines: [],
+    }));
+  };
+
+  const handlePrimaryPaymentAmountChange = (value) => {
+    const nextAmount = Math.max(
+      0,
+      Math.min(roundBudgetPaymentValue(value), roundBudgetPaymentValue(budgetTotal))
+    );
+    const nextLines = normalizedBudgetPaymentLines.map((line, index) =>
+      index === 0 ? { ...line, amount: nextAmount } : line
+    );
+    setDraftConfig((prev) => ({
+      ...prev,
+      paymentLines: nextLines,
+    }));
+  };
+
+  const handleBudgetInstallmentsChange = (lineIndex, value) => {
+    const nextInstallments = Number(value || 1) || 1;
+    if (draftConfig.isSplitPayment) {
+      const nextLines = normalizedBudgetPaymentLines.map((line, index) =>
+        index === lineIndex ? { ...line, installments: nextInstallments } : line
+      );
+      setDraftConfig((prev) => ({
+        ...prev,
+        installments:
+          (nextLines[0]?.method || prev.paymentMethod) === 'Credito'
+            ? Number(nextLines[0]?.installments || 1) || 1
+            : 1,
+        paymentLines: nextLines,
+      }));
+      return;
+    }
+
+    setDraftConfig((prev) => ({ ...prev, installments: nextInstallments }));
   };
 
   const addProductToDraft = (product) => {
@@ -485,6 +726,14 @@ export default function BudgetBuilderModal({
       customerNote: draftConfig.customerNote.trim(),
       documentTitle: (draftConfig.documentTitle || 'PRESUPUESTO').trim().toUpperCase(),
       eventLabel: draftConfig.eventLabel.trim(),
+      paymentMethod: budgetPaymentSummary,
+      paymentBreakdown: normalizedBudgetPaymentLines.map((line) => ({
+        id: line.id,
+        method: line.method,
+        amount: roundBudgetPaymentValue(line.amount || 0),
+        installments: line.method === 'Credito' ? Number(line.installments || 1) || 1 : 0,
+      })),
+      installments: normalizedBudgetPaymentLines.find((line) => line.method === 'Credito')?.installments || 0,
       itemsSnapshot: buildBudgetSnapshot(cleanItems),
       totalAmount: calculateBudgetTotal(cleanItems),
     });
@@ -878,6 +1127,152 @@ export default function BudgetBuilderModal({
                       </label>
                     </div>
 
+                    {initialRecord?.type !== 'order' && (
+                      <div className="mt-1.5 rounded-[16px] border border-fuchsia-200 bg-white/90 p-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-black uppercase tracking-[0.12em] text-fuchsia-700">
+                              Pago previsto
+                            </p>
+                            <p className="mt-0.5 text-[11px] font-semibold text-slate-500">
+                              {budgetPaymentSummary}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleToggleSplitPayment}
+                            className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] transition ${
+                              draftConfig.isSplitPayment
+                                ? 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700'
+                                : 'border-slate-200 bg-white text-slate-500 hover:border-fuchsia-200 hover:bg-fuchsia-50 hover:text-fuchsia-700'
+                            }`}
+                          >
+                            <Plus size={11} />
+                            {draftConfig.isSplitPayment ? 'Quitar pago extra' : 'Agregar otro pago'}
+                          </button>
+                        </div>
+
+                        <div className="mt-2 grid grid-cols-4 gap-1">
+                          {BUDGET_PAYMENT_METHODS.map((method) => {
+                            const Icon = method.icon;
+                            const isActive = activeBudgetMethod === method.id;
+                            return (
+                              <button
+                                key={`budget-payment-${method.id}`}
+                                type="button"
+                                onClick={() => handleSelectBudgetPaymentMethod(method.id)}
+                                className={`rounded-[12px] border px-2 py-1.5 text-center transition ${
+                                  isActive
+                                    ? 'border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700 shadow-sm'
+                                    : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'
+                                }`}
+                              >
+                                <Icon size={12} className="mx-auto mb-1" />
+                                <span className="block text-[9px] font-black leading-tight">{method.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {draftConfig.isSplitPayment ? (
+                          <>
+                            <p className="mt-2 text-[10px] font-medium text-slate-400">
+                              El segundo pago completa automáticamente el monto restante.
+                            </p>
+                            <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                              {[
+                                { key: 'primary', line: splitPrimaryBudgetLine, index: 0, editable: true },
+                                { key: 'secondary', line: splitSecondaryBudgetLine, index: 1, editable: false },
+                              ].map(({ key, line, index, editable }) => (
+                                <button
+                                  key={key}
+                                  type="button"
+                                  onClick={() => setActivePaymentLineIndex(index)}
+                                  className={`rounded-[14px] border p-2 text-left transition ${
+                                    activePaymentLineIndex === index
+                                      ? 'border-fuchsia-300 bg-fuchsia-50/60 ring-1 ring-fuchsia-200'
+                                      : 'border-slate-200 bg-slate-50'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                                      {getPaymentMethodLabel(line?.method)}
+                                    </span>
+                                    <span className="text-[9px] font-semibold text-slate-400">
+                                      {index === 0 ? 'Principal' : 'Restante'}
+                                    </span>
+                                  </div>
+                                  <div className="mt-1.5 rounded-[12px] border border-slate-200 bg-white/80 px-2 py-1.5">
+                                    <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Monto</p>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="0.01"
+                                      value={roundBudgetPaymentValue(line?.amount || 0)}
+                                      onChange={editable ? (e) => handlePrimaryPaymentAmountChange(e.target.value) : undefined}
+                                      readOnly={!editable}
+                                      disabled={!editable}
+                                      className={`${fieldNumberClass} mt-1 border-0 bg-transparent px-0 py-0 text-left text-[13px] text-slate-800 shadow-none ${
+                                        editable ? '' : 'cursor-not-allowed text-slate-500'
+                                      }`}
+                                    />
+                                  </div>
+                                  {line?.method === 'Credito' && (
+                                    <select
+                                      className="mt-1.5 w-full rounded-[11px] border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-700 outline-none"
+                                      value={Number(line.installments || 1)}
+                                      onChange={(e) => handleBudgetInstallmentsChange(index, e.target.value)}
+                                    >
+                                      <option value={1}>1 pago</option>
+                                      <option value={3}>3 cuotas</option>
+                                      <option value={6}>6 cuotas</option>
+                                      <option value={12}>12 cuotas</option>
+                                    </select>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="mt-2 rounded-[14px] border border-slate-200 bg-slate-50 p-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                                {getPaymentMethodLabel(draftConfig.paymentMethod)}
+                              </span>
+                              <span className="text-[12px] font-black text-slate-800">
+                                <FancyPrice amount={budgetTotal} />
+                              </span>
+                            </div>
+                            {draftConfig.paymentMethod === 'Credito' && (
+                              <select
+                                className="mt-1.5 w-full rounded-[11px] border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-700 outline-none"
+                                value={Number(draftConfig.installments || 1)}
+                                onChange={(e) => handleBudgetInstallmentsChange(0, e.target.value)}
+                              >
+                                <option value={1}>1 pago</option>
+                                <option value={3}>3 cuotas</option>
+                                <option value={6}>6 cuotas</option>
+                                <option value={12}>12 cuotas</option>
+                              </select>
+                            )}
+                          </div>
+                        )}
+
+                        {budgetPaymentItems.length > 1 && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {budgetPaymentItems.map((item) => (
+                              <span
+                                key={item.key}
+                                className="rounded-full border border-fuchsia-200 bg-fuchsia-50 px-2 py-0.5 text-[9px] font-black text-fuchsia-700"
+                              >
+                                {item.title}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     <div className="mt-1.5 rounded-[16px] border border-emerald-200 bg-emerald-50 px-2 py-1">
                       <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">
                         Total congelado
@@ -1125,14 +1520,16 @@ export default function BudgetBuilderModal({
                     >
                       Cancelar
                     </button>
-                    <button
+                    <AsyncActionButton
                       type="button"
-                      onClick={handleSubmit}
+                      onAction={handleSubmit}
+                      pending={isSaving}
                       disabled={isSaving}
+                      loadingLabel="Guardando..."
                       className="rounded-[16px] bg-indigo-600 px-3.5 py-1.5 text-[12px] font-black text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {isSaving ? 'Guardando...' : initialRecord ? 'Guardar cambios' : 'Guardar presupuesto'}
-                    </button>
+                    </AsyncActionButton>
                   </div>
                 </div>
               </div>

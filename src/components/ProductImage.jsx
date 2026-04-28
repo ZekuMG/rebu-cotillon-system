@@ -4,7 +4,8 @@ import { Package } from 'lucide-react';
 import { getGradientForItem } from '../utils/helpers';
 
 const ProductImage = ({ item, className = '', onClick }) => {
-  const hasImage = item.image && item.image.trim() !== '';
+  const resolvedImage = item.imageThumb || item.image_thumb || item.image || '';
+  const hasImage = resolvedImage && resolvedImage.trim() !== '';
   const gradient = getGradientForItem(item.id, item.title);
 
   if (hasImage) {
@@ -14,8 +15,11 @@ const ProductImage = ({ item, className = '', onClick }) => {
         onClick={onClick}
       >
         <img
-          src={item.image}
+          src={resolvedImage}
           alt={item.title}
+          loading="lazy"
+          decoding="async"
+          fetchpriority="low"
           className="w-full h-full object-cover"
         />
       </div>

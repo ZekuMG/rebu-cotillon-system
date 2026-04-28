@@ -526,10 +526,19 @@ export default function DashboardView({
         ))}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:auto-rows-[26rem]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:auto-rows-auto">
         {widgetOrder.map((widgetKey, index) => (
           (() => {
             const isExpandedAnnualChart = widgetKey === 'chart' && globalFilter === 'year';
+            const isChartWidget = widgetKey === 'chart';
+            const isPaymentsWidget = widgetKey === 'payments';
+            const widgetDesktopHeight = isExpandedAnnualChart
+              ? 'lg:col-span-2 lg:h-[24rem]'
+              : isChartWidget
+                ? 'lg:h-[18.5rem]'
+                : isPaymentsWidget
+                  ? 'lg:min-h-[16rem]'
+                : 'lg:h-[26rem]';
             return (
               <div
                 key={widgetKey}
@@ -548,7 +557,7 @@ export default function DashboardView({
                   e.preventDefault();
                   setDraggedItem(null);
                 }}
-                className={`min-h-0 transition-all duration-200 ${isExpandedAnnualChart ? 'lg:col-span-2 lg:h-[34rem]' : 'lg:h-[26rem]'} ${draggedItem === widgetKey ? 'rounded-xl border-2 border-dashed border-slate-300 opacity-40 scale-95' : ''}`}
+                className={`min-h-0 transition-all duration-200 ${widgetDesktopHeight} ${draggedItem === widgetKey ? 'rounded-xl border-2 border-dashed border-slate-300 opacity-40 scale-95' : ''}`}
               >
                 <div className="group relative h-full min-h-0">
                   {isAdmin && (

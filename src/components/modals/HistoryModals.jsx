@@ -10,6 +10,33 @@ import { formatNumber } from '../../utils/helpers';
 import { hasPermission } from '../../utils/userPermissions';
 import { FancyPrice } from '../FancyPrice'; 
 import UserDisplayBadge from '../UserDisplayBadge';
+import { getPaymentBreakdownDisplayItems, getPaymentSummary } from '../../utils/paymentBreakdown';
+
+const getHistoryBadgeUser = (transaction) => {
+  const normalizedRole = String(transaction?.userRole || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+  const normalizedName = String(transaction?.user || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+  const isLegacyCajaLike =
+    !transaction?.userId &&
+    (
+      ['owner', 'seller'].includes(normalizedRole) ||
+      ['dueno', 'duenio', 'dueño', 'vendedor', 'caja', 'seller'].includes(normalizedName)
+    );
+
+  if (isLegacyCajaLike) {
+    return { role: 'seller', name: 'Caja' };
+  }
+
+  return { id: transaction?.userId, role: transaction?.userRole, name: transaction?.user };
+};
 
 // ==========================================
 // MODAL: DETALLE DE TRANSACCIÓN
@@ -61,13 +88,26 @@ export const TransactionDetailModal = ({
 
   const ptsEarned = transaction.pointsEarned || transaction.client?.pointsEarned || 0;
   const ptsSpent = transaction.pointsSpent || transaction.client?.pointsSpent || 0;
+  const paymentItems = getPaymentBreakdownDisplayItems(
+    transaction.paymentBreakdown,
+    transaction.payment,
+    transaction.installments,
+    transaction.cashReceived,
+    transaction.cashChange,
+    transaction.total,
+  );
+  const paymentSummary = getPaymentSummary(
+    transaction.paymentBreakdown,
+    transaction.payment,
+    transaction.installments,
+  );
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-40 p-4 animate-in fade-in duration-200">
       <div className="bg-[#f8fafc] rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
         
         {/* HEADER */}
-        <div className={`p-4 border-b flex justify-between items-center ${isVoided ? 'bg-red-50 border-red-100' : 'bg-white border-slate-200'}`}>
+        <div className={`px-4 py-3 border-b flex justify-between items-center ${isVoided ? 'bg-red-50 border-red-100' : 'bg-white border-slate-200'}`}>
           <div className="flex items-center gap-3">
             <h4 className={`font-black text-lg tracking-tight ${isVoided ? 'text-red-700' : 'text-slate-800'}`}>
               Venta #{String(transaction.id).padStart(6, '0')}
@@ -89,39 +129,44 @@ export const TransactionDetailModal = ({
         </div>
 
         {/* BODY */}
-        <div className="p-5 overflow-y-auto flex-1 space-y-4">
+        <div className="px-4 py-3 overflow-y-auto flex-1 space-y-3">
           
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center">
-              <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1.5"><Calendar size={12}/> Fecha</p>
+          <div className="grid grid-cols-3 gap-2.5">
+            <div className="bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center">
+              <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-0.5 flex items-center gap-1.5"><Calendar size={12}/> Fecha</p>
               <p className="font-bold text-slate-700 text-xs">{transaction.date}</p>
-              <p className="text-slate-400 font-medium text-[10px] mt-0.5">{transaction.timestamp || transaction.time || '--:--'} hs</p>
+              <p className="text-slate-400 font-medium text-[10px] leading-none mt-0.5">{transaction.timestamp || transaction.time || '--:--'} hs</p>
             </div>
             
-            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center items-start">
-              <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1.5"><User size={12}/> Cajero</p>
+            <div className="bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center items-start">
+              <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-0.5 flex items-center gap-1.5"><User size={12}/> Cajero</p>
               <UserDisplayBadge
-                user={{ id: transaction.userId, role: transaction.userRole, name: transaction.user }}
+                user={getHistoryBadgeUser(transaction)}
                 userCatalog={userCatalog}
                 size="md"
                 className="mt-0.5"
               />
             </div>
 
-            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center">
-              <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1.5"><CreditCard size={12}/> Pago</p>
-              <span className="font-bold text-slate-700 text-xs truncate">{transaction.payment}</span>
-              {transaction.payment === 'Credito' && transaction.installments > 0 && (
-                <span className="text-blue-600 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded text-[9px] font-bold mt-1 w-max">
+            <div className="bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center">
+              <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-0.5 flex items-center gap-1.5"><CreditCard size={12}/> Pago</p>
+              <span className="font-bold text-slate-700 text-xs truncate">{paymentSummary}</span>
+              {paymentItems.length > 1 && (
+                <span className="text-blue-600 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded text-[9px] font-bold mt-1 w-max leading-none">
+                  {paymentItems.length} tramos
+                </span>
+              )}
+              {paymentItems.some((item) => item.method === 'Credito') && transaction.installments > 0 && (
+                <span className="text-blue-600 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded text-[9px] font-bold mt-1 w-max leading-none">
                   {transaction.installments} Cuotas
                 </span>
               )}
-              {transaction.payment === 'Efectivo' && (
-                <div className="mt-1.5 space-y-0.5">
-                  <p className="text-[9px] font-bold text-emerald-600">
+              {paymentItems.some((item) => item.method === 'Efectivo') && (
+                <div className="mt-1 space-y-0">
+                  <p className="text-[9px] font-bold text-emerald-600 leading-tight">
                     Recibido: <FancyPrice amount={Number(transaction.cashReceived || transaction.total || 0)} />
                   </p>
-                  <p className="text-[9px] font-bold text-emerald-600">
+                  <p className="text-[9px] font-bold text-emerald-600 leading-tight">
                     Devolución: <FancyPrice amount={Number(transaction.cashChange || 0)} />
                   </p>
                 </div>
@@ -129,13 +174,13 @@ export const TransactionDetailModal = ({
             </div>
           </div>
 
-          <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm flex flex-col">
-            <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+          <div className="bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-sm flex flex-col">
+            <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5">
               <UserCheck size={12}/> Cliente / Socio
             </p>
             
             {clientName ? (
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-sm shadow-inner ${isVoided ? 'bg-red-100 text-red-500' : 'bg-indigo-100 text-indigo-600'}`}>
                     {clientName.charAt(0).toUpperCase()}
@@ -153,9 +198,9 @@ export const TransactionDetailModal = ({
                 </div>
 
                 {(ptsEarned > 0 || ptsSpent > 0 || currentTotal !== null) && (
-                  <div className={`flex items-center bg-slate-50 border border-slate-100 rounded-lg p-2 ${isVoided ? 'opacity-50 grayscale' : ''}`}>
+                  <div className={`flex items-center bg-slate-50 border border-slate-100 rounded-lg px-2 py-1.5 ${isVoided ? 'opacity-50 grayscale' : ''}`}>
                     <div className="flex flex-col items-end pr-2 border-r border-slate-200">
-                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">En esta venta</span>
+                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 leading-none">En esta venta</span>
                       {ptsEarned > 0 && <span className="text-[11px] font-black text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded">+{formatNumber(ptsEarned)} pts</span>}
                       {ptsSpent > 0 && <span className="text-[11px] font-black text-rose-600 bg-rose-100 px-1.5 py-0.5 rounded">-{formatNumber(ptsSpent)} pts</span>}
                       {ptsEarned === 0 && ptsSpent === 0 && <span className="text-[11px] font-bold text-slate-400">0 pts</span>}
@@ -164,7 +209,7 @@ export const TransactionDetailModal = ({
                       <ArrowRight size={14} />
                     </div>
                     <div className="flex flex-col items-start pl-1 min-w-[50px]">
-                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Total Actual</span>
+                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 leading-none">Total Actual</span>
                       <span className="text-[12px] font-black text-indigo-600">
                         {currentTotal !== null ? `${formatNumber(currentTotal)} pts` : '--'}
                       </span>
@@ -173,7 +218,7 @@ export const TransactionDetailModal = ({
                 )}
               </div>
             ) : (
-              <div className="flex items-center gap-2.5 text-slate-400 bg-slate-50 p-2 rounded-lg border border-slate-100">
+              <div className="flex items-center gap-2.5 text-slate-400 bg-slate-50 px-2.5 py-2 rounded-lg border border-slate-100">
                 <div className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center shadow-sm">
                   <User size={14} className="text-slate-400"/>
                 </div>
@@ -183,7 +228,7 @@ export const TransactionDetailModal = ({
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-            <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex justify-between items-center">
+            <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 flex justify-between items-center">
               <p className="text-slate-600 text-[10px] font-black uppercase tracking-wider flex items-center gap-2">
                 <ShoppingCart size={14}/> Detalles del Pedido
               </p>
@@ -192,7 +237,7 @@ export const TransactionDetailModal = ({
               </span>
             </div>
             
-            <div className="divide-y divide-slate-100 max-h-[200px] overflow-y-auto custom-scrollbar">
+            <div className="divide-y divide-slate-100 max-h-[320px] overflow-y-auto custom-scrollbar">
               {(transaction.items || []).map((item, idx) => {
                 const rawQty = item.qty || item.quantity;
                 const qty = Number(rawQty) || 0;
@@ -207,24 +252,24 @@ export const TransactionDetailModal = ({
                 const isWeight = item.product_type === 'weight' || item.isWeight || (qty >= 20 && price < 50);
 
                 return (
-                  <div key={idx} className={`p-3.5 flex justify-between items-center transition-colors hover:bg-slate-50 ${isVoided ? 'opacity-50' : ''}`}>
-                    <div className="flex-1 pr-4">
-                      <p className={`font-bold text-xs mb-1 ${isVoided ? 'line-through text-slate-400' : 'text-slate-700'}`}>
+                  <div key={idx} className={`px-3.5 py-2.5 flex justify-between items-center transition-colors hover:bg-slate-50 ${isVoided ? 'opacity-50' : ''}`}>
+                    <div className="flex-1 pr-3">
+                      <p className={`font-bold text-[11px] mb-0.5 leading-tight ${isVoided ? 'line-through text-slate-400' : 'text-slate-700'}`}>
                         {item.title || item.product_title || item.name || 'Producto Desconocido'}
                       </p>
-                      <p className="text-[10px] text-slate-400 font-medium flex items-center gap-1.5">
-                        <span className="font-bold text-slate-600 bg-white border border-slate-200 shadow-sm px-1.5 py-0.5 rounded">
+                      <p className="text-[10px] text-slate-400 font-medium flex items-center gap-1.5 leading-tight">
+                        <span className="font-bold text-slate-600 bg-white border border-slate-200 shadow-sm px-1.5 py-0.5 rounded leading-none">
                           {formatNumber(qty)}{isWeight ? 'g' : ' u.'}
                         </span>
                         x <FancyPrice amount={price} /> {isWeight ? '/Kg' : 'c/u'}
                       </p>
                       {comboIncludedItems.length > 0 && (
-                        <div className="mt-2 rounded-lg border border-violet-100 bg-violet-50/70 px-2.5 py-2">
+                        <div className="mt-1.5 rounded-lg border border-violet-100 bg-violet-50/70 px-2 py-1.5">
                           {comboIncludedItems.map((includedItem, includedIndex) => {
                             const includedIsWeight = includedItem.product_type === 'weight';
                             return (
-                              <div key={`${idx}-${includedIndex}`} className="flex items-center gap-2 text-[10px] text-violet-700">
-                                <span className="font-bold rounded bg-white/80 px-1.5 py-0.5 border border-violet-100 whitespace-nowrap">
+                              <div key={`${idx}-${includedIndex}`} className="flex items-center gap-2 text-[10px] text-violet-700 leading-tight">
+                                <span className="font-bold rounded bg-white/80 px-1.5 py-0.5 border border-violet-100 whitespace-nowrap leading-none">
                                   {formatNumber(includedItem.appliedQuantity)}{includedIsWeight ? 'g' : ' u.'}
                                 </span>
                                 <span className="truncate">{includedItem.title}</span>
@@ -234,7 +279,7 @@ export const TransactionDetailModal = ({
                         </div>
                       )}
                     </div>
-                    <p className={`font-black text-sm ${isVoided ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
+                    <p className={`font-black text-[13px] leading-none ${isVoided ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
                       <FancyPrice amount={qty * price} />
                     </p>
                   </div>
@@ -242,11 +287,11 @@ export const TransactionDetailModal = ({
               })}
             </div>
 
-            <div className={`p-4 border-t flex justify-between items-center ${isVoided ? 'bg-red-50 border-red-100' : 'bg-blue-50/50 border-blue-100'}`}>
-              <span className={`text-xs font-black uppercase tracking-widest ${isVoided ? 'text-red-700' : 'text-blue-800'}`}>
+            <div className={`px-4 py-3 border-t flex justify-between items-center ${isVoided ? 'bg-red-50 border-red-100' : 'bg-blue-50/50 border-blue-100'}`}>
+              <span className={`text-[11px] font-black uppercase tracking-[0.18em] ${isVoided ? 'text-red-700' : 'text-blue-800'}`}>
                 Total Final
               </span>
-              <span className={`text-2xl font-black tracking-tight flex items-center gap-1 ${isVoided ? 'text-red-700 line-through' : 'text-blue-600'}`}>
+              <span className={`text-[26px] font-black tracking-tight leading-none flex items-center gap-1 ${isVoided ? 'text-red-700 line-through' : 'text-blue-600'}`}>
                 <FancyPrice amount={Number(transaction.total) || 0} />
               </span>
             </div>

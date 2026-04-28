@@ -6,16 +6,16 @@ const SESSION_ACTIONS = new Set([
   'Sesion Ausente',
   'Sesion Reanudada',
   'Sesion Expirada',
-  'Sesi\u00f3n Iniciada',
-  'Sesi\u00f3n Cerrada',
-  'Sesi\u00f3n Ausente',
-  'Sesi\u00f3n Reanudada',
-  'Sesi\u00f3n Expirada',
-  'Inicio de Sesi\u00f3n',
-  'Cierre de Sesi\u00f3n',
-  'Ausencia de Sesi\u00f3n',
-  'Reanudaci\u00f3n de Sesi\u00f3n',
-  'Expiraci\u00f3n de Sesi\u00f3n',
+  'Sesión Iniciada',
+  'Sesión Cerrada',
+  'Sesión Ausente',
+  'Sesión Reanudada',
+  'Sesión Expirada',
+  'Inicio de Sesión',
+  'Cierre de Sesión',
+  'Ausencia de Sesión',
+  'Reanudación de Sesión',
+  'Expiración de Sesión',
 ]);
 
 const isCouponDetails = (details) => {
@@ -37,7 +37,7 @@ const getCouponActionFromOfferAction = (action) => {
 const normalizeAction = (action) => {
   const actionMap = {
     'Nueva Venta': 'Venta Realizada',
-    'Edici\u00f3n Venta': 'Venta Modificada',
+    'Edición Venta': 'Venta Modificada',
     Venta: 'Venta Realizada',
     Gasto: 'Nuevo Gasto',
     'Registrar Gasto': 'Nuevo Gasto',
@@ -60,8 +60,8 @@ const detectActionType = (log) => {
     'Venta Realizada',
     'Venta Modificada',
     'Venta Anulada',
-    'Edici\u00f3n Producto',
-    'Edici\u00f3n Masiva',
+    'Edición Producto',
+    'Edición Masiva',
     'Venta Eliminada',
     'Venta Restaurada',
     'Presupuesto Creado',
@@ -80,8 +80,8 @@ const detectActionType = (log) => {
     'Cup\u00f3n Editado',
     'Cup\u00f3n Eliminado',
     'Nuevo Socio',
-    'Edici\u00f3n de Puntos',
-    'Edici\u00f3n de Socio',
+    'Edición de Puntos',
+    'Edición de Socio',
     'Baja de Socio',
     'Nuevo Gasto',
     'Cierre de Caja',
@@ -110,7 +110,7 @@ const detectActionType = (log) => {
     !details.itemsSnapshot &&
     (details.changes || action.includes('Edici'))
   ) {
-    return 'Edici\u00f3n Producto';
+    return 'Edición Producto';
   }
 
   if (details.items && details.total !== undefined && !details.changes && !details.itemsSnapshot && !details.productChanges) {
@@ -148,12 +148,12 @@ const detectActionType = (log) => {
     return action === 'Baja Producto' ? 'Baja Producto' : 'Alta de Producto';
   }
 
-  if (action === 'Edici\u00f3n Masiva Categor\u00edas' || (details.count !== undefined && Array.isArray(details.details))) {
-    return 'Edici\u00f3n Masiva Categor\u00edas';
+  if (action === 'Edición Masiva Categor\u00edas' || (details.count !== undefined && Array.isArray(details.details))) {
+    return 'Edición Masiva Categor\u00edas';
   }
 
-  if (action === 'Edici\u00f3n Masiva' || (details.count !== undefined && Array.isArray(details.items))) {
-    return 'Edici\u00f3n Masiva';
+  if (action === 'Edición Masiva' || (details.count !== undefined && Array.isArray(details.items))) {
+    return 'Edición Masiva';
   }
 
   return action;
@@ -289,7 +289,7 @@ export function useLogsFilter(dailyLogs = []) {
         return false;
       }
 
-      if (filterAction && log.action !== filterAction && !(filterAction === 'Venta Modificada' && log.action === 'Modificaci\u00f3n Pedido')) {
+      if (filterAction && log.action !== filterAction && !(filterAction === 'Venta Modificada' && log.action === 'Modificación Pedido')) {
         return false;
       }
 

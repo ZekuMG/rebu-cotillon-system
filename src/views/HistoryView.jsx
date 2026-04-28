@@ -1,5 +1,5 @@
 // src/views/HistoryView.jsx
-// ♻️ REFACTOR: Interfaz de Historial Consolidada y Optimizada (Filtros, Celdas Inline, UI Premium)
+// REFACTOR: Interfaz de Historial consolidada y optimizada (filtros, celdas inline, UI premium)
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -17,15 +17,27 @@ import {
   Filter,
   RotateCcw,
   ChevronDown,
+  RefreshCw,
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../data';
-import { normalizeUserText } from '../utils/appUsers';
 import { hasPermission } from '../utils/userPermissions';
 import { normalizeDate, isVentaLog, getVentaTotal } from '../utils/helpers';
 import { FancyPrice } from '../components/FancyPrice';
+import AsyncActionButton from '../components/AsyncActionButton';
 import { TransactionDetailModal } from '../components/modals/HistoryModals';
 import UserDisplayBadge from '../components/UserDisplayBadge';
-import { resolveUserPresentation } from '../utils/userPresentation';
+import usePendingAction from '../hooks/usePendingAction';
+import {
+  getPaymentBreakdownDisplayItems,
+  getPaymentSummary,
+  matchesPaymentFilter,
+  normalizePaymentBreakdown,
+} from '../utils/paymentBreakdown';
+import {
+  buildUnifiedUserFilterOptions,
+  matchesUnifiedUserFilter,
+} from '../utils/userFilters';
+import useHistoryTransactionsFeed from '../hooks/useHistoryTransactionsFeed';
 
 // --- HELPER LOCAL PARA FORMATO VISUAL ---
 const formatDisplayDate = (dateString) => {
@@ -38,7 +50,197 @@ const formatDisplayDate = (dateString) => {
   return dateString;
 };
 
+const parseHistoryDateTime = (dateValue, timeValue) => {
+  const baseDate = normalizeDate(dateValue);
+  if (!baseDate) return null;
+
+  const timeMatch = String(timeValue || '').match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (timeMatch) {
+    baseDate.setHours(
+      Number(timeMatch[1]) || 0,
+      Number(timeMatch[2]) || 0,
+      Number(timeMatch[3]) || 0,
+      0,
+    );
+  }
+
+  return baseDate;
+};
+
+const getTransactionSortDate = (tx) => {
+  if (tx?.sortDate instanceof Date && !Number.isNaN(tx.sortDate.getTime())) return tx.sortDate;
+
+  const createdAtDate = tx?.createdAt || tx?.created_at
+    ? new Date(tx.createdAt || tx.created_at)
+    : null;
+  if (createdAtDate && !Number.isNaN(createdAtDate.getTime())) return createdAtDate;
+
+  return parseHistoryDateTime(tx?.date, tx?.timestamp || tx?.time) || normalizeDate(tx?.date) || null;
+};
+
+const getVoidedSaleOriginalSortDate = (voidLog, creationLog) => {
+  const originalCreatedAt = voidLog?.details?.originalCreatedAt || voidLog?.details?.createdAt || null;
+  if (originalCreatedAt) {
+    const originalCreatedAtDate = new Date(originalCreatedAt);
+    if (!Number.isNaN(originalCreatedAtDate.getTime())) return originalCreatedAtDate;
+  }
+
+  return (
+    parseHistoryDateTime(voidLog?.details?.originalDate, voidLog?.details?.originalTimestamp) ||
+    parseHistoryDateTime(creationLog?.date, creationLog?.timestamp) ||
+    parseHistoryDateTime(voidLog?.details?.date, voidLog?.details?.timestamp) ||
+    parseHistoryDateTime(voidLog?.date, voidLog?.timestamp)
+  );
+};
+
 const HISTORY_PAGE_SIZE = 50;
+const buildUserFilterLabel = (presentation, user, duplicateCount = 1) => {
+  if (duplicateCount <= 1) return presentation.displayName;
+
+  const suffixParts = [];
+  if (user?.role) suffixParts.push(user.role);
+  if (user?.id) suffixParts.push(String(user.id).slice(-4));
+
+  return suffixParts.length
+    ? `${presentation.displayName} · ${suffixParts.join(' · ')}`
+    : presentation.displayName;
+};
+
+const getHistoryBadgeUser = (tx) => {
+  const normalizedRole = String(tx?.userRole || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+  const normalizedName = String(tx?.user || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+  const isLegacyCajaLike =
+    !tx?.userId &&
+    (
+      ['owner', 'seller'].includes(normalizedRole) ||
+      ['dueno', 'duenio', 'dueño', 'vendedor', 'caja', 'seller'].includes(normalizedName)
+    );
+
+  if (isLegacyCajaLike) {
+    return { role: 'seller', name: 'Caja' };
+  }
+
+  return { id: tx?.userId, role: tx?.userRole, name: tx?.user };
+};
+
+const filterHistoryTransactions = ({
+  transactions,
+  viewMode,
+  filterDateStart,
+  filterDateEnd,
+  filterPayment,
+  filterCategory,
+  searchQuery,
+  sortOrder,
+  inventory,
+  selectedUserFilter,
+  userCatalog,
+}) => {
+  let txList = [...transactions];
+  const isSearchingTest = searchQuery.toLowerCase().trim() === 'test';
+
+  txList = txList.filter((tx) => {
+    if (tx.isTest) return isSearchingTest;
+    return !isSearchingTest;
+  });
+
+  if (viewMode === 'today') {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    txList = txList.filter((tx) => {
+      if (!tx.sortDate) return false;
+      const txDate = new Date(tx.sortDate);
+      txDate.setHours(0, 0, 0, 0);
+      return txDate.getTime() === today.getTime();
+    });
+  } else if (viewMode === 'history') {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    txList = txList.filter((tx) => {
+      if (!tx.sortDate) return false;
+      const txDate = new Date(tx.sortDate);
+      txDate.setHours(0, 0, 0, 0);
+      return txDate.getTime() < today.getTime();
+    });
+  }
+
+  if (filterDateStart) {
+    const [year, month, day] = filterDateStart.split('-');
+    const startDate = new Date(year, month - 1, day, 0, 0, 0);
+    txList = txList.filter((tx) => tx.sortDate >= startDate);
+  }
+
+  if (filterDateEnd) {
+    const [year, month, day] = filterDateEnd.split('-');
+    const endDate = new Date(year, month - 1, day, 23, 59, 59);
+    txList = txList.filter((tx) => tx.sortDate <= endDate);
+  }
+
+  if (filterPayment) {
+    txList = txList.filter((tx) =>
+      matchesPaymentFilter(
+        tx.paymentBreakdown,
+        filterPayment,
+        tx.payment,
+        tx.installments,
+        tx.cashReceived,
+        tx.cashChange,
+        tx.total,
+      ),
+    );
+  }
+
+  if (selectedUserFilter) {
+    txList = txList.filter((tx) => matchesUnifiedUserFilter(tx, selectedUserFilter, userCatalog));
+  }
+
+  if (filterCategory) {
+    txList = txList.filter((tx) =>
+      (tx.items || []).some((item) => {
+        const invProduct = (inventory || []).find(
+          (p) => String(p.id) === String(item.productId || item.id) || p.title === item.title
+        );
+        const catString = item.category || invProduct?.category || '';
+        return catString.split(',').map((c) => c.trim().toLowerCase()).includes(filterCategory.toLowerCase());
+      }),
+    );
+  }
+
+  if (searchQuery.trim() && !isSearchingTest) {
+    const query = searchQuery.toLowerCase().trim();
+    txList = txList.filter((tx) => {
+      const idMatch = String(tx.id).includes(query);
+      const userMatch = tx.user?.toLowerCase().includes(query);
+      const paymentMatch = tx.payment?.toLowerCase().includes(query);
+      const dateMatch = tx.date?.toLowerCase().includes(query);
+      const itemsMatch = (tx.items || []).some((item) => item.title?.toLowerCase().includes(query));
+      const totalMatch = String(tx.total).includes(query);
+      const clientMatch = tx.client && typeof tx.client === 'string'
+        ? tx.client.toLowerCase().includes(query)
+        : tx.client?.name?.toLowerCase().includes(query);
+
+      return idMatch || userMatch || paymentMatch || dateMatch || itemsMatch || totalMatch || clientMatch;
+    });
+  }
+
+  txList.sort((a, b) => {
+    const dateA = a.sortDate?.getTime() || 0;
+    const dateB = b.sortDate?.getTime() || 0;
+    if (dateA !== dateB) return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
+    return sortOrder === 'desc' ? b.id - a.id : a.id - b.id;
+  });
+
+  return txList;
+};
 
 export default function HistoryView({
   transactions,
@@ -57,6 +259,8 @@ export default function HistoryView({
   showNotification: _showNotification,
   onViewTicket,
   navigationRequest,
+  onSoftReload,
+  isActive = false,
 }) {
   const hexToRgba = (hex, alpha) => {
     const normalized = String(hex || '').trim();
@@ -138,6 +342,7 @@ export default function HistoryView({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState('desc');
   const [currentPage, setCurrentPage] = useState(1);
+  const [historyFetchPage, setHistoryFetchPage] = useState(1);
   const [isUserFilterOpen, setIsUserFilterOpen] = useState(false);
   const userFilterRef = useRef(null);
   const canEditSale = hasPermission(currentUser, 'history.editSale');
@@ -148,20 +353,74 @@ export default function HistoryView({
 
   // Modal de detalle
   const [selectedTx, setSelectedTx] = useState(null);
+  const [isSoftReloading, setIsSoftReloading] = useState(false);
+  const [historyReloadKey, setHistoryReloadKey] = useState(0);
+  const { isPending, runAction } = usePendingAction();
+
+  const {
+    transactions: remoteTransactions,
+    logs: remoteHistoryLogs,
+    isLoading: isRemoteTransactionsLoading,
+    hasMore: remoteTransactionsHasMore,
+  } = useHistoryTransactionsFeed({
+    enabled: isActive,
+    page: historyFetchPage,
+    pageSize: HISTORY_PAGE_SIZE,
+    sortDirection: sortOrder,
+    filters: {
+      dateStart: filterDateStart,
+      dateEnd: filterDateEnd,
+      hasWideScan: Boolean(filterPayment || filterUser || filterCategory || searchQuery),
+    },
+    reloadKey: historyReloadKey,
+  });
+
+  const combinedHistoryLogs = useMemo(() => {
+    const byId = new Map();
+    [...(dailyLogs || []), ...(remoteHistoryLogs || [])].forEach((log) => {
+      const key = String(log?.id ?? `${log?.action || 'log'}:${log?.created_at || log?.date || ''}:${log?.timestamp || ''}`);
+      if (!byId.has(key)) byId.set(key, log);
+    });
+    return Array.from(byId.values());
+  }, [dailyLogs, remoteHistoryLogs]);
+
+  const logVoidedTransactionIds = useMemo(() => {
+    const ids = new Set();
+    (combinedHistoryLogs || []).forEach((log) => {
+      if (log.action !== 'Venta Anulada') return;
+      const txId = log.details?.id || log.details?.transactionId;
+      if (txId) ids.add(String(txId));
+    });
+    return ids;
+  }, [combinedHistoryLogs]);
 
   // =====================================================
   // TRANSACCIONES HIST?RICAS (desde logs)
   // =====================================================
   const historicTransactions = useMemo(() => {
     const txList = [];
-    const activeIds = new Set((transactions || []).map(t => String(t.id)));
+    const activeIds = new Set([
+      ...(transactions || []).map(t => String(t.id)),
+      ...(remoteTransactions || []).map(t => String(t.id)),
+    ]);
     const voidedIds = new Set();
+    const restoredSourceIds = new Set();
     const permanentlyDeletedIds = new Set();
     const permanentlyDeletedLogs = new Map();
+    const saleCreationLogsById = new Map();
     
-    (dailyLogs || []).forEach(log => {
+    (combinedHistoryLogs || []).forEach(log => {
+      if (isVentaLog(log) && log.details) {
+        const creationTxId = String(log.details.transactionId || log.details.id || log.id);
+        if (creationTxId && !saleCreationLogsById.has(creationTxId)) {
+          saleCreationLogsById.set(creationTxId, log);
+        }
+      }
       if (log.action === 'Venta Anulada' && log.details?.id) {
         voidedIds.add(String(log.details.id));
+      }
+      if (log.action === 'Venta Restaurada' && log.details?.oldTransactionId) {
+        restoredSourceIds.add(String(log.details.oldTransactionId));
       }
       //  FIX: Actualizamos el nombre a "Venta Eliminada"
       const deletedTxId = log.details?.transactionId || log.details?.id;
@@ -184,8 +443,18 @@ export default function HistoryView({
         timestamp: log.timestamp,
         fullDate: `${log.date}, ${log.timestamp || '00:00'}:00`,
         user: log.user,
+        userId: log.userId || null,
+        userRole: log.userRole || null,
         items: log.details?.items || [],
         payment: log.details?.payment || 'N/A',
+        paymentBreakdown: normalizePaymentBreakdown(
+          log.details?.paymentBreakdown,
+          log.details?.payment,
+          log.details?.installments,
+          log.details?.cashReceived,
+          log.details?.cashChange,
+          safeTotal,
+        ),
         cashReceived: Number(log.details?.cashReceived || 0),
         cashChange: Number(log.details?.cashChange || 0),
         installments: log.details?.installments || 0,
@@ -202,12 +471,12 @@ export default function HistoryView({
       });
     });
 
-    (dailyLogs || []).forEach((log) => {
+    (combinedHistoryLogs || []).forEach((log) => {
       if (isVentaLog(log) && log.details) {
         const txId = String(log.details.transactionId || log.id);
         
         //  FIX: Si est? en la lista de borrados permanentes, NO la dibujamos en el historial
-        if (activeIds.has(txId) || permanentlyDeletedIds.has(txId)) return;
+        if (activeIds.has(txId) || permanentlyDeletedIds.has(txId) || restoredSourceIds.has(txId)) return;
 
         const logDate = normalizeDate(log.date);
         if (logDate) {
@@ -219,8 +488,18 @@ export default function HistoryView({
                 timestamp: log.timestamp,
                 fullDate: `${log.date}, ${log.timestamp || '00:00'}:00`,
                 user: log.user,
+                userId: log.userId || null,
+                userRole: log.userRole || null,
                 items: log.details.items || [],
                 payment: log.details.payment || 'N/A',
+                paymentBreakdown: normalizePaymentBreakdown(
+                  log.details?.paymentBreakdown,
+                  log.details?.payment,
+                  log.details?.installments,
+                  log.details?.cashReceived,
+                  log.details?.cashChange,
+                  safeTotal,
+                ),
                 cashReceived: Number(log.details?.cashReceived || 0),
                 cashChange: Number(log.details?.cashChange || 0),
                 installments: log.details.installments || 0,
@@ -241,18 +520,70 @@ export default function HistoryView({
         }
       }
     });
+    (combinedHistoryLogs || []).forEach((log) => {
+      if (log.action !== 'Venta Anulada' || !log.details) return;
+      const txId = String(log.details.transactionId || log.details.id || log.id);
+      if (activeIds.has(txId) || permanentlyDeletedIds.has(txId) || restoredSourceIds.has(txId)) return;
+      if (txList.some((tx) => String(tx.id) === txId)) return;
+
+      const creationLog = saleCreationLogsById.get(txId);
+      const logDate = getVoidedSaleOriginalSortDate(log, creationLog);
+      if (!logDate) return;
+
+      const safeTotal = Number(log.details.total) || getVentaTotal(log.details) || 0;
+      const items =
+        log.details.items ||
+        log.details.itemsSnapshot ||
+        log.details.itemsReturned ||
+        [];
+
+      txList.push({
+        id: txId,
+        date: log.details?.originalDate || creationLog?.date || log.details?.date || log.date,
+        timestamp: log.details?.originalTimestamp || creationLog?.timestamp || log.details?.timestamp || log.timestamp,
+        fullDate: `${log.details?.originalDate || creationLog?.date || log.details?.date || log.date}, ${log.details?.originalTimestamp || creationLog?.timestamp || log.details?.timestamp || log.timestamp || '00:00'}:00`,
+        user: log.user,
+        userId: log.userId || log.details?.userId || null,
+        userRole: log.userRole || log.details?.userRole || null,
+        items,
+        payment: log.details.payment || 'N/A',
+        paymentBreakdown: normalizePaymentBreakdown(
+          log.details?.paymentBreakdown,
+          log.details?.payment,
+          log.details?.installments,
+          log.details?.cashReceived,
+          log.details?.cashChange,
+          safeTotal,
+        ),
+        cashReceived: Number(log.details?.cashReceived || 0),
+        cashChange: Number(log.details?.cashChange || 0),
+        installments: log.details?.installments || 0,
+        total: safeTotal,
+        client: log.details?.client || log.details?.memberName || null,
+        memberNumber: log.details?.memberNumber || log.details?.client?.memberNumber || null,
+        pointsEarned: log.details?.pointsEarned || 0,
+        pointsSpent: log.details?.pointsSpent || 0,
+        status: 'voided',
+        isHistoric: true,
+        sortDate: logDate,
+        voidedAt: `${log.date}, ${log.timestamp || '00:00'}:00`,
+        isTest: log.isTest,
+        isRestored: false,
+      });
+    });
+
     return txList;
-  }, [dailyLogs, transactions]);
+  }, [combinedHistoryLogs, remoteTransactions, transactions]);
 
   // =====================================================
   // TRANSACCIONES ACTIVAS
   // =====================================================
-  const activeTransactions = useMemo(() => {
+  const fallbackActiveTransactions = useMemo(() => {
     return (transactions || []).map((tx) => {
       const logDate = normalizeDate(tx.date);
       let resolvedUser = tx.user;
       let resolvedItems = tx.items;
-      const creationLog = (dailyLogs || []).find(log => 
+      const creationLog = (combinedHistoryLogs || []).find(log => 
         (log.action === 'Venta Realizada' && String(log.details?.transactionId) === String(tx.id))
       );
       
@@ -268,79 +599,79 @@ export default function HistoryView({
         Number(tx.cashReceived || 0) || Number(creationLog?.details?.cashReceived || 0);
       const resolvedCashChange =
         Number(tx.cashChange || 0) || Number(creationLog?.details?.cashChange || 0);
+      const resolvedPaymentBreakdown = normalizePaymentBreakdown(
+        tx.paymentBreakdown || creationLog?.details?.paymentBreakdown,
+        tx.payment,
+        tx.installments,
+        resolvedCashReceived,
+        resolvedCashChange,
+        tx.total,
+      );
 
       return {
         ...tx,
+        status: logVoidedTransactionIds.has(String(tx.id)) ? 'voided' : (tx.status || 'completed'),
         user: resolvedUser || 'Desconocido',
         items: resolvedItems,
+        paymentBreakdown: resolvedPaymentBreakdown,
+        payment: getPaymentSummary(resolvedPaymentBreakdown, tx.payment, tx.installments),
         cashReceived: resolvedCashReceived,
         cashChange: resolvedCashChange,
         isHistoric: false,
-        sortDate: logDate || new Date(), 
+        sortDate: getTransactionSortDate(tx) || logDate || new Date(), 
       };
     });
-  }, [transactions, dailyLogs]);
+  }, [transactions, combinedHistoryLogs, logVoidedTransactionIds]);
+
+  const activeTransactions = useMemo(() => {
+    const withVoidedStatus = (records = []) =>
+      records.map((tx) => ({
+        ...tx,
+        status: logVoidedTransactionIds.has(String(tx.id)) ? 'voided' : (tx.status || 'completed'),
+        sortDate: getTransactionSortDate(tx) || new Date(),
+      }));
+
+    if (isActive) {
+      const byId = new Map();
+
+      withVoidedStatus(fallbackActiveTransactions).forEach((tx) => {
+        byId.set(String(tx.id), tx);
+      });
+
+      withVoidedStatus(Array.isArray(remoteTransactions) ? remoteTransactions : []).forEach((tx) => {
+        byId.set(String(tx.id), {
+          ...(byId.get(String(tx.id)) || {}),
+          ...tx,
+        });
+      });
+
+      return Array.from(byId.values());
+    }
+
+    return withVoidedStatus(fallbackActiveTransactions);
+  }, [fallbackActiveTransactions, isActive, logVoidedTransactionIds, remoteTransactions]);
+
+  const activeTransactionIds = useMemo(
+    () => new Set(activeTransactions.map((tx) => String(tx.id))),
+    [activeTransactions],
+  );
+
+  const visibleHistoricTransactions = useMemo(
+    () =>
+      historicTransactions.filter((tx) => {
+        if (tx.status !== 'completed') return true;
+        return !activeTransactionIds.has(String(tx.id));
+      }),
+    [activeTransactionIds, historicTransactions],
+  );
 
   const userFilterOptions = useMemo(() => {
-    const allEntries = [];
-    const seenKeys = new Set();
-    const seenPresentationKeys = new Set();
-    const catalogUsers = Array.isArray(userCatalog?.all) ? userCatalog.all : [];
-
-    const pushOption = (option) => {
-      if (!option?.key || seenKeys.has(option.key)) return;
-
-      const presentation = resolveUserPresentation(option.user, userCatalog);
-      const presentationKey = normalizeUserText(presentation.displayName);
-      if (seenPresentationKeys.has(presentationKey)) return;
-
-      seenKeys.add(option.key);
-      seenPresentationKeys.add(presentationKey);
-      allEntries.push(option);
-    };
-
-    catalogUsers.forEach((user) => {
-      pushOption({
-        key: `id:${user.id}`,
-        user: {
-          id: user.id,
-          role: user.role,
-          name: user.displayName || user.name,
-          displayName: user.displayName || user.name,
-        },
-      });
+    return buildUnifiedUserFilterOptions({
+      catalogUsers: userCatalog?.all,
+      records: [...activeTransactions, ...visibleHistoricTransactions],
+      userCatalog,
     });
-
-    [...activeTransactions, ...historicTransactions].forEach((tx) => {
-      const normalizedName = normalizeUserText(tx.user || tx.userName);
-
-      if (tx.userId) {
-        pushOption({
-          key: `id:${tx.userId}`,
-          user: {
-            id: tx.userId,
-            role: tx.userRole,
-            name: tx.user,
-            displayName: tx.user,
-          },
-        });
-        return;
-      }
-
-      if (!normalizedName) return;
-
-      pushOption({
-        key: `name:${normalizedName}`,
-        user: {
-          role: tx.userRole || null,
-          name: tx.user,
-          displayName: tx.user,
-        },
-      });
-    });
-
-    return allEntries;
-  }, [activeTransactions, historicTransactions, userCatalog]);
+  }, [activeTransactions, userCatalog, visibleHistoricTransactions]);
 
   const selectedUserFilter = useMemo(
     () => userFilterOptions.find((option) => option.key === filterUser) || null,
@@ -351,7 +682,7 @@ export default function HistoryView({
   // COMBINAR Y FILTRAR
   // =====================================================
   const filteredTransactions = useMemo(() => {
-    let txList = [...activeTransactions, ...historicTransactions];
+    let txList = [...activeTransactions, ...visibleHistoricTransactions];
     const isSearchingTest = searchQuery.toLowerCase().trim() === 'test';
 
     // 1. FILTRO DE MODO PRUEBA
@@ -397,17 +728,21 @@ export default function HistoryView({
     }
 
     // 4. RESTO DE FILTROS B?SICOS
-    if (filterPayment) txList = txList.filter((tx) => tx.payment === filterPayment);
+    if (filterPayment) {
+      txList = txList.filter((tx) =>
+        matchesPaymentFilter(
+          tx.paymentBreakdown,
+          filterPayment,
+          tx.payment,
+          tx.installments,
+          tx.cashReceived,
+          tx.cashChange,
+          tx.total,
+        ),
+      );
+    }
     if (selectedUserFilter) {
-      const selectedUser = selectedUserFilter.user;
-      const selectedName = normalizeUserText(selectedUser?.displayName || selectedUser?.name);
-      txList = txList.filter((tx) => {
-        if (selectedUser?.id && tx.userId && String(selectedUser.id) === String(tx.userId)) {
-          return true;
-        }
-
-        return normalizeUserText(tx.user) === selectedName;
-      });
+      txList = txList.filter((tx) => matchesUnifiedUserFilter(tx, selectedUserFilter, userCatalog));
     }
     
     // 5. FILTRO DE CATEGORÍA
@@ -451,19 +786,69 @@ export default function HistoryView({
 
     return txList;
   }, [
-    viewMode, activeTransactions, historicTransactions, 
+    viewMode, activeTransactions, visibleHistoricTransactions, 
     filterDateStart, filterDateEnd, filterPayment, 
-    filterCategory, searchQuery, sortOrder, inventory, selectedUserFilter
+    filterCategory, searchQuery, sortOrder, inventory, selectedUserFilter, userCatalog
   ]);
+
+  const statsActiveTransactions = useMemo(
+    () => (fallbackActiveTransactions.length > 0 ? fallbackActiveTransactions : activeTransactions),
+    [activeTransactions, fallbackActiveTransactions],
+  );
+
+  const statsActiveTransactionIds = useMemo(
+    () => new Set(statsActiveTransactions.map((tx) => String(tx.id))),
+    [statsActiveTransactions],
+  );
+
+  const statsHistoricTransactions = useMemo(
+    () =>
+      historicTransactions.filter((tx) => {
+        if (tx.status !== 'completed') return true;
+        return !statsActiveTransactionIds.has(String(tx.id));
+      }),
+    [historicTransactions, statsActiveTransactionIds],
+  );
+
+  const exactFilteredTransactions = useMemo(
+    () =>
+      filterHistoryTransactions({
+        transactions: [...statsActiveTransactions, ...statsHistoricTransactions],
+        viewMode,
+        filterDateStart,
+        filterDateEnd,
+        filterPayment,
+        filterCategory,
+        searchQuery,
+        sortOrder,
+        inventory,
+        selectedUserFilter,
+        userCatalog,
+      }),
+    [
+      filterCategory,
+      filterDateEnd,
+      filterDateStart,
+      filterPayment,
+      inventory,
+      searchQuery,
+      selectedUserFilter,
+      sortOrder,
+      statsActiveTransactions,
+      statsHistoricTransactions,
+      userCatalog,
+      viewMode,
+    ],
+  );
 
 
   const stats = useMemo(() => {
-    const validTx = filteredTransactions.filter((tx) => tx.status !== 'voided' && tx.status !== 'deleted');
+    const validTx = exactFilteredTransactions.filter((tx) => tx.status !== 'voided' && tx.status !== 'deleted');
     return {
       count: validTx.length,
       total: validTx.reduce((sum, tx) => sum + (Number(tx.total) || 0), 0),
     };
-  }, [filteredTransactions]);
+  }, [exactFilteredTransactions]);
 
   const categoriesList = useMemo(() => {
     const cats = new Set();
@@ -484,8 +869,23 @@ export default function HistoryView({
     setSearchQuery('');
   };
 
+  const handleSoftReload = async () => {
+    setIsSoftReloading(true);
+    try {
+      if (onSoftReload) {
+        await onSoftReload();
+      }
+      setHistoryReloadKey((prev) => prev + 1);
+    } finally {
+      setIsSoftReloading(false);
+    }
+  };
+
   const hasActiveFilters = filterDateStart || filterDateEnd || filterPayment || filterUser || filterCategory || searchQuery;
-  const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / HISTORY_PAGE_SIZE));
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filteredTransactions.length / HISTORY_PAGE_SIZE) + (remoteTransactionsHasMore ? 1 : 0),
+  );
   const pageStart = filteredTransactions.length === 0 ? 0 : (currentPage - 1) * HISTORY_PAGE_SIZE + 1;
   const pageEnd = Math.min(currentPage * HISTORY_PAGE_SIZE, filteredTransactions.length);
   const visiblePageNumbers = useMemo(() => {
@@ -498,6 +898,30 @@ export default function HistoryView({
     const startIndex = (currentPage - 1) * HISTORY_PAGE_SIZE;
     return filteredTransactions.slice(startIndex, startIndex + HISTORY_PAGE_SIZE);
   }, [filteredTransactions, currentPage]);
+  const canGoNextPage = currentPage * HISTORY_PAGE_SIZE < filteredTransactions.length || remoteTransactionsHasMore;
+
+  useEffect(() => {
+    setHistoryFetchPage((prev) => Math.max(prev, currentPage));
+  }, [currentPage]);
+
+  useEffect(() => {
+    setHistoryFetchPage(1);
+  }, [viewMode, filterDateStart, filterDateEnd, filterPayment, filterUser, filterCategory, searchQuery, sortOrder, historyReloadKey]);
+
+  useEffect(() => {
+    if (!isActive || isRemoteTransactionsLoading || !remoteTransactionsHasMore) return;
+
+    const requiredVisibleCount = currentPage * HISTORY_PAGE_SIZE;
+    if (filteredTransactions.length >= requiredVisibleCount) return;
+
+    setHistoryFetchPage((prev) => prev + 1);
+  }, [
+    currentPage,
+    filteredTransactions.length,
+    isActive,
+    isRemoteTransactionsLoading,
+    remoteTransactionsHasMore,
+  ]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -539,7 +963,7 @@ export default function HistoryView({
   // =====================================================
   const hasHistorySourceData = (transactions?.length || 0) > 0 || (dailyLogs?.length || 0) > 0;
 
-  if (isLoading && !hasHistorySourceData) {
+  if ((isLoading || (isActive && isRemoteTransactionsLoading)) && activeTransactions.length === 0 && visibleHistoricTransactions.length === 0) {
     return (
       <div className="flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="text-center">
@@ -571,7 +995,8 @@ export default function HistoryView({
           </div>
 
           <span className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1.5 rounded-lg font-bold shadow-sm flex items-center gap-1 shrink-0">
-            {`Total de ventas: ${stats.count} \u00B7 `}
+            <span>{stats.count} ventas</span>
+            <span className="text-slate-300">{'\u2022'}</span>
             <span className="text-blue-600"><FancyPrice amount={stats.total} /></span>
           </span>
 
@@ -619,14 +1044,13 @@ export default function HistoryView({
               className="min-w-[190px] px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer flex items-center justify-between gap-2"
             >
               {selectedUserFilter ? (() => {
-                const presentation = resolveUserPresentation(selectedUserFilter.user, userCatalog);
                 return (
                   <span className="flex min-w-0 items-center gap-2">
                     <span
                       className="h-2.5 w-2.5 shrink-0 rounded-full border border-white/80 shadow-sm"
-                      style={{ backgroundColor: presentation.nameColor }}
+                      style={{ backgroundColor: selectedUserFilter.color }}
                     />
-                    <span className="truncate text-slate-700">{presentation.displayName}</span>
+                    <span className="truncate text-slate-700">{selectedUserFilter.displayName}</span>
                   </span>
                 );
               })() : (
@@ -652,7 +1076,6 @@ export default function HistoryView({
 
                 <div className="mt-1 max-h-72 overflow-y-auto custom-scrollbar pr-1">
                   {userFilterOptions.map((option) => {
-                    const presentation = resolveUserPresentation(option.user, userCatalog);
                     const isActive = selectedUserFilter?.key === option.key;
 
                     return (
@@ -667,14 +1090,14 @@ export default function HistoryView({
                           isActive ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-50'
                         }`}
                         style={{
-                          boxShadow: isActive ? `inset 3px 0 0 ${presentation.nameColor}` : undefined,
+                          boxShadow: isActive ? `inset 3px 0 0 ${option.color}` : undefined,
                         }}
                       >
                         <span
                           className="h-2.5 w-2.5 shrink-0 rounded-full border border-white/80 shadow-sm"
-                          style={{ backgroundColor: presentation.nameColor }}
+                          style={{ backgroundColor: option.color }}
                         />
-                        <span className="truncate font-medium">{presentation.displayName}</span>
+                        <span className="truncate font-medium">{option.displayName}</span>
                       </button>
                     );
                   })}
@@ -700,14 +1123,14 @@ export default function HistoryView({
         <table className="w-full text-xs">
           <thead className="bg-[#f8fafc] text-slate-500 uppercase text-[9px] tracking-wider font-bold sticky top-0 z-10 border-b border-slate-200 shadow-sm">
             <tr>
-              <th className="px-4 py-3.5 text-left">ID & Fecha</th>
-              <th className="px-4 py-3.5 text-left">Usuario</th>
-              <th className="px-4 py-3.5 text-left">Socio</th>
-              <th className="px-4 py-3.5 text-left">Detalle</th>
-              <th className="px-4 py-3.5 text-left">Pago</th>
-              <th className="px-4 py-3.5 text-right">Monto</th>
+              <th className="px-3 py-2.5 text-left">ID</th>
+              <th className="px-3 py-2.5 text-left">Usuario</th>
+              <th className="px-3 py-2.5 text-left">Socio</th>
+              <th className="px-3 py-2.5 text-left">Detalle</th>
+              <th className="px-3 py-2.5 text-left">Pago</th>
+              <th className="px-3 py-2.5 text-right">Monto</th>
               {hasHistoryActions && (
-                <th className="px-4 py-3.5 text-center">Acciones</th>
+                <th className="px-3 py-2.5 text-center">Acciones</th>
               )}
             </tr>
           </thead>
@@ -745,42 +1168,43 @@ export default function HistoryView({
                              : 'hover:bg-[#f0f9ff]'
                   }`}
                 >
-                  <td className="px-4 py-3 align-middle">
-                    <div className="flex items-center gap-2 overflow-hidden whitespace-nowrap text-[10px]">
-                      <span className={`font-mono font-bold text-[11px] ${isVoided ? 'text-red-800 line-through' : isDeleted ? 'text-orange-800 line-through' : 'text-slate-800'}`}>
-                        #{String(tx.id).padStart(6, '0')}
-                      </span>
-                      <span className="text-slate-300">{'\u2022'}</span>
-                      <span className="truncate font-medium text-slate-400">
+                  <td className="px-3 py-2 align-middle">
+                    <div className="overflow-hidden text-[10px] leading-tight">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`font-mono font-bold text-[11px] ${isVoided ? 'text-red-800 line-through' : isDeleted ? 'text-orange-800 line-through' : 'text-slate-800'}`}>
+                          #{String(tx.id).padStart(6, '0')}
+                        </span>
+                        {isVoided && (
+                          <span className="shrink-0 rounded border border-red-200 bg-red-100 px-1.5 py-[1px] text-[8px] font-black uppercase tracking-wider text-red-600">
+                            Anulado
+                          </span>
+                        )}
+                        {isDeleted && (
+                          <span className="shrink-0 rounded border border-orange-200 bg-orange-100 px-1.5 py-[1px] text-[8px] font-black uppercase tracking-wider text-orange-700">
+                            Eliminado
+                          </span>
+                        )}
+                        {!isVoided && !isDeleted && isRestored && (
+                          <span className="shrink-0 rounded border border-emerald-200 bg-emerald-100 px-1.5 py-[1px] text-[8px] font-black uppercase tracking-wider text-emerald-600">
+                            {restoredAt ? `Restaurado \u00B7 ${restoredAt}` : 'Restaurado'}
+                          </span>
+                        )}
+                      </div>
+                      <span className="mt-0.5 block truncate font-medium text-slate-400">
                         {formatDisplayDate(tx.date)} {(tx.time || tx.timestamp) && ` ${tx.time || tx.timestamp}`}
                       </span>
-                      {isVoided && (
-                        <span className="shrink-0 text-[8.5px] font-black tracking-widest text-red-600 uppercase bg-red-100 px-1.5 py-0.5 rounded border border-red-200">
-                          Anulado
-                        </span>
-                      )}
-                      {isDeleted && (
-                        <span className="shrink-0 text-[8.5px] font-black tracking-widest text-orange-700 uppercase bg-orange-100 px-1.5 py-0.5 rounded border border-orange-200">
-                          Eliminado
-                        </span>
-                      )}
-                      {!isVoided && !isDeleted && isRestored && (
-                        <span className="shrink-0 text-[8.5px] font-black tracking-widest text-emerald-600 uppercase bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">
-                          {restoredAt ? `Restaurado \u00B7 ${restoredAt}` : 'Restaurado'}
-                        </span>
-                      )}
                     </div>
                   </td>
                   
-                  <td className="px-4 py-3 align-middle">
+                  <td className="px-3 py-2 align-middle">
                     <UserDisplayBadge
-                      user={{ id: tx.userId, role: tx.userRole, name: tx.user }}
+                      user={getHistoryBadgeUser(tx)}
                       userCatalog={userCatalog}
                       size="sm"
                     />
                   </td>
 
-                  <td className="px-4 py-3 align-middle">
+                  <td className="px-3 py-2 align-middle">
                     <div className={`flex items-center gap-1.5 flex-wrap ${isVoided || isDeleted ? 'opacity-50' : ''}`}>
                       {clientName ? (
                         <>
@@ -801,22 +1225,22 @@ export default function HistoryView({
                     </div>
                   </td>
 
-                  <td className="px-4 py-3 align-middle">
-                    <div className={`max-h-20 overflow-y-auto custom-scrollbar pr-1 ${isVoided || isDeleted ? 'opacity-50' : ''}`}>
+                  <td className="px-3 py-2 align-middle">
+                    <div className={`max-h-[76px] overflow-y-auto custom-scrollbar pr-1 ${isVoided || isDeleted ? 'opacity-50' : ''}`}>
                       {(tx.items || []).slice(0, 3).map((i, idx) => {
                         const qty = i.qty || i.quantity || 0;
                         const isWeight = i.product_type === 'weight' || i.isWeight || (qty >= 20 && i.price < 50);
                         const comboIncludedItems = getComboIncludedItems(i);
                         
                         return (
-                          <div key={idx} className="text-slate-600 text-[10px] mb-1.5 flex items-start gap-1.5">
+                          <div key={idx} className="mb-1 flex items-start gap-1.5 text-[10px] text-slate-600">
                             <span className="font-bold bg-white border border-slate-200 shadow-sm px-1 py-0.5 rounded text-[9px] text-slate-700 whitespace-nowrap">
                               {qty}{isWeight ? 'g' : 'x'}
                             </span>
                             <div className="min-w-0 flex-1 pt-0.5">
                               <span className="truncate block font-medium" title={i.title}>{i.title}</span>
                               {comboIncludedItems.length > 0 && (
-                                <div className="mt-1 rounded-md border border-violet-100 bg-violet-50/70 px-2 py-1.5">
+                                <div className="mt-0.5 rounded-md border border-violet-100 bg-violet-50/70 px-2 py-1">
                                   {comboIncludedItems.map((includedItem, includedIndex) => {
                                     const includedIsWeight = includedItem.product_type === 'weight';
                                     return (
@@ -842,43 +1266,68 @@ export default function HistoryView({
                     </div>
                   </td>
 
-                  <td className="px-4 py-3 align-middle">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className={`px-2 py-1 rounded-md text-[10px] font-bold ${
-                          isVoided ? 'bg-red-100 text-red-600 border border-red-200'
-                                   : isDeleted ? 'bg-orange-100 text-orange-700 border border-orange-200'
-                                   : tx.payment === 'Efectivo' ? 'bg-[#dcfce7] text-[#15803d] border border-[#bbf7d0]'
-                                   : tx.payment === 'MercadoPago' ? 'bg-[#dbeafe] text-[#1d4ed8] border border-[#bfdbfe]'
-                                   : tx.payment === 'Debito' ? 'bg-purple-100 text-purple-700 border border-purple-200'
-                                   : 'bg-[#ffedd5] text-[#c2410c] border border-[#fed7aa]'
-                        }`}
-                      >
-                        {tx.payment}
-                      </span>
-                      
-                      {tx.payment === 'Credito' && tx.installments > 0 && (
-                        <span className={`text-[8.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${
-                          isVoided ? 'text-red-500 bg-red-50 border border-red-100' : isDeleted ? 'text-orange-600 bg-orange-50 border border-orange-100' : 'text-slate-500 bg-white shadow-sm border border-slate-200'
-                        }`}>
-                          {tx.installments} {tx.installments === 1 ? 'Cuota' : 'Cuotas'}
-                        </span>
-                      )}
-                    </div>
-                    {tx.payment === 'Efectivo' && Number(tx.cashChange || 0) > 0 && (
-                      <p className="mt-1 text-[10px] font-bold text-emerald-600">
-                        {'Devoluci\u00F3n'}: <FancyPrice amount={Number(tx.cashChange || 0)} />
-                      </p>
-                    )}
+                  <td className="px-3 py-2 align-middle">
+                    {(() => {
+                      const paymentItems = getPaymentBreakdownDisplayItems(
+                        tx.paymentBreakdown,
+                        tx.payment,
+                        tx.installments,
+                        tx.cashReceived,
+                        tx.cashChange,
+                        tx.total,
+                      );
+                      const primaryPayment = paymentItems[0]?.method || tx.payment;
+                      return (
+                        <>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className={`px-2 py-1 rounded-md text-[10px] font-bold ${
+                                isVoided ? 'bg-red-100 text-red-600 border border-red-200'
+                                         : isDeleted ? 'bg-orange-100 text-orange-700 border border-orange-200'
+                                         : primaryPayment === 'Efectivo' ? 'bg-[#dcfce7] text-[#15803d] border border-[#bbf7d0]'
+                                         : primaryPayment === 'MercadoPago' ? 'bg-[#dbeafe] text-[#1d4ed8] border border-[#bfdbfe]'
+                                         : primaryPayment === 'Debito' ? 'bg-purple-100 text-purple-700 border border-purple-200'
+                                         : 'bg-[#ffedd5] text-[#c2410c] border border-[#fed7aa]'
+                              }`}>
+                              {tx.payment}
+                            </span>
+                            {paymentItems.length > 1 && (
+                              <span className={`text-[8.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${
+                                isVoided ? 'text-red-500 bg-red-50 border border-red-100' : isDeleted ? 'text-orange-600 bg-orange-50 border border-orange-100' : 'text-slate-500 bg-white shadow-sm border border-slate-200'
+                              }`}>
+                                {paymentItems.length} tramos
+                              </span>
+                            )}
+                            {primaryPayment === 'Credito' && tx.installments > 0 && (
+                              <span className={`text-[8.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${
+                                isVoided ? 'text-red-500 bg-red-50 border border-red-100' : isDeleted ? 'text-orange-600 bg-orange-50 border border-orange-100' : 'text-slate-500 bg-white shadow-sm border border-slate-200'
+                              }`}>
+                                {tx.installments} {tx.installments === 1 ? 'Cuota' : 'Cuotas'}
+                              </span>
+                            )}
+                          </div>
+                          {paymentItems.length > 1 && (
+                            <p className="mt-1 text-[10px] font-bold text-slate-500">
+                              {paymentItems.map((item) => item.title).join(' · ')}
+                            </p>
+                          )}
+                          {paymentItems.some((item) => item.method === 'Efectivo' && Number(item.cashChange || 0) > 0) && (
+                            <p className="mt-1 text-[10px] font-bold text-emerald-600">
+                              {'Devolución'}: <FancyPrice amount={Number(tx.cashChange || 0)} />
+                            </p>
+                          )}
+                        </>
+                      );
+                    })()}
                   </td>
 
-                  <td className="px-4 py-3 text-right align-middle">
+                  <td className="px-3 py-2 text-right align-middle">
                     <span className={`font-black text-sm ${isVoided ? 'text-red-400 line-through' : isDeleted ? 'text-orange-400 line-through' : 'text-slate-800'}`}>
                       <FancyPrice amount={Number(tx.total) || 0} />
                     </span>
                   </td>
 
                   {hasHistoryActions && (
-                    <td className="px-4 py-3 align-middle">
+                    <td className="px-3 py-2 align-middle">
                       <div className="flex items-center justify-center gap-1.5">
                         
                         {/* Bot?n Ver Detalles */}
@@ -908,9 +1357,9 @@ export default function HistoryView({
                         {isVoided && (
                           <>
                             {/* NUEVO BOTÓN: Restaurar Venta */}
-                            {canRestoreSale && <button onClick={() => onRestoreTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-emerald-500 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-300 transition-all shadow-sm group" title="Restaurar Venta (Recuperar)">
+                            {canRestoreSale && <AsyncActionButton onAction={() => runAction(`restore-tx:${tx.id}`, () => onRestoreTransaction(tx))} pending={isPending(`restore-tx:${tx.id}`)} loadingContent={<RefreshCw size={12} className="animate-spin" />} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-emerald-500 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-300 transition-all shadow-sm group disabled:cursor-wait" title="Restaurar Venta (Recuperar)">
                               <RotateCcw size={14} className="group-hover:-rotate-45 transition-transform" />
-                            </button>}
+                            </AsyncActionButton>}
                             
                             {/* Eliminar Venta Permanentemente */}
                             {canDeleteSale && <button onClick={() => onDeleteTransaction(tx)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-red-400 hover:bg-red-50 hover:text-red-600 hover:border-red-300 transition-all shadow-sm group" title="Eliminar Registro Permanentemente">
@@ -942,9 +1391,26 @@ export default function HistoryView({
       {filteredTransactions.length > 0 && (
         <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[10px] font-semibold text-slate-500">
-              Mostrando <span className="font-black text-slate-700">{pageStart}</span> a <span className="font-black text-slate-700">{pageEnd}</span> de <span className="font-black text-slate-700">{filteredTransactions.length}</span> registros
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-[10px] font-semibold text-slate-500">
+                Mostrando <span className="font-black text-slate-700">{pageStart}</span> a <span className="font-black text-slate-700">{pageEnd}</span> de <span className="font-black text-slate-700">{filteredTransactions.length}</span> registros
+              </p>
+              <span className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-black text-slate-700">
+                50 por p&aacute;gina
+              </span>
+              <AsyncActionButton
+                type="button"
+                onAction={() => handleSoftReload()}
+                pending={isSoftReloading}
+                disabled={!onSoftReload || isSoftReloading}
+                loadingLabel="Recargando..."
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60"
+                title="Actualizar solo el historial de transacciones"
+              >
+                <RefreshCw size={12} className={isSoftReloading ? 'animate-spin' : ''} />
+                Soft reload
+              </AsyncActionButton>
+            </div>
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
@@ -971,12 +1437,12 @@ export default function HistoryView({
                 ))}
               </div>
               <span className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-black text-slate-700">
-                {'P\u00E1gina'} {currentPage} de {totalPages}
+                {'P\u00E1gina'} {currentPage}{remoteTransactionsHasMore ? '+' : ` de ${totalPages}`}
               </span>
               <button
                 type="button"
-                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
-                disabled={currentPage === totalPages}
+                onClick={() => setCurrentPage((prev) => prev + 1)}
+                disabled={!canGoNextPage}
                 className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Siguiente
@@ -1000,3 +1466,4 @@ export default function HistoryView({
     </div>
   );
 }
+

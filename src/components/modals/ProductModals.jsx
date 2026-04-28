@@ -16,9 +16,11 @@ import {
   Copy,
   CalendarX // Icono para vencimiento
 } from 'lucide-react';
+import AsyncActionButton from '../AsyncActionButton';
 
 // ♻️ FIX: Importamos formatNumber
 import { formatNumber } from '../../utils/helpers';
+import usePendingAction from '../../hooks/usePendingAction';
 import { hasOwnerAccess } from '../../utils/appUsers';
 import { buildAdjustedProductImageFile, readImageFileAsDataUrl } from '../../utils/productImageEditor';
 
@@ -373,6 +375,7 @@ const ImageSection = ({ image, onFileUpload, onUrlChange, onDelete, isUploading 
 
 export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categories, onImageUpload, onAdd, inventory, onDuplicateBarcode, isUploadingImage }) => {
   const [stockUnit, setStockUnit] = useState('g');
+  const { isPending, runAction } = usePendingAction();
   if (!isOpen) return null;
 
   const productType = newItem.product_type || 'quantity';
@@ -390,7 +393,7 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     let finalData = { ...newItem };
 
@@ -404,7 +407,9 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
       finalData.purchasePrice = Number(newItem.purchasePrice) / 1000;
     }
 
-    onAdd(e, finalData);
+    await runAction('add-product-submit', async () => {
+      await onAdd(e, finalData);
+    });
   };
 
   return (
@@ -502,11 +507,9 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
           </div>
 
           {/* Imagen */}
-          <ImageSection image={newItem.image} isUploading={isUploadingImage} onFileUpload={(file) => onImageUpload(file, false)} onUrlChange={(e) => setNewItem({ ...newItem, image: e.target.value })} onDelete={() => setNewItem({ ...newItem, image: '' })} />
+          <ImageSection image={newItem.image} isUploading={isUploadingImage} onFileUpload={(file) => onImageUpload(file, false)} onUrlChange={(e) => setNewItem({ ...newItem, image: e.target.value, image_thumb: '' })} onDelete={() => setNewItem({ ...newItem, image: '', image_thumb: '' })} />
 
-          <button type="submit" disabled={isUploadingImage} className={`w-full py-3 rounded-lg font-bold transition-colors ${isUploadingImage ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-slate-900 text-white hover:bg-slate-800'}`}>
-            {isUploadingImage ? 'Esperando imagen...' : 'Agregar'}
-          </button>
+          <AsyncActionButton type="submit" pending={isPending('add-product-submit')} disabled={isUploadingImage || isPending('add-product-submit')} loadingLabel="Guardando..." className={`w-full py-3 rounded-lg font-bold transition-colors ${isUploadingImage ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-slate-900 text-white hover:bg-slate-800'} disabled:opacity-60 disabled:cursor-wait`}>Agregar</AsyncActionButton>
         </form>
       </div>
     </div>
@@ -520,6 +523,7 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
 
 export const EditProductModal = ({ product, onClose, setEditingProduct, categories, onImageUpload, editReason, setEditReason, onSave, inventory, onDuplicateBarcode, isUploadingImage, onDuplicate, currentUser }) => {
   const [stockUnit, setStockUnit] = useState('g');
+  const { isPending, runAction } = usePendingAction();
   if (!product) return null;
   const productType = product.product_type || 'quantity';
   const isAdmin = hasOwnerAccess(currentUser);
@@ -552,13 +556,15 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (productType === 'weight' && stockUnit === 'kg') {
-      onSave(e, { ...product, stock: Math.round(Number(product.stock) * 1000) });
-    } else {
-      onSave(e);
-    }
+    await runAction(`edit-product-submit:${product.id}`, async () => {
+      if (productType === 'weight' && stockUnit === 'kg') {
+        await onSave(e, { ...product, stock: Math.round(Number(product.stock) * 1000) });
+      } else {
+        await onSave(e);
+      }
+    });
   };
 
   const handleDuplicate = () => {
@@ -656,7 +662,7 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
           </div>
 
           {/* Imagen */}
-          <ImageSection image={product.image} isUploading={isUploadingImage} onFileUpload={(file) => onImageUpload(file, true)} onUrlChange={(e) => setEditingProduct({ ...product, image: e.target.value })} onDelete={() => setEditingProduct({ ...product, image: '' })} />
+          <ImageSection image={product.image} isUploading={isUploadingImage} onFileUpload={(file) => onImageUpload(file, true)} onUrlChange={(e) => setEditingProduct({ ...product, image: e.target.value, image_thumb: '' })} onDelete={() => setEditingProduct({ ...product, image: '', image_thumb: '' })} />
 
           {/* Motivo */}
           <div>
@@ -677,9 +683,7 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
                 Duplicar
               </button>
             )}
-            <button type="submit" disabled={isUploadingImage} className={`flex-1 py-3 rounded-lg font-bold transition-colors ${isUploadingImage ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
-              {isUploadingImage ? 'Esperando imagen...' : 'Guardar Cambios'}
-            </button>
+            <AsyncActionButton type="submit" pending={isPending(`edit-product-submit:${product.id}`)} disabled={isUploadingImage || isPending(`edit-product-submit:${product.id}`)} loadingLabel="Guardando..." className={`flex-1 py-3 rounded-lg font-bold transition-colors ${isUploadingImage ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'} disabled:opacity-60 disabled:cursor-wait`}>Guardar Cambios</AsyncActionButton>
           </div>
         </form>
       </div>
@@ -692,6 +696,7 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
 // ==========================================
 
 export const DeleteProductModal = ({ product, onClose, reason, setReason, onConfirm }) => {
+  const { isPending, runAction } = usePendingAction();
   if (!product) return null;
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 backdrop-blur-sm">
@@ -711,7 +716,7 @@ export const DeleteProductModal = ({ product, onClose, reason, setReason, onConf
           </div>
           <div className="flex gap-3">
             <button onClick={onClose} className="flex-1 py-2.5 rounded-lg font-bold border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors">Cancelar</button>
-            <button onClick={onConfirm} className="flex-1 py-2.5 rounded-lg font-bold bg-red-600 text-white hover:bg-red-700 shadow-md transition-colors">Sí, Eliminar</button>
+            <AsyncActionButton onAction={() => runAction(`delete-product-modal:${product.id}`, onConfirm)} pending={isPending(`delete-product-modal:${product.id}`)} loadingLabel="Eliminando..." className="flex-1 py-2.5 rounded-lg font-bold bg-red-600 text-white hover:bg-red-700 shadow-md transition-colors disabled:opacity-60 disabled:cursor-wait">Sí, Eliminar</AsyncActionButton>
           </div>
         </div>
       </div>

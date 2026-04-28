@@ -2,10 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { 
   Search, Save, CheckSquare, Square, 
   Scale, Package, ArrowRight, Loader2, RotateCcw,
-  FileText, X, User, Edit3, ChevronDown, Plus, Trash2
+  FileText, X, User, Edit3, ChevronDown, Plus, Trash2, PackageX
 } from 'lucide-react';
+import AsyncActionButton from '../components/AsyncActionButton';
 import { FancyPrice } from '../components/FancyPrice';
 import Swal from 'sweetalert2';
+import usePendingAction from '../hooks/usePendingAction';
 
 export default function BulkEditorView({ 
   inventory: realInventory, 
@@ -39,6 +41,7 @@ export default function BulkEditorView({
   // --- Filtros ---
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Todas');
+  const [showOnlyOutOfStock, setShowOnlyOutOfStock] = useState(false);
   
   // --- Estado de Edición Local ---
   const [edits, setEdits] = useState({});
@@ -47,6 +50,7 @@ export default function BulkEditorView({
   // --- Herramienta de Ajuste Masivo ---
   const [bulkAction, setBulkAction] = useState({ field: 'price', percentage: '' });
   const [isSaving, setIsSaving] = useState(false);
+  const { isPending, runAction } = usePendingAction();
 
   // --- Estado de Vista Previa de Exportación ---
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -67,7 +71,7 @@ export default function BulkEditorView({
 
   useEffect(() => {
     setMainLimit(ITEMS_PER_CHUNK);
-  }, [searchTerm, selectedCategory]);
+  }, [searchTerm, selectedCategory, showOnlyOutOfStock]);
 
   const filteredProducts = sandboxInventory.filter((product) => {
     const searchString = searchTerm.toLowerCase().trim();
@@ -89,9 +93,19 @@ export default function BulkEditorView({
     
     const matchesCategory = selectedCategory === 'Todas' || 
       (Array.isArray(product.categories) ? product.categories.includes(selectedCategory) : product.category === selectedCategory);
+    const matchesOutOfStock = showOnlyOutOfStock ? Number(product.stock) <= 0 : true;
       
-    return matchesSearch && matchesCategory;
+    return matchesSearch && matchesCategory && matchesOutOfStock;
   });
+
+  const filteredProductIds = filteredProducts.map((product) => product.id);
+  const visibleOutOfStockIds = filteredProducts
+    .filter((product) => Number(product.stock) <= 0)
+    .map((product) => product.id);
+  const areAllFilteredSelected =
+    filteredProductIds.length > 0 && filteredProductIds.every((id) => selectedIds.includes(id));
+  const areAllVisibleOutOfStockSelected =
+    visibleOutOfStockIds.length > 0 && visibleOutOfStockIds.every((id) => selectedIds.includes(id));
 
   const handleMainScroll = (e) => {
     const { scrollTop, clientHeight, scrollHeight } = e.target;
@@ -116,11 +130,16 @@ export default function BulkEditorView({
   };
 
   const toggleSelectAll = () => {
-    if (selectedIds.length === filteredProducts.length) {
-      setSelectedIds([]);
+    if (areAllFilteredSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !filteredProductIds.includes(id)));
     } else {
-      setSelectedIds(filteredProducts.map(p => p.id));
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...filteredProductIds])));
     }
+  };
+
+  const handleSelectOutOfStock = () => {
+    if (visibleOutOfStockIds.length === 0) return;
+    setSelectedIds((prev) => Array.from(new Set([...prev, ...visibleOutOfStockIds])));
   };
 
   const toggleSelect = (id) => {
@@ -185,52 +204,59 @@ export default function BulkEditorView({
   };
 
   const handleSaveSingle = async (product) => {
-    setIsSaving(true);
-    const editData = edits[product.id];
-    
-    if (onSaveSingle) {
-      await onSaveSingle(product, editData);
-    }
-    
-    const isWeight = product.product_type === 'weight';
-    const finalPrice = isWeight ? Number(editData.price) / 1000 : Number(editData.price);
-    const finalCost = isWeight ? Number(editData.purchasePrice) / 1000 : Number(editData.purchasePrice);
-    const finalStock = Number(editData.stock);
+    await runAction(`bulk-save-single:${product.id}`, async () => {
+      setIsSaving(true);
+      try {
+        const editData = edits[product.id];
+        
+        if (onSaveSingle) {
+          await onSaveSingle(product, editData);
+        }
+        
+        const isWeight = product.product_type === 'weight';
+        const finalPrice = isWeight ? Number(editData.price) / 1000 : Number(editData.price);
+        const finalCost = isWeight ? Number(editData.purchasePrice) / 1000 : Number(editData.purchasePrice);
+        const finalStock = Number(editData.stock);
 
-    setSandboxInventory(sandboxInventory.map(p => 
-      p.id === product.id ? { ...p, price: finalPrice, purchasePrice: finalCost, stock: finalStock } : p
-    ));
-    setIsSaving(false);
+        setSandboxInventory(sandboxInventory.map(p => 
+          p.id === product.id ? { ...p, price: finalPrice, purchasePrice: finalCost, stock: finalStock } : p
+        ));
+      } finally {
+        setIsSaving(false);
+      }
+    });
   };
 
   const handleSaveBulk = async () => {
     if (selectedIds.length === 0) return;
     setIsSaving(true);
-    
-    if (onSaveBulk) {
-      const bulkData = selectedIds.map(id => ({
-        product: sandboxInventory.find(p => p.id === id),
-        edits: edits[id]
-      }));
-      await onSaveBulk(bulkData);
-    }
-
-    setSandboxInventory(prev => prev.map(p => {
-      if (selectedIds.includes(p.id)) {
-        const editData = edits[p.id];
-        const isWeight = p.product_type === 'weight';
-        return {
-          ...p,
-          price: isWeight ? Number(editData.price) / 1000 : Number(editData.price),
-          purchasePrice: isWeight ? Number(editData.purchasePrice) / 1000 : Number(editData.purchasePrice),
-          stock: Number(editData.stock)
-        };
+    try {
+      if (onSaveBulk) {
+        const bulkData = selectedIds.map(id => ({
+          product: sandboxInventory.find(p => p.id === id),
+          edits: edits[id]
+        }));
+        await onSaveBulk(bulkData);
       }
-      return p;
-    }));
-    
-    setSelectedIds([]); 
-    setIsSaving(false);
+
+      setSandboxInventory(prev => prev.map(p => {
+        if (selectedIds.includes(p.id)) {
+          const editData = edits[p.id];
+          const isWeight = p.product_type === 'weight';
+          return {
+            ...p,
+            price: isWeight ? Number(editData.price) / 1000 : Number(editData.price),
+            purchasePrice: isWeight ? Number(editData.purchasePrice) / 1000 : Number(editData.purchasePrice),
+            stock: Number(editData.stock)
+          };
+        }
+        return p;
+      }));
+      
+      setSelectedIds([]);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // ✨ AHORA EL PDF FUNCIONA COMO UN "CARRITO" ACUMULATIVO
@@ -484,6 +510,33 @@ export default function BulkEditorView({
           >
             {categories.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
+          <button
+            type="button"
+            onClick={() => setShowOnlyOutOfStock((prev) => !prev)}
+            className={`px-3 py-1.5 rounded-lg font-black text-xs border transition-all shrink-0 flex items-center gap-1.5 ${
+              showOnlyOutOfStock
+                ? 'bg-red-50 border-red-200 text-red-700 shadow-inner'
+                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-white'
+            }`}
+            title="Filtrar sólo productos agotados"
+          >
+            <PackageX size={14} />
+            Agotados
+          </button>
+          <button
+            type="button"
+            onClick={handleSelectOutOfStock}
+            disabled={visibleOutOfStockIds.length === 0}
+            className={`px-3 py-1.5 rounded-lg font-black text-xs border transition-all shrink-0 flex items-center gap-1.5 ${
+              areAllVisibleOutOfStockSelected
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                : 'bg-white border-amber-200 text-amber-700 hover:bg-amber-50'
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
+            title="Seleccionar todos los agotados visibles para exportación o reposición"
+          >
+            <CheckSquare size={14} />
+            {areAllVisibleOutOfStockSelected ? 'Agotados listos' : `Seleccionar agotados${visibleOutOfStockIds.length > 0 ? ` (${visibleOutOfStockIds.length})` : ''}`}
+          </button>
         </div>
 
         <div className="pl-3 border-l border-slate-200 flex items-center gap-2">
@@ -495,6 +548,13 @@ export default function BulkEditorView({
             {selectedIds.length > 0 ? `Añadir al PDF (${selectedIds.length})` : `Ver Presupuesto ${exportItems.length > 0 ? `(${exportItems.length})` : ''}`}
           </button>
 
+          {showOnlyOutOfStock && (
+            <span className="hidden xl:inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-amber-800">
+              <PackageX size={12} />
+              Exporta agotados y podés sumar otros para reponer
+            </span>
+          )}
+
           <button 
             onClick={handleResetAllEdits}
             disabled={(!hasPendingBulkChanges && selectedIds.length === 0 && bulkAction.percentage === '') || isSaving}
@@ -504,14 +564,16 @@ export default function BulkEditorView({
             Deshacer todo
           </button>
 
-          <button 
-            onClick={handleSaveBulk}
+          <AsyncActionButton 
+            onAction={handleSaveBulk}
+            pending={isSaving}
             disabled={selectedIds.length === 0 || isSaving}
+            loadingLabel="Guardando..."
             className="bg-slate-900 text-white px-4 py-1.5 rounded-md font-black text-xs shadow-md hover:bg-slate-800 disabled:opacity-50 transition-colors flex items-center gap-2 whitespace-nowrap"
           >
             {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
             Guardar Cambios ({selectedIds.length})
-          </button>
+          </AsyncActionButton>
         </div>
       </div>
 
@@ -523,7 +585,7 @@ export default function BulkEditorView({
               <tr>
                 <th className="p-1.5 w-8 text-center">
                   <button onClick={toggleSelectAll} className="hover:text-fuchsia-300 transition-colors">
-                    {selectedIds.length === filteredProducts.length && filteredProducts.length > 0 ? <CheckSquare size={14} /> : <Square size={14} />}
+                    {areAllFilteredSelected ? <CheckSquare size={14} /> : <Square size={14} />}
                   </button>
                 </th>
                 <th className="p-1.5 text-[10px] uppercase font-black tracking-wider">Producto</th>
@@ -629,14 +691,16 @@ export default function BulkEditorView({
                       <div className="flex items-center justify-center gap-1.5 min-h-[28px] w-full">
                         {rowChanged ? (
                           <>
-                            <button 
-                              onClick={() => handleSaveSingle(p)}
+                            <AsyncActionButton 
+                              onAction={() => handleSaveSingle(p)}
+                              pending={isPending(`bulk-save-single:${p.id}`)}
+                              loadingContent={<Loader2 size={12} className="animate-spin" />}
                               disabled={isSaving}
                               title="Guardar Cambio"
                               className="w-7 h-7 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors flex justify-center items-center shadow-sm disabled:opacity-50"
                             >
                               <Save size={14} />
-                            </button>
+                            </AsyncActionButton>
                             <button 
                               onClick={() => handleResetRow(p)}
                               disabled={isSaving}

@@ -281,7 +281,7 @@ export const ExportPdfLayout = ({ data }) => {
                 <li><strong>Modificaciones:</strong> Con 72hs de anticipación, sujeto a disponibilidad de stock.</li>
                 <li><strong>Cancelaciones:</strong> La seña no es reembolsable ya que se utiliza para reserva de mercadería.</li>
                 <li><strong>Actualización:</strong> Los precios quedan congelados únicamente con el pago de la seña.</li>
-                <li><strong>Validez:</strong> Este presupuesto tiene una validez de 7 días.</li>
+                <li><strong>Validez:</strong> Este presupuesto tiene una validez de 3 días.</li>
               </ol>
             </div>
           </div>

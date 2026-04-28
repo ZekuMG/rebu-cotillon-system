@@ -23,6 +23,20 @@ export const DailyReportModal = ({ isOpen, onClose, report }) => {
     window.print();
   };
 
+  const containsTestWord = (value) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .includes('test');
+
+  const visibleItemsSold = (report.itemsSold || []).filter(
+    (item) => !containsTestWord(item?.title)
+  );
+  const visibleNewClients = (report.newClients || []).filter(
+    (client) => !containsTestWord(client?.name)
+  );
+
   return (
     // CORRECCIÓN VISUAL: Usamos 'items-start' y 'overflow-y-auto' en el padre para evitar que el centro corte el contenido
     <div className="fixed inset-0 bg-black/80 flex justify-center items-start z-[70] p-4 backdrop-blur-sm overflow-y-auto">
@@ -149,7 +163,7 @@ export const DailyReportModal = ({ isOpen, onClose, report }) => {
             {/* DETALLE STOCK VENDIDO */}
             <div className="mb-8">
               <h3 className="text-sm font-black text-slate-900 uppercase border-b border-slate-200 pb-2 mb-4 flex items-center gap-2">
-                <Package size={16} /> Stock Vendido ({report.itemsSold?.length || 0} items)
+                <Package size={16} /> Stock Vendido ({visibleItemsSold.length} items)
               </h3>
               
               <table className="w-full text-xs text-left">
@@ -161,7 +175,7 @@ export const DailyReportModal = ({ isOpen, onClose, report }) => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {(report.itemsSold || []).map((item, idx) => (
+                  {visibleItemsSold.map((item, idx) => (
                     <tr key={idx}>
                       <td className="py-2 px-2 text-slate-700 font-medium truncate max-w-[200px]">{item.title}</td>
                       <td className="py-2 px-2 text-slate-600 text-center font-bold">{formatNumber(item.qty, item.qty % 1 !== 0 ? 2 : 0)}</td>
@@ -170,14 +184,14 @@ export const DailyReportModal = ({ isOpen, onClose, report }) => {
                   ))}
                 </tbody>
               </table>
-              {(report.itemsSold || []).length === 0 && (
+              {visibleItemsSold.length === 0 && (
                 <p className="text-center text-slate-400 py-4 italic">No se registraron ventas de productos.</p>
               )}
             </div>
 
             {/* ================= PÁGINA 2: NUEVOS CLIENTES ================= */}
             {/* Solo mostramos la página si hay clientes nuevos */}
-            {report.newClients && report.newClients.length > 0 && (
+            {visibleNewClients.length > 0 && (
               <>
                 {/* SALTO DE PÁGINA PARA IMPRESIÓN */}
                 <div className="print:break-before-page mt-12 print:mt-0"></div>
@@ -192,7 +206,7 @@ export const DailyReportModal = ({ isOpen, onClose, report }) => {
                       </div>
                       <div className="text-right">
                         <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-xs font-bold border border-slate-200">
-                           Total: {report.newClients.length}
+                           Total: {visibleNewClients.length}
                         </span>
                       </div>
                     </div>
@@ -207,7 +221,7 @@ export const DailyReportModal = ({ isOpen, onClose, report }) => {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {report.newClients.map((client, idx) => (
+                          {visibleNewClients.map((client, idx) => (
                             <tr key={idx} className="hover:bg-slate-50">
                               <td className="py-3 px-4 font-mono text-slate-500">{client.time}</td>
                               <td className="py-3 px-4 font-bold text-slate-700">#{String(client.number).padStart(4, '0')}</td>

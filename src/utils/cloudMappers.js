@@ -1,4 +1,9 @@
 import { formatDateAR, formatTimeFullAR, isTestRecord } from './helpers';
+import {
+  getOrderPaymentHistorySummary,
+  getPrimaryPaymentInfo,
+  normalizePaymentBreakdown,
+} from './paymentBreakdown';
 
 const MODIFIED_SALE_ACTIONS = new Set([
   'Venta Modificada',
@@ -27,11 +32,17 @@ export const safeCloudData = (result, tableName) => {
 export const mapInventoryRecords = (products = []) =>
   products.map((product) => ({
     ...product,
+    imageThumb: product.image_thumb || product.imageThumb || product.image || '',
     categories: product.category
       ? product.category.split(',').map((category) => category.trim()).filter(Boolean)
       : [],
     purchasePrice: product.purchasePrice || 0,
     expiration_date: product.expiration_date || null,
+    activeOffers: Array.isArray(product.active_offers)
+      ? product.active_offers
+      : Array.isArray(product.activeOffers)
+        ? product.activeOffers
+        : [],
   }));
 
 export const mapMemberRecords = (clients = []) =>
@@ -68,6 +79,11 @@ export const mapLogRecords = (logs = []) =>
       }
     }
     
+    const shouldIgnoreNestedTestDetectionForLog = (actionName) => {
+      const normalizedAction = String(actionName || '').toLowerCase();
+      return normalizedAction.includes('cierre de caja') || normalizedAction.includes('cierre autom');
+    };
+
     const mappedLog = {
       id: log.id,
       action,
@@ -76,15 +92,18 @@ export const mapLogRecords = (logs = []) =>
       userId: log.user_id || details?.userId || null,
       userRole: log.user_role || details?.userRole || details?.role || null,
       reason: log.reason,
+      created_at: log.created_at || null,
       date: formatDateAR(new Date(log.created_at)),
       timestamp: formatTimeFullAR(new Date(log.created_at)),
     };
 
-    mappedLog.isTest = isTestRecord({
-      action: mappedLog.action,
-      details: mappedLog.details,
-      reason: mappedLog.reason,
-    });
+    mappedLog.isTest = shouldIgnoreNestedTestDetectionForLog(mappedLog.action)
+      ? Boolean(mappedLog.details?.isTest || mappedLog.details?.testMarker === 'test')
+      : isTestRecord({
+          action: mappedLog.action,
+          details: mappedLog.details,
+          reason: mappedLog.reason,
+        });
 
     return mappedLog;
   });
@@ -107,6 +126,9 @@ const mapRecoveredSaleItem = (item) => ({
   price: Number(item.price ?? 0),
   subtotal: Number(item.subtotal ?? item.lineSubtotal ?? item.line_total ?? item.lineTotal ?? 0) || undefined,
   isReward: Boolean(item.isReward ?? item.is_reward ?? false),
+  isDiscount: Boolean(item.isDiscount ?? item.is_discount ?? false),
+  discountMode: item.discountMode || item.discount_mode || null,
+  discountPercent: item.discountPercent ?? item.discount_percent ?? null,
   productId: item.productId || item.id || item.product_id || null,
   product_type: item.product_type || null,
   isCustom: Boolean(item.isCustom ?? item.is_custom ?? false),
@@ -138,7 +160,7 @@ const enrichSaleItemsWithSnapshot = (items = [], snapshotItems = []) => {
   const normalizedSnapshotItems = snapshotItems.map(mapRecoveredSaleItem);
   const usedIndexes = new Set();
 
-  return items.map((item, itemIndex) => {
+  const enrichedItems = items.map((item, itemIndex) => {
     let matchedSnapshotIndex = normalizedSnapshotItems.findIndex((snapshotItem, snapshotIndex) => {
       if (usedIndexes.has(snapshotIndex)) return false;
 
@@ -177,6 +199,9 @@ const enrichSaleItemsWithSnapshot = (items = [], snapshotItems = []) => {
       price: item.price ?? snapshotItem.price,
       subtotal: item.subtotal ?? snapshotItem.subtotal ?? undefined,
       isReward: item.isReward ?? snapshotItem.isReward,
+      isDiscount: item.isDiscount ?? snapshotItem.isDiscount,
+      discountMode: item.discountMode || snapshotItem.discountMode || null,
+      discountPercent: item.discountPercent ?? snapshotItem.discountPercent ?? null,
       productId: item.productId || snapshotItem.productId,
       product_type: item.product_type || snapshotItem.product_type || null,
       isCustom: item.isCustom ?? snapshotItem.isCustom,
@@ -185,6 +210,9 @@ const enrichSaleItemsWithSnapshot = (items = [], snapshotItems = []) => {
       categories: item.categories || snapshotItem.categories || null,
     };
   });
+
+  const missingSnapshotItems = normalizedSnapshotItems.filter((_, snapshotIndex) => !usedIndexes.has(snapshotIndex));
+  return [...enrichedItems, ...missingSnapshotItems];
 };
 
 const findSaleSnapshotLog = (logs, saleId) =>
@@ -223,15 +251,34 @@ export const mapSaleRecords = (sales = [], parsedLogs = []) =>
     }
 
     const restoreLog = findSaleRestoreLog(parsedLogs, sale.id);
+    const paymentBreakdown = normalizePaymentBreakdown(
+      sale.payment_breakdown ?? snapshotLog?.details?.paymentBreakdown,
+      sale.payment_method,
+      sale.installments,
+      sale.cash_received,
+      sale.cash_change,
+      sale.total,
+    );
+    const primaryPaymentInfo = getPrimaryPaymentInfo(
+      paymentBreakdown,
+      sale.payment_method,
+      sale.installments,
+      sale.cash_received,
+      sale.cash_change,
+      sale.total,
+    );
     const mappedSale = {
       id: sale.id,
+      createdAt: sale.created_at || null,
       date: formatDateAR(new Date(sale.created_at)),
       time: formatTimeFullAR(new Date(sale.created_at)),
       total: sale.total,
-      payment: sale.payment_method,
-      cashReceived: Number(sale.cash_received ?? snapshotLog?.details?.cashReceived ?? 0),
-      cashChange: Number(sale.cash_change ?? snapshotLog?.details?.cashChange ?? 0),
-      installments: sale.installments,
+      payment: primaryPaymentInfo.payment,
+      paymentBreakdown,
+      primaryPaymentMethod: primaryPaymentInfo.primaryMethod,
+      cashReceived: Number(primaryPaymentInfo.cashReceived ?? snapshotLog?.details?.cashReceived ?? 0),
+      cashChange: Number(primaryPaymentInfo.cashChange ?? snapshotLog?.details?.cashChange ?? 0),
+      installments: primaryPaymentInfo.installments,
       items,
       client: sale.clients
         ? { name: sale.clients.name, memberNumber: sale.clients.member_number }
@@ -241,7 +288,7 @@ export const mapSaleRecords = (sales = [], parsedLogs = []) =>
       user: sale.user_name || 'Desconocido',
       userId: sale.user_id || null,
       userRole: sale.user_role || null,
-      status: 'completed',
+      status: sale.status || 'completed',
       isRestored: Boolean(restoreLog),
       restoredAt: restoreLog ? `${restoreLog.date} ${restoreLog.timestamp}` : null,
     };
@@ -252,14 +299,18 @@ export const mapSaleRecords = (sales = [], parsedLogs = []) =>
 
 export const mapExpenseRecords = (expenses = []) =>
   expenses.map((expense) => {
+    const createdAt = expense.created_at || expense.createdAt || new Date().toISOString();
+    const paymentMethod = expense.payment_method || expense.paymentMethod || 'Efectivo';
     const mappedExpense = {
       id: expense.id,
-      description: expense.description,
-      amount: expense.amount,
-      category: expense.category,
-      paymentMethod: expense.payment_method,
-      date: formatDateAR(new Date(expense.created_at)),
-      time: formatTimeFullAR(new Date(expense.created_at)),
+      created_at: createdAt,
+      createdAt,
+      description: expense.description || expense.note || 'Gasto General',
+      amount: Number(expense.amount || 0),
+      category: expense.category || 'Varios',
+      paymentMethod,
+      date: formatDateAR(new Date(createdAt)),
+      time: formatTimeFullAR(new Date(createdAt)),
       user: expense.user_name || 'Sistema',
       userId: expense.user_id || null,
       userRole: expense.user_role || null,
@@ -275,6 +326,7 @@ export const mapExpenseRecords = (expenses = []) =>
 
 export const mapCashClosureRecord = (closure) => ({
   id: closure.id,
+  createdAt: closure.created_at || null,
   date: closure.date,
   openTime: closure.open_time,
   closeTime: closure.close_time,
@@ -293,8 +345,15 @@ export const mapCashClosureRecord = (closure) => ({
   paymentMethods: closure.payment_methods_summary || {},
   itemsSold: closure.items_sold_list || [],
   newClients: closure.new_clients_list || [],
+  newClientsCount: Array.isArray(closure.new_clients_list) ? closure.new_clients_list.length : 0,
   expensesSnapshot: closure.expenses_snapshot || [],
   transactionsSnapshot: closure.transactions_snapshot || [],
+  hasDetail: [
+    'payment_methods_summary',
+    'items_sold_list',
+    'expenses_snapshot',
+    'transactions_snapshot',
+  ].some((key) => Object.prototype.hasOwnProperty.call(closure || {}, key)),
 });
 
 export const mapCashClosureRecords = (closures = []) => closures.map(mapCashClosureRecord);
@@ -330,43 +389,81 @@ export const mapOfferRecords = (offers = []) =>
   }));
 
 export const mapBudgetRecords = (budgets = []) =>
-  budgets.map((budget) => ({
-    id: budget.id,
-    memberId: budget.member_id,
-    customerName: budget.customer_name || '',
-    customerPhone: budget.customer_phone || '',
-    customerNote: budget.customer_note || '',
-    documentTitle: budget.document_title || 'PRESUPUESTO',
-    eventLabel: budget.event_label || '',
-    itemsSnapshot: budget.items_snapshot || [],
-    totalAmount: Number(budget.total_amount || 0),
-    createdAt: budget.created_at,
-    isActive: budget.is_active !== false,
-    type: 'budget',
-    status: 'Presupuesto',
-  }));
+  budgets.map((budget) => {
+    const paymentBreakdown = normalizePaymentBreakdown(
+      budget.payment_breakdown,
+      budget.payment_method || 'Efectivo',
+      budget.installments || 0,
+      0,
+      0,
+      budget.total_amount || 0,
+    );
+    const primaryPaymentInfo = getPrimaryPaymentInfo(
+      paymentBreakdown,
+      budget.payment_method || 'Efectivo',
+      budget.installments || 0,
+      0,
+      0,
+      budget.total_amount || 0,
+    );
+
+    return {
+      id: budget.id,
+      memberId: budget.member_id,
+      customerName: budget.customer_name || '',
+      customerPhone: budget.customer_phone || '',
+      customerNote: budget.customer_note || '',
+      documentTitle: budget.document_title || 'PRESUPUESTO',
+      eventLabel: budget.event_label || '',
+      paymentMethod: primaryPaymentInfo.payment,
+      paymentBreakdown,
+      installments: primaryPaymentInfo.installments,
+      itemsSnapshot: budget.items_snapshot || [],
+      totalAmount: Number(budget.total_amount || 0),
+      createdAt: budget.created_at,
+      isActive: budget.is_active !== false,
+      type: 'budget',
+      status: 'Presupuesto',
+    };
+  });
 
 export const mapOrderRecords = (orders = []) =>
-  orders.map((order) => ({
-    id: order.id,
-    budgetId: order.budget_id,
-    memberId: order.member_id,
-    customerName: order.customer_name || '',
-    customerPhone: order.customer_phone || '',
-    customerNote: order.customer_note || '',
-    documentTitle: order.document_title || 'PEDIDO',
-    eventLabel: order.event_label || '',
-    itemsSnapshot: order.items_snapshot || [],
-    totalAmount: Number(order.total_amount || 0),
-    depositAmount: Number(order.deposit_amount || 0),
-    paidTotal: Number(order.paid_total || 0),
-    remainingAmount: Number(order.remaining_amount || 0),
-    pickupDate: order.pickup_date || null,
-    status: order.status || 'Pendiente',
-    createdAt: order.created_at,
-    isActive: order.is_active !== false,
-    type: 'order',
-  }));
+  orders.map((order) => {
+    const paidTotal = Number(order.paid_total || 0);
+    const paymentSummary = getOrderPaymentHistorySummary(
+      order.payment_breakdown,
+      order.payment_method || 'Pedido',
+      order.installments || 0,
+      paidTotal,
+    );
+
+    return {
+      id: order.id,
+      budgetId: order.budget_id,
+      memberId: order.member_id,
+      customerName: order.customer_name || '',
+      customerPhone: order.customer_phone || '',
+      customerNote: order.customer_note || '',
+      documentTitle: order.document_title || 'PEDIDO',
+      eventLabel: order.event_label || '',
+      paymentMethod: paymentSummary.paymentMethod,
+      paymentBreakdown: paymentSummary.paymentBreakdown,
+      paymentHistory: paymentSummary.paymentHistory,
+      installments: paymentSummary.installments,
+      cashReceived: Number(paymentSummary.cashReceived || 0),
+      cashChange: Number(paymentSummary.cashChange || 0),
+      itemsSnapshot: order.items_snapshot || [],
+      totalAmount: Number(order.total_amount || 0),
+      depositAmount: Number(order.deposit_amount || 0),
+      paidTotal,
+      remainingAmount: Number(order.remaining_amount || 0),
+      pickupDate: order.pickup_date || null,
+      status: order.status || 'Pendiente',
+      createdAt: order.created_at,
+      isActive: order.is_active !== false,
+      type: 'order',
+    };
+  });
 
 export const mapRegisterState = (registerState) => {
   if (!registerState) return null;

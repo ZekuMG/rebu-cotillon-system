@@ -41,12 +41,7 @@ export const hexToRgba = (hex, alpha = 1) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
-const buildPresentation = ({
-  displayName,
-  nameColor,
-  avatar,
-  type,
-}) => {
+const buildPresentation = ({ displayName, nameColor, avatar, type }) => {
   const color = nameColor || UNKNOWN_FALLBACK.nameColor;
   const borderColor = hexToRgba(color, 0.22) || '#cbd5e1';
   const backgroundColor = hexToRgba(color, 0.12) || '#f8fafc';
@@ -69,9 +64,11 @@ const buildPresentation = ({
 
 const normalizeCandidateUser = (user) => {
   if (!user) return null;
+
   if (typeof user === 'string') {
     const trimmed = user.trim();
     if (!trimmed) return null;
+
     return {
       id: null,
       displayName: trimmed,
@@ -82,9 +79,7 @@ const normalizeCandidateUser = (user) => {
     };
   }
 
-  const displayName = String(
-    user.displayName || user.name || user.userName || user.user || '',
-  ).trim();
+  const displayName = String(user.displayName || user.name || user.userName || user.user || '').trim();
 
   return {
     id: user.id || user.userId || null,
@@ -104,11 +99,14 @@ const normalizeExplicitRole = (value) => {
 
 const getGenericHistoricalRole = (value) => {
   const normalized = normalizeUserText(value);
-
   if (!normalized) return null;
 
-  if (['system', 'sistema', 'admin', 'dueno', 'dueño', 'dueã±o', 'due?o'].includes(normalized)) {
+  if (['system', 'sistema', 'admin'].includes(normalized)) {
     return 'system';
+  }
+
+  if (['owner', 'dueno', 'dueño', 'due?o'].includes(normalized)) {
+    return 'owner';
   }
 
   if (['seller', 'vendedor', 'caja'].includes(normalized)) {
@@ -120,7 +118,6 @@ const getGenericHistoricalRole = (value) => {
 
 const buildGenericRolePresentation = (role) => {
   const roleMeta = APP_USER_ROLE_META[role];
-
   if (!roleMeta) return null;
 
   return buildPresentation({
@@ -153,10 +150,9 @@ const findUserByCatalog = (candidate, userCatalog) => {
     return null;
   }
 
-  return (userCatalog.all || []).find((user) => {
-    const userName = normalizeUserText(user.displayName || user.name);
-    return userName === normalizedName;
-  }) || null;
+  return (
+    (userCatalog.all || []).find((user) => normalizeUserText(user.displayName || user.name) === normalizedName) || null
+  );
 };
 
 export const resolveUserPresentation = (user, userCatalog = null) => {

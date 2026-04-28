@@ -2,6 +2,7 @@
 import { useMemo } from 'react';
 import { PAYMENT_METHODS } from '../data';
 import { isVentaLog, normalizeDate } from '../utils/helpers';
+import { getPaymentMethodTotals } from '../utils/paymentBreakdown';
 
 export default function useDashboardData({ 
   transactions, 
@@ -149,6 +150,10 @@ export default function useDashboardData({
         validTransactions.push({
           source: 'tx', id: tx.id, date: txDate, time: tx.time, total: Number(tx.total) || 0, 
           payment: tx.payment, items: tx.items || [], 
+          paymentBreakdown: tx.paymentBreakdown || null,
+          installments: tx.installments || 0,
+          cashReceived: tx.cashReceived || 0,
+          cashChange: tx.cashChange || 0,
           client: tx.client,
           net,
           cost: (Number(tx.total) || 0) - net,
@@ -168,6 +173,10 @@ export default function useDashboardData({
             validTransactions.push({
               source: 'log', id: txId || log.id, date: logDate, time: log.timestamp || '00:00',
               total: Number(log.details.total) || 0, payment: log.details.payment || 'Efectivo', items: log.details.items || [],
+              paymentBreakdown: log.details.paymentBreakdown || null,
+              installments: log.details.installments || 0,
+              cashReceived: log.details.cashReceived || 0,
+              cashChange: log.details.cashChange || 0,
               client: log.details.client,
               net,
               cost: (Number(log.details.total) || 0) - net,
@@ -336,7 +345,17 @@ export default function useDashboardData({
 
   const paymentStats = useMemo(() => {
     return PAYMENT_METHODS.map(method => {
-      const total = filteredData.filter(tx => tx.payment === method.id).reduce((sum, tx) => sum + tx.total, 0);
+      const total = filteredData.reduce((sum, tx) => {
+        const totalsByMethod = getPaymentMethodTotals(
+          tx.paymentBreakdown,
+          tx.payment,
+          tx.installments,
+          tx.cashReceived,
+          tx.cashChange,
+          tx.total,
+        );
+        return sum + Number(totalsByMethod[method.label] || 0);
+      }, 0);
       return { ...method, total };
     });
   }, [filteredData]);

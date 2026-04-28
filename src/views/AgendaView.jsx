@@ -15,6 +15,8 @@ import {
   UserRound,
   X,
 } from 'lucide-react';
+import AsyncActionButton from '../components/AsyncActionButton';
+import usePendingAction from '../hooks/usePendingAction';
 import { hasPermission } from '../utils/userPermissions';
 import useIncrementalFeed from '../hooks/useIncrementalFeed';
 
@@ -95,6 +97,7 @@ function AgendaFormModal({
   setFormData,
   onClose,
   onSubmit,
+  submitPending = false,
   isOfflineReadOnly = false,
 }) {
   if (!isOpen) return null;
@@ -248,15 +251,17 @@ function AgendaFormModal({
             >
               Cancelar
             </button>
-            <button
+            <AsyncActionButton
               type="button"
-              onClick={onSubmit}
+              onAction={onSubmit}
+              pending={submitPending}
               disabled={isOfflineReadOnly}
+              loadingLabel={isEdit ? 'Guardando...' : 'Creando...'}
               className="inline-flex items-center gap-2 rounded-[14px] border border-emerald-200 bg-emerald-600 px-4 py-2 text-sm font-black text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Save size={14} />
               {isEdit ? 'Guardar cambios' : 'Crear contacto'}
-            </button>
+            </AsyncActionButton>
           </div>
         </div>
       </div>
@@ -272,6 +277,7 @@ export default function AgendaView({
   onUpdateContact,
   onDeleteContact,
 }) {
+  const { isPending, runAction } = usePendingAction();
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('Todos');
   const [statusFilter, setStatusFilter] = useState('Activos');
@@ -573,16 +579,18 @@ export default function AgendaView({
                           </button>
                         )}
                         {canDeleteAgenda && contact.isActive !== false && (
-                          <button
+                          <AsyncActionButton
                             type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void handleDelete(contact);
+                            onAction={(event) => {
+                              event?.stopPropagation?.();
+                              return runAction(`agenda-delete:${contact.id}`, () => handleDelete(contact));
                             }}
+                            pending={isPending(`agenda-delete:${contact.id}`)}
+                            loadingContent={<Trash2 size={15} className="animate-pulse" />}
                             className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
                           >
                             <Trash2 size={15} />
-                          </button>
+                          </AsyncActionButton>
                         )}
                       </div>
                     </td>
@@ -729,7 +737,8 @@ export default function AgendaView({
         formData={formData}
         setFormData={setFormData}
         onClose={() => setIsModalOpen(false)}
-        onSubmit={() => void handleSubmit()}
+        onSubmit={() => runAction(`agenda-form:${modalMode}:${selectedContact?.id || 'create'}`, handleSubmit)}
+        submitPending={isPending(`agenda-form:${modalMode}:${selectedContact?.id || 'create'}`)}
         isOfflineReadOnly={isOfflineReadOnly}
       />
     </div>

@@ -1,5 +1,10 @@
 import { supabase } from '../supabase/client';
 import { isImageAvatar } from './avatarUtils';
+import { CLOUD_SELECTS } from './cloudSelects';
+import {
+  extractSchemaMissingColumn,
+  runSelectWithSchemaFallback,
+} from './supabaseSchemaFallback';
 import {
   getEffectivePermissions,
   normalizePermissionsOverride,
@@ -183,15 +188,140 @@ export const hasOwnerAccess = (user) => ['system', 'owner'].includes(normalizeAp
 export const isSystemUser = (user) => normalizeAppUserRole(user?.role) === 'system';
 export const isSellerUser = (user) => normalizeAppUserRole(user?.role) === 'seller';
 
-export const fetchAppUsersPublic = async () => {
-  const { data, error } = await supabase
-    .from('app_users_public')
-    .select('*')
-    .order('role', { ascending: true })
-    .order('display_name', { ascending: true });
+const APP_USERS_PUBLIC_MINIMAL_SELECT = [
+  'id',
+  'display_name',
+  'role',
+  'avatar',
+  'name_color',
+  'theme',
+  'is_active',
+  'created_at',
+  'updated_at',
+  'created_by',
+].join(',');
 
-  if (error) throw error;
-  return (data || []).map(normalizeAppUserRecord).filter(Boolean);
+const APP_USERS_TABLE_MINIMAL_SELECT = [
+  'id',
+  'display_name',
+  'role',
+  'avatar',
+  'name_color',
+  'theme',
+  'is_active',
+  'permissions_override',
+  'permissions_version',
+  'force_reauth_permissions_version',
+  'created_at',
+  'updated_at',
+  'created_by',
+].join(',');
+
+const readAppUsersFromSource = async ({
+  sourceName,
+  selectColumns,
+  includeInactive = false,
+  orderUsers = true,
+} = {}) => {
+  let useActiveFilter = !includeInactive;
+  let useOrdering = orderUsers;
+  let lastError = null;
+
+  while (true) {
+    const result = await runSelectWithSchemaFallback((safeSelect) => {
+      let query = supabase.from(sourceName).select(safeSelect);
+
+      if (useActiveFilter) {
+        query = query.eq('is_active', true);
+      }
+
+      if (useOrdering) {
+        query = query.order('role', { ascending: true }).order('display_name', { ascending: true });
+      }
+
+      return query;
+    }, selectColumns);
+
+    if (!result.error) {
+      const normalizedUsers = (result.data || []).map(normalizeAppUserRecord).filter(Boolean);
+      if (!includeInactive && !useActiveFilter) {
+        return normalizedUsers.filter((user) => user.isActive !== false);
+      }
+      return normalizedUsers;
+    }
+
+    lastError = result.error;
+    const missingColumn = extractSchemaMissingColumn(result.error);
+
+    if (missingColumn === 'is_active' && useActiveFilter) {
+      useActiveFilter = false;
+      continue;
+    }
+
+    if (
+      useOrdering &&
+      ['role', 'display_name'].includes(String(missingColumn || '').toLowerCase())
+    ) {
+      useOrdering = false;
+      continue;
+    }
+
+    throw lastError;
+  }
+};
+
+export const fetchAppUsersPublic = async ({
+  includeInactive = false,
+  includeAuditFields = false,
+} = {}) => {
+  const attemptedReads = [
+    () =>
+      readAppUsersFromSource({
+        sourceName: 'app_users_public',
+        selectColumns: includeAuditFields ? CLOUD_SELECTS.appUsersPublicFull : CLOUD_SELECTS.appUsersPublicLogin,
+        includeInactive,
+        orderUsers: true,
+      }),
+    () =>
+      readAppUsersFromSource({
+        sourceName: 'app_users_public',
+        selectColumns: APP_USERS_PUBLIC_MINIMAL_SELECT,
+        includeInactive,
+        orderUsers: true,
+      }),
+    () =>
+      readAppUsersFromSource({
+        sourceName: 'app_users_public',
+        selectColumns: APP_USERS_PUBLIC_MINIMAL_SELECT,
+        includeInactive,
+        orderUsers: false,
+      }),
+    () =>
+      readAppUsersFromSource({
+        sourceName: 'app_users',
+        selectColumns: APP_USERS_TABLE_MINIMAL_SELECT,
+        includeInactive,
+        orderUsers: true,
+      }),
+    () =>
+      readAppUsersFromSource({
+        sourceName: 'app_users',
+        selectColumns: APP_USERS_TABLE_MINIMAL_SELECT,
+        includeInactive,
+        orderUsers: false,
+      }),
+  ];
+
+  let lastError = null;
+  for (const attempt of attemptedReads) {
+    try {
+      return await attempt();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('No se pudieron leer los usuarios compartidos.');
 };
 
 export const bootstrapAppUsers = async ({ systemUser, sellerUser }) => {
