@@ -1,234 +1,312 @@
-================================================================================
-🚀 PARTY MANAGER — REBU COTILLÓN POS SYSTEM
-📖 DOCUMENTACIÓN TÉCNICA MAESTRA PARA INTELIGENCIAS ARTIFICIALES
-================================================================================
+# Rebu Cotillon POS System
 
-ATENCIÓN IA: Este documento contiene el contexto absoluto, la arquitectura, los paradigmas de UI/UX y las soluciones a bugs históricos del proyecto. DEBES leer detenidamente las secciones de "Reglas Críticas" y "Manejo de Estados" antes de proponer modificaciones estructurales o de interfaces.
+Documentacion tecnica y funcional del Punto de Venta Rebu Cotillon.
 
-Última actualización: Marzo 2026
-Versión: 0.6.9 (Unificación Modular "Extras" y Blindaje Vite/Electron)
+Ultima actualizacion: Abril 2026  
+Version app: 1.0.6  
+Stack principal: React 18, Vite, Electron, Supabase y Tailwind CSS.
 
---------------------------------------------------------------------------------
-1. STACK TECNOLÓGICO
---------------------------------------------------------------------------------
-- Frontend: React 18 (Funcional, uso intensivo de Hooks) + Vite.
-- Estilos: Tailwind CSS + Lucide React (Iconografía).
-- Backend / Base de Datos: Supabase (PostgreSQL, Auth, Storage público, Realtime).
-- Escritorio: Electron (Empaquetado y renderizado nativo Chromium).
-- Generación de Documentos: html2pdf.js y Media Queries de impresión nativa CSS.
+---
 
---------------------------------------------------------------------------------
-2. ARQUITECTURA DE SOFTWARE (EL "GOD COMPONENT")
---------------------------------------------------------------------------------
-El proyecto utiliza un patrón centralizado estricto para evitar problemas de desincronización de estados entre vistas:
+## 1. Objetivo del sistema
 
-- `App.jsx` es el "God Component". Contiene TODOS los estados globales de la aplicación (~40 estados: inventory, cart, clients, logs, rewards, categories, offers, etc.).
-- Funciones Core: `fetchCloudData()` hace un `Promise.allSettled` a Supabase para precargar todo en memoria.
-- Prop Drilling: `App.jsx` inyecta los datos y los manejadores de eventos (handlers) hacia abajo a las Vistas (`src/views/`).
-- Gestor de Modales: Existe un archivo `AppModals.jsx` que orquesta la aparición de todos los modales globales (Checkout, Configuración, Clientes) para evitar problemas de z-index y contexto de renderizado.
+Rebu Cotillon POS System es una aplicacion de escritorio para administrar el punto de venta, inventario, socios, promociones, pedidos, presupuestos, cierres de caja, reportes y auditoria del negocio.
 
---------------------------------------------------------------------------------
-3. PARADIGMAS DE DISEÑO UI/UX (REGLAS DE ESTILOS)
---------------------------------------------------------------------------------
-Para mantener la coherencia visual en toda la aplicación, se DEBEN respetar estas reglas:
-1. Pestañas (Folder Tabs): Las navegaciones internas (como en ExtrasView) usan un diseño de "Carpeta Física". El contenedor tiene un borde inferior grueso (`border-b-2`). La pestaña activa baja 2 píxeles (`-mb-[2px]` o similar) con fondo blanco para "pisar" y ocultar la línea divisoria, creando el efecto visual de una solapa abierta.
-2. Scrollbars Ocultas: Todo contenedor horizontal (`overflow-x-auto`) debe llevar la clase Tailwind `[&::-webkit-scrollbar]:hidden` y el estilo inline `style={{ scrollbarWidth: 'none' }}` para evitar que Windows inyecte barras grises feas.
-3. Empty States: Si un array de datos está vacío, se debe mostrar un contenedor gris (`bg-slate-50`), con borde punteado (`border-dashed`), un icono grande de Lucide en el centro dentro de un círculo blanco, y un texto descriptivo.
-4. Tipografía Financiera: Todo precio o número importante usa la fuente `font-black` y componentes como `<FancyPrice />` para separar los miles.
-5. HintIcon - Iconos de Ayuda: Componente reutilizable en `src/components/HintIcon.jsx`. Muestra un icono de interrogación gris claro que, al pasar el mouse, despliega un tooltip flotante centrado en pantalla. Ideal para instrucciones contextuales y explicaciones de campos complejos. No ocupa espacio físico y se superpone sobre toda la interfaz.
-   - Ubicación: `src/components/HintIcon.jsx`
-   - Uso: `<HintIcon hint="Tu mensaje de ayuda aquí" size={13} />`
-   - Props: hint (string), size (number, default 16), className (string)
-   - Ejemplo: Colocado junto a "Sin historial de cambios" en LogDetailRenderer para explicar registros antiguos.
+La app esta pensada para trabajar con Supabase como nube principal, pero con defensas para seguir mostrando datos parciales u operar con snapshot local cuando hay problemas de conexion o diferencias menores de schema.
 
---------------------------------------------------------------------------------
-4. MODELO DE DATOS Y CONVERSIÓN "CANTIDAD VS PESO"
---------------------------------------------------------------------------------
-Supabase guarda los datos maestros. Existe un dualismo crítico en el inventario:
-La tabla `products` incluye la columna `product_type` ('quantity' o 'weight').
+---
 
-A. PRODUCTOS POR CANTIDAD ('quantity'):
-- Stock: Unidades enteras (ej: 50).
-- Precio/Costo: Por unidad.
-- UI: El carrito suma de 1 en 1.
+## 2. Arquitectura general
 
-B. PRODUCTOS POR PESO ('weight') - ¡ALERTA MATEMÁTICA!:
-- Base de Datos: El stock se almacena en GRAMOS (ej: 1500 = 1.5kg). El costo y precio se almacenan en $/GRAMO (ej: si cuesta $10.000 el kilo, en la DB se guarda 10).
-- Interfaz de Usuario (UI): Todas las vistas y tablas muestran la información en KILOS ($/kg).
-- Modales: `ProductModals.jsx` realiza la conversión de fondo. Al editar, multiplica por 1000 para que el humano vea el precio por kilo. Al guardar, divide por 1000.
-- Punto de Venta (POS): Al hacer clic en un producto por peso, se abre un `WeightInputModal` donde el usuario teclea los gramos deseados. En el carrito, la `quantity` equivale a gramos. El total es `precio (por gramo) * quantity (en gramos)`.
+El proyecto mantiene una arquitectura centralizada:
 
---------------------------------------------------------------------------------
-5. MÓDULOS DEL SISTEMA (`src/views/`)
---------------------------------------------------------------------------------
-* POSView (Caja): Escucha eventos de teclado (`useBarcodeScanner`) para pistola láser. Pre-checkout permite asignar un socio o "Consumidor Final". Los presupuestos se guardan en el estado global para persistir aunque el usuario cambie de pestaña.
-* InventoryView: Vista de cuadrícula responsiva (de 4 a 10 columnas ajustables por el usuario) o vista de lista. Cuenta con ordenamiento múltiple (A-Z, Más recientes vía `created_at`, Precio, Stock).
-* ExtrasView [NUEVO]: Consolidación absoluta del negocio. Contiene 3 pestañas:
-  - Categorías: ABM y asignación masiva de productos.
-  - Ofertas: Reglas automáticas detectadas por el POS (2x1, 3x2, Combos fijos, KITS, Mayoristas por cantidad, Descuentos).
-  - Premios: Recompensas canjeables.
-* ClientsView: CRUD de Socios. Integra un buscador que filtra al vuelo y un select dinámico. El "Último Movimiento" se calcula iterando las transacciones históricas.
-* BulkEditorView: Editor masivo estilo hoja de cálculo para ajustar precios por porcentaje. Sirve como antesala para el generador de Presupuestos PDF.
+- `src/App.jsx` funciona como componente principal de negocio. Administra estados globales, carga de nube, operaciones de stock, ventas, pedidos, logs, cierres y sincronizacion.
+- `src/views/` contiene las pantallas principales: POS, Inventario, Dashboard, Historial, Clientes, Logs, Sesiones, Extras, Reportes y Editor masivo.
+- `src/components/modals/` contiene los modales operativos.
+- `src/components/dashboard/` contiene KPIs, graficos, rankings y alertas.
+- `src/utils/` centraliza helpers de mapeo, compatibilidad con Supabase, selects cloud, formateadores y logica compartida.
+- `src/hooks/` contiene hooks de dashboard, clientes, filtros de logs y lector de codigo de barras.
 
---------------------------------------------------------------------------------
-6. IMPRESIÓN DUAL, PDFS Y EL "TIME MACHINE" (MÁQUINA DEL TIEMPO)
---------------------------------------------------------------------------------
-El sistema utiliza clases utilitarias de CSS (`print:hidden`, `print:block`) para manejar dos motores de impresión distintos:
-1. Ticket Térmico: Usa `TicketPrintLayout.jsx`. Formato 58mm estricto, Arial 11px, blanco y negro puro. Se dispara automáticamente tras una venta en el POS.
-2. Motor A4 PDF: Usa `ExportPdfLayout.jsx`. Genera Presupuestos estéticos con logos, tipografías mixtas y tablas cebradas.
+Regla importante: evitar mezclar componentes React y utilidades puras en el mismo archivo para no romper Fast Refresh de Vite.
 
-[ LA MÁQUINA DEL TIEMPO DE PDFS ]
-- Cuando se genera un Presupuesto PDF, `App.jsx` inyecta un registro en la tabla `logs` (Acción: Exportación PDF).
-- En la columna `details` (JSONB) de la DB, guarda una FOTOGRAFÍA EXACTA (Snapshot) de los productos, precios, cliente y configuración en ese milisegundo.
-- Si un admin va a `LogsView` un mes después y selecciona "Reimprimir", el motor PDF vuelve a armar el documento consumiendo el Snapshot, ignorando que los productos reales hayan subido de precio debido a la inflación.
+---
 
---------------------------------------------------------------------------------
-7. LOGS DE AUDITORÍA Y "SABUESO DE NOTAS"
---------------------------------------------------------------------------------
-Todas las acciones relevantes llaman a `addLog(action, details, reason)`.
-Problema histórico: A veces Supabase o funciones automáticas inyectaban razones aburridas como "Salida de dinero", ocultando la nota escrita por el cajero.
-Solución ("Sabueso"): Se creó la función `extractRealNote(log)` en `LogsTable.jsx` que excava de forma recursiva dentro del objeto JSON `details` buscando claves (`description`, `note`, `extraInfo`). Si la encuentra, pisa visualmente el texto del sistema, restaurando la retroactividad de los comentarios reales del usuario.
-- Test Global: La función `isTestRecord(item)` oculta automáticamente de las vistas y reportes oficiales cualquier venta, gasto o cliente que contenga la palabra "test".
+## 3. Stack tecnologico
 
---------------------------------------------------------------------------------
-8. FIDELIZACIÓN: SISTEMA DE PUNTOS
---------------------------------------------------------------------------------
-- Tasa de acumulación: 1 Punto por cada $500 de venta neta.
-- Las recompensas (`rewards`) pueden ser productos físicos (descuentan stock) o vouchers de descuento financiero.
-- En el POS, los premios ingresan al carrito con la flag `isReward: true` forzando un precio $0 y bloqueando los botones de sumar/restar cantidad.
+- Frontend: React 18 con componentes funcionales y hooks.
+- Build: Vite.
+- Escritorio: Electron.
+- UI: Tailwind CSS y Lucide React.
+- Backend: Supabase PostgreSQL, REST, Auth y Storage.
+- Impresion: CSS print nativo para ticket termico y layouts HTML para reportes/presupuestos.
 
---------------------------------------------------------------------------------
-9. REGLAS Y BUGS CONOCIDOS PARA PREVENIR ERRORES
---------------------------------------------------------------------------------
-- [CRÍTICO] Error de Vite (Fast Refresh): Nunca exportar componentes de React y utilidades Javascript normales en el mismo archivo. Todo lo que sea lógica abstracta (ej: generadores de IDs, formateadores de precio) DEBE vivir en `src/utils/helpers.js`.
-- [CRÍTICO] Caché de Electron ("Código Fantasma"): Trabajar con Electron y Vite corriendo asincrónicamente provoca que Electron lea el `/dist` viejo. SIEMPRE usar el script personalizado `npm run dev:fresh` para matar la caché, compilar y luego abrir Electron.
-- Caída de la DB por UUIDs: Si se intenta borrar o buscar una venta con un ID malformado, PostgreSQL rechaza la petición causando un crash general. Se mitigó usando una expresión regular de validación de UUIDs en los handlers.
-- Cierre de modales involuntarios: El evento `focus` nativo de Windows (al abrir el selector de archivos para subir imágenes) causaba un re-render global que cerraba los modales de React. Se eliminó el listener `focus` del window y se le dio un cooldown de 15s al listener de `visibilitychange`.
-- Restricción de CORS en Electron: Electron requiere que el cliente de Supabase asuma un origen válido local. En `supabase/client.js` se forzó el `detectSessionInUrl: false` y fetch custom headers para evitar rechazos de red.
+---
 
---------------------------------------------------------------------------------
-10. INFORMACION DE ESTRUCTURA DE ARCHIVOS LOCAL
---------------------------------------------------------------------------------
-src/
-├── components/
-│   ├── ActionLogs/           # Tablas, renderizadores de detalle y Sabueso
-│   ├── dashboard/            # KPIs, Kioscos y Gráficos
-│   ├── modals/               # Formularios flotantes segmentados
-│   ├── AppModals.jsx         # Orquestador de Modales
-│   ├── ExportPdfLayout.jsx   # Plantilla de Presupuestos (Motor A4)
-│   ├── Sidebar.jsx           # Navegación (Control de roles de Usuario)
-│   └── TicketPrintLayout.jsx # Pantilla de Ticket Térmico 58mm
-├── hooks/
-│   └── useBarcodeScanner.js  # Lector de código de barras global
-├── supabase/
-│   └── client.js             # Conexión DB
-├── utils/
-│   └── helpers.js            # Funciones puras (Formateo, isTestRecord)
-├── views/
-│   ├── BulkEditorView.jsx    # Editor Excel-like y creador de PDFs
-│   ├── ClientsView.jsx       # Gestión de Socios
-│   ├── DashboardView.jsx     # Panel inicial
-│   ├── ExtrasView.jsx        # ⭐ Módulo Unificado: Promos, Catálogo y Premios
-│   ├── HistoryView.jsx       # Transacciones de venta
-│   ├── InventoryView.jsx     # Gestor de Stock principal
-│   ├── LogsView.jsx          # Auditoría
-│   ├── POSView.jsx           # Punto de Venta y Carrito
-│   └── ReportsHistoryView.jsx# Cierres de caja (Ciegos)
-└── App.jsx                   # CEREBRO DEL SISTEMA (God Component)
+## 4. Modulos principales
 
---------------------------------------------------------------------------------
-11. COMANDOS DE DESARROLLO Y BUILD
---------------------------------------------------------------------------------
-> npm install             (Instalación de dependencias iniciales)
-> npm run dev:fresh       (🚀 COMANDO OBLIGATORIO PARA DESARROLLAR: Limpia, hace build y lanza Electron)
-> npm run build           (Compila la aplicación estática en Vite)
-> npm run electron:dev    (Lanza solo Electron asumiendo que el build ya se hizo)
-> npm run electron:build  (Empaqueta el ejecutable nativo para Windows/Mac)
+### Punto de Venta
 
+El POS permite buscar productos, usar lector de codigo de barras, vender por cantidad o peso, aplicar ofertas, combos, canjes de socio, descuentos y pagos mixtos.
 
+Cambios recientes importantes:
 
+- Al cobrar una venta, el modal de venta realizada incluye la vista previa del ticket, informacion central y productos del pedido.
+- El ticket puede imprimirse desde el mismo modal sin abrir una vista intermedia.
+- Las ventas guardan informacion suficiente para reconstruir detalle, ticket, historial y reportes.
 
+### Inventario
 
+Administra productos por cantidad y por peso, stock, precios, costos, categorias, vencimientos e imagenes.
+
+Cambios recientes importantes:
+
+- Los productos proximos a vencer ya no se muestran como "vencidos" antes de tiempo.
+- El vencimiento se presenta como texto contextual: "Por vencer en X dias".
+- La duplicacion de productos depende del permiso `inventory.create`, porque duplicar se considera una creacion desde una plantilla.
+
+### Historial de transacciones
+
+Muestra ventas, productos vendidos, usuario, socio, medio de pago, ticket y estado.
+
+Cambios recientes importantes:
+
+- Se corrigio la carga de productos cuando hay descuentos, canjes o columnas faltantes en `sale_items`.
+- Se recupera el usuario desde la venta o desde logs asociados, evitando que figure como "Desconocido" cuando la informacion existe.
+- Se mejoro el calculo y visualizacion de productos por peso.
+
+### Dashboard y Diario
+
+El Dashboard resume ventas, ingreso, ganancia neta, gastos, pagos, ranking y alertas.
+
+Cambios recientes importantes:
+
+- En modo Diario, `Ingreso` representa el bruto vendido del periodo.
+- `Ganancia Neta` representa ingreso bruto menos costo de productos vendidos y gastos registrados.
+- Los KPIs usan `HintIcon` para explicar conceptos sin ocupar espacio visual.
+- Los graficos diarios muestran tambien el neto en el tooltip.
+
+### Pedidos y presupuestos
+
+Los pedidos/presupuestos pueden incluir productos normales, por peso, combos y descuentos.
+
+Cambios recientes importantes:
+
+- Los combos preservan metadata como `isCombo` y `productsIncluded`.
+- Los descuentos preservan metadata como `isDiscount`.
+- Al finalizar pedidos pagos, el stock se ajusta con la misma logica de ventas.
+
+### Logs y auditoria
+
+Todas las acciones relevantes registran logs con detalle JSON.
+
+Cambios recientes importantes:
+
+- Los logs de anulacion, restauracion y edicion registran `stockChanges` con productos reales afectados.
+- Los canjes/descuentos se registran como descuento y no como "Gratis".
+- Los mappers toleran logs viejos y acciones con textos historicos.
+
+### Cierres y reportes
+
+Los cierres calculan ventas, gastos, efectivo, metodos de pago y ganancia.
+
+Cambios recientes importantes:
+
+- Los reportes usan pagos mixtos correctamente.
+- El costo de productos vendidos puede salir de `stockChanges` cuando existe.
+- Las ventas por peso y combos se consideran de forma mas coherente para costos y reportes.
+
+---
+
+## 5. Productos por cantidad y por peso
+
+La columna `product_type` define el tipo de producto:
+
+- `quantity`: stock en unidades, precio por unidad y costo por unidad.
+- `weight`: stock en gramos, precio interno por gramo y costo interno por gramo.
+
+Reglas clave:
+
+- La UI muestra productos por peso en kilos cuando corresponde.
+- En base de datos se guarda el precio/costo por gramo.
+- En carrito y ventas, la cantidad de productos por peso representa gramos.
+- Los subtotales deben usar `subtotal` cuando existe; si no existe, se calcula con heuristica segun `product_type`.
+
+---
+
+## 6. Stock de ventas, combos y descuentos
+
+La logica de stock fue unificada para ventas, anulaciones, restauraciones y edicion.
+
+Reglas actuales:
+
+- Productos normales descuentan stock del producto vendido.
+- Productos por peso descuentan gramos.
+- Combos descuentan stock de cada producto incluido en `productsIncluded`.
+- Descuentos, canjes, rewards y productos personalizados no afectan stock.
+- Anular una venta restaura stock.
+- Restaurar una venta anulada valida stock disponible y vuelve a descontar.
+- Editar una venta aplica solo la diferencia de stock.
+- Cada update de stock en Supabase debe revisar `{ error }` y cortar el flujo si falla.
+
+Archivos relevantes:
+
+- `src/App.jsx`
+- `src/utils/budgetHelpers.js`
+- `src/components/modals/TransactionModals.jsx`
+- `src/components/modals/HistoryModals.jsx`
+- `src/components/TicketPrintLayout.jsx`
+
+---
+
+## 7. Compatibilidad con Supabase
+
+La app no asume que todas las bases tengan exactamente el mismo schema.
+
+Se usa una capa flexible para:
+
+- Quitar columnas opcionales rechazadas por Supabase y reintentar.
+- Manejar errores en selects anidados como `sale_items(...)`.
+- Permitir que gastos, logs, cierres y ventas carguen aunque falten columnas de auditoria.
+- Insertar o actualizar degradando payloads cuando columnas opcionales no existen.
+- Reducir ruido de consola: solo debe mostrarse el error final si todos los reintentos fallan.
+
+Archivos relevantes:
+
+- `src/utils/supabaseSchemaFallback.js`
+- `src/utils/cloudSelects.js`
+- `src/utils/cloudMappers.js`
+
+Columnas tratadas como opcionales segun compatibilidad:
+
+- `user_id`
+- `user_role`
+- `user_name`
+- `product_type`
+- `subtotal`
+- `line_subtotal`
+- `active_offers`
+- otras columnas de auditoria o metadata segun tabla.
+
+---
+
+## 8. Permisos
+
+El sistema usa permisos granulares por modulo.
+
+Regla reciente:
+
+- Duplicar producto depende de `inventory.create`.
+- No se exige `inventory.edit` para ejecutar la duplicacion si el usuario ya pudo acceder al flujo correspondiente.
+- Mensaje esperado si falta permiso: `Necesitas permiso para crear productos para duplicarlos.`
+
+Archivo relevante:
+
+- `src/components/modals/ProductModals.jsx`
+- `src/App.jsx`
+- `src/utils/userPermissions.js`
+
+---
+
+## 9. Modo sin conexion y recarga
+
+El sistema puede detectar modo sin conexion o fallos parciales de nube.
+
+Comportamiento esperado:
+
+- Si hay snapshot local, se muestran datos existentes.
+- Si un modulo falla, no deberia tirar abajo toda la aplicacion.
+- El aviso de modo sin conexion incluye accion para reconectar.
+- La parte superior del programa incluye accesos a Soft Reload y Force Reload.
+
+---
+
+## 10. UI y componentes reutilizables
+
+### FancyPrice
+
+Usar `FancyPrice` para importes principales. Evita inconsistencias visuales en precios y totales.
+
+### HintIcon
+
+Ubicacion: `src/components/HintIcon.jsx`
+
+Uso:
+
+```jsx
+<HintIcon hint="Texto de ayuda" size={13} side="left" />
 ```
-Punto de Venta Rebu - Release
-├─ electron-main.cjs
-├─ eslint.config.js
-├─ icon.ico
-├─ index.html
-├─ package-lock.json
-├─ package.json
-├─ public
-│  ├─ favicon.svg
-│  └─ icons.svg
-├─ README.md
-├─ src
-│  ├─ App.css
-│  ├─ App.jsx
-│  ├─ assets
-│  │  ├─ logo-rebu.jpg
-│  │  ├─ react.svg
-│  │  └─ vite.svg
-│  ├─ components
-│  │  ├─ ActionLogs
-│  │  │  ├─ LogDetailModal.jsx
-│  │  │  ├─ LogDetailRenderer.jsx
-│  │  │  ├─ logHelpers.js
-│  │  │  ├─ LogsControls.jsx
-│  │  │  └─ LogsTable.jsx
-│  │  ├─ AppModals.jsx
-│  │  ├─ dashboard
-│  │  │  ├─ DashboardControls.jsx
-│  │  │  ├─ ExpirationAlert.jsx
-│  │  │  ├─ index.js
-│  │  │  ├─ KpiCards.jsx
-│  │  │  ├─ LowStockAlert.jsx
-│  │  │  ├─ PaymentBreakdown.jsx
-│  │  │  ├─ SalesChart.jsx
-│  │  │  └─ TopRanking.jsx
-│  │  ├─ ExportPdfLayout.jsx
-│  │  ├─ FancyPrice.jsx
-│  │  ├─ modals
-│  │  │  ├─ BarcodeModals.jsx
-│  │  │  ├─ CashModals.jsx
-│  │  │  ├─ ClientSelectionModal.jsx
-│  │  │  ├─ DailyReportModal.jsx
-│  │  │  ├─ ExpenseModal.jsx
-│  │  │  ├─ HistoryModals.jsx
-│  │  │  ├─ NotificationModal.jsx
-│  │  │  ├─ ProductModals.jsx
-│  │  │  ├─ RedemptionModal.jsx
-│  │  │  ├─ SaleModals.jsx
-│  │  │  └─ TransactionModals.jsx
-│  │  ├─ ProductImage.jsx
-│  │  ├─ Sidebar.jsx
-│  │  └─ TicketPrintLayout.jsx
-│  ├─ data
-│  │  ├─ seedHelpers.js
-│  │  └─ seedTransactions.js
-│  ├─ data.js
-│  ├─ hooks
-│  │  ├─ useBarcodeScanner.js
-│  │  ├─ useClients.js
-│  │  ├─ useDashboardData.js
-│  │  └─ useLogsFilter.js
-│  ├─ index.css
-│  ├─ main.jsx
-│  ├─ supabase
-│  │  └─ client.js
-│  ├─ utils
-│  │  ├─ actionMap.js
-│  │  ├─ helpers.js
-│  │  └─ storage.js
-│  └─ views
-│     ├─ BulkEditorView.jsx
-│     ├─ ClientsView.jsx
-│     ├─ DashboardView.jsx
-│     ├─ ExtrasView.jsx
-│     ├─ HistoryView.jsx
-│     ├─ InventoryView.jsx
-│     ├─ LogsView.jsx
-│     ├─ POSView.jsx
-│     └─ ReportsHistoryView.jsx
-└─ vite.config.js
 
+Se usa para explicar conceptos sin agregar texto permanente en pantalla, por ejemplo:
+
+- Ingreso bruto.
+- Ganancia neta.
+- Campos complejos de presupuestos u ofertas.
+
+### ProductImage
+
+Usar el componente existente para mostrar imagenes de productos y mantener fallback visual consistente.
+
+---
+
+## 11. Pruebas manuales recomendadas
+
+Despues de cambios de negocio, probar:
+
+1. Venta normal: descuenta stock correcto.
+2. Venta por peso: descuenta gramos correctos.
+3. Venta con combo: descuenta cada producto incluido.
+4. Venta con descuento/canje/reward/custom: no afecta stock.
+5. Anulacion: restaura stock.
+6. Restauracion: valida stock y vuelve a descontar.
+7. Edicion de venta: ajusta solo diferencias.
+8. Historial: muestra productos, usuario, pago y ticket.
+9. Gastos: cargan y aparecen aunque falten columnas opcionales de usuario.
+10. Dashboard Diario: ingreso bruto y ganancia neta se diferencian cuando hay costos o gastos.
+11. Cierre de caja: pagos mixtos, efectivo, gastos y ganancia cierran coherentemente.
+12. Duplicacion de producto: usuario con `inventory.create` puede duplicar; usuario sin ese permiso no.
+
+---
+
+## 12. Comandos
+
+Instalar dependencias:
+
+```bash
+npm install
 ```
+
+Build de produccion:
+
+```bash
+npm run build
+```
+
+Desarrollo con Electron:
+
+```bash
+npm run dev:fresh
+```
+
+Ejecutar solo Electron sobre build existente:
+
+```bash
+npm run electron:dev
+```
+
+Empaquetar app:
+
+```bash
+npm run electron:build
+```
+
+---
+
+## 13. Reglas de mantenimiento
+
+- No modificar schema de Supabase sin una migracion planificada.
+- Preferir compatibilidad en codigo cuando se trate de columnas opcionales.
+- No romper datos historicos: usar snapshots y fallbacks antes de asumir campos nuevos.
+- Mantener logs con suficiente detalle para reconstruir ventas, stock y usuarios.
+- Para stock, usar helpers compartidos y no calculos manuales aislados.
+- Para productos por peso, recordar que la base opera en gramos.
+- Antes de entregar cambios, ejecutar `npm run build`.

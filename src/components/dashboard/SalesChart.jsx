@@ -1030,6 +1030,11 @@ export const SalesChart = ({ chartData, maxSales, globalFilter, getEmptyStateMes
                     className={`pointer-events-none absolute -top-10 left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-[10px] text-white shadow-lg transition-all duration-200 ${isHovered ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'}`}
                   >
                     <p className="font-bold"><FancyPrice amount={item.sales} /></p>
+                    {globalFilter === 'day' && (
+                      <p className={`${item.net < 0 ? 'text-rose-300' : 'text-emerald-300'}`}>
+                        Neto <FancyPrice amount={item.net || 0} />
+                      </p>
+                    )}
                     <p className="text-slate-300">{item.count} Ventas</p>
                   </div>
 

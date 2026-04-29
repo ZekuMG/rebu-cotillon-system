@@ -137,12 +137,17 @@ export const TicketPrintLayout = ({ transaction }) => {
     items.forEach(item => {
       const qty = Number(item.qty || item.quantity || 1);
       const price = Number(item.price);
+      const explicitSubtotal = Number(item.subtotal ?? item.lineSubtotal ?? item.line_subtotal);
       
       // ♻️ FIX: formatNumber para las cantidades
       const titlePrefix = qty !== 1 ? `(${formatNumber(qty)}) ` : '';
       const fullTitle = titlePrefix + item.title;
 
-      const totalItemPrice = qty * price;
+      const totalItemPrice = Number.isFinite(explicitSubtotal) && explicitSubtotal !== 0
+        ? explicitSubtotal
+        : (item.product_type || 'quantity') === 'weight' && price >= 100
+          ? price * (qty / 1000)
+          : qty * price;
       // ♻️ FIX: formatCurrency (ya trae el $)
       const priceStr = item.isReward ? 'GRATIS' : formatCurrency(totalItemPrice);
 

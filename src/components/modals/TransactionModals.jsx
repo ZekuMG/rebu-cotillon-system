@@ -75,8 +75,17 @@ export const EditTransactionModal = ({
   if (!transaction) return null;
 
   // ── LÓGICA LOCAL DEL MODAL (Evita errores del padre) ──
+  const getLineSubtotal = (item = {}) => {
+    const explicitSubtotal = Number(item.subtotal ?? item.lineSubtotal ?? item.line_subtotal);
+    if (Number.isFinite(explicitSubtotal) && explicitSubtotal !== 0) return explicitSubtotal;
+    const price = Number(item.price || 0);
+    const qty = Number(item.qty || item.quantity || 0);
+    if (item.product_type !== 'weight') return price * qty;
+    return price >= 100 ? price * (qty / 1000) : price * qty;
+  };
+
   const recalculateTotal = (items, payment) => {
-    const subtotal = items.reduce((acc, i) => acc + (Number(i.price || 0) * Number(i.qty || 0)), 0);
+    const subtotal = items.reduce((acc, i) => acc + getLineSubtotal(i), 0);
     return payment === 'Credito' ? subtotal * 1.1 : subtotal;
   };
 
@@ -205,7 +214,7 @@ export const EditTransactionModal = ({
           <div className="space-y-2">
             {transaction.items.map((item, index) => {
               const isWeight = item.product_type === 'weight' || item.isWeight || (item.qty > 20 && item.price < 50);
-              const rowTotal = (Number(item.price) || 0) * (Number(item.qty) || 0);
+              const rowTotal = getLineSubtotal(item);
 
               return (
                 <div key={`item-${index}`} className="flex items-center gap-3 bg-white p-3 rounded-xl border border-slate-200 shadow-sm transition-all hover:border-blue-300">

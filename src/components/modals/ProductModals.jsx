@@ -21,7 +21,7 @@ import AsyncActionButton from '../AsyncActionButton';
 // ♻️ FIX: Importamos formatNumber
 import { formatNumber } from '../../utils/helpers';
 import usePendingAction from '../../hooks/usePendingAction';
-import { hasOwnerAccess } from '../../utils/appUsers';
+import { hasPermission } from '../../utils/userPermissions';
 import { buildAdjustedProductImageFile, readImageFileAsDataUrl } from '../../utils/productImageEditor';
 
 // ==========================================
@@ -518,7 +518,7 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
 
 // ==========================================
 // MODAL: EDITAR PRODUCTO
-// ✅ v6: Agregado botón "Duplicar" (solo admin)
+// v6: Agregado boton "Duplicar" segun permiso inventory.create
 // ==========================================
 
 export const EditProductModal = ({ product, onClose, setEditingProduct, categories, onImageUpload, editReason, setEditReason, onSave, inventory, onDuplicateBarcode, isUploadingImage, onDuplicate, currentUser }) => {
@@ -526,7 +526,7 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
   const { isPending, runAction } = usePendingAction();
   if (!product) return null;
   const productType = product.product_type || 'quantity';
-  const isAdmin = hasOwnerAccess(currentUser);
+  const canDuplicateProduct = hasPermission(currentUser, 'inventory.create');
 
   // ✅ Precio guardado en /g → lo mostramos en /kg
   const displayPrice = productType === 'weight' ? Math.round(Number(product.price) * 1000) : product.price;
@@ -670,9 +670,9 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
             <textarea className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-amber-50 focus:ring-2 focus:ring-amber-500 outline-none" rows="2" placeholder="¿Por qué realizas este cambio?" value={editReason} onChange={(e) => setEditReason(e.target.value)}></textarea>
           </div>
 
-          {/* ✅ Botones: Duplicar (solo admin) + Guardar */}
+          {/* Botones: Duplicar segun permiso + Guardar */}
           <div className="flex gap-3">
-            {isAdmin && onDuplicate && (
+            {canDuplicateProduct && onDuplicate && (
               <button
                 type="button"
                 onClick={handleDuplicate}

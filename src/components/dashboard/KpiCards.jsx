@@ -16,6 +16,7 @@ import { formatNumber } from '../../utils/helpers';
 import { hasOwnerAccess } from '../../utils/appUsers';
 import { hasPermission } from '../../utils/userPermissions';
 import { FancyPrice } from '../FancyPrice';
+import { HintIcon } from '../HintIcon';
 
 export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, currentUser, setTempOpeningBalance, setIsOpeningBalanceModalOpen, globalFilter, expenses = [], onOpenExpenseModal }) => {
   const canManageExpenses = hasPermission(currentUser, 'extras.expenses.manage');
@@ -47,7 +48,14 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
         <div className="bg-white p-4 rounded-xl shadow-sm border border-fuchsia-100 relative overflow-hidden flex flex-col justify-between h-32">
           <div className="flex justify-between items-start z-10">
             <span className="text-[15px] font-bold text-fuchsia-400 uppercase">{getPeriodText('Ingreso')}</span>
-            <TrendingUp size={14} className="text-fuchsia-500" />
+            <div className="flex items-center gap-1.5">
+              <HintIcon
+                hint="Ingreso bruto vendido en el periodo seleccionado."
+                size={13}
+                side="left"
+              />
+              <TrendingUp size={14} className="text-fuchsia-500" />
+            </div>
           </div>
           {/* ♻️ FIX: FancyPrice */}
           <span className="text-2xl font-bold text-fuchsia-600 z-10">
@@ -61,7 +69,14 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
         <div className="bg-white p-4 rounded-xl shadow-sm border border-emerald-100 relative overflow-hidden flex flex-col justify-between h-32">
           <div className="flex justify-between items-start z-10">
             <span className="text-[15px] font-bold text-emerald-500 uppercase">Ganancia Neta</span>
-            <DollarSign size={14} className="text-emerald-500" />
+            <div className="flex items-center gap-1.5">
+              <HintIcon
+                hint="Ganancia neta del periodo: ingreso bruto menos costos de productos vendidos y gastos registrados."
+                size={13}
+                side="left"
+              />
+              <DollarSign size={14} className="text-emerald-500" />
+            </div>
           </div>
           {/* ♻️ FIX: FancyPrice */}
           <span className="text-2xl font-bold text-emerald-600 z-10">

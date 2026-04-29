@@ -50,7 +50,7 @@ export default function UserPermissionsEditor({
   if (!user) {
     return (
       <div className="rounded-[22px] border border-slate-200 bg-white/90 p-5 text-sm font-semibold text-slate-500 shadow-sm">
-        SeleccionÃƒÂ¡ un usuario para editar sus permisos.
+        Selecciona un usuario para editar sus permisos.
       </div>
     );
   }

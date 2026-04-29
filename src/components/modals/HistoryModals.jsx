@@ -242,6 +242,12 @@ export const TransactionDetailModal = ({
                 const rawQty = item.qty || item.quantity;
                 const qty = Number(rawQty) || 0;
                 const price = Number(item.price) || 0;
+                const explicitSubtotal = Number(item.subtotal ?? item.lineSubtotal ?? item.line_subtotal);
+                const lineSubtotal = Number.isFinite(explicitSubtotal) && explicitSubtotal !== 0
+                  ? explicitSubtotal
+                  : item.product_type === 'weight' && price >= 100
+                    ? price * (qty / 1000)
+                    : qty * price;
                 const comboIncludedItems = item.isCombo && Array.isArray(item.productsIncluded)
                   ? item.productsIncluded.map((includedItem) => ({
                       ...includedItem,
@@ -250,6 +256,7 @@ export const TransactionDetailModal = ({
                   : [];
                 
                 const isWeight = item.product_type === 'weight' || item.isWeight || (qty >= 20 && price < 50);
+                const displayUnitPrice = isWeight && price < 100 ? price * 1000 : price;
 
                 return (
                   <div key={idx} className={`px-3.5 py-2.5 flex justify-between items-center transition-colors hover:bg-slate-50 ${isVoided ? 'opacity-50' : ''}`}>
@@ -261,7 +268,7 @@ export const TransactionDetailModal = ({
                         <span className="font-bold text-slate-600 bg-white border border-slate-200 shadow-sm px-1.5 py-0.5 rounded leading-none">
                           {formatNumber(qty)}{isWeight ? 'g' : ' u.'}
                         </span>
-                        x <FancyPrice amount={price} /> {isWeight ? '/Kg' : 'c/u'}
+                        x <FancyPrice amount={displayUnitPrice} /> {isWeight ? '/Kg' : 'c/u'}
                       </p>
                       {comboIncludedItems.length > 0 && (
                         <div className="mt-1.5 rounded-lg border border-violet-100 bg-violet-50/70 px-2 py-1.5">
@@ -280,7 +287,7 @@ export const TransactionDetailModal = ({
                       )}
                     </div>
                     <p className={`font-black text-[13px] leading-none ${isVoided ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
-                      <FancyPrice amount={qty * price} />
+                      <FancyPrice amount={lineSubtotal} />
                     </p>
                   </div>
                 );

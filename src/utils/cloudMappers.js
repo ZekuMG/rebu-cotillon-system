@@ -8,14 +8,39 @@ import {
 const MODIFIED_SALE_ACTIONS = new Set([
   'Venta Modificada',
   'Modificacion Pedido',
-  'Modificación de Pedido',
+  'Modificacion de Pedido',
 ]);
 
 const SALE_ITEM_SNAPSHOT_ACTIONS = new Set([
   'Venta Realizada',
-  'Modificación Pedido',
+  'Modificacion Pedido',
+  'Modificacion de Pedido',
+  'Venta Modificada',
   'Venta Restaurada',
 ]);
+
+const getSafeDate = (value) => {
+  const date = value ? new Date(value) : new Date();
+  return Number.isNaN(date.getTime()) ? new Date() : date;
+};
+
+const isModifiedSaleAction = (actionName) => {
+  const normalizedAction = String(actionName || '').toLowerCase();
+  return (
+    MODIFIED_SALE_ACTIONS.has(actionName) ||
+    (normalizedAction.includes('modificaci') && normalizedAction.includes('pedido'))
+  );
+};
+
+const isSaleItemSnapshotAction = (actionName) => {
+  const normalizedAction = String(actionName || '').toLowerCase();
+  return (
+    SALE_ITEM_SNAPSHOT_ACTIONS.has(actionName) ||
+    (normalizedAction.includes('venta') && normalizedAction.includes('realizada')) ||
+    (normalizedAction.includes('venta') && normalizedAction.includes('restaurada')) ||
+    isModifiedSaleAction(actionName)
+  );
+};
 
 export const safeCloudData = (result, tableName) => {
   if (result.status === 'fulfilled' && !result.value.error) {
@@ -67,7 +92,7 @@ export const mapAgendaContactRecords = (contacts = []) =>
 
 export const mapLogRecords = (logs = []) =>
   logs.map((log) => {
-    const action = MODIFIED_SALE_ACTIONS.has(log.action) ? 'Modificación Pedido' : log.action;
+    const action = isModifiedSaleAction(log.action) ? 'Venta Modificada' : log.action;
     
     // 🔧 PARSE details si viene como JSON string desde Supabase
     let details = log.details;
@@ -93,8 +118,8 @@ export const mapLogRecords = (logs = []) =>
       userRole: log.user_role || details?.userRole || details?.role || null,
       reason: log.reason,
       created_at: log.created_at || null,
-      date: formatDateAR(new Date(log.created_at)),
-      timestamp: formatTimeFullAR(new Date(log.created_at)),
+      date: formatDateAR(getSafeDate(log.created_at)),
+      timestamp: formatTimeFullAR(getSafeDate(log.created_at)),
     };
 
     mappedLog.isTest = shouldIgnoreNestedTestDetectionForLog(mappedLog.action)
@@ -135,6 +160,9 @@ const mapRecoveredSaleItem = (item) => ({
   isCombo: Boolean(item.isCombo ?? item.is_combo ?? false),
   category: item.category || null,
   categories: Array.isArray(item.categories) ? item.categories : null,
+  productsIncluded: Array.isArray(item.productsIncluded || item.products_included)
+    ? item.productsIncluded || item.products_included
+    : [],
 });
 
 const getSaleSnapshotItems = (log) => {
@@ -208,6 +236,7 @@ const enrichSaleItemsWithSnapshot = (items = [], snapshotItems = []) => {
       isCombo: item.isCombo ?? snapshotItem.isCombo,
       category: item.category || snapshotItem.category || null,
       categories: item.categories || snapshotItem.categories || null,
+      productsIncluded: item.productsIncluded || snapshotItem.productsIncluded || [],
     };
   });
 
@@ -218,7 +247,7 @@ const enrichSaleItemsWithSnapshot = (items = [], snapshotItems = []) => {
 const findSaleSnapshotLog = (logs, saleId) =>
   logs.reduce((bestLog, log) => {
     const isCandidate =
-      SALE_ITEM_SNAPSHOT_ACTIONS.has(log.action) &&
+      isSaleItemSnapshotAction(log.action) &&
       String(log.details?.transactionId) === String(saleId);
 
     if (!isCandidate) return bestLog;
@@ -270,8 +299,8 @@ export const mapSaleRecords = (sales = [], parsedLogs = []) =>
     const mappedSale = {
       id: sale.id,
       createdAt: sale.created_at || null,
-      date: formatDateAR(new Date(sale.created_at)),
-      time: formatTimeFullAR(new Date(sale.created_at)),
+      date: formatDateAR(getSafeDate(sale.created_at)),
+      time: formatTimeFullAR(getSafeDate(sale.created_at)),
       total: sale.total,
       payment: primaryPaymentInfo.payment,
       paymentBreakdown,
@@ -285,9 +314,12 @@ export const mapSaleRecords = (sales = [], parsedLogs = []) =>
         : null,
       pointsEarned: sale.points_earned,
       pointsSpent: sale.points_spent,
-      user: sale.user_name || 'Desconocido',
-      userId: sale.user_id || null,
-      userRole: sale.user_role || null,
+      user: sale.user_name || snapshotLog?.details?.userName || 'Desconocido',
+      userId: sale.user_id || snapshotLog?.details?.userId || null,
+      userRole: sale.user_role || snapshotLog?.details?.userRole || null,
+      stockChanges: Array.isArray(snapshotLog?.details?.stockChanges)
+        ? snapshotLog.details.stockChanges
+        : [],
       status: sale.status || 'completed',
       isRestored: Boolean(restoreLog),
       restoredAt: restoreLog ? `${restoreLog.date} ${restoreLog.timestamp}` : null,
@@ -309,8 +341,8 @@ export const mapExpenseRecords = (expenses = []) =>
       amount: Number(expense.amount || 0),
       category: expense.category || 'Varios',
       paymentMethod,
-      date: formatDateAR(new Date(createdAt)),
-      time: formatTimeFullAR(new Date(createdAt)),
+      date: formatDateAR(getSafeDate(createdAt)),
+      time: formatTimeFullAR(getSafeDate(createdAt)),
       user: expense.user_name || 'Sistema',
       userId: expense.user_id || null,
       userRole: expense.user_role || null,
@@ -330,7 +362,7 @@ export const mapCashClosureRecord = (closure) => ({
   date: closure.date,
   openTime: closure.open_time,
   closeTime: closure.close_time,
-  user: closure.user_name,
+  user: closure.user_name || closure.user || 'Sistema',
   userId: closure.user_id || null,
   userRole: closure.user_role || null,
   type: closure.type,

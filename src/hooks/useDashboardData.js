@@ -29,22 +29,6 @@ export default function useDashboardData({
     return normalizeDate(dateStr);
   };
 
-  const getProductCost = (productId) => {
-    if (!inventory) return 0;
-    const product = inventory.find(p => p.id === productId);
-    return product ? (Number(product.purchasePrice) || 0) : 0;
-  };
-
-  const getTransactionNet = (tx) => {
-    let cost = 0;
-    (tx.items || []).forEach(item => {
-      const qty = Number(item.qty) || Number(item.quantity) || 0;
-      const pCost = getProductCost(item.id || item.productId);
-      cost += pCost * qty;
-    });
-    return (Number(tx.total) || 0) - cost;
-  };
-
   const getLiveProductForItem = (item) => {
     if (!inventory) return null;
     const itemId = item?.id || item?.productId;
@@ -57,6 +41,59 @@ export default function useDashboardData({
     if (!normalizedTitle) return null;
     return inventory.find((product) => String(product.title || '').trim().toLowerCase() === normalizedTitle) || null;
   };
+
+  const getProductById = (productId) => {
+    if (!inventory || productId === undefined || productId === null) return null;
+    return inventory.find((product) => String(product.id) === String(productId)) || null;
+  };
+
+  const getProductCost = (productId, fallbackCost = 0) => {
+    const product = getProductById(productId);
+    return Number(product?.purchasePrice ?? fallbackCost ?? 0) || 0;
+  };
+
+  const getStockChangeProductId = (change = {}) =>
+    change.productId || change.product_id || change.id || null;
+
+  const getStockChangeQty = (change = {}) =>
+    Math.abs(Number(change.quantitySold ?? change.quantityReserved ?? change.quantityChanged ?? change.quantity ?? change.qty ?? 0) || 0);
+
+  const shouldSkipCostItem = (item = {}) =>
+    item.isReward || item.isCustom || item.isDiscount || item.type === 'discount';
+
+  const getTransactionCost = (tx = {}) => {
+    const stockChanges = Array.isArray(tx.stockChanges) ? tx.stockChanges : [];
+    if (stockChanges.length > 0) {
+      return stockChanges.reduce((acc, change) => {
+        const productId = getStockChangeProductId(change);
+        const qty = getStockChangeQty(change);
+        if (!productId || qty <= 0) return acc;
+        return acc + (getProductCost(productId, change.purchasePrice ?? change.cost) * qty);
+      }, 0);
+    }
+
+    return (tx.items || []).reduce((acc, item) => {
+      if (shouldSkipCostItem(item)) return acc;
+
+      if (item?.isCombo && Array.isArray(item.productsIncluded) && item.productsIncluded.length > 0) {
+        const comboQty = Number(item.qty ?? item.quantity ?? 1) || 1;
+        const comboCost = item.productsIncluded.reduce((comboAcc, includedItem) => {
+          const includedProductId = includedItem.productId || includedItem.product_id || includedItem.id;
+          const includedQty = Number(includedItem.quantity ?? includedItem.qty ?? (includedItem.product_type === 'weight' ? 1000 : 1)) || 0;
+          if (!includedProductId || includedQty <= 0) return comboAcc;
+          return comboAcc + (getProductCost(includedProductId, includedItem.purchasePrice ?? includedItem.cost) * includedQty * comboQty);
+        }, 0);
+        return acc + comboCost;
+      }
+
+      const productId = item.productId || item.product_id || item.id;
+      const qty = Number(item.qty ?? item.quantity ?? 0) || 0;
+      if (!productId || qty <= 0) return acc;
+      return acc + (getProductCost(productId, item.purchasePrice ?? item.cost) * qty);
+    }, 0);
+  };
+
+  const getTransactionNet = (tx) => (Number(tx.total) || 0) - getTransactionCost(tx);
 
   const getRankingItemRevenue = (item, txTotal = 0) => {
     const qty = Number(item?.qty) || Number(item?.quantity) || 0;
@@ -147,16 +184,18 @@ export default function useDashboardData({
       const txDate = safeParseDate(tx.date); 
       if (txDate && isInRange(txDate)) {
         const net = getTransactionNet(tx);
+        const cost = getTransactionCost(tx);
         validTransactions.push({
-          source: 'tx', id: tx.id, date: txDate, time: tx.time, total: Number(tx.total) || 0, 
-          payment: tx.payment, items: tx.items || [], 
+          source: 'tx', id: tx.id, date: txDate, time: tx.time, total: Number(tx.total) || 0,
+          payment: tx.payment, items: tx.items || [],
           paymentBreakdown: tx.paymentBreakdown || null,
           installments: tx.installments || 0,
           cashReceived: tx.cashReceived || 0,
           cashChange: tx.cashChange || 0,
           client: tx.client,
+          stockChanges: Array.isArray(tx.stockChanges) ? tx.stockChanges : [],
           net,
-          cost: (Number(tx.total) || 0) - net,
+          cost,
         });
         processedTxIds.add(String(tx.id));
       }
@@ -168,8 +207,13 @@ export default function useDashboardData({
         if (!processedTxIds.has(String(txId))) { 
           const logDate = safeParseDate(log.date);
           if (logDate && isInRange(logDate)) {
-            const logTxLike = { total: Number(log.details.total) || 0, items: log.details.items || [] };
+            const logTxLike = {
+              total: Number(log.details.total) || 0,
+              items: log.details.items || [],
+              stockChanges: Array.isArray(log.details.stockChanges) ? log.details.stockChanges : [],
+            };
             const net = getTransactionNet(logTxLike);
+            const cost = getTransactionCost(logTxLike);
             validTransactions.push({
               source: 'log', id: txId || log.id, date: logDate, time: log.timestamp || '00:00',
               total: Number(log.details.total) || 0, payment: log.details.payment || 'Efectivo', items: log.details.items || [],
@@ -178,8 +222,9 @@ export default function useDashboardData({
               cashReceived: log.details.cashReceived || 0,
               cashChange: log.details.cashChange || 0,
               client: log.details.client,
+              stockChanges: Array.isArray(log.details.stockChanges) ? log.details.stockChanges : [],
               net,
-              cost: (Number(log.details.total) || 0) - net,
+              cost,
             });
           }
         }
@@ -187,11 +232,11 @@ export default function useDashboardData({
     });
 
     return validTransactions;
-  }, [globalFilter, transactions, dailyLogs, isInRange]);
+  }, [globalFilter, transactions, dailyLogs, isInRange, inventory]);
 
   const filteredExpenses = useMemo(() => {
     return (expenses || []).filter(exp => {
-      const expDate = safeParseDate(exp.date || exp.created_at);
+      const expDate = safeParseDate(exp.date || exp.created_at || exp.createdAt);
       return expDate && isInRange(expDate);
     });
   }, [expenses, isInRange]);
@@ -219,19 +264,29 @@ export default function useDashboardData({
     };
   }, [filteredExpenses]);
 
+  const getExpenseHour = (expense = {}) => {
+    const rawTime = expense.time || expense.timestamp;
+    if (typeof rawTime === 'string' && rawTime.includes(':')) {
+      const hour = parseInt(rawTime.split(':')[0], 10);
+      if (Number.isFinite(hour)) return hour;
+    }
+
+    const dateObj = safeParseDate(expense.createdAt || expense.created_at || expense.date);
+    return dateObj ? dateObj.getHours() : 0;
+  };
+
+  const buildDateKey = (dateObj) =>
+    dateObj ? `${dateObj.getFullYear()}-${dateObj.getMonth()}-${dateObj.getDate()}` : '';
+
   const kpiStats = useMemo(() => {
-    let gross = 0; let net = 0; const count = filteredData.length;
+    let gross = 0; let net = 0; let cost = 0; const count = filteredData.length;
     filteredData.forEach(tx => {
-      gross += tx.total; let cost = 0;
-      tx.items.forEach(item => {
-        const qty = Number(item.qty) || Number(item.quantity) || 0;
-        const pCost = getProductCost(item.id || item.productId);
-        cost += pCost * qty;
-      });
-      net += (tx.total - cost);
+      gross += tx.total;
+      net += Number(tx.net) || 0;
+      cost += Number(tx.cost) || 0;
     });
     net -= expenseStats.total;
-    return { gross, net, count };
+    return { gross, net, cost, expenses: expenseStats.total, count };
   }, [filteredData, inventory, expenseStats]);
 
   const averageTicket = kpiStats.count > 0 ? kpiStats.gross / kpiStats.count : 0;
@@ -251,11 +306,22 @@ export default function useDashboardData({
         const range = ranges.find(r => hour >= r.start && hour < r.end);
         if (range) {
           range.sales += tx.total;
-          range.net += getTransactionNet(tx);
+          range.net += Number(tx.net) || 0;
           range.count += 1;
           range.transactions.push(tx);
         }
       });
+
+      filteredExpenses.forEach(expense => {
+        const amount = Number(expense.amount) || 0;
+        if (amount <= 0) return;
+        const hour = getExpenseHour(expense);
+        const range =
+          ranges.find(r => hour >= r.start && hour < r.end) ||
+          (hour < ranges[0].start ? ranges[0] : ranges[ranges.length - 1]);
+        if (range) range.net -= amount;
+      });
+
       return ranges.map(r => ({ ...r, isCurrent: currentHour >= r.start && currentHour < r.end }));
     }
 
@@ -287,13 +353,21 @@ export default function useDashboardData({
 
       filteredData.forEach(tx => {
         if (!tx.date) return;
-        const key = `${tx.date.getFullYear()}-${tx.date.getMonth()}-${tx.date.getDate()}`;
+        const key = buildDateKey(tx.date);
         if (daysMap.has(key)) {
           const entry = daysMap.get(key);
           entry.sales += tx.total;
-          entry.net += getTransactionNet(tx);
+          entry.net += Number(tx.net) || 0;
           entry.count += 1;
           entry.transactions.push(tx);
+        }
+      });
+
+      filteredExpenses.forEach(expense => {
+        const expenseDate = safeParseDate(expense.date || expense.created_at || expense.createdAt);
+        const key = buildDateKey(expenseDate);
+        if (daysMap.has(key)) {
+          daysMap.get(key).net -= Number(expense.amount) || 0;
         }
       });
 
@@ -330,14 +404,23 @@ export default function useDashboardData({
       if (daysMap.has(key)) { 
         const entry = daysMap.get(key); 
         entry.sales += tx.total;
-        entry.net += getTransactionNet(tx);
+        entry.net += Number(tx.net) || 0;
         entry.count += 1; 
         entry.transactions.push(tx); 
       }
     });
 
+    filteredExpenses.forEach(expense => {
+      const expenseDate = safeParseDate(expense.date || expense.created_at || expense.createdAt);
+      if (!expenseDate) return;
+      const key = `${expenseDate.getDate()}/${expenseDate.getMonth() + 1}`;
+      if (daysMap.has(key)) {
+        daysMap.get(key).net -= Number(expense.amount) || 0;
+      }
+    });
+
     return Array.from(daysMap.values());
-  }, [globalFilter, filteredData, currentHour, inventory]);
+  }, [globalFilter, filteredData, filteredExpenses, currentHour, inventory]);
 
   const maxSales = useMemo(() => {
     const max = Math.max(...chartData.map(d => d.sales)); return max > 0 ? max : 1;
@@ -360,7 +443,7 @@ export default function useDashboardData({
     });
   }, [filteredData]);
 
-  const isLegacyWeightLikeItem = (item, liveProduct) => {
+  function isLegacyWeightLikeItem(item, liveProduct) {
     if (liveProduct) return liveProduct.product_type === 'weight';
     if (item?.product_type === 'weight' || item?.isWeight) return true;
 
@@ -372,7 +455,7 @@ export default function useDashboardData({
     const hasLegacyQuantityMarker = !item?.product_type || item?.product_type === 'quantity';
 
     return hasLegacyQuantityMarker && !item?.isCombo && !item?.isDiscount && isCustomLike && qty >= 20 && price > 0 && price < 50;
-  };
+  }
 
   const rankingStats = useMemo(() => {
     const statsMap = {};

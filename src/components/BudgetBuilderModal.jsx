@@ -553,11 +553,16 @@ export default function BudgetBuilderModal({
 
     if (canonical.benefitType === 'combo' || canonical.benefitType === 'fixed_price' || offer.applyTo === 'Seleccion') {
       const comboItem = createEmptyBudgetItem({
+        id: `combo-${offer.id || Date.now()}-${Date.now()}`,
         title: offer.name || 'Combo manual',
         category: 'Combos',
         qty: 1,
         newPrice: Number(offer.offerPrice || 0),
         product_type: 'quantity',
+        isCombo: true,
+        isTemporary: true,
+        originalOfferId: offer.id || null,
+        productsIncluded: Array.isArray(offer.productsIncluded) ? offer.productsIncluded : [],
       });
 
       setDraftItems((prev) => [...prev, comboItem]);
@@ -577,6 +582,7 @@ export default function BudgetBuilderModal({
       }
 
       const discountItem = createEmptyBudgetItem({
+        id: `discount-${offer.id || Date.now()}-${Date.now()}`,
         title:
           canonical.benefitType === 'coupon'
             ? `Cupón ${canonical.couponCode || offer.name || 'Manual'}`
@@ -585,6 +591,9 @@ export default function BudgetBuilderModal({
         qty: 1,
         newPrice: -Math.abs(discountAmount),
         product_type: 'quantity',
+        isDiscount: true,
+        isTemporary: true,
+        originalOfferId: offer.id || null,
       });
 
       setDraftItems((prev) => [...prev, discountItem]);
@@ -1324,51 +1333,6 @@ export default function BudgetBuilderModal({
                   </button>
                 </div>
 
-                {showOffersPanel && selectableBudgetOffers.length < 0 && (
-                  <div className="mb-2 rounded-[18px] border border-emerald-200 bg-emerald-50/70 p-2">
-                    {selectableBudgetOffers.length === 0 ? (
-                      <div className="rounded-[14px] border border-dashed border-emerald-200 bg-white/80 px-3 py-4 text-center">
-                        <p className="text-[12px] font-bold text-emerald-700">No hay combos ni descuentos manuales disponibles.</p>
-                      </div>
-                    ) : (
-                      <div className="grid gap-1.5 sm:grid-cols-2">
-                        {selectableBudgetOffers.map((offer) => {
-                          const canonical = offer.canonical;
-                          const isCombo = canonical.benefitType === 'combo' || canonical.benefitType === 'fixed_price' || offer.applyTo === 'Seleccion';
-                          const label = isCombo
-                            ? 'Combo'
-                            : canonical.benefitType === 'coupon'
-                              ? 'Cupón'
-                              : 'Descuento';
-                          const detail = isCombo
-                            ? <FancyPrice amount={Number(offer.offerPrice || 0)} />
-                            : canonical.discountMode === 'percentage'
-                              ? `${Number(canonical.discountValue || offer.discountValue || 0)}%`
-                              : <FancyPrice amount={Number(canonical.discountValue || offer.discountValue || 0)} />;
-
-                          return (
-                            <button
-                              key={`budget-offer-${offer.id}`}
-                              type="button"
-                              onClick={() => applyOfferToDraft(offer)}
-                              className="rounded-[14px] border border-emerald-200 bg-white px-3 py-2 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50"
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="min-w-0">
-                                  <p className="truncate text-[12px] font-black text-slate-800">{offer.name}</p>
-                                  <p className="mt-1 text-[10px] font-semibold text-slate-500">{label}</p>
-                                </div>
-                                <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">
-                                  {detail}
-                                </span>
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
 
                 <div className="space-y-1">
                   {draftItems.map((item) => {

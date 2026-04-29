@@ -46,6 +46,20 @@ export const calculateBudgetLineSubtotal = (item = {}) => {
 export const calculateBudgetTotal = (items = []) =>
   items.reduce((acc, item) => acc + calculateBudgetLineSubtotal(item), 0);
 
+const normalizeBudgetIncludedProduct = (product = {}) => {
+  const productType = product.product_type || 'quantity';
+  return {
+    id: product.id ?? product.productId ?? product.product_id ?? null,
+    productId: product.productId ?? product.product_id ?? product.id ?? null,
+    title: product.title || product.name || '',
+    price: Number(product.price || product.newPrice || product.unit_price || 0) || 0,
+    product_type: productType,
+    quantity:
+      Number(product.quantity ?? product.qty ?? (productType === 'weight' ? 1000 : 1)) ||
+      (productType === 'weight' ? 1000 : 1),
+  };
+};
+
 export const normalizeBudgetBuilderItem = (item = {}) => ({
   id: item.id ?? `line-${Date.now()}`,
   productId: item.productId ?? item.product_id ?? null,
@@ -59,6 +73,12 @@ export const normalizeBudgetBuilderItem = (item = {}) => ({
     item.stock === undefined || item.stock === null || item.stock === ''
       ? undefined
       : Number(item.stock) || 0,
+  isCombo: Boolean(item.isCombo ?? item.is_combo ?? false),
+  isDiscount: Boolean(item.isDiscount ?? item.is_discount ?? false),
+  originalOfferId: item.originalOfferId ?? item.original_offer_id ?? null,
+  productsIncluded: Array.isArray(item.productsIncluded || item.products_included)
+    ? (item.productsIncluded || item.products_included).map(normalizeBudgetIncludedProduct)
+    : [],
 });
 
 export const buildBudgetSnapshot = (items = []) =>
@@ -74,7 +94,13 @@ export const buildBudgetSnapshot = (items = []) =>
       unit_price: Number(item.newPrice) || 0,
       subtotal: calculateBudgetLineSubtotal(item),
       product_type: item.product_type || 'quantity',
-      is_custom: Boolean(item.isTemporary || !item.productId),
+      is_combo: Boolean(item.isCombo),
+      is_discount: Boolean(item.isDiscount),
+      is_custom: Boolean((item.isTemporary || !item.productId) && !item.isCombo && !item.isDiscount),
+      original_offer_id: item.originalOfferId || null,
+      products_included: Array.isArray(item.productsIncluded)
+        ? item.productsIncluded.map(normalizeBudgetIncludedProduct)
+        : [],
     }));
 
 export const hydrateBudgetSnapshot = (itemsSnapshot = []) =>
@@ -88,6 +114,10 @@ export const hydrateBudgetSnapshot = (itemsSnapshot = []) =>
       unit_price: item.unit_price,
       product_type: item.product_type,
       is_custom: item.is_custom,
+      is_combo: item.is_combo,
+      is_discount: item.is_discount,
+      original_offer_id: item.original_offer_id,
+      products_included: item.products_included,
     })
   );
 
@@ -101,6 +131,10 @@ export const buildExportItemsFromSnapshot = (itemsSnapshot = []) =>
     product_type: item.product_type,
     isTemporary: item.isTemporary,
     stock: item.stock,
+    isCombo: item.isCombo,
+    isDiscount: item.isDiscount,
+    originalOfferId: item.originalOfferId,
+    productsIncluded: item.productsIncluded,
   }));
 
 export const buildBudgetExportConfig = (record) => ({

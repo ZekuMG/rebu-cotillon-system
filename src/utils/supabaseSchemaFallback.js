@@ -38,6 +38,15 @@ const normalizeIdentifier = (token = '') =>
     .replace(/^["`]|["`]$/g, '')
     .toLowerCase();
 
+const normalizeRelationIdentifier = (token = '') => {
+  const cleaned = normalizeIdentifier(token).split('!')[0];
+  const withoutAlias = cleaned.includes(':') ? cleaned.split(':').pop() : cleaned;
+  return withoutAlias.replace(/_\d+$/g, '');
+};
+
+const relationMatches = (left, right) =>
+  Boolean(left && right && normalizeRelationIdentifier(left) === normalizeRelationIdentifier(right));
+
 const parseMissingColumnRef = (missingColumn = '') => {
   const parts = String(missingColumn || '')
     .split('.')
@@ -55,6 +64,68 @@ const parseMissingColumnRef = (missingColumn = '') => {
     relation: parts[parts.length - 2],
     column: parts[parts.length - 1],
   };
+};
+
+export const getSchemaMissingColumnName = (missingColumn = '') =>
+  parseMissingColumnRef(missingColumn).column || normalizeColumnToken(missingColumn);
+
+export const SCHEMA_OPTIONAL_COLUMNS = {
+  products: new Set([
+    'brand',
+    'purchaseprice',
+    'purchase_price',
+    'barcode',
+    'image',
+    'active_offers',
+    'updated_at',
+    'image_thumb',
+    'product_type',
+    'expiration_date',
+    'is_active',
+  ]),
+  clients: new Set(['dni', 'phone', 'email', 'extrainfo', 'extra_info', 'updated_at', 'is_active']),
+  logs: new Set(['details', 'reason', 'user', 'user_id', 'user_role', 'user_name']),
+  expenses: new Set(['payment_method', 'user_id', 'user_role', 'user_name']),
+  cash_closures: new Set([
+    'user_id',
+    'user_role',
+    'user_name',
+    'payment_methods_summary',
+    'items_sold_list',
+    'new_clients_list',
+    'expenses_snapshot',
+    'transactions_snapshot',
+  ]),
+  sales: new Set([
+    'payment_breakdown',
+    'cash_received',
+    'cash_change',
+    'installments',
+    'client_id',
+    'points_earned',
+    'points_spent',
+    'status',
+    'user_id',
+    'user_role',
+    'user_name',
+  ]),
+  sale_items: new Set([
+    'product_id',
+    'subtotal',
+    'line_subtotal',
+    'product_type',
+    'is_reward',
+    'is_discount',
+    'is_custom',
+    'is_combo',
+  ]),
+};
+
+export const isOptionalSchemaColumn = (table, missingColumn) => {
+  const columnName = getSchemaMissingColumnName(missingColumn);
+  if (!columnName) return false;
+  const optionalColumns = SCHEMA_OPTIONAL_COLUMNS[normalizeIdentifier(table)];
+  return Boolean(optionalColumns?.has(columnName));
 };
 
 export const extractSchemaMissingColumn = (error) => {
@@ -77,13 +148,13 @@ export const removeColumnFromSelect = (selectColumns, missingColumn, currentRela
   const missingRef = parseMissingColumnRef(missingColumn);
   const normalizedMissing = missingRef.column || normalizeColumnToken(missingColumn);
   const targetRelation = missingRef.relation;
-  const normalizedCurrentRelation = currentRelation ? normalizeIdentifier(currentRelation) : null;
+  const normalizedCurrentRelation = currentRelation ? normalizeRelationIdentifier(currentRelation) : null;
   const tokens = splitSelectColumns(selectColumns);
   const hasTargetRelationToken = targetRelation
     ? tokens.some((token) => {
         const openIndex = token.indexOf('(');
         if (openIndex === -1) return false;
-        return normalizeIdentifier(token.slice(0, openIndex)) === targetRelation;
+        return relationMatches(token.slice(0, openIndex), targetRelation);
       })
     : false;
 
@@ -95,7 +166,7 @@ export const removeColumnFromSelect = (selectColumns, missingColumn, currentRela
       if (openIndex === -1 || closeIndex === -1 || closeIndex < openIndex) {
         if (
           targetRelation &&
-          normalizedCurrentRelation !== targetRelation &&
+          !relationMatches(normalizedCurrentRelation, targetRelation) &&
           (normalizedCurrentRelation || hasTargetRelationToken)
         ) {
           return token;
@@ -104,14 +175,13 @@ export const removeColumnFromSelect = (selectColumns, missingColumn, currentRela
       }
 
       const relationName = token.slice(0, openIndex).trim();
-      const normalizedRelationName = normalizeIdentifier(relationName);
       const innerSelect = token.slice(openIndex + 1, closeIndex);
 
       if (!targetRelation && normalizeColumnToken(relationName) === normalizedMissing) {
         return null;
       }
 
-      const nextInner = removeColumnFromSelect(innerSelect, missingColumn, normalizedRelationName);
+      const nextInner = removeColumnFromSelect(innerSelect, missingColumn, relationName);
       if (!nextInner) return null;
 
       return `${relationName}(${nextInner})`;

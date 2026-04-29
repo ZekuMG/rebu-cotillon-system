@@ -40,6 +40,8 @@ import {
 import {
   extractSchemaMissingColumn,
   fetchAllCloudRowsWithSelectFallback,
+  getSchemaMissingColumnName,
+  isOptionalSchemaColumn,
   removeColumnFromSelect,
   runSelectWithSchemaFallback,
 } from './utils/supabaseSchemaFallback';
@@ -303,7 +305,7 @@ const fetchRecentRowsWithOptionalActiveFilter = async ({
 
     if (!result.error) return result;
 
-    const missingColumn = extractSchemaMissingColumn(result.error);
+    const missingColumn = getSchemaMissingColumnName(extractSchemaMissingColumn(result.error));
     if (missingColumn === 'is_active' && useActiveFilter) {
       useActiveFilter = false;
       continue;
@@ -330,6 +332,41 @@ const fetchRowsCreatedAfterWithSelectFallback = async (
     (safeSelect) => buildQuery(safeSelect).gt('created_at', createdAfter),
     selectColumns
   );
+
+const buildSaleHistoryLogsQuery = (selectColumns) =>
+  supabase
+    .from('logs')
+    .select(selectColumns)
+    .in('action', HISTORY_LOG_ACTIONS)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false });
+
+const fetchSaleHistoryLogsForTransactions = async ({ createdAfter = null, limit = null } = {}) => {
+  const logsResult = createdAfter
+    ? await fetchRowsCreatedAfterWithSelectFallback(
+        buildSaleHistoryLogsQuery,
+        CLOUD_SELECTS.logs,
+        createdAfter
+      )
+    : limit
+      ? await fetchRecentRowsWithSelectFallback(
+          buildSaleHistoryLogsQuery,
+          CLOUD_SELECTS.logs,
+          limit
+        )
+      : await fetchAllCloudRowsWithSelectFallback(
+          buildSaleHistoryLogsQuery,
+          CLOUD_SELECTS.logs,
+          CLOUD_FETCH_BATCH_SIZE
+        );
+
+  if (logsResult.error) {
+    console.warn('No se pudieron cargar logs para enriquecer ventas:', logsResult.error);
+    return [];
+  }
+
+  return mapLogRecords(logsResult.data || []);
+};
 
 const fetchRowsCreatedAfterWithOptionalActiveFilter = async ({
   table,
@@ -360,7 +397,7 @@ const fetchRowsCreatedAfterWithOptionalActiveFilter = async ({
 
     if (!result.error) return result;
 
-    const missingColumn = extractSchemaMissingColumn(result.error);
+    const missingColumn = getSchemaMissingColumnName(extractSchemaMissingColumn(result.error));
     if (missingColumn === 'is_active' && useActiveFilter) {
       useActiveFilter = false;
       continue;
@@ -562,16 +599,19 @@ const fetchCoreCloudPayload = async () => {
 };
 
 const fetchTransactionsCloudPayload = async () => {
-  const salesResult = await fetchAllCloudRowsWithSelectFallback(
-    (selectColumns) =>
-      supabase
-        .from('sales')
-        .select(selectColumns)
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false }),
-    CLOUD_SELECTS.sales,
-    CLOUD_FETCH_BATCH_SIZE
-  );
+  const [salesResult, parsedLogs] = await Promise.all([
+    fetchAllCloudRowsWithSelectFallback(
+      (selectColumns) =>
+        supabase
+          .from('sales')
+          .select(selectColumns)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false }),
+      CLOUD_SELECTS.sales,
+      CLOUD_FETCH_BATCH_SIZE
+    ),
+    fetchSaleHistoryLogsForTransactions(),
+  ]);
 
   const hasCloudConnection = !salesResult.error;
   const salesData = salesResult.error ? null : salesResult.data || [];
@@ -582,21 +622,24 @@ const fetchTransactionsCloudPayload = async () => {
 
   return {
     hasCloudConnection,
-    transactions: salesData ? mapSaleRecords(salesData, []) : null,
+    transactions: salesData ? mapSaleRecords(salesData, parsedLogs) : null,
   };
 };
 
 const fetchRecentTransactionsCloudPayload = async () => {
-  const salesResult = await fetchRecentRowsWithSelectFallback(
-    (selectColumns) =>
-      supabase
-        .from('sales')
-        .select(selectColumns)
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false }),
-    CLOUD_SELECTS.sales,
-    CLOUD_RECENT_SYNC_LIMIT
-  );
+  const [salesResult, parsedLogs] = await Promise.all([
+    fetchRecentRowsWithSelectFallback(
+      (selectColumns) =>
+        supabase
+          .from('sales')
+          .select(selectColumns)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false }),
+      CLOUD_SELECTS.sales,
+      CLOUD_RECENT_SYNC_LIMIT
+    ),
+    fetchSaleHistoryLogsForTransactions({ limit: CLOUD_RECENT_SYNC_LIMIT }),
+  ]);
 
   const hasCloudConnection = !salesResult.error;
   const salesData = salesResult.error ? null : salesResult.data || [];
@@ -607,21 +650,24 @@ const fetchRecentTransactionsCloudPayload = async () => {
 
   return {
     hasCloudConnection,
-    transactions: salesData ? mapSaleRecords(salesData, []) : null,
+    transactions: salesData ? mapSaleRecords(salesData, parsedLogs) : null,
   };
 };
 
 const fetchTransactionsCloudPayloadSince = async (createdAfter) => {
-  const salesResult = await fetchRowsCreatedAfterWithSelectFallback(
-    (selectColumns) =>
-      supabase
-        .from('sales')
-        .select(selectColumns)
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false }),
-    CLOUD_SELECTS.sales,
-    createdAfter
-  );
+  const [salesResult, parsedLogs] = await Promise.all([
+    fetchRowsCreatedAfterWithSelectFallback(
+      (selectColumns) =>
+        supabase
+          .from('sales')
+          .select(selectColumns)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false }),
+      CLOUD_SELECTS.sales,
+      createdAfter
+    ),
+    fetchSaleHistoryLogsForTransactions({ createdAfter }),
+  ]);
 
   const hasCloudConnection = !salesResult.error;
   const salesData = salesResult.error ? null : salesResult.data || [];
@@ -632,7 +678,7 @@ const fetchTransactionsCloudPayloadSince = async (createdAfter) => {
 
   return {
     hasCloudConnection,
-    transactions: salesData ? mapSaleRecords(salesData, []) : null,
+    transactions: salesData ? mapSaleRecords(salesData, parsedLogs) : null,
   };
 };
 
@@ -1285,6 +1331,12 @@ const getCloudErrorMessage = (error, fallback = 'Error de sincronizacion con la 
   return error?.message || error?.details || error?.hint || fallback;
 };
 
+const getPayloadKeyForMissingColumn = (payload, missingColumn) => {
+  const columnName = getSchemaMissingColumnName(missingColumn);
+  if (!columnName || !payload || typeof payload !== 'object') return null;
+  return Object.keys(payload).find((key) => key.toLowerCase() === columnName.toLowerCase()) || null;
+};
+
 const insertWithSchemaFallback = async (table, payload, selectColumns = '*') => {
   let safePayload = { ...payload };
   let safeSelect = selectColumns;
@@ -1294,9 +1346,10 @@ const insertWithSchemaFallback = async (table, payload, selectColumns = '*') => 
     if (!error) return { data, payload: safePayload };
 
     const missingColumn = extractSchemaMissingColumn(error);
-    if (missingColumn && missingColumn in safePayload) {
+    const missingPayloadKey = getPayloadKeyForMissingColumn(safePayload, missingColumn);
+    if (missingPayloadKey && isOptionalSchemaColumn(table, missingColumn)) {
       const nextPayload = { ...safePayload };
-      delete nextPayload[missingColumn];
+      delete nextPayload[missingPayloadKey];
       safePayload = nextPayload;
       continue;
     }
@@ -1322,10 +1375,15 @@ const insertRowsWithSchemaFallback = async (table, rows) => {
     if (!error) return { data, payload: safeRows };
 
     const missingColumn = extractSchemaMissingColumn(error);
-    const canDropMissingColumn = missingColumn && safeRows.some((row) => missingColumn in row);
+    const canDropMissingColumn =
+      missingColumn &&
+      isOptionalSchemaColumn(table, missingColumn) &&
+      safeRows.some((row) => getPayloadKeyForMissingColumn(row, missingColumn));
     if (canDropMissingColumn) {
       safeRows = safeRows.map((row) => {
-        const { [missingColumn]: _removed, ...rest } = row;
+        const missingPayloadKey = getPayloadKeyForMissingColumn(row, missingColumn);
+        if (!missingPayloadKey) return row;
+        const { [missingPayloadKey]: _removed, ...rest } = row;
         return rest;
       });
       continue;
@@ -1344,9 +1402,10 @@ const updateWithSchemaFallback = async (table, id, payload, selectColumns = '*')
     if (!error) return { data, payload: safePayload };
 
     const missingColumn = extractSchemaMissingColumn(error);
-    if (missingColumn && missingColumn in safePayload) {
+    const missingPayloadKey = getPayloadKeyForMissingColumn(safePayload, missingColumn);
+    if (missingPayloadKey && isOptionalSchemaColumn(table, missingColumn)) {
       const nextPayload = { ...safePayload };
-      delete nextPayload[missingColumn];
+      delete nextPayload[missingPayloadKey];
       safePayload = nextPayload;
       continue;
     }
@@ -3491,7 +3550,7 @@ export default function PartySupplyApp() {
         nextTotalAmount > 0;
       const wasStockReserved = isOrderStockReserved(previousOrder);
 
-      if (isCrossingToFullyPaid) {
+      if (isCrossingToFullyPaid && !wasStockReserved) {
         const { stockIssues } = getOrderStockIssues(orderPreview);
         if (stockIssues.length > 0) {
           showNotification('error', 'Stock Insuficiente', `No se puede guardar el pedido: ${stockIssues.join(', ')}`);
@@ -3618,16 +3677,49 @@ export default function PartySupplyApp() {
       productId: item.productId ?? null,
       qty: Number(item.qty || item.quantity || 0) || 0,
       newPrice: Number(item.newPrice || item.unit_price || item.price || 0) || 0,
-      isTemporary: Boolean(item.isTemporary || item.is_custom || !item.productId),
+      isTemporary: Boolean(item.isTemporary || item.is_custom || (!item.productId && !item.isCombo)),
       product_type: item.product_type || 'quantity',
     }));
 
+  const getOrderStockProductId = (item) => item?.productId || item?.product_id || item?.id || null;
+
+  const shouldSkipOrderStockProductId = (id) => {
+    if (!id) return true;
+    const normalizedId = String(id);
+    if (['null', 'undefined'].includes(normalizedId)) return true;
+    return ['temp-', 'custom_', 'desc_', 'discount_', 'combo_', 'reward_'].some((prefix) =>
+      normalizedId.startsWith(prefix)
+    );
+  };
+
+  const getOrderStockQuantity = (item, fallback = 0) => {
+    const value = Number(item?.qty ?? item?.quantity ?? fallback);
+    if (Number.isFinite(value) && value > 0) return value;
+    return Number(fallback || 0);
+  };
+
   const buildOrderRequiredStock = (items = []) =>
     items.reduce((acc, item) => {
-      if (!item.productId || item.isTemporary) return acc;
-      const nextQty = Number(item.qty || item.quantity || 0) || 0;
+      if (item?.isDiscount || item?.type === 'discount') return acc;
+
+      if (item?.isCombo) {
+        const comboQty = getOrderStockQuantity(item, 1) || 1;
+        const includedItems = Array.isArray(item.productsIncluded) ? item.productsIncluded : [];
+        includedItems.forEach((includedItem) => {
+          const includedId = getOrderStockProductId(includedItem);
+          if (shouldSkipOrderStockProductId(includedId)) return;
+          const defaultIncludedQty = includedItem?.product_type === 'weight' ? 1000 : 1;
+          const includedQty = getOrderStockQuantity(includedItem, defaultIncludedQty) || defaultIncludedQty;
+          acc[String(includedId)] = (acc[String(includedId)] || 0) + includedQty * comboQty;
+        });
+        return acc;
+      }
+
+      const productId = getOrderStockProductId(item);
+      if (item.isTemporary || shouldSkipOrderStockProductId(productId)) return acc;
+      const nextQty = getOrderStockQuantity(item, 0);
       if (nextQty <= 0) return acc;
-      acc[String(item.productId)] = (acc[String(item.productId)] || 0) + nextQty;
+      acc[String(productId)] = (acc[String(productId)] || 0) + nextQty;
       return acc;
     }, {});
 
@@ -3701,10 +3793,13 @@ export default function PartySupplyApp() {
     for (const [id, delta] of entries) {
       const product = inventory.find((entry) => String(entry.id) === String(id));
       if (!product) continue;
-      await supabase
+      const { error: stockErr } = await supabase
         .from('products')
         .update({ stock: Number(product.stock || 0) + Number(delta || 0) })
         .eq('id', id);
+      if (stockErr) {
+        throw new Error(`Fallo actualizando stock de ${product.title}: ${stockErr.message}`);
+      }
     }
 
     setInventory((prev) =>
@@ -3751,6 +3846,173 @@ export default function PartySupplyApp() {
     return applyOrderStockDelta(deltaByProduct);
   };
 
+  const getSaleStockProductId = (item) => item?.productId || item?.product_id || item?.id || null;
+
+  const shouldSkipSaleStockProductId = (id) => {
+    if (!id) return true;
+    const normalizedId = String(id);
+    if (['null', 'undefined'].includes(normalizedId)) return true;
+    return ['custom_', 'desc_', 'discount_', 'combo_', 'reward_'].some((prefix) =>
+      normalizedId.startsWith(prefix)
+    );
+  };
+
+  const isSaleStockIgnoredItem = (item) =>
+    Boolean(
+      item?.isReward ||
+      item?.isCustom ||
+      item?.isTemporary ||
+      item?.isDiscount ||
+      item?.type === 'discount'
+    );
+
+  const getSaleStockQuantity = (item, fallback = 0) => {
+    const value = Number(item?.quantity ?? item?.qty ?? fallback);
+    if (Number.isFinite(value) && value > 0) return value;
+    return Number(fallback || 0);
+  };
+
+  const buildSaleRequiredStock = (items = []) =>
+    (items || []).reduce((acc, item) => {
+      if (isSaleStockIgnoredItem(item)) return acc;
+
+      if (item?.isCombo) {
+        const comboQuantity = getSaleStockQuantity(item, 1) || 1;
+        const includedItems = Array.isArray(item.productsIncluded) ? item.productsIncluded : [];
+        includedItems.forEach((includedItem) => {
+          const includedId = getSaleStockProductId(includedItem);
+          if (shouldSkipSaleStockProductId(includedId)) return;
+          const defaultIncludedQty = includedItem?.product_type === 'weight' ? 1000 : 1;
+          const includedQuantity = getSaleStockQuantity(includedItem, defaultIncludedQty) || defaultIncludedQty;
+          acc[String(includedId)] = (acc[String(includedId)] || 0) + includedQuantity * comboQuantity;
+        });
+        return acc;
+      }
+
+      const productId = getSaleStockProductId(item);
+      if (shouldSkipSaleStockProductId(productId)) return acc;
+      const quantity = getSaleStockQuantity(item, 0);
+      if (quantity <= 0) return acc;
+      acc[String(productId)] = (acc[String(productId)] || 0) + quantity;
+      return acc;
+    }, {});
+
+  const buildSaleStockDelta = (requiredStock = {}, multiplier = -1) =>
+    Object.entries(requiredStock).reduce((acc, [id, qty]) => {
+      const delta = Number(qty || 0) * Number(multiplier || 0);
+      if (delta !== 0 && !shouldSkipSaleStockProductId(id)) {
+        acc[String(id)] = (acc[String(id)] || 0) + delta;
+      }
+      return acc;
+    }, {});
+
+  const buildSaleStockDiffDelta = (previousRequired = {}, nextRequired = {}) => {
+    const deltaByProduct = {};
+    const allIds = new Set([...Object.keys(previousRequired), ...Object.keys(nextRequired)]);
+    allIds.forEach((id) => {
+      const previousQty = Number(previousRequired[id] || 0);
+      const nextQty = Number(nextRequired[id] || 0);
+      const delta = previousQty - nextQty;
+      if (delta !== 0) {
+        deltaByProduct[String(id)] = delta;
+      }
+    });
+    return deltaByProduct;
+  };
+
+  const buildSaleProductChanges = (previousRequired = {}, nextRequired = {}) => {
+    const allIds = new Set([...Object.keys(previousRequired), ...Object.keys(nextRequired)]);
+    return Array.from(allIds)
+      .map((id) => {
+        const oldQty = Number(previousRequired[id] || 0);
+        const newQty = Number(nextRequired[id] || 0);
+        if (oldQty === newQty) return null;
+        const product = inventory.find((entry) => String(entry.id) === String(id));
+        return {
+          id,
+          productId: product?.id || id,
+          title: product?.title || `Producto #${id}`,
+          product_type: product?.product_type || 'quantity',
+          oldQty,
+          newQty,
+          diff: newQty - oldQty,
+        };
+      })
+      .filter(Boolean);
+  };
+
+  const getSaleStockDeltaPreview = (deltaByProduct = {}) => {
+    const entries = Object.entries(deltaByProduct).filter(([, delta]) => Number(delta || 0) !== 0);
+    if (entries.length === 0) return { stockChanges: [], stockIssues: [] };
+
+    const stockIssues = entries
+      .map(([id, delta]) => {
+        const product = inventory.find((entry) => String(entry.id) === String(id));
+        if (!product) return `Producto #${id} (ya no existe en inventario)`;
+        const stockBefore = Number(product.stock || 0);
+        const stockAfter = stockBefore + Number(delta || 0);
+        if (stockAfter < 0) {
+          return `${product.title} (faltan ${Math.abs(stockAfter)})`;
+        }
+        return null;
+      })
+      .filter(Boolean);
+
+    const stockChanges = entries
+      .map(([id, delta]) => {
+        const product = inventory.find((entry) => String(entry.id) === String(id));
+        if (!product) return null;
+        const numericDelta = Number(delta || 0);
+        const stockBefore = Number(product.stock || 0);
+        const quantityChanged = Math.abs(numericDelta);
+        return {
+          productId: product.id,
+          title: product.title,
+          product_type: product.product_type || 'quantity',
+          quantityChanged,
+          quantitySold: numericDelta < 0 ? quantityChanged : 0,
+          quantityRestored: numericDelta > 0 ? quantityChanged : 0,
+          stockBefore,
+          stockAfter: stockBefore + numericDelta,
+        };
+      })
+      .filter(Boolean);
+
+    return { stockChanges, stockIssues };
+  };
+
+  const applySaleStockDelta = async (deltaByProduct = {}) => {
+    const entries = Object.entries(deltaByProduct).filter(([, delta]) => Number(delta || 0) !== 0);
+    if (entries.length === 0) return { stockChanges: [], stockIssues: [] };
+
+    const preview = getSaleStockDeltaPreview(deltaByProduct);
+    if (preview.stockIssues.length > 0) {
+      return preview;
+    }
+
+    for (const [id, delta] of entries) {
+      const product = inventory.find((entry) => String(entry.id) === String(id));
+      if (!product) continue;
+      const nextStock = Number(product.stock || 0) + Number(delta || 0);
+      const { error: stockErr } = await supabase
+        .from('products')
+        .update({ stock: nextStock })
+        .eq('id', id);
+      if (stockErr) {
+        throw new Error(`Fallo actualizando stock de ${product.title}: ${stockErr.message}`);
+      }
+    }
+
+    setInventory((prev) =>
+      prev.map((product) => {
+        const delta = deltaByProduct[String(product.id)];
+        return delta ? { ...product, stock: Number(product.stock || 0) + Number(delta || 0) } : product;
+      })
+    );
+
+    return { stockChanges: preview.stockChanges, stockIssues: [] };
+  };
+
   const buildOrderLogItems = (itemsSnapshot = []) =>
     hydrateBudgetSnapshot(itemsSnapshot).map((item) => ({
       id: item.productId || item.id || null,
@@ -3763,7 +4025,11 @@ export default function PartySupplyApp() {
       price: Number(item.newPrice || 0),
       subtotal: Number(item.newPrice || 0) * (item.product_type === 'weight' ? Number(item.qty || 0) / 1000 : Number(item.qty || 0)),
       product_type: item.product_type || 'quantity',
-      isCustom: Boolean(item.isTemporary),
+      isCombo: Boolean(item.isCombo),
+      isDiscount: Boolean(item.isDiscount),
+      isCustom: Boolean(item.isTemporary && !item.isCombo && !item.isDiscount),
+      originalOfferId: item.originalOfferId || null,
+      productsIncluded: Array.isArray(item.productsIncluded) ? item.productsIncluded : [],
     }));
 
   const buildBudgetChanges = (previousRecord, nextRecord) => {
@@ -3887,38 +4153,31 @@ export default function PartySupplyApp() {
       product_title: item.title,
       quantity: item.qty,
       price: item.newPrice,
+      subtotal:
+        Number(item.newPrice || 0) *
+        (item.product_type === 'weight'
+          ? Number(item.qty || 0) / 1000
+          : Number(item.qty || 0)),
       is_reward: false,
+      product_type: item.product_type || 'quantity',
     }));
 
     await insertRowsWithSchemaFallback('sale_items', itemsPayload);
 
     let stockChanges = [];
     if (!skipStockDeduction) {
-      stockChanges = Object.entries(requiredStock)
-        .map(([id, qtyToDeduct]) => {
-          const product = inventory.find((entry) => String(entry.id) === String(id));
-          if (!product) return null;
-          const stockBefore = Number(product.stock || 0);
-          return {
-            productId: product.id,
-            title: product.title,
-            product_type: product.product_type || 'quantity',
-            quantitySold: Number(qtyToDeduct || 0),
-            stockBefore,
-            stockAfter: stockBefore - Number(qtyToDeduct || 0),
-          };
-        })
-        .filter(Boolean);
-
-      for (const [id, qtyToDeduct] of Object.entries(requiredStock)) {
-        const product = inventory.find((entry) => String(entry.id) === String(id));
-        if (product) {
-          await supabase
-            .from('products')
-            .update({ stock: Number(product.stock || 0) - Number(qtyToDeduct || 0) })
-            .eq('id', id);
-        }
+      const deltaByProduct = Object.fromEntries(
+        Object.entries(requiredStock).map(([id, qty]) => [id, -Number(qty || 0)])
+      );
+      const { stockChanges: appliedStockChanges, stockIssues: finalizeStockIssues } =
+        await applyOrderStockDelta(deltaByProduct);
+      if (finalizeStockIssues.length > 0) {
+        throw new Error(`No hay stock suficiente para completar el pedido: ${finalizeStockIssues.join(', ')}`);
       }
+      stockChanges = appliedStockChanges.map((change) => ({
+        ...change,
+        quantitySold: change.quantityReserved || change.quantityChanged || 0,
+      }));
     }
 
     let updatedClientForHistory = null;
@@ -3939,15 +4198,6 @@ export default function PartySupplyApp() {
       }
     }
 
-    if (!skipStockDeduction) {
-      setInventory((prev) =>
-        prev.map((product) => {
-          const qtyToDeduct = requiredStock[String(product.id)];
-          return qtyToDeduct ? { ...product, stock: Number(product.stock || 0) - Number(qtyToDeduct || 0) } : product;
-        })
-      );
-    }
-
     const now = new Date();
     const historyItems = items.map((item) => ({
       id: item.productId || item.id,
@@ -3956,10 +4206,18 @@ export default function PartySupplyApp() {
       quantity: item.qty,
       qty: item.qty,
       price: item.newPrice,
+      subtotal:
+        Number(item.newPrice || 0) *
+        (item.product_type === 'weight'
+          ? Number(item.qty || 0) / 1000
+          : Number(item.qty || 0)),
       isReward: false,
       product_type: item.product_type || 'quantity',
-      isCustom: Boolean(item.isTemporary),
-      isCombo: false,
+      isCombo: Boolean(item.isCombo),
+      isDiscount: Boolean(item.isDiscount),
+      isCustom: Boolean(item.isTemporary && !item.isCombo && !item.isDiscount),
+      originalOfferId: item.originalOfferId || null,
+      productsIncluded: Array.isArray(item.productsIncluded) ? item.productsIncluded : [],
       category: item.category || null,
     }));
 
@@ -4008,12 +4266,14 @@ export default function PartySupplyApp() {
             ? Number(item.quantity || 0) / 1000
             : Number(item.quantity || 0)),
         isReward: false,
+        isDiscount: Boolean(item.isDiscount),
+        type: item.isDiscount ? 'discount' : undefined,
         product_type: item.product_type || 'quantity',
         isCustom: Boolean(item.isCustom),
-      isCombo: false,
-      isDiscount: false,
-      productsIncluded: [],
-    }));
+        isCombo: Boolean(item.isCombo),
+        originalOfferId: item.originalOfferId || null,
+        productsIncluded: Array.isArray(item.productsIncluded) ? item.productsIncluded : [],
+      }));
 
     await addLog(
       'Venta Realizada',
@@ -4182,7 +4442,7 @@ export default function PartySupplyApp() {
         Number(orderRecord.paidTotal || 0) < Number(orderRecord.totalAmount || 0) &&
         Number(orderRecord.paidTotal || 0) + paymentAmount >= Number(orderRecord.totalAmount || 0);
 
-      if (isFirstPayment || isCrossingToFullyPaid) {
+      if (isFirstPayment || (isCrossingToFullyPaid && !wasStockReserved)) {
         const { stockIssues } = getOrderStockIssues(orderRecord);
         if (stockIssues.length > 0) {
           showNotification('error', 'Stock Insuficiente', `No se puede registrar el pago del pedido: ${stockIssues.join(', ')}`);
@@ -5234,9 +5494,105 @@ export default function PartySupplyApp() {
   const cycleCashExpenses = cycleExpenses
     .filter(e => e.paymentMethod === 'Efectivo')
     .reduce((acc, exp) => acc + (Number(exp.amount) || 0), 0);
-  const cycleCashSales = cycleTransactions
-    .filter(t => t.payment === 'Efectivo')
-    .reduce((acc, t) => acc + (Number(t.total) || 0), 0);
+  const getTransactionPaymentTotals = (tx) =>
+    getPaymentMethodTotals(
+      tx?.paymentBreakdown,
+      tx?.primaryPaymentMethod || tx?.payment,
+      tx?.installments,
+      tx?.cashReceived,
+      tx?.cashChange,
+      tx?.total,
+    );
+  const getTransactionCashTotal = (tx) => Number(getTransactionPaymentTotals(tx).Efectivo || 0);
+  const getReportLineSubtotal = (item = {}) => {
+    const explicitSubtotal = Number(item.subtotal ?? item.lineSubtotal ?? item.line_total ?? item.lineTotal);
+    if (Number.isFinite(explicitSubtotal) && explicitSubtotal !== 0) return explicitSubtotal;
+    return (Number(item.price) || 0) * (Number(item.qty || item.quantity || 0) || 0);
+  };
+  const getSaleLineSubtotal = (item = {}) => {
+    const explicitSubtotal = Number(item.subtotal ?? item.lineSubtotal ?? item.line_subtotal);
+    if (Number.isFinite(explicitSubtotal) && explicitSubtotal !== 0) return explicitSubtotal;
+    const price = Number(item.price || 0);
+    const qty = Number(item.qty || item.quantity || 0);
+    if ((item.product_type || 'quantity') !== 'weight') return price * qty;
+    return price >= 100 ? price * (qty / 1000) : price * qty;
+  };
+  const getSaleItemsSubtotal = (items = []) =>
+    (items || []).reduce((acc, item) => acc + getSaleLineSubtotal(item), 0);
+  const getEditedTransactionTotal = (items = [], payment = 'Efectivo') => {
+    const subtotal = getSaleItemsSubtotal(items);
+    return payment === 'Credito' ? subtotal * 1.1 : subtotal;
+  };
+  const getReportStockChangeId = (change = {}) => change.productId || change.product_id || change.id || null;
+  const getReportStockChangeQty = (change = {}) =>
+    Number(change.quantitySold || change.quantityReserved || change.quantityChanged || 0) || 0;
+  const buildReportRevenueByProduct = (tx = {}) =>
+    (Array.isArray(tx.items) ? tx.items : []).reduce((acc, item) => {
+      if (item?.isReward || item?.isDiscount || item?.isCustom) return acc;
+      const subtotal = getReportLineSubtotal(item);
+
+      if (item?.isCombo && Array.isArray(item.productsIncluded) && item.productsIncluded.length > 0) {
+        const comboQty = Number(item.qty || item.quantity || 1) || 1;
+        const includedWeights = item.productsIncluded.map((includedItem) => {
+          const includedQty =
+            (Number(includedItem.quantity ?? includedItem.qty ?? 0) || 0) * comboQty;
+          const includedPrice = Number(includedItem.price || 0) || 0;
+          const weight = Math.max(includedQty * includedPrice, includedQty, 1);
+          return { includedItem, weight };
+        });
+        const totalWeight = includedWeights.reduce((sum, entry) => sum + entry.weight, 0) || includedWeights.length || 1;
+
+        includedWeights.forEach(({ includedItem, weight }) => {
+          const includedId = getOrderStockProductId(includedItem);
+          if (shouldSkipOrderStockProductId(includedId)) return;
+          acc[String(includedId)] = (acc[String(includedId)] || 0) + (subtotal * weight) / totalWeight;
+        });
+        return acc;
+      }
+
+      const productId = item.productId || item.id || item.product_id || null;
+      if (shouldSkipOrderStockProductId(productId)) return acc;
+      acc[String(productId)] = (acc[String(productId)] || 0) + subtotal;
+      return acc;
+    }, {});
+  const buildReportStockLinesFromChanges = (tx = {}) => {
+    const revenueByProduct = buildReportRevenueByProduct(tx);
+    return (Array.isArray(tx.stockChanges) ? tx.stockChanges : [])
+      .map((change) => {
+        const productId = getReportStockChangeId(change);
+        const qty = getReportStockChangeQty(change);
+        if (!productId || qty <= 0) return null;
+        const inventoryItem = inventory.find((product) => String(product.id) === String(productId));
+        const cost = Number(inventoryItem?.purchasePrice ?? change.purchasePrice ?? change.cost ?? 0) || 0;
+        return {
+          id: productId,
+          title: change.title || inventoryItem?.title || `Producto #${productId}`,
+          qty,
+          revenue: Number(revenueByProduct[String(productId)] || 0),
+          cost: cost * qty,
+        };
+      })
+      .filter(Boolean);
+  };
+  const buildFallbackReportItemLines = (tx = {}) =>
+    (Array.isArray(tx.items) ? tx.items : [])
+      .filter((item) => !item?.isReward && !item?.isDiscount && !item?.isCustom)
+      .map((item) => {
+        const productId = item.productId || item.id || item.product_id || item.title;
+        const qty = Number(item.qty || item.quantity || 0) || 0;
+        if (!productId || qty <= 0) return null;
+        const inventoryItem = inventory.find((product) => String(product.id) === String(item.productId || item.id));
+        const cost = Number(inventoryItem?.purchasePrice || 0) || 0;
+        return {
+          id: productId,
+          title: item.title || inventoryItem?.title || 'Producto',
+          qty,
+          revenue: getReportLineSubtotal(item),
+          cost: cost * qty,
+        };
+      })
+      .filter(Boolean);
+  const cycleCashSales = cycleTransactions.reduce((acc, tx) => acc + getTransactionCashTotal(tx), 0);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -6129,7 +6485,7 @@ export default function PartySupplyApp() {
     
     const cycleTransactions = cycleStart
       ? safeTransactions.filter(tx => {
-          if (!tx || tx.status === 'voided') return false;
+          if (!tx || tx.status === 'voided' || tx.isTest) return false;
           const txDate = parseTxDate(tx);
           return txDate && txDate >= cycleStart;
         })
@@ -6137,10 +6493,11 @@ export default function PartySupplyApp() {
 
     const cycleExpenses = cycleStart
       ? expenses.filter(exp => {
+          if (exp?.isTest) return false;
           const expDate = parseExpDate(exp);
           return expDate && expDate >= cycleStart;
         })
-      : expenses;
+      : expenses.filter(exp => !exp?.isTest);
 
     const cycleTotalSales = cycleTransactions.reduce((acc, tx) => acc + (Number(tx.total) || 0), 0);
     const cycleSalesCount = cycleTransactions.length;
@@ -6148,30 +6505,24 @@ export default function PartySupplyApp() {
     const itemsSoldMap = {};
     let totalCost = 0; 
     cycleTransactions.forEach(tx => {
-      tx.items.forEach(item => {
-        const inventoryItem = inventory.find(p => String(p.id) === String(item.productId || item.id));
-        const cost = Number(inventoryItem?.purchasePrice || 0);
-        if (!itemsSoldMap[item.id]) itemsSoldMap[item.id] = { id: item.id, title: item.title, qty: 0, revenue: 0, cost: 0 };
-        const qty = Number(item.qty || item.quantity || 0);
-        const price = Number(item.price || 0);
-        itemsSoldMap[item.id].qty += qty;
-        itemsSoldMap[item.id].revenue += (price * qty); 
-        itemsSoldMap[item.id].cost += (cost * qty);
-        totalCost += (cost * qty);
+      const stockLines = buildReportStockLinesFromChanges(tx);
+      const fallbackLines = stockLines.length > 0 ? [] : buildFallbackReportItemLines(tx);
+      const reportLines = stockLines.length > 0 ? stockLines : fallbackLines;
+      reportLines.forEach((line) => {
+        if (!itemsSoldMap[line.id]) {
+          itemsSoldMap[line.id] = { id: line.id, title: line.title, qty: 0, revenue: 0, cost: 0 };
+        }
+        itemsSoldMap[line.id].qty += Number(line.qty || 0);
+        itemsSoldMap[line.id].revenue += Number(line.revenue || 0);
+        itemsSoldMap[line.id].cost += Number(line.cost || 0);
+        totalCost += Number(line.cost || 0);
       });
     });
     const itemsSoldList = Object.values(itemsSoldMap);
 
     const paymentMethodsSummary = {};
     cycleTransactions.forEach(tx => {
-      const perMethodTotals = getPaymentMethodTotals(
-        tx.paymentBreakdown,
-        tx.primaryPaymentMethod || tx.payment,
-        tx.installments,
-        tx.cashReceived,
-        tx.cashChange,
-        tx.total,
-      );
+      const perMethodTotals = getTransactionPaymentTotals(tx);
       Object.entries(perMethodTotals).forEach(([method, amount]) => {
         if (!paymentMethodsSummary[method]) paymentMethodsSummary[method] = 0;
         paymentMethodsSummary[method] += Number(amount || 0);
@@ -6182,17 +6533,7 @@ export default function PartySupplyApp() {
     const cashExpenses = cycleExpenses.filter(e => e.paymentMethod === 'Efectivo').reduce((acc, curr) => acc + Number(curr.amount), 0);
     const averageTicket = cycleSalesCount > 0 ? (cycleTotalSales / cycleSalesCount) : 0;
     const netProfit = cycleTotalSales - totalCost - totalExpenses;
-    const cashSales = cycleTransactions.reduce((acc, tx) => {
-      const perMethodTotals = getPaymentMethodTotals(
-        tx.paymentBreakdown,
-        tx.primaryPaymentMethod || tx.payment,
-        tx.installments,
-        tx.cashReceived,
-        tx.cashChange,
-        tx.total,
-      );
-      return acc + Number(perMethodTotals.Efectivo || 0);
-    }, 0);
+    const cashSales = cycleTransactions.reduce((acc, tx) => acc + getTransactionCashTotal(tx), 0);
     const finalPhysicalBalance = openingBalance + cashSales - cashExpenses;
 
     const cycleNewClients = (members || [])
@@ -6789,6 +7130,10 @@ export default function PartySupplyApp() {
 
   const handleDuplicateProduct = async (originalProduct) => {
     if (blockIfOfflineReadonly('duplicar productos')) return;
+    if (!hasPermission(currentUserRef.current, 'inventory.create')) {
+      showNotification('error', 'Permiso requerido', 'Necesitas permiso para crear productos para duplicarlos.');
+      return;
+    }
     try {
       const payload = {
         title: `${originalProduct.title} (copia)`,
@@ -6927,35 +7272,9 @@ export default function PartySupplyApp() {
     const primaryInstallments = paymentInfo.installments;
     
     // ? MAGIA: Agrupamos todo el stock requerido (productos sueltos + los que están adentro de combos)
-    const requiredStock = {};
-    cart.forEach(c => {
-      if (c.isReward || c.isCustom || c.isDiscount) return; // IGNORAMOS REWARDS, CUSTOM Y DESCUENTOS PUROS
-      
-      if (c.isCombo && c.productsIncluded) {
-        c.productsIncluded.forEach(includedItem => {
-          const includedQuantity = Number(
-            includedItem.quantity ??
-            includedItem.qty ??
-            (includedItem.product_type === 'weight' ? 1000 : 1)
-          ) || (includedItem.product_type === 'weight' ? 1000 : 1);
-          requiredStock[includedItem.id] = (requiredStock[includedItem.id] || 0) + (includedQuantity * Number(c.quantity || 1));
-        });
-      } else if (!c.isCombo) {
-        requiredStock[c.id] = (requiredStock[c.id] || 0) + c.quantity;
-      }
-    });
-
-    const stockIssues = [];
-    Object.keys(requiredStock).forEach(id => {
-      // Ignoramos IDs generados manualmente que se hayan colado
-      if (String(id).startsWith('custom_') || String(id).startsWith('desc_') || String(id).startsWith('combo_')) return;
-      
-      // CAST A STRING PARA EVITAR ERROR DE TIPADO AL BUSCAR EN INVENTORY
-      const p = inventory.find(x => String(x.id) === String(id));
-      if (!p || p.stock < requiredStock[id]) {
-        stockIssues.push(p ? p.title : 'Desconocido');
-      }
-    });
+    const requiredStock = buildSaleRequiredStock(cart);
+    const checkoutStockDelta = buildSaleStockDelta(requiredStock, -1);
+    const { stockIssues } = getSaleStockDeltaPreview(checkoutStockDelta);
 
     if (stockIssues.length > 0) { 
       showNotification('error', 'Falta Stock', `Revisar: ${stockIssues.join(', ')}`); 
@@ -7000,6 +7319,7 @@ export default function PartySupplyApp() {
           product_title: i.title,
           quantity: i.quantity,
           price: i.price,
+          subtotal: (Number(i.price) || 0) * (Number(i.quantity) || 0),
           is_reward: !!i.isReward,
           product_type: i.product_type || 'quantity',
         };
@@ -7010,30 +7330,9 @@ export default function PartySupplyApp() {
         throw new Error(`Supabase rechaz\u00f3 los productos de la venta: ${saleItemsErr.message}`);
       }
 
-      const stockChanges = Object.entries(requiredStock)
-        .map(([id, qtyToDeduct]) => {
-          const product = inventory.find((p) => String(p.id) === String(id));
-          if (!product) return null;
-
-          const beforeStock = Number(product.stock || 0);
-          return {
-            productId: product.id,
-            title: product.title,
-            product_type: product.product_type || 'quantity',
-            quantitySold: Number(qtyToDeduct || 0),
-            stockBefore: beforeStock,
-            stockAfter: beforeStock - Number(qtyToDeduct || 0),
-          };
-        })
-        .filter(Boolean);
-
-      // ? Descontamos stock usando el mapa que agrupamos al principio
-      for (const [id, qtyToDeduct] of Object.entries(requiredStock)) {
-         // CAST A STRING PARA EVITAR ERROR DE TIPADO
-         const prod = inventory.find(p => String(p.id) === String(id));
-         if (prod) {
-             await supabase.from('products').update({ stock: prod.stock - qtyToDeduct }).eq('id', id);
-         }
+      const { stockChanges, stockIssues: stockApplyIssues } = await applySaleStockDelta(checkoutStockDelta);
+      if (stockApplyIssues.length > 0) {
+        throw new Error(`Stock insuficiente: ${stockApplyIssues.join(', ')}`);
       }
 
       let updatedClientForTicket = null;
@@ -7071,12 +7370,6 @@ export default function PartySupplyApp() {
           );
       }
 
-      // ? Actualizamos el inventario local en React
-      setInventory(inventory.map(p => {
-        const qtyToDeduct = requiredStock[p.id];
-        return qtyToDeduct ? { ...p, stock: p.stock - qtyToDeduct } : p;
-      }));
-
       const tx = {
         id: sale.id,
         date: formatDateAR(new Date()),
@@ -7106,11 +7399,7 @@ export default function PartySupplyApp() {
         title: item.title,
         quantity: item.quantity,
         price: item.price,
-        subtotal:
-          (Number(item.price) || 0) *
-          ((item.product_type || 'quantity') === 'weight'
-            ? Number(item.quantity || 0) / 1000
-            : Number(item.quantity || 0)),
+        subtotal: (Number(item.price) || 0) * (Number(item.quantity) || 0),
         isReward: item.isReward || false,
         isDiscount: item.isDiscount || false,
         type: item.type || (item.isDiscount ? 'discount' : undefined),
@@ -7215,36 +7504,13 @@ export default function PartySupplyApp() {
       // 2. FLUJO DE ANULACIÓN NORMAL
       // ==========================================
       Swal.fire({ title: 'Anulando...', text: 'Paso 1: Devolviendo stock...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
-      const updatedInventory = [...inventory];
-      const restoredStockChanges = [];
-      for (const item of tx.items) {
-        if (!item.isReward && !item.isCustom) { 
-          const prodIndex = updatedInventory.findIndex(p => 
-               (item.productId && String(p.id) === String(item.productId)) || 
-               (item.id && String(p.id) === String(item.id)) ||
-               p.title === item.title
-          );
-          if (prodIndex !== -1) {
-            const prodId = updatedInventory[prodIndex].id;
-            const qtyToReturn = Number(item.quantity || item.qty || 0);
-            const beforeStock = Number(updatedInventory[prodIndex].stock || 0);
-            const newStock = beforeStock + qtyToReturn;
-            restoredStockChanges.push({
-              productId: prodId,
-              title: updatedInventory[prodIndex].title,
-              product_type: updatedInventory[prodIndex].product_type || 'quantity',
-              quantityRestored: qtyToReturn,
-              stockBefore: beforeStock,
-              stockAfter: newStock,
-            });
-            updatedInventory[prodIndex] = { ...updatedInventory[prodIndex], stock: newStock };
-            
-            const { error: stockErr } = await supabase.from('products').update({ stock: newStock }).eq('id', prodId);
-            if (stockErr) throw new Error(`Fallo actualizando stock: ${stockErr.message}`);
-          }
-        }
+      const refundRequiredStock = buildSaleRequiredStock(tx.items || []);
+      const refundStockDelta = buildSaleStockDelta(refundRequiredStock, 1);
+      const { stockChanges: restoredStockChanges, stockIssues: refundStockIssues } =
+        await applySaleStockDelta(refundStockDelta);
+      if (refundStockIssues.length > 0) {
+        throw new Error(`No se pudo restaurar stock: ${refundStockIssues.join(', ')}`);
       }
-      setInventory(updatedInventory);
 
       Swal.fire({ title: 'Anulando...', text: 'Paso 2: Ajustando puntos del socio...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       const clientMemberNumber = tx.client?.memberNumber || tx.client?.number || tx.memberNumber;
@@ -7363,27 +7629,9 @@ export default function PartySupplyApp() {
 
     if (!result.isConfirmed) return;
 
-    const stockIssues = [];
-    for (const item of tx.items) {
-      if (!item.isReward && !item.isCustom) {
-        const prod = inventory.find(p => 
-           (item.productId && String(p.id) === String(item.productId)) || 
-           (item.id && String(p.id) === String(item.id)) ||
-           (item.title && p.title === item.title)
-        );
-        
-        const qtyNeeded = Number(item.qty || item.quantity || 0);
-        
-        if (!prod) {
-            stockIssues.push(`"${item.title}" (Producto ya no existe en inventario)`);
-        } else {
-            const currentStock = Number(prod.stock || 0);
-            if (currentStock < qtyNeeded) {
-                stockIssues.push(`"${item.title}" (Faltan ${qtyNeeded - currentStock})`);
-            }
-        }
-      }
-    }
+    const restoreRequiredStock = buildSaleRequiredStock(tx.items || []);
+    const restoreStockDelta = buildSaleStockDelta(restoreRequiredStock, -1);
+    const { stockIssues } = getSaleStockDeltaPreview(restoreStockDelta);
     
     if (stockIssues.length > 0) {
       Swal.fire('Stock Insuficiente', `No hay stock suficiente actualmente para restaurar esta venta:\n\n${stockIssues.join('\n')}`, 'error');
@@ -7455,24 +7703,10 @@ export default function PartySupplyApp() {
           await insertRowsWithSchemaFallback('sale_items', itemsPayload);
       }
 
-      const updatedInventory = [...inventory];
-      for (const item of tx.items) {
-         if (!item.isReward && !item.isCustom) {
-            const prodIndex = updatedInventory.findIndex(p => 
-               (item.productId && String(p.id) === String(item.productId)) || 
-               (item.id && String(p.id) === String(item.id)) ||
-               p.title === item.title
-            );
-            if (prodIndex !== -1) {
-               const prodId = updatedInventory[prodIndex].id;
-               const qtyToDeduct = Number(item.qty || item.quantity || 0);
-               const newStock = updatedInventory[prodIndex].stock - qtyToDeduct;
-               updatedInventory[prodIndex] = { ...updatedInventory[prodIndex], stock: newStock };
-               await supabase.from('products').update({ stock: newStock }).eq('id', prodId);
-            }
-         }
+      const { stockChanges, stockIssues: restoreApplyIssues } = await applySaleStockDelta(restoreStockDelta);
+      if (restoreApplyIssues.length > 0) {
+        throw new Error(`Stock insuficiente: ${restoreApplyIssues.join(', ')}`);
       }
-      setInventory(updatedInventory);
 
       if (clientDb) {
           const previousPoints = clientDb.points;
@@ -7514,6 +7748,7 @@ export default function PartySupplyApp() {
          pointsEarned: tx.pointsEarned || 0,
          pointsSpent: tx.pointsSpent || 0,
          pointsChange: pointsChange,
+         stockChanges,
          itemsRestored: tx.items.map(i => ({ title: i.title, quantity: i.qty || i.quantity })),
          itemsSnapshot: tx.items.map(i => ({
            id: i.id,
@@ -7526,7 +7761,8 @@ export default function PartySupplyApp() {
            isCustom: !!i.isCustom,
            isCombo: !!i.isCombo,
            category: i.category || null,
-           categories: Array.isArray(i.categories) ? i.categories : null
+           categories: Array.isArray(i.categories) ? i.categories : null,
+           productsIncluded: Array.isArray(i.productsIncluded) ? i.productsIncluded : undefined
          }))
       };
       
@@ -7562,10 +7798,11 @@ export default function PartySupplyApp() {
     const existingItemIndex = editingTransaction.items.findIndex(
       (i) => i.productId === product.id || (i.id === product.id && !i.productId)
     );
+    const qtyToAdd = product.product_type === 'weight' ? 1000 : 1;
     let updatedItems;
     if (existingItemIndex !== -1) {
       updatedItems = editingTransaction.items.map((i, idx) =>
-        idx === existingItemIndex ? { ...i, qty: (Number(i.qty) || 0) + 1 } : i
+        idx === existingItemIndex ? { ...i, qty: (Number(i.qty) || 0) + qtyToAdd } : i
       );
     } else {
       const maxUniqueId = Math.max(0, ...editingTransaction.items.map((i) => i.uniqueId || 0));
@@ -7577,15 +7814,12 @@ export default function PartySupplyApp() {
           id: product.id,
           title: product.title,
           price: Number(product.price) || 0,
-          qty: 1,
+          qty: qtyToAdd,
+          product_type: product.product_type || 'quantity',
         },
       ];
     }
-    const subtotal = updatedItems.reduce(
-      (acc, item) => acc + (Number(item.price) || 0) * (Number(item.qty) || 0),
-      0
-    );
-    const newTotal = editingTransaction.payment === 'Credito' ? subtotal * 1.1 : subtotal;
+    const newTotal = getEditedTransactionTotal(updatedItems, editingTransaction.payment);
     setEditingTransaction({ ...editingTransaction, items: updatedItems, total: newTotal });
     setTransactionSearch('');
   };
@@ -7597,8 +7831,7 @@ export default function PartySupplyApp() {
       showNotification('warning', 'Operación Inválida', 'No puedes dejar la orden vacía.');
       return;
     }
-    const subtotal = updatedItems.reduce((acc, item) => acc + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
-    const newTotal = editingTransaction.payment === 'Credito' ? subtotal * 1.1 : subtotal;
+    const newTotal = getEditedTransactionTotal(updatedItems, editingTransaction.payment);
     setEditingTransaction({ ...editingTransaction, items: updatedItems, total: newTotal });
   };
 
@@ -7612,15 +7845,13 @@ export default function PartySupplyApp() {
       }
       return item;
     });
-    const subtotal = updatedItems.reduce((acc, item) => acc + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
-    const newTotal = editingTransaction.payment === 'Credito' ? subtotal * 1.1 : subtotal;
+    const newTotal = getEditedTransactionTotal(updatedItems, editingTransaction.payment);
     setEditingTransaction({ ...editingTransaction, items: updatedItems, total: newTotal });
   };
 
   const handleEditTxPaymentChange = (newPayment) => {
     if (!editingTransaction) return;
-    const subtotal = editingTransaction.items.reduce((acc, item) => acc + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
-    const newTotal = newPayment === 'Credito' ? subtotal * 1.1 : subtotal;
+    const newTotal = getEditedTransactionTotal(editingTransaction.items, newPayment);
     const nextCashReceived = newPayment === 'Efectivo'
       ? Number(editingTransaction.cashReceived || newTotal)
       : 0;
@@ -7642,15 +7873,16 @@ export default function PartySupplyApp() {
     const originalTx =
       transactions.find((t) => String(t.id) === String(editingTransaction.id)) ||
       editingTransaction;
+    const finalTotal = getEditedTransactionTotal(editingTransaction.items, editingTransaction.payment);
 
     const safeCashReceived = editingTransaction.payment === 'Efectivo'
-      ? Number(editingTransaction.cashReceived ?? editingTransaction.total ?? 0)
+      ? Number(editingTransaction.cashReceived ?? finalTotal ?? 0)
       : 0;
     const safeCashChange = editingTransaction.payment === 'Efectivo'
-      ? Math.max(0, safeCashReceived - Number(editingTransaction.total || 0))
+      ? Math.max(0, safeCashReceived - Number(finalTotal || 0))
       : 0;
 
-    if (editingTransaction.payment === 'Efectivo' && safeCashReceived < Number(editingTransaction.total || 0)) {
+    if (editingTransaction.payment === 'Efectivo' && safeCashReceived < Number(finalTotal || 0)) {
       showNotification('warning', 'Monto insuficiente', 'El monto recibido en efectivo debe cubrir el total luego de la modificación.');
       return;
     }
@@ -7660,7 +7892,7 @@ export default function PartySupplyApp() {
 
       // 1. Detección de cambios básicos
       const changes = {};
-      if (originalTx.total !== editingTransaction.total) changes.total = { old: originalTx.total, new: editingTransaction.total };
+      if (originalTx.total !== finalTotal) changes.total = { old: originalTx.total, new: finalTotal };
       if (originalTx.payment !== editingTransaction.payment) changes.payment = { old: originalTx.payment, new: editingTransaction.payment };
       if (Number(originalTx.installments || 0) !== Number(editingTransaction.installments || 0)) {
         changes.installments = { old: Number(originalTx.installments || 0), new: Number(editingTransaction.installments || 0) };
@@ -7677,28 +7909,19 @@ export default function PartySupplyApp() {
           ...i,
           qty: Number(i.qty || i.quantity || 0),
           price: Number(i.price || 0),
+          subtotal: getSaleLineSubtotal(i),
           title: i.title || i.product_title || i.name || 'Producto'
       }));
 
       // [Cálculo de diferencias para stock]
-      const productChanges = [];
-      const oldMap = {};
-      originalTx.items.forEach(i => { oldMap[i.id || i.productId] = Number(i.qty || i.quantity || 0); });
-      
-      const newMap = {};
-      finalItems.forEach(i => { if (i.id || i.productId) newMap[i.id || i.productId] = i.qty; });
-
-      const allIds = new Set([...Object.keys(oldMap), ...Object.keys(newMap)]);
-      allIds.forEach(id => {
-         if (id && id !== 'null' && id !== 'undefined') {
-             const oldQty = oldMap[id] || 0;
-             const newQty = newMap[id] || 0;
-             if (oldQty !== newQty) {
-                const itemDef = finalItems.find(x => String(x.id || x.productId) === String(id)) || originalTx.items.find(x => String(x.id || x.productId) === String(id));
-                productChanges.push({ id, title: itemDef?.title || 'Producto', oldQty, newQty, diff: newQty - oldQty });
-             }
-         }
-      });
+      const previousRequiredStock = buildSaleRequiredStock(originalTx.items || []);
+      const nextRequiredStock = buildSaleRequiredStock(finalItems);
+      const stockDeltaByProduct = buildSaleStockDiffDelta(previousRequiredStock, nextRequiredStock);
+      const productChanges = buildSaleProductChanges(previousRequiredStock, nextRequiredStock);
+      const { stockIssues: editStockIssues } = getSaleStockDeltaPreview(stockDeltaByProduct);
+      if (editStockIssues.length > 0) {
+        throw new Error(`Stock insuficiente para guardar la modificacion: ${editStockIssues.join(', ')}`);
+      }
 
       // [Cálculo de puntos]
       let pointsChange = null;
@@ -7708,7 +7931,7 @@ export default function PartySupplyApp() {
       if (clientObj && typeof clientObj === 'object' && clientObj.name !== 'No asociado') {
          cName = clientObj.name; cNum = clientObj.memberNumber;
          const oldPts = Number(originalTx.pointsEarned || 0);
-         const newPts = Math.floor(editingTransaction.total / 500); 
+         const newPts = Math.floor(finalTotal / 500); 
          if (oldPts !== newPts) pointsChange = { previous: oldPts, new: newPts, diff: newPts - oldPts };
       } else if (typeof clientObj === 'string' && clientObj !== 'No asociado') {
          cName = clientObj;
@@ -7723,8 +7946,9 @@ export default function PartySupplyApp() {
         'sales',
         editingTransaction.id,
         {
-          total: editingTransaction.total,
+          total: getEditedTransactionTotal(finalItems, editingTransaction.payment),
           payment_method: editingTransaction.payment,
+          payment_breakdown: editingTransaction.paymentBreakdown || null,
           installments: editingTransaction.installments || 0,
           points_earned: pointsChange ? pointsChange.new : originalTx.pointsEarned,
           cash_received: safeCashReceived,
@@ -7749,6 +7973,8 @@ export default function PartySupplyApp() {
           product_title: i.title,
           quantity: i.qty,
           price: i.price,
+          subtotal: i.subtotal,
+          product_type: i.product_type || 'quantity',
           is_reward: !!i.isReward
         };
       });
@@ -7760,13 +7986,9 @@ export default function PartySupplyApp() {
       }
 
       // D. Actualizar Stock
-      for (const change of productChanges) {
-        if (change.diff !== 0) {
-          const prod = inventory.find(p => String(p.id) === String(change.id));
-          if (prod) {
-            await supabase.from('products').update({ stock: prod.stock - change.diff }).eq('id', change.id);
-          }
-        }
+      const { stockChanges, stockIssues: editApplyIssues } = await applySaleStockDelta(stockDeltaByProduct);
+      if (editApplyIssues.length > 0) {
+        throw new Error(`Stock insuficiente para guardar la modificacion: ${editApplyIssues.join(', ')}`);
       }
 
       // E. Actualizar Puntos Cliente
@@ -7793,6 +8015,7 @@ export default function PartySupplyApp() {
       // F. Sincronizar UI Inmediatamente
       const finalTx = {
          ...editingTransaction,
+         total: finalTotal,
          items: finalItems, 
          pointsEarned: pointsChange ? pointsChange.new : originalTx.pointsEarned,
          cashReceived: safeCashReceived,
@@ -7808,12 +8031,6 @@ export default function PartySupplyApp() {
           : [finalTx, ...prev];
       });
 
-      setInventory(inventory.map(p => {
-         const change = productChanges.find(c => String(c.id) === String(p.id));
-         if (change) return { ...p, stock: p.stock - change.diff };
-         return p;
-      }));
-
       // G. Log
       const logDetails = {
          transactionId: editingTransaction.id, client: cName, memberNumber: cNum,
@@ -7821,7 +8038,7 @@ export default function PartySupplyApp() {
          installments: editingTransaction.installments || 0,
          cashReceived: safeCashReceived,
          cashChange: safeCashChange,
-         changes, productChanges, itemsSnapshot: finalItems, pointsChange
+         changes, productChanges, stockChanges, itemsSnapshot: finalItems, pointsChange
       };
       addLog('Modificación Pedido', logDetails, editReason || 'Ajuste manual');
 
