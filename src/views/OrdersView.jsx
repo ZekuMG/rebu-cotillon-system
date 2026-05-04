@@ -67,6 +67,37 @@ const createOrderPaymentDraft = (amount = 0, preferredMethod = 'Efectivo') => ({
   ],
 });
 
+const setOrderPaymentDraftAmount = (draft, value) => {
+  const amount = Math.max(roundOrderPaymentValue(value || 0), 0);
+  const paymentLines = Array.isArray(draft?.paymentLines) ? draft.paymentLines : [];
+  const primaryLine = paymentLines[0] || createPaymentLine({ id: 'order_primary', method: 'Efectivo', amount });
+
+  if (!draft?.isSplitPayment) {
+    return {
+      ...draft,
+      amountInput: value,
+      paymentLines: [{ ...primaryLine, amount }],
+    };
+  }
+
+  const secondaryLine = paymentLines[1] || createPaymentLine({
+    id: 'order_secondary',
+    method: primaryLine.method === 'Efectivo' ? 'Debito' : 'Efectivo',
+    amount: 0,
+  });
+  const primaryAmount = Math.min(Math.max(roundOrderPaymentValue(primaryLine.amount || 0), 0), amount);
+  const secondaryAmount = Math.max(roundOrderPaymentValue(amount - primaryAmount), 0);
+
+  return {
+    ...draft,
+    amountInput: value,
+    paymentLines: [
+      { ...primaryLine, amount: primaryAmount },
+      { ...secondaryLine, amount: secondaryAmount },
+    ],
+  };
+};
+
 const getDraftBaseLine = (line, fallbackMethod = 'Efectivo', fallbackAmount = 0) =>
   createPaymentLine({
     id: line?.id,
@@ -82,7 +113,7 @@ const getNormalizedOrderDraftLines = (draft) => {
   const primaryBase = getDraftBaseLine(configuredLines[0], 'Efectivo', totalAmount);
 
   if (!draft?.isSplitPayment) {
-    return [getDraftBaseLine(primaryBase, primaryBase.method || 'Efectivo', totalAmount)];
+    return [getDraftBaseLine({ ...primaryBase, amount: totalAmount }, primaryBase.method || 'Efectivo', totalAmount)];
   }
 
   const secondaryBase = getDraftBaseLine(
@@ -160,15 +191,15 @@ const buildRecordView = (record, membersMap, type) => {
   };
 };
 
-function MiniModal({ title, children, onClose }) {
+function MiniModal({ title, children, onClose, maxWidth = 'max-w-md' }) {
   return (
     <div className="fixed inset-0 z-[85] flex items-center justify-center bg-slate-950/70 p-4">
-      <div className="w-full max-w-md rounded-[28px] border border-slate-200 bg-white shadow-2xl">
+      <div className={`w-full ${maxWidth} max-h-[92vh] overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-2xl`}>
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
           <h3 className="text-sm font-black uppercase tracking-[0.16em] text-slate-800">{title}</h3>
           <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-100"><X size={16} /></button>
         </div>
-        <div className="p-4">{children}</div>
+        <div className="max-h-[calc(92vh-58px)] overflow-y-auto p-3 scrollbar-hide">{children}</div>
       </div>
     </div>
   );
@@ -318,7 +349,7 @@ function OrderPaymentEditor({ draft, onChange, maxAmount, title = 'Abono', hint 
           min="0"
           step="0.01"
           value={draft?.amountInput || ''}
-          onChange={(e) => onChange((prev) => ({ ...prev, amountInput: e.target.value }))}
+          onChange={(e) => onChange((prev) => setOrderPaymentDraftAmount(prev, e.target.value))}
           className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none"
           placeholder="0"
         />
@@ -486,9 +517,9 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
   const [paymentDraft, setPaymentDraft] = useState(() => createOrderPaymentDraft(0));
   const [isSavingPayment, setIsSavingPayment] = useState(false);
   const depositAmount = convertPaymentDraft.amountInput;
-  const setDepositAmount = (value) => setConvertPaymentDraft((prev) => ({ ...prev, amountInput: value }));
+  const setDepositAmount = (value) => setConvertPaymentDraft((prev) => setOrderPaymentDraftAmount(prev, value));
   const paymentAmount = paymentDraft.amountInput;
-  const setPaymentAmount = (value) => setPaymentDraft((prev) => ({ ...prev, amountInput: value }));
+  const setPaymentAmount = (value) => setPaymentDraft((prev) => setOrderPaymentDraftAmount(prev, value));
   const { isPending, runAction } = usePendingAction();
   const canCreateBudget = hasPermission(currentUser, 'orders.createBudget');
   const canEditBudget = hasPermission(currentUser, 'orders.editBudget');
@@ -728,8 +759,8 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                 <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar pedido, cliente o teléfono..." className="w-full bg-transparent text-[14px] font-semibold text-slate-700 outline-none placeholder:font-medium placeholder:text-slate-400" />
               </div>
               <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
-                <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 outline-none"><option value="all">Todos los tipos</option><option value="budget">Presupuestos</option><option value="order">Pedidos</option></select>
-                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 outline-none"><option value="all">Todos los estados</option><option value="Presupuesto">Presupuesto</option><option value="Pendiente">Pendiente</option><option value="Señado">Señado</option><option value="Pagado">Pagado</option><option value="Cancelado">Cancelado</option><option value="Retirado">Retirado</option></select>
+                <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 outline-none"><option value="all">Todos</option><option value="budget">Presupuestos</option><option value="order">Pedidos</option></select>
+                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 outline-none"><option value="all">Todos</option><option value="Presupuesto">Presupuesto</option><option value="Pendiente">Pendiente</option><option value="Señado">Señado</option><option value="Pagado">Pagado</option><option value="Cancelado">Cancelado</option><option value="Retirado">Retirado</option></select>
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/70 px-2 py-1.5 scrollbar-hide" onScroll={visibleRecordsFeed.handleScroll}>
@@ -891,8 +922,68 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
 
       <BudgetBuilderModal isOpen={isBudgetModalOpen} onClose={() => { setIsBudgetModalOpen(false); setEditingBudget(null); }} inventory={inventory} categories={categories} members={members} offers={offers} initialRecord={editingBudget} onSave={handleSaveBudget} isSaving={isSavingBudget} />
 
-      {convertTarget && <MiniModal title="Convertir a pedido" onClose={() => { setConvertTarget(null); setConvertPaymentDraft(createOrderPaymentDraft(0)); }}><div className="space-y-3">
-        <label className="block rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2"><span className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400"><CalendarRange size={11} />Fecha de retiro</span><input type="date" value={pickupDate} onChange={(e) => setPickupDate(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none" /></label>
+      {convertTarget && <MiniModal title="Convertir a pedido" maxWidth="max-w-4xl" onClose={() => { setConvertTarget(null); setConvertPaymentDraft(createOrderPaymentDraft(0)); }}><div className="grid gap-3 lg:grid-cols-[0.9fr_1.1fr]">
+        <div className="space-y-2">
+          <div className="rounded-[18px] border border-slate-200 bg-slate-50 p-3">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] text-slate-500">Presupuesto</span>
+              <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 font-mono text-[9px] font-black text-sky-700">{formatRecordCode(convertTarget)}</span>
+            </div>
+            <p className="mt-2 text-[16px] font-black leading-tight text-slate-800">{convertTarget.customerName}</p>
+            <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{convertTarget.customerKind} - {convertTarget.customerPhone}</p>
+            {convertTarget.eventLabel && <p className="mt-1 text-[11px] font-semibold text-slate-500">{convertTarget.eventLabel}</p>}
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="rounded-[14px] border border-slate-200 bg-white px-2.5 py-2">
+                <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Total</p>
+                <p className="mt-0.5 text-[17px] font-black text-slate-800"><FancyPrice amount={convertTarget.totalAmount || 0} /></p>
+              </div>
+              <label className="block rounded-[14px] border border-slate-200 bg-white px-2.5 py-2">
+                <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-[0.1em] text-slate-400"><CalendarRange size={11} />Retiro</span>
+                <input type="date" value={pickupDate} onChange={(e) => setPickupDate(e.target.value)} className="mt-0.5 w-full bg-transparent text-[13px] font-black text-slate-800 outline-none" />
+              </label>
+            </div>
+          </div>
+          <div className="rounded-[18px] border border-slate-200 bg-white p-2">
+            <div className="flex items-center justify-between gap-2 px-1">
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Articulos</p>
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-black text-slate-500">{convertTarget.items?.length || 0}</span>
+            </div>
+            <div className="mt-1.5 max-h-[238px] space-y-1.5 overflow-y-auto pr-1 scrollbar-hide">
+              {(convertTarget.items || []).map((item) => {
+                const subtotal = calculateBudgetLineSubtotal(item);
+                return (
+                  <div key={item.id} className="grid grid-cols-[1fr_auto] gap-2 rounded-[13px] border border-slate-200 bg-slate-50 px-2.5 py-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-[12px] font-black text-slate-800">{item.title}</p>
+                      <p className="mt-0.5 text-[10px] font-semibold text-slate-500">{formatBudgetItemQuantity(item)} - {formatCurrency(item.newPrice)}</p>
+                    </div>
+                    <p className="self-center text-[12px] font-black text-slate-800">{formatCurrency(subtotal)}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+        <div className="flex min-h-0 flex-col gap-2">
+          <div className="rounded-[18px] border border-sky-200 bg-sky-50 px-3 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-sky-600"><CreditCard size={12} />Sena inicial</p>
+                <p className="mt-0.5 text-[11px] font-semibold text-sky-700">Puede quedar en cero si se convierte sin anticipo.</p>
+              </div>
+              <div className="rounded-[13px] border border-white/80 bg-white px-2.5 py-1.5 text-right">
+                <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Restante estimado</p>
+                <p className="text-[14px] font-black text-slate-800">{formatCurrency(Math.max(Number(convertTarget.totalAmount || 0) - Number(depositAmount || 0), 0))}</p>
+              </div>
+            </div>
+          </div>
+          <OrderPaymentEditor draft={convertPaymentDraft} onChange={setConvertPaymentDraft} maxAmount={convertTarget.totalAmount || 0} title="Monto de sena" hint="Podes cobrarla con uno o dos metodos." />
+          <div className="sticky bottom-0 mt-auto grid grid-cols-2 gap-2 border-t border-slate-200 bg-white pt-2">
+            <button type="button" onClick={() => { setConvertTarget(null); setConvertPaymentDraft(createOrderPaymentDraft(0)); }} className="rounded-[14px] border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-100">Cancelar</button>
+            <AsyncActionButton type="button" onAction={handleConvertBudget} pending={isConverting} disabled={isConverting} loadingLabel="Convirtiendo..." className="rounded-[14px] border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-black text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60">Crear pedido</AsyncActionButton>
+          </div>
+        </div>
+        {false && <div className="hidden">
         <label className="block rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2"><span className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400"><CreditCard size={11} />Seña inicial</span><input type="number" min="0" step="0.01" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none" /></label>
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-semibold text-slate-600">Total del presupuesto: <span className="font-black text-slate-800">{formatCurrency(convertTarget.totalAmount)}</span></div>
         <OrderPaymentEditor draft={convertPaymentDraft} onChange={setConvertPaymentDraft} maxAmount={convertTarget.totalAmount || 0} title="Seña inicial" hint="Cada seña puede cobrarse con uno o dos métodos." />
@@ -900,7 +991,7 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
           <button type="button" onClick={() => { setConvertTarget(null); setConvertPaymentDraft(createOrderPaymentDraft(0)); }} className="flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-100">Cancelar</button>
           <AsyncActionButton type="button" onAction={handleConvertBudget} pending={isConverting} disabled={isConverting} loadingLabel="Convirtiendo..." className="flex-1 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-black text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60">Crear pedido</AsyncActionButton>
         </div>
-      </div></MiniModal>}
+      </div>}</div></MiniModal>}
 
       {paymentTarget && <MiniModal title="Registrar pago" onClose={() => { setPaymentTarget(null); setPaymentDraft(createOrderPaymentDraft(0)); }}><div className="space-y-3">
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-semibold text-slate-600">Restante actual: <span className="font-black text-slate-800">{formatCurrency(paymentTarget.remainingAmount)}</span></div>

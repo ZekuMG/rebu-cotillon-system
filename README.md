@@ -3,7 +3,7 @@
 Documentacion tecnica y funcional del Punto de Venta Rebu Cotillon.
 
 Ultima actualizacion: Abril 2026  
-Version app: 1.0.6  
+Version app: 1.0.7  
 Stack principal: React 18, Vite, Electron, Supabase y Tailwind CSS.
 
 ---

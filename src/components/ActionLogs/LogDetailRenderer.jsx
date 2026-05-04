@@ -868,6 +868,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
       // Leemos el config que está ADENTRO del snapshot
       const snap = details.snapshot || {};
       const config = snap.config || details.config || {};
+      const canReprintPdf = Array.isArray(snap.items);
       
       const isClient = config.isForClient;
       const itemsCount = details.itemCount || (snap.items ? snap.items.length : 0);
@@ -876,14 +877,26 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
       return (
         <div className="space-y-4">
           
-          <button 
-            onClick={() => onReprintPdf && onReprintPdf(details)}
-            className="w-full flex flex-col items-center justify-center gap-2 p-5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-[14px] shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-0.5 border border-indigo-500 group"
+          <button
+            type="button"
+            onClick={() => canReprintPdf && onReprintPdf && onReprintPdf(details)}
+            disabled={!canReprintPdf}
+            className={`w-full flex flex-col items-center justify-center gap-2 p-5 text-white rounded-[14px] shadow-lg border transition-all group ${
+              canReprintPdf
+                ? 'bg-indigo-600 hover:bg-indigo-700 hover:shadow-xl hover:-translate-y-0.5 border-indigo-500'
+                : 'bg-slate-400 border-slate-300 cursor-not-allowed opacity-80'
+            }`}
           >
             <Download size={28} className="group-hover:scale-110 transition-transform duration-300" />
             <div className="text-center">
-              <span className="block font-black text-sm uppercase tracking-wider mb-1">Volver a Descargar PDF</span>
-              <span className="text-[10px] text-indigo-200 font-medium">Recrea el documento exactamente como fue generado</span>
+              <span className="block font-black text-sm uppercase tracking-wider mb-1">
+                {canReprintPdf ? 'Volver a Descargar PDF' : 'PDF no disponible'}
+              </span>
+              <span className={`text-[10px] font-medium ${canReprintPdf ? 'text-indigo-200' : 'text-slate-100'}`}>
+                {canReprintPdf
+                  ? 'Recrea el documento exactamente como fue generado'
+                  : 'Registro guardado en modo liviano para cuidar la base de datos'}
+              </span>
             </div>
           </button>
 

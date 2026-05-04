@@ -846,14 +846,14 @@ export default function POSView({
         method: primaryMethod,
         amount: primaryAmount,
         installments: primaryMethod === 'Credito' ? Number(primaryInput.installments || 1) : 1,
-        cashReceived: primaryMethod === 'Efectivo' ? getEditableCashInputValue({ ...primaryInput, method: primaryMethod }) : '',
+        cashReceived: '',
       }),
       createPaymentLine({
         id: secondaryInput.id || 'split_secondary',
         method: secondaryMethod,
         amount: secondaryAmount,
         installments: secondaryMethod === 'Credito' ? Number(secondaryInput.installments || 1) : 1,
-        cashReceived: secondaryMethod === 'Efectivo' ? getEditableCashInputValue({ ...secondaryInput, method: secondaryMethod }) : '',
+        cashReceived: '',
       }),
     ];
   };
@@ -1713,10 +1713,8 @@ export default function POSView({
                 { key: 'secondary', line: rawSplitSecondaryLine, normalizedLine: splitSecondaryLine, index: 1, amountEditable: false },
               ].map(({ key, line, normalizedLine, index, amountEditable }) => {
                 const isCredit = line.method === 'Credito';
-                const isCash = line.method === 'Efectivo';
                 const lineAmount = roundPaymentValue(normalizedLine.amount || line.amount || 0);
                 const lineDisabled = !amountEditable && splitSecondaryDisabled;
-                const lineCashInputValue = getEditableCashInputValue(line);
                 return (
                   <div key={key} onClick={() => setActiveSplitLineIndex(index)} className={`rounded-xl border px-2 py-1.5 transition-all ${activeSplitLineIndex === index ? 'border-fuchsia-300 bg-fuchsia-50/30 shadow-sm ring-1 ring-fuchsia-200' : lineDisabled ? 'border-slate-200 bg-slate-100/80' : 'border-slate-200 bg-slate-50/90'}`}>
                     <div className="flex items-center gap-1.5">
@@ -1750,17 +1748,6 @@ export default function POSView({
                         <option value={6}>6 cuotas</option>
                         <option value={12}>12 cuotas</option>
                       </select>
-                    )}
-                    {isCash && !lineDisabled && (
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={lineCashInputValue}
-                        placeholder="Efectivo recibido"
-                        onFocus={() => setActiveSplitLineIndex(index)}
-                        onChange={(e) => handleSplitCashReceivedChange(index, e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-emerald-200 bg-white px-2 py-1 text-[11px] font-black text-slate-800 shadow-sm outline-none placeholder:text-[10px] placeholder:font-bold placeholder:text-slate-400 focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
-                      />
                     )}
                   </div>
                 );
@@ -1824,8 +1811,8 @@ export default function POSView({
             )}
             <div className="flex justify-between text-xs text-slate-500"><span>Pago</span><span>{paymentSummary}</span></div>
             {paymentTotals.surchargeTotal > 0 && (<div className="flex justify-between text-xs font-bold text-amber-600"><span>Recargo credito</span><span>+<FancyPrice amount={paymentTotals.surchargeTotal} /></span></div>)}
-            {cashReceivedAmount > 0 && <div className="flex justify-between text-xs text-slate-500"><span>Efectivo recibido</span><span><FancyPrice amount={cashReceivedAmount} /></span></div>}
-            {cashChangeAmount > 0 && <div className="flex justify-between text-xs font-bold text-emerald-600"><span>Devolucion</span><span><FancyPrice amount={cashChangeAmount} /></span></div>}
+            {!isSplitPaymentMode && cashReceivedAmount > 0 && <div className="flex justify-between text-xs text-slate-500"><span>Efectivo recibido</span><span><FancyPrice amount={cashReceivedAmount} /></span></div>}
+            {!isSplitPaymentMode && cashChangeAmount > 0 && <div className="flex justify-between text-xs font-bold text-emerald-600"><span>Devolucion</span><span><FancyPrice amount={cashChangeAmount} /></span></div>}
             <div className="flex justify-between items-end pt-2">
               <span className="text-sm font-bold text-slate-800 uppercase">Total a Pagar</span>
               <span className="text-[24px] font-black text-slate-900"><FancyPrice amount={total} /></span>

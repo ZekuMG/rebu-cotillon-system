@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  BarChart3,
   Building2,
   ClipboardList,
   FileBarChart,
@@ -71,6 +72,7 @@ export default function Sidebar({ activeTab, setActiveTab, currentUser, onLogout
   const canViewOrders = canAccessTab(currentUser, 'orders');
   const canViewExtras = canAccessTab(currentUser, 'extras');
   const canViewReports = canAccessTab(currentUser, 'reports');
+  const canViewMetrics = canAccessTab(currentUser, 'metrics');
   const canViewLogs = canAccessTab(currentUser, 'logs');
   const canViewSessions = canAccessTab(currentUser, 'sessions');
   const canViewBulkEditor = canAccessTab(currentUser, 'bulk-editor');
@@ -106,6 +108,7 @@ export default function Sidebar({ activeTab, setActiveTab, currentUser, onLogout
         {canViewAgenda && <SidebarButton onClick={() => setActiveTab('agenda')} isActive={activeTab === 'agenda'} icon={Building2} label="Agenda" accentColor={navAccentColor} />}
         {canViewOrders && <SidebarButton onClick={() => setActiveTab('orders')} isActive={activeTab === 'orders'} icon={ClipboardList} label="Pedidos" accentColor={navAccentColor} />}
         {canViewExtras && <SidebarButton onClick={() => setActiveTab('extras')} isActive={activeTab === 'extras'} icon={Settings2} label="Extras" accentColor={navAccentColor} />}
+        {canViewMetrics && <SidebarButton onClick={() => setActiveTab('metrics')} isActive={activeTab === 'metrics'} icon={BarChart3} label="Métricas" accentColor={navAccentColor} />}
       </nav>
 
       <div className="flex w-full flex-col items-center gap-2 pb-1">

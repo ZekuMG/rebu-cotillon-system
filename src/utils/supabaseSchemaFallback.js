@@ -119,6 +119,18 @@ export const SCHEMA_OPTIONAL_COLUMNS = {
     'is_custom',
     'is_combo',
   ]),
+  budgets: new Set([
+    'payment_method',
+    'payment_breakdown',
+    'installments',
+    'is_active',
+  ]),
+  orders: new Set([
+    'payment_method',
+    'payment_breakdown',
+    'installments',
+    'is_active',
+  ]),
 };
 
 export const isOptionalSchemaColumn = (table, missingColumn) => {

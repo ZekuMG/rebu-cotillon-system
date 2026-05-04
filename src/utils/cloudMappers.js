@@ -314,6 +314,7 @@ export const mapSaleRecords = (sales = [], parsedLogs = []) =>
         : null,
       pointsEarned: sale.points_earned,
       pointsSpent: sale.points_spent,
+      pointsChange: snapshotLog?.details?.pointsChange || null,
       user: sale.user_name || snapshotLog?.details?.userName || 'Desconocido',
       userId: sale.user_id || snapshotLog?.details?.userId || null,
       userRole: sale.user_role || snapshotLog?.details?.userRole || null,

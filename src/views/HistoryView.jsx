@@ -18,6 +18,7 @@ import {
   RotateCcw,
   ChevronDown,
   RefreshCw,
+  Gift,
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../data';
 import { hasPermission } from '../utils/userPermissions';
@@ -94,6 +95,47 @@ const getVoidedSaleOriginalSortDate = (voidLog, creationLog) => {
 };
 
 const HISTORY_PAGE_SIZE = 50;
+const HEADER_CONTROL_CLASS = 'h-8 shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-700 shadow-sm outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100';
+const HEADER_ICON_CONTROL_CLASS = `${HEADER_CONTROL_CLASS} pl-8 pr-3`;
+const HEADER_BUTTON_CLASS = `${HEADER_CONTROL_CLASS} inline-flex items-center justify-center gap-1.5 hover:bg-slate-50`;
+const normalizeSearchText = (value = '') =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+const getSearchTokens = (query = '') => normalizeSearchText(query).split(/\s+/).filter(Boolean);
+const getClientSearchText = (client) =>
+  typeof client === 'string' ? client : [client?.name, client?.memberNumber].filter(Boolean).join(' ');
+const getHistorySearchHaystack = (tx) =>
+  normalizeSearchText([
+    tx.id,
+    tx.user,
+    tx.payment,
+    tx.date,
+    tx.total,
+    getClientSearchText(tx.client),
+    tx.memberName,
+    tx.memberNumber,
+    ...(tx.items || []).flatMap((item) => [
+      item.title,
+      item.product_title,
+      item.name,
+      item.category,
+    ]),
+  ].filter(Boolean).join(' '));
+const matchesHistorySearchQuery = (tx, query) => {
+  const tokens = getSearchTokens(query);
+  if (tokens.length === 0) return true;
+  const haystack = getHistorySearchHaystack(tx);
+  return tokens.every((token) => haystack.includes(token));
+};
+const isRedemptionItem = (item = {}) =>
+  Boolean(item.isReward || item.is_reward || /^canje\s*:/i.test(String(item.title || item.product_title || item.name || '')));
+const getHistoryItemTitle = (item = {}) =>
+  String(item.title || item.product_title || item.name || 'Producto')
+    .replace(/^canje\s*:\s*/i, '')
+    .trim() || 'Canje';
 const buildUserFilterLabel = (presentation, user, duplicateCount = 1) => {
   if (duplicateCount <= 1) return presentation.displayName;
 
@@ -105,6 +147,7 @@ const buildUserFilterLabel = (presentation, user, duplicateCount = 1) => {
     ? `${presentation.displayName} · ${suffixParts.join(' · ')}`
     : presentation.displayName;
 };
+void buildUserFilterLabel;
 
 const getHistoryBadgeUser = (tx) => {
   const normalizedRole = String(tx?.userRole || '')
@@ -216,20 +259,7 @@ const filterHistoryTransactions = ({
   }
 
   if (searchQuery.trim() && !isSearchingTest) {
-    const query = searchQuery.toLowerCase().trim();
-    txList = txList.filter((tx) => {
-      const idMatch = String(tx.id).includes(query);
-      const userMatch = tx.user?.toLowerCase().includes(query);
-      const paymentMatch = tx.payment?.toLowerCase().includes(query);
-      const dateMatch = tx.date?.toLowerCase().includes(query);
-      const itemsMatch = (tx.items || []).some((item) => item.title?.toLowerCase().includes(query));
-      const totalMatch = String(tx.total).includes(query);
-      const clientMatch = tx.client && typeof tx.client === 'string'
-        ? tx.client.toLowerCase().includes(query)
-        : tx.client?.name?.toLowerCase().includes(query);
-
-      return idMatch || userMatch || paymentMatch || dateMatch || itemsMatch || totalMatch || clientMatch;
-    });
+    txList = txList.filter((tx) => matchesHistorySearchQuery(tx, searchQuery));
   }
 
   txList.sort((a, b) => {
@@ -760,20 +790,7 @@ export default function HistoryView({
 
     // 6. B?SQUEDA GENERAL
     if (searchQuery.trim() && !isSearchingTest) {
-      const query = searchQuery.toLowerCase().trim();
-      txList = txList.filter((tx) => {
-        const idMatch = String(tx.id).includes(query);
-        const userMatch = tx.user?.toLowerCase().includes(query);
-        const paymentMatch = tx.payment?.toLowerCase().includes(query);
-        const dateMatch = tx.date?.toLowerCase().includes(query);
-        const itemsMatch = (tx.items || []).some((item) => item.title?.toLowerCase().includes(query));
-        const totalMatch = String(tx.total).includes(query);
-        const clientMatch = tx.client && typeof tx.client === 'string' 
-          ? tx.client.toLowerCase().includes(query) 
-          : tx.client?.name?.toLowerCase().includes(query);
-
-        return idMatch || userMatch || paymentMatch || dateMatch || itemsMatch || totalMatch || clientMatch;
-      });
+      txList = txList.filter((tx) => matchesHistorySearchQuery(tx, searchQuery));
     }
 
     // 7. ORDENAMIENTO
@@ -988,51 +1005,51 @@ export default function HistoryView({
   return (
     <div className="bg-white rounded-xl shadow-sm border overflow-hidden h-full min-h-0 flex flex-col">
       {/* HEADER Y FILTROS */}
-      <div className="border-b bg-slate-50 px-3 py-3 shrink-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="bg-blue-100 p-1.5 rounded-lg text-blue-600 shrink-0">
-            <History size={18} />
+      <div className="border-b bg-slate-50 px-3 py-2 shrink-0">
+        <div className="history-filter-scroll flex flex-nowrap items-center gap-1.5 overflow-x-auto pb-1 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-track]:bg-transparent" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e1 transparent' }}>
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-sky-200 bg-sky-50 text-sky-600 shadow-sm">
+            <History size={16} />
           </div>
 
-          <span className="text-[10px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1.5 rounded-lg font-bold shadow-sm flex items-center gap-1 shrink-0">
+          <span className={`${HEADER_CONTROL_CLASS} inline-flex items-center gap-1.5`}>
             <span>{stats.count} ventas</span>
             <span className="text-slate-300">{'\u2022'}</span>
             <span className="text-blue-600"><FancyPrice amount={stats.total} /></span>
           </span>
 
-          <div className="relative flex-1 min-w-[260px]">
+          <div className="relative min-w-[260px] flex-1 shrink-0">
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="Buscar por ID, producto o cliente..."
-              className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-sm"
+              placeholder="Buscar ID, cliente, producto..."
+              className={`${HEADER_ICON_CONTROL_CLASS} w-full`}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
 
-          <select className="px-3 py-1.5 text-xs font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white shrink-0" value={viewMode} onChange={(e) => setViewMode(e.target.value)}>
+          <select className={HEADER_CONTROL_CLASS} value={viewMode} onChange={(e) => setViewMode(e.target.value)}>
             <option value="all">Todas las fechas</option>
             <option value="today">Solo Hoy</option>
             <option value="history">Solo Historial</option>
           </select>
 
-          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1.5 shadow-sm shrink-0">
+          <div className={`${HEADER_CONTROL_CLASS} flex items-center gap-1.5 px-2`}>
             <Calendar size={12} className="text-slate-400" />
-            <input type="date" className="text-[10px] bg-transparent outline-none font-medium text-slate-600 cursor-pointer" value={filterDateStart} onChange={(e) => setFilterDateStart(e.target.value)} title="Desde"/>
+            <input type="date" className="h-full bg-transparent text-[11px] font-bold text-slate-700 outline-none cursor-pointer" value={filterDateStart} onChange={(e) => setFilterDateStart(e.target.value)} title="Desde"/>
             <span className="text-[10px] text-slate-300">a</span>
-            <input type="date" className="text-[10px] bg-transparent outline-none font-medium text-slate-600 cursor-pointer" value={filterDateEnd} onChange={(e) => setFilterDateEnd(e.target.value)} title="Hasta"/>
+            <input type="date" className="h-full bg-transparent text-[11px] font-bold text-slate-700 outline-none cursor-pointer" value={filterDateEnd} onChange={(e) => setFilterDateEnd(e.target.value)} title="Hasta"/>
           </div>
 
           <div className="relative shrink-0">
              <Filter size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-             <select className="pl-7 pr-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white appearance-none cursor-pointer" value={filterPayment} onChange={(e) => setFilterPayment(e.target.value)}>
+             <select className={`${HEADER_ICON_CONTROL_CLASS} appearance-none cursor-pointer`} value={filterPayment} onChange={(e) => setFilterPayment(e.target.value)}>
                <option value="">{'M\u00E9todo de Pago'}</option>
                {PAYMENT_METHODS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
              </select>
           </div>
           
-          <select className="px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer shrink-0" value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
+          <select className={`${HEADER_CONTROL_CLASS} cursor-pointer`} value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
             <option value="">{'Todas las Categor\u00EDas'}</option>
             {categoriesList.map((c) => (<option key={c} value={c}>{c}</option>))}
           </select>
@@ -1041,7 +1058,7 @@ export default function HistoryView({
             <button
               type="button"
               onClick={() => setIsUserFilterOpen((prev) => !prev)}
-              className="min-w-[190px] px-3 py-1.5 text-[11px] font-medium border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 shadow-sm bg-white cursor-pointer flex items-center justify-between gap-2"
+              className={`${HEADER_CONTROL_CLASS} flex min-w-[170px] cursor-pointer items-center justify-between gap-2`}
             >
               {selectedUserFilter ? (() => {
                 return (
@@ -1107,12 +1124,12 @@ export default function HistoryView({
           </div>
 
           {hasActiveFilters && (
-            <button onClick={clearFilters} className="flex items-center gap-1 px-3 py-1.5 text-[10px] font-bold text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors border border-red-100 shrink-0">
+            <button onClick={clearFilters} className={`${HEADER_BUTTON_CLASS} border-red-100 bg-red-50 text-red-600 hover:bg-red-100`}>
               <X size={12} /> Limpiar Filtros
             </button>
           )}
 
-          <button onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')} className="flex items-center gap-1 px-3 py-1.5 text-[10px] font-bold text-slate-600 bg-white hover:bg-slate-100 rounded-lg border border-slate-200 shadow-sm transition-colors shrink-0 ml-auto" title="Invertir Orden">
+          <button onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')} className={HEADER_BUTTON_CLASS} title="Invertir Orden">
             <ArrowUpDown size={12} /> {sortOrder === 'desc' ? 'M\u00E1s recientes' : 'M\u00E1s antiguas'}
           </button>
         </div>
@@ -1231,14 +1248,21 @@ export default function HistoryView({
                         const qty = i.qty || i.quantity || 0;
                         const isWeight = i.product_type === 'weight' || i.isWeight || (qty >= 20 && i.price < 50);
                         const comboIncludedItems = getComboIncludedItems(i);
+                        const isRedemption = isRedemptionItem(i);
                         
                         return (
                           <div key={idx} className="mb-1 flex items-start gap-1.5 text-[10px] text-slate-600">
-                            <span className="font-bold bg-white border border-slate-200 shadow-sm px-1 py-0.5 rounded text-[9px] text-slate-700 whitespace-nowrap">
-                              {qty}{isWeight ? 'g' : 'x'}
-                            </span>
+                            {isRedemption ? (
+                              <span className="inline-flex items-center gap-1 rounded border border-fuchsia-200 bg-fuchsia-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] text-fuchsia-700 shadow-sm">
+                                <Gift size={9} /> Canje
+                              </span>
+                            ) : (
+                              <span className="font-bold bg-white border border-slate-200 shadow-sm px-1 py-0.5 rounded text-[9px] text-slate-700 whitespace-nowrap">
+                                {qty}{isWeight ? 'g' : 'x'}
+                              </span>
+                            )}
                             <div className="min-w-0 flex-1 pt-0.5">
-                              <span className="truncate block font-medium" title={i.title}>{i.title}</span>
+                              <span className="truncate block font-medium" title={getHistoryItemTitle(i)}>{getHistoryItemTitle(i)}</span>
                               {comboIncludedItems.length > 0 && (
                                 <div className="mt-0.5 rounded-md border border-violet-100 bg-violet-50/70 px-2 py-1">
                                   {comboIncludedItems.map((includedItem, includedIndex) => {
@@ -1290,13 +1314,6 @@ export default function HistoryView({
                               }`}>
                               {tx.payment}
                             </span>
-                            {paymentItems.length > 1 && (
-                              <span className={`text-[8.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${
-                                isVoided ? 'text-red-500 bg-red-50 border border-red-100' : isDeleted ? 'text-orange-600 bg-orange-50 border border-orange-100' : 'text-slate-500 bg-white shadow-sm border border-slate-200'
-                              }`}>
-                                {paymentItems.length} tramos
-                              </span>
-                            )}
                             {primaryPayment === 'Credito' && tx.installments > 0 && (
                               <span className={`text-[8.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${
                                 isVoided ? 'text-red-500 bg-red-50 border border-red-100' : isDeleted ? 'text-orange-600 bg-orange-50 border border-orange-100' : 'text-slate-500 bg-white shadow-sm border border-slate-200'

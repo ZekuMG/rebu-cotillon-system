@@ -97,6 +97,7 @@ import HistoryView from './views/HistoryView';
 import LogsView from './views/LogsView';
 import ExtrasView from './views/ExtrasView';
 import ReportsHistoryView from './views/ReportsHistoryView';
+import MetricsView from './views/MetricsView';
 import BulkEditorView from './views/BulkEditorView';
 import OrdersView from './views/OrdersView';
 import SessionsView from './views/SessionsView';
@@ -138,6 +139,7 @@ const OFFLINE_DASHBOARD_CACHE_KEY = 'party_cloud_snapshot_dashboard_v2';
 const OFFLINE_HISTORY_CACHE_KEY = 'party_cloud_snapshot_history_v1';
 const OFFLINE_ORDERS_CACHE_KEY = 'party_cloud_snapshot_orders_v2';
 const OFFLINE_REPORTS_CACHE_KEY = 'party_cloud_snapshot_reports_v1';
+const OFFLINE_METRICS_CACHE_KEY = 'party_cloud_snapshot_metrics_v1';
 const OFFLINE_SHARED_USERS_CACHE_KEY = 'party_shared_users_snapshot_v1';
 const OFFLINE_POS_CACHE_KEY = 'party_pos_snapshot_v1';
 const OFFLINE_LOGIN_CACHE_KEY = 'party_offline_login_verifiers_v1';
@@ -146,6 +148,23 @@ const USER_SETTINGS_KEY = 'party_user_settings_v1';
 const APP_TEXT_ENCODING_VERSION = 'utf8-clean';
 const CLOUD_FETCH_BATCH_SIZE = 200;
 const CLOUD_RECENT_SYNC_LIMIT = 250;
+const SNAPSHOT_STORAGE_SOFT_LIMIT = 1_500_000;
+const SNAPSHOT_COMPACT_LIMITS = {
+  transactions: 650,
+  dailyLogs: 150,
+  historyLogs: 150,
+  expenses: 500,
+  pastClosures: 500,
+  budgets: 500,
+  orders: 500,
+};
+const METRICS_SNAPSHOT_LIMITS = {
+  transactions: 200,
+  expenses: 120,
+  pastClosures: 120,
+  budgets: 120,
+  orders: 120,
+};
 const HISTORY_LOG_INITIAL_LIMIT = 50;
 const HISTORY_LOG_RECENT_SYNC_LIMIT = 50;
 const SESSION_ABSENT_MS = 10 * 60 * 1000;
@@ -209,6 +228,7 @@ const MODULE_LOAD_DEFAULT_STATE = {
   history: { status: 'idle', lastLoadedAt: 0, dirty: false },
   orders: { status: 'idle', lastLoadedAt: 0, dirty: false },
   reports: { status: 'idle', lastLoadedAt: 0, dirty: false },
+  metrics: { status: 'idle', lastLoadedAt: 0, dirty: false },
 };
 
 const MODULE_FRESHNESS_MS = {
@@ -218,6 +238,7 @@ const MODULE_FRESHNESS_MS = {
   history: 15 * 60 * 1000,
   orders: 15 * 60 * 1000,
   reports: 20 * 60 * 1000,
+  metrics: 30 * 60 * 1000,
 };
 
 const TAB_TO_DATA_MODULE = {
@@ -225,6 +246,7 @@ const TAB_TO_DATA_MODULE = {
   clients: 'transactions',
   history: 'history',
   reports: 'reports',
+  metrics: 'metrics',
   orders: 'orders',
 };
 
@@ -427,6 +449,8 @@ const mergeLatestRecords = (existingRecords, incomingRecords) => {
 
 const mapCashClosureReportFromLog = (log) => {
   const details = log?.details && typeof log.details === 'object' ? log.details : {};
+  const expensesSnapshot = Array.isArray(details.expensesSnapshot) ? details.expensesSnapshot : [];
+  const transactionsSnapshot = Array.isArray(details.transactionsSnapshot) ? details.transactionsSnapshot : [];
 
   return {
     id: details.id || `log:${log?.id || Date.now()}`,
@@ -451,12 +475,56 @@ const mapCashClosureReportFromLog = (log) => {
     paymentMethods: details.paymentMethods || {},
     itemsSold: Array.isArray(details.itemsSold) ? details.itemsSold : [],
     newClients: Array.isArray(details.newClients) ? details.newClients : [],
-    expensesSnapshot: Array.isArray(details.expensesSnapshot) ? details.expensesSnapshot : [],
-    transactionsSnapshot: Array.isArray(details.transactionsSnapshot) ? details.transactionsSnapshot : [],
-    hasDetail: true,
+    expensesSnapshot,
+    transactionsSnapshot,
+    hasDetail: expensesSnapshot.length > 0 || transactionsSnapshot.length > 0,
     source: 'log',
     createdAt: log?.created_at || null,
   };
+};
+
+const hasCashClosureSnapshotsInLog = (details) =>
+  Boolean(
+    details &&
+      typeof details === 'object' &&
+      (Array.isArray(details.expensesSnapshot) || Array.isArray(details.transactionsSnapshot))
+  );
+
+const LOG_IMAGE_PLACEHOLDER = '[imagen omitida]';
+const LOG_AVATAR_PLACEHOLDER = '[avatar omitido]';
+const LOG_STRING_MAX_LENGTH = 4000;
+
+const compactLogDetailsForStorage = (value, key = '') => {
+  if (value === null || value === undefined) return value;
+
+  if (typeof value === 'string') {
+    if (value.startsWith('data:image/')) {
+      return key.toLowerCase().includes('avatar') ? LOG_AVATAR_PLACEHOLDER : LOG_IMAGE_PLACEHOLDER;
+    }
+
+    if (key.toLowerCase().includes('avatar') && value.length > 120) {
+      return LOG_AVATAR_PLACEHOLDER;
+    }
+
+    if (value.length > LOG_STRING_MAX_LENGTH) {
+      return `${value.slice(0, LOG_STRING_MAX_LENGTH)}... [texto recortado]`;
+    }
+
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => compactLogDetailsForStorage(item, key));
+  }
+
+  if (typeof value === 'object') {
+    return Object.entries(value).reduce((nextValue, [entryKey, entryValue]) => {
+      nextValue[entryKey] = compactLogDetailsForStorage(entryValue, entryKey);
+      return nextValue;
+    }, {});
+  }
+
+  return value;
 };
 
 const hasUsableCloudResult = (result) => result.status === 'fulfilled' && !result.value?.error;
@@ -968,6 +1036,75 @@ const fetchReportsCloudPayloadSince = async (createdAfter) => {
   };
 };
 
+const fetchMetricsCloudPayload = async () => {
+  const [salesResult, logsResult, expResult, closuresResult, budgetsResult, ordersResult] = await Promise.allSettled([
+    fetchAllCloudRowsWithSelectFallback(
+      (selectColumns) =>
+        supabase
+          .from('sales')
+          .select(selectColumns)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false }),
+      CLOUD_SELECTS.sales,
+      CLOUD_FETCH_BATCH_SIZE
+    ),
+    Promise.resolve([]),
+    fetchAllCloudRowsWithSelectFallback(
+      (selectColumns) =>
+        supabase
+          .from('expenses')
+          .select(selectColumns)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false }),
+      CLOUD_SELECTS.expenses,
+      CLOUD_FETCH_BATCH_SIZE
+    ),
+    fetchAllCloudRowsWithSelectFallback(
+      (selectColumns) =>
+        supabase
+          .from('cash_closures')
+          .select(selectColumns)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false }),
+      CLOUD_SELECTS.cashClosuresSummary,
+      CLOUD_FETCH_BATCH_SIZE
+    ),
+    fetchRowsWithOptionalActiveFilter({
+      table: 'budgets',
+      selectColumns: CLOUD_SELECTS.budgets,
+      orderBy: 'created_at',
+      orderDirection: 'desc',
+      additionalOrders: [{ column: 'id', ascending: false }],
+    }),
+    fetchRowsWithOptionalActiveFilter({
+      table: 'orders',
+      selectColumns: CLOUD_SELECTS.orders,
+      orderBy: 'created_at',
+      orderDirection: 'desc',
+      additionalOrders: [{ column: 'id', ascending: false }],
+    }),
+  ]);
+
+  const hasCloudConnection = [salesResult, expResult, closuresResult, budgetsResult, ordersResult].some(hasUsableCloudResult);
+  const salesData = safeCloudData(salesResult, 'ventas para métricas');
+  const logsData = safeCloudData(logsResult, 'logs para métricas');
+  const expData = safeCloudData(expResult, 'gastos para métricas');
+  const closuresData = safeCloudData(closuresResult, 'cierres para métricas');
+  const budgetsData = safeCloudData(budgetsResult, 'presupuestos para métricas');
+  const ordersData = safeCloudData(ordersResult, 'pedidos para métricas');
+  const parsedLogs = logsData && logsResult.status === 'fulfilled' && Array.isArray(logsResult.value) ? logsResult.value : [];
+
+  return {
+    hasCloudConnection,
+    transactions: salesData ? mapSaleRecords(salesData, parsedLogs) : null,
+    dailyLogs: null,
+    expenses: expData ? mapExpenseRecords(expData) : null,
+    pastClosures: closuresData ? mapCashClosureRecords(closuresData) : null,
+    budgets: budgetsData ? mapBudgetRecords(budgetsData) : null,
+    orders: ordersData ? mapOrderRecords(ordersData) : null,
+  };
+};
+
 const fetchCashClosureDetailById = async (closureId) => {
   if (!closureId) return null;
 
@@ -988,7 +1125,7 @@ const fetchCashClosureDetailById = async (closureId) => {
 
     if (!logError && logData) {
       const mappedLog = mapLogRecords([logData])[0];
-      if (mappedLog?.details && typeof mappedLog.details === 'object') {
+      if (hasCashClosureSnapshotsInLog(mappedLog?.details)) {
         return mapCashClosureReportFromLog(mappedLog);
       }
     }
@@ -1178,12 +1315,70 @@ const loadSnapshotFromStorage = (storageKey) => {
   }
 };
 
+const trimSnapshotArray = (records, limit) =>
+  Array.isArray(records) ? records.slice(0, limit) : records;
+
+const compactSnapshotForStorage = (snapshot, limits = SNAPSHOT_COMPACT_LIMITS) => {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot;
+
+  return Object.entries(snapshot).reduce((nextSnapshot, [key, value]) => {
+    const limit = limits[key];
+    nextSnapshot[key] = Number.isFinite(limit) ? trimSnapshotArray(value, limit) : value;
+    return nextSnapshot;
+  }, {});
+};
+
+const serializeSnapshotForStorage = (snapshot) => {
+  const serialized = JSON.stringify(snapshot);
+  if (serialized.length <= SNAPSHOT_STORAGE_SOFT_LIMIT) return serialized;
+  return JSON.stringify(compactSnapshotForStorage(snapshot));
+};
+
+const buildStrictSnapshotLimits = (limits = SNAPSHOT_COMPACT_LIMITS) =>
+  Object.entries(limits).reduce((nextLimits, [key, limit]) => {
+    nextLimits[key] = Math.min(limit, 200);
+    return nextLimits;
+  }, {});
+
+const buildTinySnapshotLimits = (limits = SNAPSHOT_COMPACT_LIMITS) =>
+  Object.entries(limits).reduce((nextLimits, [key]) => {
+    nextLimits[key] = 50;
+    return nextLimits;
+  }, {});
+
 const saveSnapshotToStorage = (storageKey, snapshot) => {
   try {
-    window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
+    window.localStorage.setItem(storageKey, serializeSnapshotForStorage(snapshot));
   } catch (error) {
-    console.error('No se pudo guardar el snapshot offline:', error);
+    try {
+      window.localStorage.removeItem(storageKey);
+      const strictSnapshot = compactSnapshotForStorage(snapshot, buildStrictSnapshotLimits());
+      window.localStorage.setItem(storageKey, JSON.stringify(strictSnapshot));
+      return;
+    } catch (strictError) {
+      try {
+        const tinySnapshot = compactSnapshotForStorage(snapshot, buildTinySnapshotLimits());
+        window.localStorage.setItem(storageKey, JSON.stringify(tinySnapshot));
+        return;
+      } catch {
+        console.warn('No se pudo guardar el snapshot offline por falta de espacio local:', strictError);
+        return;
+      }
+    }
   }
+};
+
+const buildMetricsOfflineSnapshot = (payload, fallback = {}) => {
+  const source = {
+    savedAt: new Date().toISOString(),
+    transactions: payload.transactions ?? fallback.transactions ?? [],
+    expenses: payload.expenses ?? fallback.expenses ?? [],
+    pastClosures: payload.pastClosures ?? fallback.pastClosures ?? [],
+    budgets: payload.budgets ?? fallback.budgets ?? [],
+    orders: payload.orders ?? fallback.orders ?? [],
+  };
+
+  return compactSnapshotForStorage(source, METRICS_SNAPSHOT_LIMITS);
 };
 
 const loadOfflineSnapshot = () =>
@@ -1204,6 +1399,8 @@ const loadOfflineOrdersSnapshot = () => loadSnapshotFromStorage(OFFLINE_ORDERS_C
 const saveOfflineOrdersSnapshot = (snapshot) => saveSnapshotToStorage(OFFLINE_ORDERS_CACHE_KEY, snapshot);
 const loadOfflineReportsSnapshot = () => loadSnapshotFromStorage(OFFLINE_REPORTS_CACHE_KEY);
 const saveOfflineReportsSnapshot = (snapshot) => saveSnapshotToStorage(OFFLINE_REPORTS_CACHE_KEY, snapshot);
+const loadOfflineMetricsSnapshot = () => loadSnapshotFromStorage(OFFLINE_METRICS_CACHE_KEY);
+const saveOfflineMetricsSnapshot = (snapshot) => saveSnapshotToStorage(OFFLINE_METRICS_CACHE_KEY, snapshot);
 const loadOfflineSharedUsersSnapshot = () => loadSnapshotFromStorage(OFFLINE_SHARED_USERS_CACHE_KEY);
 const saveOfflineSharedUsersSnapshot = (snapshot) =>
   saveSnapshotToStorage(OFFLINE_SHARED_USERS_CACHE_KEY, snapshot);
@@ -1465,6 +1662,7 @@ export default function PartySupplyApp() {
     history: null,
     orders: null,
     reports: null,
+    metrics: null,
   });
   const activeTabRef = useRef('pos');
   const dataStateRef = useRef({});
@@ -1563,6 +1761,27 @@ export default function PartySupplyApp() {
     return true;
   };
 
+  const applyMetricsSnapshot = (snapshot) => {
+    const hasMetricsData =
+      snapshot &&
+      (
+        'transactions' in snapshot ||
+        'dailyLogs' in snapshot ||
+        'expenses' in snapshot ||
+        'pastClosures' in snapshot ||
+        'budgets' in snapshot ||
+        'orders' in snapshot
+      );
+    if (!hasMetricsData) return false;
+    if ('transactions' in snapshot) setTransactions(Array.isArray(snapshot.transactions) ? snapshot.transactions : []);
+    if ('dailyLogs' in snapshot) setDailyLogs(Array.isArray(snapshot.dailyLogs) ? snapshot.dailyLogs : []);
+    if ('expenses' in snapshot) setExpenses(Array.isArray(snapshot.expenses) ? snapshot.expenses : []);
+    if ('pastClosures' in snapshot) setPastClosures(Array.isArray(snapshot.pastClosures) ? snapshot.pastClosures : []);
+    if ('budgets' in snapshot) setBudgets(Array.isArray(snapshot.budgets) ? snapshot.budgets : []);
+    if ('orders' in snapshot) setOrders(Array.isArray(snapshot.orders) ? snapshot.orders : []);
+    return true;
+  };
+
   const applyOrdersSnapshot = (snapshot) => {
     const hasOrdersData = snapshot && ('budgets' in snapshot || 'orders' in snapshot);
     if (!hasOrdersData) return false;
@@ -1579,6 +1798,7 @@ export default function PartySupplyApp() {
     applyDashboardSnapshot(snapshot);
     applyOrdersSnapshot(snapshot);
     applyReportsSnapshot(snapshot);
+    applyMetricsSnapshot(snapshot);
     if (snapshot.savedAt) setOfflineSnapshotAt(snapshot.savedAt);
     return true;
   };
@@ -1783,6 +2003,12 @@ export default function PartySupplyApp() {
     if (payload.pastClosures !== null) {
       setPastClosures((prev) => (merge ? mergeLatestRecords(prev, payload.pastClosures) : payload.pastClosures));
     }
+  };
+
+  const applyMetricsPayload = (payload) => {
+    applyTransactionsPayload(payload);
+    applyDashboardPayload(payload);
+    applyOrdersPayload(payload);
   };
 
   const loadCoreCloudData = async ({ showSpinner = false, force = false } = {}) => {
@@ -2271,6 +2497,74 @@ export default function PartySupplyApp() {
     return promise;
   };
 
+  const loadMetricsCloudData = async ({ force = false } = {}) => {
+    if (moduleLoadPromisesRef.current.metrics) {
+      return moduleLoadPromisesRef.current.metrics;
+    }
+
+    const currentState = moduleLoadStateRef.current.metrics;
+    if (!force && isModuleStateFresh(currentState, MODULE_FRESHNESS_MS.metrics)) {
+      return true;
+    }
+
+    const run = async () => {
+      setModuleState('metrics', { status: 'loading', dirty: false });
+
+      try {
+        const payload = await fetchMetricsCloudPayload();
+
+        if (!payload?.hasCloudConnection) {
+          const cachedSnapshot =
+            loadOfflineMetricsSnapshot() ||
+            loadOfflineTransactionsSnapshot() ||
+            loadOfflineDashboardSnapshot() ||
+            loadOfflineOrdersSnapshot() ||
+            loadOfflineReportsSnapshot() ||
+            loadOfflineSnapshot();
+
+          if (applyMetricsSnapshot(cachedSnapshot)) {
+            setModuleState('metrics', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+            return true;
+          }
+
+          setModuleState('metrics', { status: 'error', dirty: true });
+          return false;
+        }
+
+        applyMetricsPayload(payload);
+        setIsOfflineReadOnly(false);
+
+        const nextSnapshot = buildMetricsOfflineSnapshot(payload, dataStateRef.current);
+        saveOfflineMetricsSnapshot(nextSnapshot);
+        setModuleState('metrics', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+        return true;
+      } catch (error) {
+        console.error('Error general de conexiÃƒÂ³n (metrics):', error);
+        const cachedSnapshot =
+          loadOfflineMetricsSnapshot() ||
+          loadOfflineTransactionsSnapshot() ||
+          loadOfflineDashboardSnapshot() ||
+          loadOfflineOrdersSnapshot() ||
+          loadOfflineReportsSnapshot() ||
+          loadOfflineSnapshot();
+
+        if (applyMetricsSnapshot(cachedSnapshot)) {
+          setModuleState('metrics', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+          return true;
+        }
+
+        setModuleState('metrics', { status: 'error', dirty: true });
+        return false;
+      } finally {
+        moduleLoadPromisesRef.current.metrics = null;
+      }
+    };
+
+    const promise = run();
+    moduleLoadPromisesRef.current.metrics = promise;
+    return promise;
+  };
+
   const loadModuleForTab = async (tab, { force = false } = {}) => {
     switch (TAB_TO_DATA_MODULE[tab]) {
       case 'transactions':
@@ -2283,6 +2577,8 @@ export default function PartySupplyApp() {
         return loadOrdersCloudData({ force });
       case 'reports':
         return loadReportsCloudData({ force });
+      case 'metrics':
+        return loadMetricsCloudData({ force });
       default:
         return true;
     }
@@ -2315,6 +2611,8 @@ export default function PartySupplyApp() {
           await loadOrdersCloudData({ force });
         } else if (moduleKey === 'reports') {
           await loadReportsCloudData({ force });
+        } else if (moduleKey === 'metrics') {
+          await loadMetricsCloudData({ force });
         }
       }
     } catch (error) {
@@ -2337,6 +2635,7 @@ export default function PartySupplyApp() {
       const cachedDashboardSnapshot = loadOfflineDashboardSnapshot();
       const cachedOrdersSnapshot = loadOfflineOrdersSnapshot();
       const cachedReportsSnapshot = loadOfflineReportsSnapshot();
+      const cachedMetricsSnapshot = loadOfflineMetricsSnapshot();
       const cachedPosSnapshot = loadOfflinePosSnapshot();
       const hasCoreSnapshot = cachedCoreSnapshot
         ? ('transactions' in cachedCoreSnapshot || 'budgets' in cachedCoreSnapshot)
@@ -2348,6 +2647,7 @@ export default function PartySupplyApp() {
       const hasDashboardSnapshot = cachedDashboardSnapshot ? applyDashboardSnapshot(cachedDashboardSnapshot) : false;
       const hasOrdersSnapshot = cachedOrdersSnapshot ? applyOrdersSnapshot(cachedOrdersSnapshot) : false;
       const hasReportsSnapshot = cachedReportsSnapshot ? applyReportsSnapshot(cachedReportsSnapshot) : false;
+      const hasMetricsSnapshot = cachedMetricsSnapshot ? applyMetricsSnapshot(cachedMetricsSnapshot) : false;
       const hasPosSnapshot = cachedPosSnapshot ? applyPosSnapshot(cachedPosSnapshot) : false;
       const hasSharedUsersSnapshot =
         cachedSharedUsersSnapshot?.authMode === 'supabase' &&
@@ -2366,6 +2666,7 @@ export default function PartySupplyApp() {
           hasDashboardSnapshot ||
           hasOrdersSnapshot ||
           hasReportsSnapshot ||
+          hasMetricsSnapshot ||
           hasPosSnapshot ||
           hasSharedUsersSnapshot
       );
@@ -2556,6 +2857,7 @@ export default function PartySupplyApp() {
   const canManageRegister = hasPermission(currentUser, 'register.manage');
   const canViewDashboard = canAccessTab(currentUser, 'dashboard');
   const canViewReports = canAccessTab(currentUser, 'reports');
+  const canViewMetrics = canAccessTab(currentUser, 'metrics');
   const canViewLogs = canAccessTab(currentUser, 'logs');
   const canViewSessions = canAccessTab(currentUser, 'sessions');
   const canViewUserManagement = canAccessTab(currentUser, 'user-management');
@@ -2943,7 +3245,7 @@ export default function PartySupplyApp() {
 
       await fetchCloudData(false, { force: true, includeActiveModule: true });
       setIsOfflineReadOnly(false);
-      showNotification('success', 'Reconectado', 'La conexion con Supabase se restablecio correctamente.');
+      showNotification('success', 'Reconectado', 'Se conectó la base de datos correctamente.');
     } catch (error) {
       console.error('No se pudo reconectar:', error);
       setIsOfflineReadOnly(true);
@@ -3005,6 +3307,7 @@ export default function PartySupplyApp() {
             ...details,
           }
         : details;
+    const compactedDetails = compactLogDetailsForStorage(normalizedDetails);
 
     const newLog = {
       id: Date.now(),
@@ -3012,14 +3315,14 @@ export default function PartySupplyApp() {
       date: formatDateAR(now),
       action,
       user: actor.userName,
-      details: normalizedDetails,
+      details: compactedDetails,
       reason,
       created_at: new Date().toISOString()
     };
     
     newLog.isTest = shouldIgnoreNestedTestDetectionForLog(action)
-      ? Boolean(normalizedDetails?.isTest || normalizedDetails?.testMarker === 'test')
-      : isTestRecord({ action, details, reason });
+      ? Boolean(compactedDetails?.isTest || compactedDetails?.testMarker === 'test')
+      : isTestRecord({ action, details: compactedDetails, reason });
     setDailyLogs((prev) => [newLog, ...prev].slice(0, DASHBOARD_LOG_LIMIT));
     if (HISTORY_LOG_ACTIONS.includes(action)) {
       setHistoryLogs((prev) => [newLog, ...prev]);
@@ -3034,7 +3337,7 @@ export default function PartySupplyApp() {
       await withTimeout(
         insertWithSchemaFallback('logs', {
           action,
-          details: normalizedDetails,
+          details: compactedDetails,
           user: actor.userName,
           reason,
           created_at: new Date().toISOString()
@@ -3278,7 +3581,14 @@ export default function PartySupplyApp() {
       type: config.isForClient ? 'Presupuesto' : 'Reporte Interno',
       clientName: config.clientName || null,
       itemCount: items.length,
-      snapshot: dataToExport
+      snapshot: {
+        config,
+        date: dateStr,
+        itemCount: items.length,
+        compact: true,
+      },
+      snapshotStored: false,
+      note: 'Snapshot completo omitido para reducir uso de base de datos.',
     };
 
     addLog('Exportación PDF', logDetails, 'Exportación de catálogo');
@@ -3323,6 +3633,15 @@ export default function PartySupplyApp() {
   const handleReprintPdf = (logDetails) => {
     if (!logDetails || !logDetails.snapshot) {
       showNotification('error', 'Error', 'No hay datos guardados para recrear este PDF.');
+      return;
+    }
+
+    if (!Array.isArray(logDetails.snapshot.items)) {
+      showNotification(
+        'info',
+        'PDF no disponible',
+        'Este registro fue guardado en modo liviano para no llenar la base de datos.',
+      );
       return;
     }
     
@@ -5564,10 +5883,12 @@ export default function PartySupplyApp() {
         if (!productId || qty <= 0) return null;
         const inventoryItem = inventory.find((product) => String(product.id) === String(productId));
         const cost = Number(inventoryItem?.purchasePrice ?? change.purchasePrice ?? change.cost ?? 0) || 0;
+        const productType = change.product_type || change.productType || inventoryItem?.product_type || 'quantity';
         return {
           id: productId,
           title: change.title || inventoryItem?.title || `Producto #${productId}`,
           qty,
+          product_type: productType,
           revenue: Number(revenueByProduct[String(productId)] || 0),
           cost: cost * qty,
         };
@@ -5583,10 +5904,12 @@ export default function PartySupplyApp() {
         if (!productId || qty <= 0) return null;
         const inventoryItem = inventory.find((product) => String(product.id) === String(item.productId || item.id));
         const cost = Number(inventoryItem?.purchasePrice || 0) || 0;
+        const productType = item.product_type || item.productType || inventoryItem?.product_type || 'quantity';
         return {
           id: productId,
           title: item.title || inventoryItem?.title || 'Producto',
           qty,
+          product_type: productType,
           revenue: getReportLineSubtotal(item),
           cost: cost * qty,
         };
@@ -6510,15 +6833,29 @@ export default function PartySupplyApp() {
       const reportLines = stockLines.length > 0 ? stockLines : fallbackLines;
       reportLines.forEach((line) => {
         if (!itemsSoldMap[line.id]) {
-          itemsSoldMap[line.id] = { id: line.id, title: line.title, qty: 0, revenue: 0, cost: 0 };
+          itemsSoldMap[line.id] = {
+            id: line.id,
+            title: line.title,
+            product_type: line.product_type || 'quantity',
+            qty: 0,
+            unitQty: 0,
+            weightQty: 0,
+            revenue: 0,
+            cost: 0,
+          };
         }
-        itemsSoldMap[line.id].qty += Number(line.qty || 0);
+        const lineQty = Number(line.qty || 0);
+        const isWeightLine = line.product_type === 'weight';
+        itemsSoldMap[line.id].qty += lineQty;
+        itemsSoldMap[line.id].product_type = isWeightLine ? 'weight' : itemsSoldMap[line.id].product_type;
+        if (isWeightLine) itemsSoldMap[line.id].weightQty += lineQty;
+        else itemsSoldMap[line.id].unitQty += lineQty;
         itemsSoldMap[line.id].revenue += Number(line.revenue || 0);
         itemsSoldMap[line.id].cost += Number(line.cost || 0);
         totalCost += Number(line.cost || 0);
       });
     });
-    const itemsSoldList = Object.values(itemsSoldMap);
+    const itemsSoldList = Object.values(itemsSoldMap).sort((a, b) => Number(b.revenue || 0) - Number(a.revenue || 0));
 
     const paymentMethodsSummary = {};
     cycleTransactions.forEach(tx => {
@@ -6657,8 +6994,11 @@ export default function PartySupplyApp() {
           paymentMethods: paymentMethodsSummary,
           itemsSold: itemsSoldList,
           newClients: cycleNewClients,
-          expensesSnapshot: cycleExpenses,
-          transactionsSnapshot: cycleTransactions,
+          expensesCount: cycleExpenses.length,
+          transactionsCount: cycleTransactions.length,
+          itemsSoldCount: itemsSoldList.length,
+          newClientsCount: cycleNewClients.length,
+          snapshotsStoredIn: shouldSaveReport ? 'cash_closures' : 'not_saved',
           isTestMode: !shouldSaveReport
         };
 
@@ -7324,26 +7664,28 @@ export default function PartySupplyApp() {
           product_type: i.product_type || 'quantity',
         };
       });
-      try {
-        await insertRowsWithSchemaFallback('sale_items', itemsPayload);
-      } catch (saleItemsErr) {
-        throw new Error(`Supabase rechaz\u00f3 los productos de la venta: ${saleItemsErr.message}`);
-      }
-
-      const { stockChanges, stockIssues: stockApplyIssues } = await applySaleStockDelta(checkoutStockDelta);
-      if (stockApplyIssues.length > 0) {
-        throw new Error(`Stock insuficiente: ${stockApplyIssues.join(', ')}`);
-      }
-
+      let stockChanges = [];
       let updatedClientForTicket = null;
-      let pointsChange = null; 
-      if (clientId) {
+      let pointsChange = null;
+      try {
+        const saleItemsPromise = insertRowsWithSchemaFallback('sale_items', itemsPayload).catch((saleItemsErr) => {
+          throw new Error(`Supabase rechaz\u00f3 los productos de la venta: ${saleItemsErr.message}`);
+        });
+
+        const stockPromise = applySaleStockDelta(checkoutStockDelta).then(({ stockChanges, stockIssues: stockApplyIssues }) => {
+          if (stockApplyIssues.length > 0) {
+            throw new Error(`Stock insuficiente: ${stockApplyIssues.join(', ')}`);
+          }
+          return stockChanges;
+        });
+
+        const clientUpdatePromise = (async () => {
+          if (!clientId) return;
+
           const previousPoints = posSelectedClient.points;
           const newPoints = previousPoints - pointsSpent + pointsEarned;
           pointsChange = { previous: previousPoints, new: newPoints, diff: newPoints - previousPoints };
 
-          await supabase.from('clients').update({ points: newPoints }).eq('id', clientId);
-          
           updatedClientForTicket = {
             ...posSelectedClient,
             points: newPoints,
@@ -7352,6 +7694,21 @@ export default function PartySupplyApp() {
             created_at: posSelectedClient?.created_at || posSelectedClient?.createdAt || null,
             createdAt: posSelectedClient?.createdAt || posSelectedClient?.created_at || null,
           };
+
+          const { error: clientUpdateError } = await supabase.from('clients').update({ points: newPoints }).eq('id', clientId);
+          if (clientUpdateError) {
+            console.error('Error actualizando puntos del cliente', clientUpdateError);
+          }
+        })();
+
+        const [appliedStockChanges] = await Promise.all([
+          stockPromise,
+          saleItemsPromise,
+          clientUpdatePromise,
+        ]);
+        stockChanges = appliedStockChanges;
+
+        if (updatedClientForTicket) {
           setMembers((prev) =>
             prev.map((member) =>
               member.id === clientId
@@ -7368,6 +7725,9 @@ export default function PartySupplyApp() {
                 : member,
             ),
           );
+        }
+      } catch (saleItemsErr) {
+        throw saleItemsErr;
       }
 
       const tx = {
@@ -7389,6 +7749,7 @@ export default function PartySupplyApp() {
         client: updatedClientForTicket || posSelectedClient, 
         pointsEarned: clientId ? pointsEarned : 0,
         pointsSpent: pointsSpent,
+        pointsChange,
       };
 
       tx.isTest = isTestRecord(tx);
@@ -7873,16 +8234,24 @@ export default function PartySupplyApp() {
     const originalTx =
       transactions.find((t) => String(t.id) === String(editingTransaction.id)) ||
       editingTransaction;
-    const finalTotal = getEditedTransactionTotal(editingTransaction.items, editingTransaction.payment);
+    const editedBaseTotal = getEditedTransactionTotal(editingTransaction.items, 'Efectivo');
+    const editedPaymentBreakdown = normalizePaymentBreakdown(
+      editingTransaction.paymentBreakdown,
+      editingTransaction.payment,
+      editingTransaction.installments,
+      editingTransaction.cashReceived,
+      editingTransaction.cashChange,
+      editedBaseTotal,
+    );
+    const editedPaymentTotals = getPaymentBreakdownTotals(editedPaymentBreakdown);
+    const finalTotal = editedPaymentTotals.baseTotal > 0
+      ? editedPaymentTotals.chargedTotal
+      : getEditedTransactionTotal(editingTransaction.items, editingTransaction.payment);
 
-    const safeCashReceived = editingTransaction.payment === 'Efectivo'
-      ? Number(editingTransaction.cashReceived ?? finalTotal ?? 0)
-      : 0;
-    const safeCashChange = editingTransaction.payment === 'Efectivo'
-      ? Math.max(0, safeCashReceived - Number(finalTotal || 0))
-      : 0;
+    const safeCashReceived = editedPaymentTotals.cashReceivedTotal || 0;
+    const safeCashChange = editedPaymentTotals.cashChangeTotal || 0;
 
-    if (editingTransaction.payment === 'Efectivo' && safeCashReceived < Number(finalTotal || 0)) {
+    if (editedPaymentTotals.cashMissingTotal > 0) {
       showNotification('warning', 'Monto insuficiente', 'El monto recibido en efectivo debe cubrir el total luego de la modificación.');
       return;
     }
@@ -7946,9 +8315,9 @@ export default function PartySupplyApp() {
         'sales',
         editingTransaction.id,
         {
-          total: getEditedTransactionTotal(finalItems, editingTransaction.payment),
+          total: finalTotal,
           payment_method: editingTransaction.payment,
-          payment_breakdown: editingTransaction.paymentBreakdown || null,
+          payment_breakdown: editedPaymentBreakdown || null,
           installments: editingTransaction.installments || 0,
           points_earned: pointsChange ? pointsChange.new : originalTx.pointsEarned,
           cash_received: safeCashReceived,
@@ -8016,6 +8385,7 @@ export default function PartySupplyApp() {
       const finalTx = {
          ...editingTransaction,
          total: finalTotal,
+         paymentBreakdown: editedPaymentBreakdown,
          items: finalItems, 
          pointsEarned: pointsChange ? pointsChange.new : originalTx.pointsEarned,
          cashReceived: safeCashReceived,
@@ -8035,6 +8405,7 @@ export default function PartySupplyApp() {
       const logDetails = {
          transactionId: editingTransaction.id, client: cName, memberNumber: cNum,
          payment: editingTransaction.payment,
+         paymentBreakdown: editedPaymentBreakdown,
          installments: editingTransaction.installments || 0,
          cashReceived: safeCashReceived,
          cashChange: safeCashChange,
@@ -8174,6 +8545,7 @@ export default function PartySupplyApp() {
   const isHistoryModuleLoading = moduleLoadState.history.status === 'loading';
   const isOrdersModuleLoading = moduleLoadState.orders.status === 'loading';
   const isReportsModuleLoading = moduleLoadState.reports.status === 'loading';
+  const isMetricsModuleLoading = moduleLoadState.metrics.status === 'loading';
   const dashboardOfflineEmptyMessage =
     isOfflineReadOnly &&
     moduleLoadState.dashboard.status !== 'loaded' &&
@@ -8202,6 +8574,16 @@ export default function PartySupplyApp() {
     pastClosures.length === 0
       ? 'Sin conexión y sin snapshot local de reportes. Volvé a intentarlo con internet.'
       : '';
+  const metricsOfflineEmptyMessage =
+    isOfflineReadOnly &&
+    moduleLoadState.metrics.status !== 'loaded' &&
+    transactions.length === 0 &&
+    expenses.length === 0 &&
+    pastClosures.length === 0 &&
+    budgets.length === 0 &&
+    orders.length === 0
+      ? 'Sin conexion y sin snapshot local de metricas. Volve a intentarlo con internet.'
+      : '';
   const cloudStatusMeta = (() => {
     const isAnyModuleLoading =
       moduleLoadState.core.status === 'loading' ||
@@ -8209,7 +8591,8 @@ export default function PartySupplyApp() {
       moduleLoadState.dashboard.status === 'loading' ||
       moduleLoadState.history.status === 'loading' ||
       moduleLoadState.orders.status === 'loading' ||
-      moduleLoadState.reports.status === 'loading';
+      moduleLoadState.reports.status === 'loading' ||
+      moduleLoadState.metrics.status === 'loading';
 
     if (isAuthBootLoading || isCloudLoading || isAnyModuleLoading || isReconnectAttempting) {
       return {
@@ -8248,6 +8631,7 @@ export default function PartySupplyApp() {
     orders: 'Pedidos',
     history: 'Historial de Ventas',
     reports: 'Reportes de Caja',
+    metrics: 'Métricas',
     logs: 'Registro de Acciones',
     sessions: 'Gestor de Sesiones',
     extras: 'Gestión de Extras',
@@ -8552,6 +8936,7 @@ export default function PartySupplyApp() {
             <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} offers={offers} currentUser={currentUser} userCatalog={userCatalog} isLoading={isOrdersModuleLoading && budgets.length === 0 && orders.length === 0} emptyStateMessage={ordersOfflineEmptyMessage} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onUpdateOrder={handleUpdateOrder} onDeleteBudget={handleDeleteBudget} onDeleteOrder={handleDeleteOrder} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
             <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={historyLogs} inventory={inventory} currentUser={currentUser} userCatalog={userCatalog} members={members} isLoading={isHistoryModuleLoading && transactions.length === 0 && historyLogs.length === 0} emptyStateMessage={historyOfflineEmptyMessage} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setHistoryLogs} navigationRequest={historyNavigationRequest} onSoftReload={() => Promise.all([loadHistoryCloudData({ force: true }), loadTransactionsCloudData({ force: true })])} isActive={activeTab === 'history'} /></PersistentTabPanel>
             {canViewReports && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members} isLoading={isReportsModuleLoading && pastClosures.length === 0} emptyStateMessage={reportsOfflineEmptyMessage} onLoadReportDetail={fetchCashClosureDetailById} /></PersistentTabPanel>)}
+            {canViewMetrics && (<PersistentTabPanel tab="metrics" activeTab={activeTab} className="h-full min-h-0"><MetricsView transactions={transactions} expenses={expenses} pastClosures={pastClosures} inventory={inventory} members={members} budgets={budgets} orders={orders} dailyLogs={dailyLogs} currentUser={currentUser} userCatalog={userCatalog} isLoading={isMetricsModuleLoading && transactions.length === 0 && expenses.length === 0 && pastClosures.length === 0} emptyStateMessage={metricsOfflineEmptyMessage} onRefresh={() => loadMetricsCloudData({ force: true })} isActive={activeTab === 'metrics'} /></PersistentTabPanel>)}
             {canViewLogs && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView initialLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} userCatalog={userCatalog} isActive={activeTab === 'logs'} /></PersistentTabPanel>)}
             {canViewSessions && (<PersistentTabPanel tab="sessions" activeTab={activeTab} className="h-full min-h-0"><SessionsView initialLogs={dailyLogs} currentSessionMeta={currentSessionMeta} userCatalog={userCatalog} /></PersistentTabPanel>)}
             {canViewUserManagement && (

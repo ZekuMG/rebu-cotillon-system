@@ -4,7 +4,7 @@
 import React from 'react';
 import {
   Edit2, XCircle, X, FileText, Calendar, User,
-  CreditCard, ShoppingCart, Trash2, UserCheck, ArrowRight 
+  CreditCard, ShoppingCart, Trash2, UserCheck, ArrowRight, Gift
 } from 'lucide-react';
 import { formatNumber } from '../../utils/helpers';
 import { hasPermission } from '../../utils/userPermissions';
@@ -37,6 +37,13 @@ const getHistoryBadgeUser = (transaction) => {
 
   return { id: transaction?.userId, role: transaction?.userRole, name: transaction?.user };
 };
+
+const isRedemptionItem = (item = {}) =>
+  Boolean(item.isReward || item.is_reward || /^canje\s*:/i.test(String(item.title || item.product_title || item.name || '')));
+const getHistoryItemTitle = (item = {}) =>
+  String(item.title || item.product_title || item.name || 'Producto Desconocido')
+    .replace(/^canje\s*:\s*/i, '')
+    .trim() || 'Canje';
 
 // ==========================================
 // MODAL: DETALLE DE TRANSACCIÓN
@@ -101,10 +108,23 @@ export const TransactionDetailModal = ({
     transaction.payment,
     transaction.installments,
   );
+  const itemCount = (transaction.items || []).length;
+  const totalQuantity = (transaction.items || []).reduce((sum, item) => {
+    if (isRedemptionItem(item)) return sum;
+    return sum + (Number(item.qty || item.quantity || 0) || 0);
+  }, 0);
+  const statusLabel = isVoided ? 'Anulada' : transaction.isHistoric ? 'Historica' : 'Completada';
+  const statusClass = isVoided
+    ? 'border-red-200 bg-red-50 text-red-700'
+    : transaction.isHistoric
+      ? 'border-slate-200 bg-slate-50 text-slate-600'
+      : 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  const hasCashPayment = paymentItems.some((item) => item.method === 'Efectivo');
+  const paymentDetails = paymentItems.map((item) => item.title || item.label || item.method).join(' + ');
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-40 p-4 animate-in fade-in duration-200">
-      <div className="bg-[#f8fafc] rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
+      <div className="bg-[#f8fafc] rounded-2xl shadow-2xl max-w-5xl w-full max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
         
         {/* HEADER */}
         <div className={`px-4 py-3 border-b flex justify-between items-center ${isVoided ? 'bg-red-50 border-red-100' : 'bg-white border-slate-200'}`}>
@@ -129,16 +149,16 @@ export const TransactionDetailModal = ({
         </div>
 
         {/* BODY */}
-        <div className="px-4 py-3 overflow-y-auto flex-1 space-y-3">
+        <div className="grid h-[min(70vh,620px)] min-h-0 gap-3 overflow-hidden px-3 py-3 lg:grid-cols-[390px_minmax(0,1fr)] lg:grid-rows-[188px_132px_92px_92px]">
           
-          <div className="grid grid-cols-3 gap-2.5">
-            <div className="bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center">
+          <div className="grid h-full min-h-0 grid-cols-2 auto-rows-[92px] gap-2 overflow-y-auto pr-1 custom-scrollbar lg:col-start-1">
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
               <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-0.5 flex items-center gap-1.5"><Calendar size={12}/> Fecha</p>
               <p className="font-bold text-slate-700 text-xs">{transaction.date}</p>
               <p className="text-slate-400 font-medium text-[10px] leading-none mt-0.5">{transaction.timestamp || transaction.time || '--:--'} hs</p>
             </div>
             
-            <div className="bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center items-start">
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
               <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-0.5 flex items-center gap-1.5"><User size={12}/> Cajero</p>
               <UserDisplayBadge
                 user={getHistoryBadgeUser(transaction)}
@@ -148,13 +168,11 @@ export const TransactionDetailModal = ({
               />
             </div>
 
-            <div className="bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center">
+            <div className="col-span-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
               <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-0.5 flex items-center gap-1.5"><CreditCard size={12}/> Pago</p>
               <span className="font-bold text-slate-700 text-xs truncate">{paymentSummary}</span>
-              {paymentItems.length > 1 && (
-                <span className="text-blue-600 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded text-[9px] font-bold mt-1 w-max leading-none">
-                  {paymentItems.length} tramos
-                </span>
+              {paymentDetails && paymentDetails !== paymentSummary && (
+                <p className="mt-1 truncate text-[10px] font-bold text-slate-400" title={paymentDetails}>{paymentDetails}</p>
               )}
               {paymentItems.some((item) => item.method === 'Credito') && transaction.installments > 0 && (
                 <span className="text-blue-600 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded text-[9px] font-bold mt-1 w-max leading-none">
@@ -174,7 +192,7 @@ export const TransactionDetailModal = ({
             </div>
           </div>
 
-          <div className="bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-sm flex flex-col">
+          <div className="h-[132px] rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm lg:col-start-1">
             <p className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5">
               <UserCheck size={12}/> Cliente / Socio
             </p>
@@ -218,7 +236,7 @@ export const TransactionDetailModal = ({
                 )}
               </div>
             ) : (
-              <div className="flex items-center gap-2.5 text-slate-400 bg-slate-50 px-2.5 py-2 rounded-lg border border-slate-100">
+              <div className="grid grid-cols-[34px_1fr] items-center gap-2 text-slate-400 bg-slate-50 px-2.5 py-2 rounded-lg border border-slate-100">
                 <div className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center shadow-sm">
                   <User size={14} className="text-slate-400"/>
                 </div>
@@ -227,8 +245,42 @@ export const TransactionDetailModal = ({
             )}
           </div>
 
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-            <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 flex justify-between items-center">
+          <div className="grid h-[92px] grid-cols-2 gap-2 lg:col-start-1">
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <p className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Estado</p>
+              <span className={`inline-block rounded-lg border px-2 py-1 text-[10px] font-black uppercase tracking-wider ${statusClass}`}>
+                {statusLabel}
+              </span>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <p className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Total</p>
+              <p className={`truncate text-[16px] font-black ${isVoided ? 'text-red-700 line-through' : 'text-blue-600'}`}>
+                <FancyPrice amount={Number(transaction.total) || 0} />
+              </p>
+            </div>
+          </div>
+
+          <div className="grid h-[92px] grid-cols-2 gap-2 lg:col-start-1">
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <p className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Items</p>
+              <p className="text-[15px] font-black text-slate-700">{itemCount}</p>
+              <p className="text-[10px] font-bold text-slate-400">{formatNumber(totalQuantity)} unidades</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <p className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Efectivo</p>
+              {hasCashPayment ? (
+                <>
+                  <p className="text-[10px] font-bold text-emerald-600">Recibido: <FancyPrice amount={Number(transaction.cashReceived || transaction.total || 0)} /></p>
+                  <p className="text-[10px] font-bold text-emerald-600">Devolucion: <FancyPrice amount={Number(transaction.cashChange || 0)} /></p>
+                </>
+              ) : (
+                <p className="text-[12px] font-bold text-slate-400">No aplica</p>
+              )}
+            </div>
+          </div>
+
+          <div className="grid h-full min-h-0 grid-rows-[42px_minmax(0,1fr)_60px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:col-start-2 lg:row-start-1 lg:row-span-4">
+            <div className="grid grid-cols-[1fr_auto] items-center border-b border-slate-200 bg-slate-50 px-3 py-2">
               <p className="text-slate-600 text-[10px] font-black uppercase tracking-wider flex items-center gap-2">
                 <ShoppingCart size={14}/> Detalles del Pedido
               </p>
@@ -237,7 +289,7 @@ export const TransactionDetailModal = ({
               </span>
             </div>
             
-            <div className="divide-y divide-slate-100 max-h-[320px] overflow-y-auto custom-scrollbar">
+            <div className="min-h-0 divide-y divide-slate-100 overflow-y-auto custom-scrollbar">
               {(transaction.items || []).map((item, idx) => {
                 const rawQty = item.qty || item.quantity;
                 const qty = Number(rawQty) || 0;
@@ -257,18 +309,27 @@ export const TransactionDetailModal = ({
                 
                 const isWeight = item.product_type === 'weight' || item.isWeight || (qty >= 20 && price < 50);
                 const displayUnitPrice = isWeight && price < 100 ? price * 1000 : price;
+                const isRedemption = isRedemptionItem(item);
 
                 return (
-                  <div key={idx} className={`px-3.5 py-2.5 flex justify-between items-center transition-colors hover:bg-slate-50 ${isVoided ? 'opacity-50' : ''}`}>
+                  <div key={idx} className={`px-3 py-2 flex justify-between items-center transition-colors hover:bg-slate-50 ${isVoided ? 'opacity-50' : ''}`}>
                     <div className="flex-1 pr-3">
                       <p className={`font-bold text-[11px] mb-0.5 leading-tight ${isVoided ? 'line-through text-slate-400' : 'text-slate-700'}`}>
-                        {item.title || item.product_title || item.name || 'Producto Desconocido'}
+                        {getHistoryItemTitle(item)}
                       </p>
                       <p className="text-[10px] text-slate-400 font-medium flex items-center gap-1.5 leading-tight">
-                        <span className="font-bold text-slate-600 bg-white border border-slate-200 shadow-sm px-1.5 py-0.5 rounded leading-none">
-                          {formatNumber(qty)}{isWeight ? 'g' : ' u.'}
-                        </span>
-                        x <FancyPrice amount={displayUnitPrice} /> {isWeight ? '/Kg' : 'c/u'}
+                        {isRedemption ? (
+                          <span className="inline-flex items-center gap-1 rounded border border-fuchsia-200 bg-fuchsia-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] text-fuchsia-700 leading-none">
+                            <Gift size={10} /> Canje
+                          </span>
+                        ) : (
+                          <>
+                            <span className="font-bold text-slate-600 bg-white border border-slate-200 shadow-sm px-1.5 py-0.5 rounded leading-none">
+                              {formatNumber(qty)}{isWeight ? 'g' : ' u.'}
+                            </span>
+                            x <FancyPrice amount={displayUnitPrice} /> {isWeight ? '/Kg' : 'c/u'}
+                          </>
+                        )}
                       </p>
                       {comboIncludedItems.length > 0 && (
                         <div className="mt-1.5 rounded-lg border border-violet-100 bg-violet-50/70 px-2 py-1.5">
@@ -294,7 +355,7 @@ export const TransactionDetailModal = ({
               })}
             </div>
 
-            <div className={`px-4 py-3 border-t flex justify-between items-center ${isVoided ? 'bg-red-50 border-red-100' : 'bg-blue-50/50 border-blue-100'}`}>
+            <div className={`px-3 py-2.5 border-t flex justify-between items-center ${isVoided ? 'bg-red-50 border-red-100' : 'bg-blue-50/50 border-blue-100'}`}>
               <span className={`text-[11px] font-black uppercase tracking-[0.18em] ${isVoided ? 'text-red-700' : 'text-blue-800'}`}>
                 Total Final
               </span>

@@ -465,7 +465,7 @@ export default function useDashboardData({
         const qty = Number(item.qty) || Number(item.quantity) || 0;
         const revenue = getRankingItemRevenue(item, tx.total);
         
-        const liveProduct = inventory ? inventory.find(p => p.id === (item.id || item.productId)) : null;
+        const liveProduct = getLiveProductForItem(item);
         const isWeightItem = isLegacyWeightLikeItem(item, liveProduct);
 
         let keys = [];
@@ -500,7 +500,14 @@ export default function useDashboardData({
     });
 
     return Object.values(statsMap)
-      .sort((a, b) => b[rankingCriteria || 'revenue'] - a[rankingCriteria || 'revenue'])
+      .sort((a, b) => {
+        if (rankingCriteria !== 'qty' || rankingMode !== 'categories') {
+          return b[rankingCriteria || 'revenue'] - a[rankingCriteria || 'revenue'];
+        }
+        const aQtyScore = Number(a.unitQty || 0) + (Number(a.weightQty || 0) / 1000);
+        const bQtyScore = Number(b.unitQty || 0) + (Number(b.weightQty || 0) / 1000);
+        return bQtyScore - aQtyScore;
+      })
       .slice(0, 10); 
   }, [filteredData, rankingMode, rankingCriteria, inventory]);
 

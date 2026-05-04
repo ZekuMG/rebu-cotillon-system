@@ -7,14 +7,25 @@ import {
   FileText,
   Barcode,
   Package,
-  ShoppingCart,
-  AlertCircle
+  ShoppingCart
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../../data';
 // ♻️ FIX: Importamos FancyPrice
 import AsyncActionButton from '../AsyncActionButton';
 import { FancyPrice } from '../FancyPrice';
 import usePendingAction from '../../hooks/usePendingAction';
+import {
+  createPaymentLine,
+  getPaymentBreakdownTotals,
+  getPaymentLineCashChange,
+  getPaymentLineCashMissing,
+  getPaymentLineCashReceived,
+  getPaymentLineChargedTotal,
+  getPaymentSummary,
+  normalizePaymentBreakdown,
+} from '../../utils/paymentBreakdown';
+
+const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
 export const EditTransactionModal = ({
   transaction, onClose, inventory, setEditingTransaction,
@@ -23,28 +34,13 @@ export const EditTransactionModal = ({
 }) => {
   const searchInputRef = useRef(null);
   const { isPending, runAction } = usePendingAction();
-  const safeTotal = Number(transaction?.total || 0);
-  const cashReceivedAmount = (() => {
-    if (!transaction || transaction.payment !== 'Efectivo') return 0;
-    if (transaction.cashReceived === '' || transaction.cashReceived === null || transaction.cashReceived === undefined) {
-      return safeTotal;
-    }
-    const parsed = Number(transaction.cashReceived);
-    return Number.isFinite(parsed) ? parsed : safeTotal;
-  })();
-  const cashChangeAmount = transaction?.payment === 'Efectivo'
-    ? Math.max(0, cashReceivedAmount - safeTotal)
-    : 0;
-  const cashMissingAmount = transaction?.payment === 'Efectivo'
-    ? Math.max(0, safeTotal - cashReceivedAmount)
-    : 0;
 
   // Auto-focus en el buscador para que la pistola láser funcione directo
   useEffect(() => {
-    if (transaction) {
+    if (transaction?.id) {
       setTimeout(() => searchInputRef.current?.focus(), 100);
     }
-  }, [transaction]);
+  }, [transaction?.id]);
 
   // Lector de Código de Barras Global para el Modal
   useEffect(() => {
@@ -53,6 +49,13 @@ export const EditTransactionModal = ({
 
     const handleKeyDown = (e) => {
       if (!transaction) return;
+      const target = e.target;
+      const isTypingField =
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.tagName === 'SELECT' ||
+        target?.isContentEditable;
+      if (isTypingField && target !== searchInputRef.current) return;
       
       if (e.key === 'Enter' && buffer.length > 3) {
         e.preventDefault();
@@ -84,9 +87,83 @@ export const EditTransactionModal = ({
     return price >= 100 ? price * (qty / 1000) : price * qty;
   };
 
-  const recalculateTotal = (items, payment) => {
-    const subtotal = items.reduce((acc, i) => acc + getLineSubtotal(i), 0);
-    return payment === 'Credito' ? subtotal * 1.1 : subtotal;
+  const getItemsSubtotal = (items = []) =>
+    items.reduce((acc, i) => acc + getLineSubtotal(i), 0);
+
+  const getTransactionPaymentLines = (sourceTransaction, subtotal) => {
+    if (Array.isArray(sourceTransaction.paymentBreakdown) && sourceTransaction.paymentBreakdown.length > 0) {
+      return normalizePaymentBreakdown(
+        sourceTransaction.paymentBreakdown,
+        sourceTransaction.payment,
+        sourceTransaction.installments,
+        sourceTransaction.cashReceived,
+        sourceTransaction.cashChange,
+        sourceTransaction.total,
+      );
+    }
+
+    return [
+      createPaymentLine({
+        id: 'edit_payment_primary',
+        method: sourceTransaction.payment || 'Efectivo',
+        amount: subtotal,
+        installments: sourceTransaction.payment === 'Credito' ? Number(sourceTransaction.installments || 1) || 1 : 0,
+        cashReceived: sourceTransaction.payment === 'Efectivo' ? (sourceTransaction.cashReceived || subtotal) : 0,
+      }),
+    ];
+  };
+
+  const buildPaymentState = (sourceTransaction, items, requestedLines = null) => {
+    const subtotal = roundCurrency(getItemsSubtotal(items));
+    const sourceLines = requestedLines || getTransactionPaymentLines(sourceTransaction, subtotal);
+    const lineCount = sourceLines.length > 1 ? 2 : 1;
+    const primarySource = sourceLines[0] || createPaymentLine({ id: 'edit_payment_primary', method: 'Efectivo', amount: subtotal });
+    const secondarySource = sourceLines[1] || createPaymentLine({
+      id: 'edit_payment_secondary',
+      method: primarySource.method === 'Efectivo' ? 'Debito' : 'Efectivo',
+      amount: 0,
+    });
+    const primaryAmount = lineCount > 1
+      ? Math.min(Math.max(roundCurrency(primarySource.amount || 0), 0), subtotal)
+      : subtotal;
+    const secondaryAmount = lineCount > 1 ? Math.max(roundCurrency(subtotal - primaryAmount), 0) : 0;
+    const baseLines = lineCount > 1
+      ? [
+          { ...primarySource, amount: primaryAmount },
+          { ...secondarySource, amount: secondaryAmount },
+        ]
+      : [{ ...primarySource, amount: subtotal }];
+    const normalizedLines = normalizePaymentBreakdown(baseLines, primarySource.method || 'Efectivo', primarySource.installments || 0, 0, 0, subtotal);
+    const totals = getPaymentBreakdownTotals(normalizedLines);
+    const payment = getPaymentSummary(normalizedLines, normalizedLines[0]?.method || 'Efectivo', normalizedLines[0]?.installments || 0);
+
+    return {
+      subtotal,
+      total: totals.chargedTotal,
+      payment,
+      paymentBreakdown: normalizedLines,
+      installments: normalizedLines.find((line) => line.method === 'Credito')?.installments || 0,
+      cashReceived: normalizedLines
+        .filter((line) => line.method === 'Efectivo')
+        .reduce((sum, line) => sum + getPaymentLineCashReceived(line), 0),
+      cashChange: normalizedLines
+        .filter((line) => line.method === 'Efectivo')
+        .reduce((sum, line) => sum + getPaymentLineCashChange(line), 0),
+    };
+  };
+
+  const applyTransactionState = (draftTransaction, nextItems = draftTransaction.items, requestedLines = null) => {
+    const paymentState = buildPaymentState(draftTransaction, nextItems, requestedLines);
+    setEditingTransaction({
+      ...draftTransaction,
+      items: nextItems,
+      total: paymentState.total,
+      payment: paymentState.payment,
+      paymentBreakdown: paymentState.paymentBreakdown,
+      installments: paymentState.installments,
+      cashReceived: paymentState.cashReceived,
+      cashChange: paymentState.cashChange,
+    });
   };
 
   const handleAddLocalItem = (product) => {
@@ -105,13 +182,7 @@ export const EditTransactionModal = ({
         product_type: product.product_type || 'quantity'
       });
     }
-    const nextTotal = recalculateTotal(newItems, transaction.payment);
-    setEditingTransaction({
-      ...transaction,
-      items: newItems,
-      total: nextTotal,
-      cashChange: transaction.payment === 'Efectivo' ? Math.max(0, cashReceivedAmount - nextTotal) : 0,
-    });
+    applyTransactionState(transaction, newItems);
     setTransactionSearch('');
   };
 
@@ -119,52 +190,106 @@ export const EditTransactionModal = ({
     const newItems = [...transaction.items];
     const numValue = value === '' ? '' : Number(value);
     newItems[index] = { ...newItems[index], [field]: numValue };
-    const nextTotal = recalculateTotal(newItems, transaction.payment);
-    setEditingTransaction({
-      ...transaction,
-      items: newItems,
-      total: nextTotal,
-      cashChange: transaction.payment === 'Efectivo' ? Math.max(0, cashReceivedAmount - nextTotal) : 0,
-    });
+    applyTransactionState(transaction, newItems);
   };
 
   const handleRemoveLocalItem = (index) => {
     const newItems = transaction.items.filter((_, i) => i !== index);
-    const nextTotal = recalculateTotal(newItems, transaction.payment);
-    setEditingTransaction({
-      ...transaction,
-      items: newItems,
-      total: nextTotal,
-      cashChange: transaction.payment === 'Efectivo' ? Math.max(0, cashReceivedAmount - nextTotal) : 0,
-    });
+    applyTransactionState(transaction, newItems);
   };
 
   const handlePaymentChangeLocal = (payment) => {
-    const nextTotal = recalculateTotal(transaction.items, payment);
-    const nextCashReceived = payment === 'Efectivo' ? (cashReceivedAmount || nextTotal) : 0;
-    setEditingTransaction({
-      ...transaction,
-      payment,
-      installments: payment === 'Credito' ? 1 : 0,
-      total: nextTotal,
-      cashReceived: nextCashReceived,
-      cashChange: payment === 'Efectivo' ? Math.max(0, nextCashReceived - nextTotal) : 0,
-    });
+    const subtotal = roundCurrency(getItemsSubtotal(transaction.items));
+    applyTransactionState(
+      { ...transaction, payment, installments: payment === 'Credito' ? 1 : 0, paymentBreakdown: null },
+      transaction.items,
+      [createPaymentLine({
+        id: 'edit_payment_primary',
+        method: payment,
+        amount: subtotal,
+        installments: payment === 'Credito' ? 1 : 0,
+        cashReceived: payment === 'Efectivo' ? subtotal : 0,
+      })],
+    );
+  };
+
+  const paymentLines = Array.isArray(transaction.paymentBreakdown) && transaction.paymentBreakdown.length > 0
+    ? normalizePaymentBreakdown(
+        transaction.paymentBreakdown,
+        transaction.payment,
+        transaction.installments,
+        transaction.cashReceived,
+        transaction.cashChange,
+        transaction.total,
+      )
+    : buildPaymentState(transaction, transaction.items).paymentBreakdown;
+  const isSplitPayment = paymentLines.length > 1;
+  const itemsSubtotal = roundCurrency(getItemsSubtotal(transaction.items));
+  const paymentTotals = getPaymentBreakdownTotals(paymentLines);
+  const cashMissingAmount = paymentTotals.cashMissingTotal;
+  const cashChangeAmount = paymentTotals.cashChangeTotal;
+  const creditSurcharge = paymentTotals.surchargeTotal;
+
+  const updatePaymentLines = (updater) => {
+    const nextLines = typeof updater === 'function' ? updater(paymentLines.map((line) => ({ ...line }))) : updater;
+    applyTransactionState(transaction, transaction.items, nextLines);
+  };
+
+  const handleSplitPaymentToggle = () => {
+    if (isSplitPayment) {
+      const primary = paymentLines[0] || createPaymentLine({ method: 'Efectivo', amount: itemsSubtotal });
+      updatePaymentLines([{ ...primary, amount: itemsSubtotal }]);
+      return;
+    }
+
+    const primary = paymentLines[0] || createPaymentLine({ method: 'Efectivo', amount: itemsSubtotal });
+    const primaryAmount = Math.min(roundCurrency(itemsSubtotal / 2), itemsSubtotal);
+    updatePaymentLines([
+      { ...primary, amount: primaryAmount },
+      createPaymentLine({
+        id: 'edit_payment_secondary',
+        method: primary.method === 'Efectivo' ? 'Debito' : 'Efectivo',
+        amount: Math.max(roundCurrency(itemsSubtotal - primaryAmount), 0),
+      }),
+    ]);
+  };
+
+  const handlePaymentLineMethodChange = (lineIndex, method) => {
+    updatePaymentLines((lines) =>
+      lines.map((line, index) => (
+        index === lineIndex
+          ? {
+              ...line,
+              method,
+              installments: method === 'Credito' ? Number(line.installments || 1) || 1 : 0,
+              cashReceived: method === 'Efectivo' ? getPaymentLineChargedTotal({ ...line, method }) : 0,
+            }
+          : line
+      ))
+    );
+  };
+
+  const handlePrimaryPaymentAmountChange = (value) => {
+    const primaryAmount = Math.min(Math.max(roundCurrency(value), 0), itemsSubtotal);
+    updatePaymentLines((lines) => [
+      { ...lines[0], amount: primaryAmount },
+      { ...(lines[1] || createPaymentLine({ method: 'Debito' })), amount: Math.max(roundCurrency(itemsSubtotal - primaryAmount), 0) },
+    ]);
   };
 
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-[200] p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-[16px] shadow-2xl w-full max-w-2xl flex flex-col max-h-[95vh] border border-slate-200">
+      <div className="bg-white rounded-[16px] shadow-2xl w-full max-w-4xl flex flex-col max-h-[90vh] border border-slate-200">
         
         {/* HEADER */}
-        <div className="flex justify-between items-center p-5 border-b border-slate-100 bg-slate-50/50 rounded-t-[16px]">
+        <div className="flex justify-between items-center p-3 border-b border-slate-100 bg-slate-50/50 rounded-t-[16px]">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shadow-sm">
-              <ShoppingCart size={20} />
+            <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shadow-sm">
+              <ShoppingCart size={17} />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-800">Modificar Venta #{transaction.id}</h3>
-              <p className="text-xs text-slate-500">Agrega, quita o edita precios y cantidades</p>
+              <h3 className="text-base font-bold text-slate-800">Modificar Venta #{transaction.id}</h3>
+              <p className="text-[11px] text-slate-500">Agrega, quita o ajusta cantidades</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 bg-white border border-slate-200 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-50 transition-colors">
@@ -173,17 +298,85 @@ export const EditTransactionModal = ({
         </div>
 
         {/* BODY */}
-        <div className="flex-1 overflow-y-auto p-5 custom-scrollbar bg-[#f8fafc]">
+        <div className="grid h-[min(66vh,580px)] min-h-0 grid-cols-1 overflow-hidden bg-[#f8fafc] lg:grid-cols-[330px_minmax(0,1fr)]">
+          <div className="min-h-0 space-y-2 overflow-y-auto border-r border-slate-200 p-3 custom-scrollbar">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+                <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Subtotal</p>
+                <p className="mt-1 text-sm font-black text-slate-800"><FancyPrice amount={itemsSubtotal} /></p>
+              </div>
+              <div className="rounded-xl border border-green-200 bg-green-50 px-3 py-2 shadow-sm">
+                <p className="text-[9px] font-black uppercase tracking-[0.12em] text-green-600">Total</p>
+                <p className="mt-1 text-sm font-black text-green-700"><FancyPrice amount={transaction.total} /></p>
+              </div>
+            </div>
+
+            {creditSurcharge > 0 && (
+              <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-800">
+                <AlertTriangle size={13} className="mr-1 inline" /> Recargo credito: <FancyPrice amount={creditSurcharge} />
+              </div>
+            )}
+
+            <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Pago</p>
+                <button type="button" onClick={handleSplitPaymentToggle} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-black text-slate-600 transition hover:bg-slate-100">
+                  {isSplitPayment ? 'Un solo pago' : 'Dividir pago'}
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {paymentLines.map((line, lineIndex) => {
+                  const isCash = line.method === 'Efectivo';
+                  const cashMissing = getPaymentLineCashMissing(line);
+                  const cashChange = getPaymentLineCashChange(line);
+                  return (
+                    <div key={line.id || `edit-payment-${lineIndex}`} className="rounded-xl border border-slate-200 bg-slate-50 p-2">
+                      <div className="grid grid-cols-[1fr_96px] gap-2">
+                        <select className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" value={line.method} onChange={(e) => handlePaymentLineMethodChange(lineIndex, e.target.value)}>
+                          {PAYMENT_METHODS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
+                        </select>
+                        {isSplitPayment && lineIndex === 0 ? (
+                          <input type="number" min="0" step="1" className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-right text-[11px] font-black text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" value={line.amount} onChange={(e) => handlePrimaryPaymentAmountChange(e.target.value)} />
+                        ) : (
+                          <div className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-right text-[11px] font-black text-slate-700"><FancyPrice amount={line.amount} /></div>
+                        )}
+                      </div>
+
+                      {line.method === 'Credito' && (
+                        <select className="mt-2 w-full rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-[11px] font-bold text-blue-800 outline-none focus:ring-2 focus:ring-blue-500" value={Number(line.installments || 1)} onChange={(e) => updatePaymentLines((lines) => lines.map((entry, index) => index === lineIndex ? { ...entry, installments: Number(e.target.value || 1) || 1 } : entry))}>
+                          <option value={1}>1 pago</option><option value={3}>3 cuotas</option><option value={6}>6 cuotas</option><option value={12}>12 cuotas</option>
+                        </select>
+                      )}
+
+                      {isCash && (
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <label className="block">
+                            <span className="text-[9px] font-black uppercase tracking-[0.1em] text-emerald-700">Recibido</span>
+                            <input type="number" min="0" step="1" className="mt-1 w-full rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-[11px] font-bold text-slate-800 outline-none focus:ring-2 focus:ring-emerald-500" value={line.cashReceived ?? ''} onChange={(e) => updatePaymentLines((lines) => lines.map((entry, index) => index === lineIndex ? { ...entry, cashReceived: e.target.value } : entry))} />
+                          </label>
+                          <div className={`rounded-lg border px-2 py-1.5 ${cashMissing > 0 ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+                            <p className="text-[9px] font-black uppercase tracking-[0.1em]">{cashMissing > 0 ? 'Falta' : 'Cambio'}</p>
+                            <p className="mt-1 text-[11px] font-black"><FancyPrice amount={cashMissing > 0 ? cashMissing : cashChange} /></p>
+                          </div>
+                        </div>
+                      )}
+                      <p className="mt-1 text-right text-[10px] font-bold text-slate-500">Cobra <FancyPrice amount={getPaymentLineChargedTotal(line)} /></p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           
           {/* Buscador */}
-          <div className="mb-4 relative">
+          <div className="relative hidden">
             <div className="flex items-center border border-slate-200 rounded-xl px-3 bg-white shadow-sm focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-blue-500 transition-all">
               <Search size={16} className="text-slate-400" />
-              <input 
+              <input
                 ref={searchInputRef}
                 type="text" 
                 placeholder="Buscar por nombre o escanear código de barras..." 
-                className="w-full p-2.5 bg-transparent text-sm outline-none text-slate-700" 
+                className="w-full p-2 bg-transparent text-xs outline-none text-slate-700"
                 value={transactionSearch} 
                 onChange={(e) => setTransactionSearch(e.target.value)} 
               />
@@ -210,14 +403,49 @@ export const EditTransactionModal = ({
             )}
           </div>
 
-          {/* Lista de Productos Modificables */}
-          <div className="space-y-2">
+          </div>
+
+          <div className="min-h-0 overflow-y-auto p-3 custom-scrollbar">
+          <div className="relative mb-2">
+            <div className="flex items-center border border-slate-200 rounded-xl px-3 bg-white shadow-sm focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-blue-500 transition-all">
+              <Search size={16} className="text-slate-400" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder="Buscar por nombre o escanear codigo de barras..."
+                className="w-full p-2 bg-transparent text-xs outline-none text-slate-700"
+                value={transactionSearch}
+                onChange={(e) => setTransactionSearch(e.target.value)}
+              />
+              <Barcode size={18} className="text-slate-300" />
+            </div>
+
+            {transactionSearch && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 shadow-xl rounded-xl max-h-48 overflow-y-auto z-20 p-1 animate-in fade-in slide-in-from-top-2">
+                {inventory.filter((p) => p.title.toLowerCase().includes(transactionSearch.toLowerCase())).map((p) => (
+                  <button key={p.id} onClick={() => handleAddLocalItem(p)} className="w-full text-left p-2.5 hover:bg-blue-50 text-sm flex justify-between items-center rounded-lg transition-colors group">
+                    <span className="font-medium text-slate-700 group-hover:text-blue-700 flex items-center gap-2">
+                      <Package size={14} className="text-slate-400" /> {p.title}
+                    </span>
+                    <span className="font-bold text-slate-800">
+                      <FancyPrice amount={p.price} />
+                    </span>
+                  </button>
+                ))}
+                {inventory.filter((p) => p.title.toLowerCase().includes(transactionSearch.toLowerCase())).length === 0 && (
+                   <div className="p-3 text-center text-sm text-slate-500">No se encontraron productos.</div>
+                )}
+              </div>
+            )}
+          </div>
+          <p className="mb-2 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Productos</p>
+          <div className="space-y-1.5">
             {transaction.items.map((item, index) => {
               const isWeight = item.product_type === 'weight' || item.isWeight || (item.qty > 20 && item.price < 50);
               const rowTotal = getLineSubtotal(item);
 
               return (
-                <div key={`item-${index}`} className="flex items-center gap-3 bg-white p-3 rounded-xl border border-slate-200 shadow-sm transition-all hover:border-blue-300">
+                <div key={`item-${index}`} className="flex items-center gap-2 bg-white p-2 rounded-xl border border-slate-200 shadow-sm transition-all hover:border-blue-300">
                   
                   {/* Nombre */}
                   <div className="flex-1 min-w-[120px]">
@@ -228,14 +456,9 @@ export const EditTransactionModal = ({
                   {/* Precio Unitario */}
                   <div className="w-[90px]">
                     <label className="text-[9px] font-bold text-slate-400 uppercase mb-0.5 block">Precio Unit.</label>
-                    <div className="relative">
-                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">$</span>
-                      <input 
-                        type="number" 
-                        className="w-full pl-5 pr-2 py-1.5 text-xs font-bold border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" 
-                        value={item.price} 
-                        onChange={(e) => handleUpdateItem(index, 'price', e.target.value)} 
-                      />
+                    <div className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-black text-slate-700">
+                      <FancyPrice amount={isWeight && Number(item.price || 0) < 100 ? Number(item.price || 0) * 1000 : Number(item.price || 0)} />
+                      {isWeight && <span className="ml-0.5 text-[9px] text-slate-400">/kg</span>}
                     </div>
                   </div>
 
@@ -247,7 +470,7 @@ export const EditTransactionModal = ({
                         type="number" 
                         min="1"
                         step={isWeight ? "10" : "1"}
-                        className="w-full pr-6 pl-2 py-1.5 text-xs font-bold border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" 
+                        className="w-full pr-6 pl-2 py-1.5 text-xs font-bold border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" 
                         value={item.qty} 
                         onChange={(e) => handleUpdateItem(index, 'qty', e.target.value)} 
                       />
@@ -278,6 +501,7 @@ export const EditTransactionModal = ({
                </div>
             )}
           </div>
+          </div>
         </div>
 
         {/* FOOTER (Opciones de Pago y Guardado) */}
@@ -286,8 +510,8 @@ export const EditTransactionModal = ({
           void runAction(`edit-transaction:${transaction.id}`, async () => {
             await onSave(event);
           });
-        }} className="p-5 border-t border-slate-200 bg-white rounded-b-[16px]">
-          <div className="grid grid-cols-2 gap-4 mb-4">
+        }} className="p-3 border-t border-slate-200 bg-white rounded-b-[16px]">
+          <div className="hidden grid-cols-2 gap-3 mb-3">
             <div>
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Método de Pago</label>
               <select className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-slate-50 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" value={transaction.payment} onChange={(e) => handlePaymentChangeLocal(e.target.value)}>
@@ -303,7 +527,7 @@ export const EditTransactionModal = ({
             </div>
           </div>
           
-          {transaction.payment === 'Credito' && (
+          {transaction.payment === '__legacy_credit__' && (
             <div className="flex items-center justify-between bg-blue-50 p-3 rounded-xl border border-blue-100 mb-4">
               <span className="text-xs font-bold text-blue-800 flex items-center gap-1"><AlertTriangle size={14}/> 10% recargo aplicado</span>
               <select className="text-xs p-1.5 font-bold rounded-lg border border-blue-200 bg-white text-blue-800 outline-none focus:ring-2 focus:ring-blue-500" value={transaction.installments || 1} onChange={(e) => setEditingTransaction({ ...transaction, installments: Number(e.target.value) })}>
@@ -312,7 +536,7 @@ export const EditTransactionModal = ({
             </div>
           )}
 
-          {transaction.payment === 'Efectivo' && (
+          {transaction.payment === '__legacy_cash__' && (
             <div className="mb-4 rounded-xl border border-emerald-100 bg-emerald-50/80 p-3">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <span className="text-xs font-bold text-emerald-800 flex items-center gap-1">
@@ -381,7 +605,7 @@ export const EditTransactionModal = ({
             <textarea className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-amber-50 focus:ring-2 focus:ring-amber-500 outline-none text-amber-900" rows="2" placeholder="Ej: Me equivoqué en el precio, el cliente sumó un producto..." value={editReason} onChange={(e) => setEditReason(e.target.value)}></textarea>
           </div>
 
-          <AsyncActionButton type="submit" pending={isPending(`edit-transaction:${transaction.id}`)} disabled={transaction.items.length === 0 || (transaction.payment === 'Efectivo' && cashMissingAmount > 0) || isPending(`edit-transaction:${transaction.id}`)} loadingLabel="Guardando..." className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-md disabled:bg-slate-300 disabled:cursor-not-allowed">
+          <AsyncActionButton type="submit" pending={isPending(`edit-transaction:${transaction.id}`)} disabled={transaction.items.length === 0 || cashMissingAmount > 0 || isPending(`edit-transaction:${transaction.id}`)} loadingLabel="Guardando..." className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-md disabled:bg-slate-300 disabled:cursor-not-allowed">
             Guardar y Aplicar Cambios
           </AsyncActionButton>
         </form>

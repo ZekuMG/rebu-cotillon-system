@@ -10,6 +10,7 @@ import {
   Receipt,
   CreditCard,
   TicketPercent,
+  Gift,
 } from 'lucide-react';
 import { FancyPrice } from '../FancyPrice';
 import { formatWeight } from '../../utils/helpers';
@@ -61,9 +62,15 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
       ? transaction.client
       : transaction.client?.name || 'Consumidor final';
   const memberNumber = typeof transaction.client === 'object' ? transaction.client?.memberNumber : null;
+  const pointsChangeNew = Number(transaction.pointsChange?.new);
+  const clientCurrentPoints = Number(transaction.client?.currentPoints ?? transaction.client?.points);
   const currentPoints =
     typeof transaction.client === 'object'
-      ? Number(transaction.client?.points ?? transaction.client?.currentPoints ?? 0)
+      ? Number.isFinite(pointsChangeNew)
+        ? pointsChangeNew
+        : Number.isFinite(clientCurrentPoints)
+          ? clientCurrentPoints
+          : 0
       : 0;
   const totalItems = (transaction.items || []).reduce(
     (sum, item) => sum + (Number(item.quantity) || 0),
@@ -84,21 +91,30 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
     return `${Number(item.quantity || 0)} u`;
   };
 
+  const getExplicitSubtotal = (item) => {
+    const explicitSubtotal = Number(item.subtotal ?? item.lineSubtotal ?? item.line_subtotal);
+    return Number.isFinite(explicitSubtotal) && explicitSubtotal !== 0 ? explicitSubtotal : null;
+  };
+
   const getItemSubtotal = (item) => {
     if (item.isReward) return null;
-    const quantityFactor =
-      (item.product_type || 'quantity') === 'weight'
-        ? Number(item.quantity || 0) / 1000
-        : Number(item.quantity || 0);
-    return (Number(item.price) || 0) * quantityFactor;
+    const explicitSubtotal = getExplicitSubtotal(item);
+    if (explicitSubtotal !== null) return explicitSubtotal;
+
+    const price = Number(item.price) || 0;
+    const quantity = Number(item.quantity || 0);
+    if ((item.product_type || 'quantity') !== 'weight') return price * quantity;
+    return price >= 100 ? price * (quantity / 1000) : price * quantity;
   };
 
   const getItemDiscountAmount = (item) => {
-    const quantityFactor =
-      (item.product_type || 'quantity') === 'weight'
-        ? Number(item.quantity || 0) / 1000
-        : Number(item.quantity || 0);
-    return Math.abs((Number(item.price) || 0) * quantityFactor);
+    return Math.abs(getItemSubtotal(item) ?? Number(item.price || 0));
+  };
+
+  const getDisplayUnitPrice = (item) => {
+    const price = Number(item.price || 0);
+    if ((item.product_type || 'quantity') !== 'weight') return price;
+    return price < 100 ? price * 1000 : price;
   };
 
   return (
@@ -113,7 +129,7 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
         </div>
 
         <div className="grid min-h-0 flex-1 gap-0 overflow-hidden lg:grid-cols-[260px_minmax(360px,1fr)_300px]">
-          <div className="order-2 min-h-0 space-y-2 overflow-y-auto px-3.5 pb-3.5 pt-2.5 md:px-4 md:pb-4 md:pt-3">
+          <div className="order-2 min-h-0 space-y-2 overflow-y-auto px-3.5 pb-3.5 pt-1 md:px-4 md:pb-4 md:pt-1.5">
             <div className="hidden">
               <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">Número de compra</p>
               <p className="text-[26px] font-black leading-none text-slate-800 sm:col-start-2 sm:row-start-2">#{String(transaction.id).padStart(6, '0')}</p>
@@ -135,10 +151,10 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
               </div>
             </div>
 
-            <div className="grid gap-1.5 sm:grid-cols-[0.9fr_1.1fr]">
-              <div className="hidden min-w-0 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 min-h-[74px]">
-                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-blue-400">Vendedor</p>
-                <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] font-black leading-tight text-blue-700">
+            <div className="grid gap-1.5 sm:grid-cols-3">
+              <div className="min-w-0 rounded-xl border border-blue-100 bg-blue-50 px-3 py-1.5 min-h-[68px]">
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-blue-400">Usuario</p>
+                <p className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px] font-black leading-tight text-blue-700">
                   <User size={13} className="shrink-0" />
                   <span className="min-w-0 break-words">{transaction.user || 'Sin usuario'}</span>
                 </p>
@@ -232,23 +248,33 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
             </div>
 
             <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-              {paymentItems.map((paymentItem) => (
-                <div key={paymentItem.key} className="rounded-lg border border-slate-200 bg-white/70 px-3 py-1.5">
+              {paymentItems.map((paymentItem) => {
+                const showCashDetail = paymentItem.method === 'Efectivo' && isCashOnlyPayment;
+                return (
+                <div key={paymentItem.key} className="rounded-lg border border-slate-200 bg-white/70 px-3 py-2">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 break-words text-[14px] font-black leading-none text-slate-700">{paymentItem.title}</span>
-                    <span className="shrink-0 text-[15px] font-black text-slate-800">
+                    <span className="min-w-0 break-words text-[15px] font-black leading-none text-slate-700">{paymentItem.title}</span>
+                    <span className="shrink-0 text-[16px] font-black text-slate-800">
                       <FancyPrice amount={paymentItem.chargedAmount || 0} />
                     </span>
                   </div>
-                  {paymentItem.method === 'Efectivo' && isCashOnlyPayment && (
-                    <div className="mt-0.5 flex items-center justify-between text-[11px] font-bold leading-tight">
-                      <span className="text-blue-600">Recibido</span>
-                      <span className="text-blue-700">
-                        <FancyPrice amount={Number(paymentItem.cashReceived || effectiveCashReceived || 0)} />
-                      </span>
+                  {showCashDetail && (
+                    <div className="mt-2 grid grid-cols-2 gap-1.5">
+                      <div className="rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1.5">
+                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-blue-500">Recibido</p>
+                        <p className="mt-0.5 text-[14px] font-black leading-none text-blue-700">
+                          <FancyPrice amount={Number(paymentItem.cashReceived || effectiveCashReceived || 0)} />
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-2.5 py-1.5">
+                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-emerald-500">Devolucion</p>
+                        <p className="mt-0.5 text-[14px] font-black leading-none text-emerald-700">
+                          <FancyPrice amount={Number(paymentItem.cashChange || 0)} />
+                        </p>
+                      </div>
                     </div>
                   )}
-                  {paymentItem.method === 'Efectivo' && isCashOnlyPayment && Number(paymentItem.cashChange || 0) > 0 && (
+                  {paymentItem.method === '__legacy_cash_change__' && isCashOnlyPayment && Number(paymentItem.cashChange || 0) > 0 && (
                     <div className="mt-0.5 flex items-center justify-between text-[11px] font-bold leading-tight">
                       <span className="text-emerald-600">Devolución</span>
                       <span className="text-emerald-700">
@@ -257,7 +283,8 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
               <div className="flex items-end justify-between gap-3 border-t border-slate-200 pt-2">
                 <span className="font-black text-slate-600">TOTAL</span>
                 <span className="text-[28px] font-black leading-none text-green-600">
@@ -267,7 +294,7 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
             </div>
           </div>
 
-          <div className="order-3 flex min-h-0 flex-col border-t border-slate-200 bg-slate-50 px-2.5 pb-2.5 pt-2 lg:max-h-[calc(92vh-150px)] lg:self-start lg:border-l lg:border-t-0 lg:px-[3%] lg:pb-3 lg:pt-2.5">
+          <div className="order-3 flex min-h-0 flex-col border-t border-slate-200 bg-slate-50 px-2.5 pb-2.5 pt-2 lg:h-full lg:border-l lg:border-t-0 lg:px-[3%] lg:pb-3 lg:pt-2.5">
             <div className="flex shrink-0 items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <Package size={15} className="text-slate-500" />
@@ -278,7 +305,7 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
               </span>
             </div>
 
-            <div className="mt-2 max-h-full space-y-1 overflow-y-auto pr-0.5">
+            <div className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto pr-0.5">
               {orderedItems.map((item, index) => {
                 const itemSubtotal = getItemSubtotal(item);
                 const itemDiscountAmount = getItemDiscountAmount(item);
@@ -296,7 +323,11 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-1.5">
                         <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
-                          {itemImage ? (
+                          {isDiscountLike ? (
+                            <div className={`flex h-full w-full items-center justify-center ${isRewardItem ? 'bg-violet-50 text-violet-500' : 'bg-emerald-50 text-emerald-500'}`}>
+                              {isRewardItem ? <Gift size={20} strokeWidth={2.4} /> : <TicketPercent size={20} strokeWidth={2.4} />}
+                            </div>
+                          ) : itemImage ? (
                             <img
                               src={itemImage}
                               alt=""
@@ -305,10 +336,6 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
                               fetchpriority="low"
                               className="h-full w-full object-cover"
                             />
-                          ) : isDiscountLike ? (
-                            <div className={`flex h-full w-full items-center justify-center ${isRewardItem ? 'bg-violet-50 text-violet-500' : 'bg-emerald-50 text-emerald-500'}`}>
-                              <TicketPercent size={20} strokeWidth={2.4} />
-                            </div>
                           ) : (
                             <img
                               src={logoImg}
@@ -326,8 +353,8 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
                             <span>{formatItemQuantity(item)}</span>
                             {isDiscountLike && (
                               <span className={`rounded-full px-2 py-0.5 ${isRewardItem ? 'bg-violet-100 text-violet-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                                <TicketPercent size={10} className="mr-1 inline" />
-                                Descuento
+                                {isRewardItem ? <Gift size={10} className="mr-1 inline" /> : <TicketPercent size={10} className="mr-1 inline" />}
+                                {isRewardItem ? 'Canje' : 'Descuento'}
                               </span>
                             )}
                             {item.isCombo && <span className="rounded-full bg-violet-100 px-2 py-0.5 text-violet-700">Combo</span>}
@@ -338,7 +365,7 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
                               Valor unitario:{' '}
                               <span className="text-slate-600">
                                 {(item.product_type || 'quantity') === 'weight'
-                                  ? `$${Number(item.price || 0).toLocaleString('es-AR')} / kg`
+                                  ? `$${getDisplayUnitPrice(item).toLocaleString('es-AR')} / kg`
                                   : <FancyPrice amount={Number(item.price || 0)} />}
                               </span>
                             </p>
@@ -347,7 +374,7 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
                       </div>
                       <div className="shrink-0 rounded-md bg-slate-50 px-1.5 py-0.5 text-right">
                         <p className={`text-[9px] font-black uppercase tracking-[0.1em] ${isRewardItem ? 'text-violet-400' : isDiscountItem ? 'text-emerald-400' : 'text-slate-400'}`}>
-                          {isDiscountLike ? 'Descuento' : 'Subtotal'}
+                          {isRewardItem ? 'Canje' : isDiscountItem ? 'Descuento' : 'Subtotal'}
                         </p>
                         <p className={`text-[12px] font-black ${isRewardItem ? 'text-violet-600' : isDiscountItem ? 'text-emerald-600' : 'text-slate-800'}`}>
                           {isDiscountLike ? <FancyPrice amount={itemDiscountAmount} /> : <FancyPrice amount={itemSubtotal} />}
@@ -371,8 +398,8 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
               </span>
             </div>
 
-            <div className="mt-2.5 flex min-h-0 flex-1 justify-center overflow-y-auto rounded-lg border border-slate-200 bg-slate-200 p-2.5">
-              <div className="w-[82%] overflow-hidden rounded-sm bg-white px-[3%] py-2.5 shadow-md">
+            <div className="mt-2.5 flex min-h-0 flex-1 items-start justify-center overflow-y-auto rounded-lg border border-slate-200 bg-slate-200 p-2.5">
+              <div className="mx-auto w-[82%] overflow-hidden rounded-sm bg-white px-[3%] py-2.5 shadow-md">
                 <TicketPrintLayout transaction={transaction} />
               </div>
             </div>

@@ -801,7 +801,7 @@ export default function BudgetBuilderModal({
                   onChange={(e) => setSelectedCategory(e.target.value)}
                   className={`mt-2 ${fieldSelectClass} ${fieldShellClass}`}
                 >
-                  <option value="Todas">Todas las categorias</option>
+                  <option value="Todas">Todos</option>
                   {(categories || []).map((category) => (
                     <option key={category} value={category}>
                       {category}

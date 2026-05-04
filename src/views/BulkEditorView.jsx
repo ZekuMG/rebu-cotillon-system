@@ -508,6 +508,7 @@ export default function BulkEditorView({
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
           >
+            <option value="Todas">Todos</option>
             {categories.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
           <button

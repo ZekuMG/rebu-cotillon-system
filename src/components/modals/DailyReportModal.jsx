@@ -13,7 +13,7 @@ import {
   Users // Icono para clientes
 } from 'lucide-react';
 // ♻️ FIX: Importamos formatNumber y FancyPrice
-import { formatNumber } from '../../utils/helpers';
+import { formatNumber, formatWeight } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
 
 export const DailyReportModal = ({ isOpen, onClose, report }) => {
@@ -36,6 +36,18 @@ export const DailyReportModal = ({ isOpen, onClose, report }) => {
   const visibleNewClients = (report.newClients || []).filter(
     (client) => !containsTestWord(client?.name)
   );
+  const getItemQtyLabel = (item = {}) => {
+    const qty = Number(item.qty || 0);
+    const weightQty = Number(item.weightQty || 0);
+    const unitQty = Number(item.unitQty || 0);
+    const isWeight = item.product_type === 'weight' || weightQty > 0;
+
+    if (isWeight && unitQty > 0) {
+      return `${formatWeight(weightQty || qty)} + ${formatNumber(unitQty)} u`;
+    }
+    if (isWeight) return formatWeight(weightQty || qty);
+    return `${formatNumber(unitQty || qty, qty % 1 !== 0 ? 2 : 0)} u`;
+  };
 
   return (
     // CORRECCIÓN VISUAL: Usamos 'items-start' y 'overflow-y-auto' en el padre para evitar que el centro corte el contenido
@@ -178,7 +190,7 @@ export const DailyReportModal = ({ isOpen, onClose, report }) => {
                   {visibleItemsSold.map((item, idx) => (
                     <tr key={idx}>
                       <td className="py-2 px-2 text-slate-700 font-medium truncate max-w-[200px]">{item.title}</td>
-                      <td className="py-2 px-2 text-slate-600 text-center font-bold">{formatNumber(item.qty, item.qty % 1 !== 0 ? 2 : 0)}</td>
+                      <td className="py-2 px-2 text-slate-600 text-center font-bold">{getItemQtyLabel(item)}</td>
                       <td className="py-2 px-2 text-slate-800 text-right font-bold"><FancyPrice amount={item.revenue} /></td>
                     </tr>
                   ))}

@@ -94,6 +94,18 @@ export const APP_PERMISSION_GROUPS = [
     actions: [],
   },
   {
+    id: 'metrics',
+    label: 'Métricas',
+    viewKey: 'metrics.view',
+    actions: [
+      { key: 'metrics.viewProfit', label: 'Ver costos y ganancias' },
+      { key: 'metrics.viewUsers', label: 'Ver métricas por usuario' },
+      { key: 'metrics.viewClients', label: 'Ver métricas de socios/clientes' },
+      { key: 'metrics.export', label: 'Exportar métricas' },
+      { key: 'metrics.configureAlerts', label: 'Configurar alertas' },
+    ],
+  },
+  {
     id: 'logs',
     label: 'Registro de Acciones',
     viewKey: 'logs.view',
@@ -148,6 +160,7 @@ export const APP_TAB_PERMISSION_MAP = {
   orders: 'orders.view',
   history: 'history.view',
   reports: 'reports.view',
+  metrics: 'metrics.view',
   logs: 'logs.view',
   sessions: 'sessions.view',
   extras: 'extras.view',
@@ -237,6 +250,12 @@ const OWNER_PRESET = {
   'history.restoreSale': true,
   'history.deleteSale': true,
   'reports.view': true,
+  'metrics.view': true,
+  'metrics.viewProfit': true,
+  'metrics.viewUsers': true,
+  'metrics.viewClients': true,
+  'metrics.export': true,
+  'metrics.configureAlerts': true,
   'logs.view': true,
   'logs.reprintPdf': true,
   'logs.editNotes': true,
@@ -338,7 +357,7 @@ export const canAccessTab = (user, tabKey) => {
 };
 
 export const getDefaultTabForUser = (user) => {
-  const priority = ['dashboard', 'pos', 'inventory', 'clients', 'agenda', 'orders', 'history', 'extras', 'reports', 'logs', 'sessions', 'bulk-editor', 'user-management'];
+  const priority = ['dashboard', 'pos', 'inventory', 'clients', 'agenda', 'orders', 'history', 'extras', 'reports', 'metrics', 'logs', 'sessions', 'bulk-editor', 'user-management'];
   return priority.find((tabKey) => canAccessTab(user, tabKey)) || 'settings';
 };
 
