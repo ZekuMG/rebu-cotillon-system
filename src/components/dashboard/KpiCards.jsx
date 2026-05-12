@@ -33,21 +33,21 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
   switch (widgetKey) {
     case 'sales':
       return (
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-blue-100 relative overflow-hidden flex flex-col justify-between h-32">
+        <div className="bg-white p-3 rounded-lg shadow-sm border border-blue-100 relative overflow-hidden flex flex-col justify-between h-24">
           <div className="flex justify-between items-start z-10">
-            <span className="text-[15px] font-bold text-blue-400 uppercase">{getPeriodText('Ventas')}</span>
+            <span className="text-[11px] font-black text-blue-400 uppercase tracking-wide">{getPeriodText('Ventas')}</span>
             <Package size={14} className="text-blue-500" />
           </div>
           {/* Este es cantidad de ventas (número entero), usamos formatNumber */}
-          <span className="text-2xl font-bold text-blue-600 z-10">{formatNumber(kpiStats.count)}</span>
+          <span className="text-xl font-black text-blue-600 z-10">{formatNumber(kpiStats.count)}</span>
           <div className="absolute bottom-0 left-0 w-full h-1 bg-blue-400"></div>
         </div>
       );
     case 'revenue':
       return (
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-fuchsia-100 relative overflow-hidden flex flex-col justify-between h-32">
+        <div className="bg-white p-3 rounded-lg shadow-sm border border-fuchsia-100 relative overflow-hidden flex flex-col justify-between h-24">
           <div className="flex justify-between items-start z-10">
-            <span className="text-[15px] font-bold text-fuchsia-400 uppercase">{getPeriodText('Ingreso')}</span>
+            <span className="text-[11px] font-black text-fuchsia-400 uppercase tracking-wide">{getPeriodText('Ingreso')}</span>
             <div className="flex items-center gap-1.5">
               <HintIcon
                 hint="Ingreso bruto vendido en el periodo seleccionado."
@@ -58,7 +58,7 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
             </div>
           </div>
           {/* ♻️ FIX: FancyPrice */}
-          <span className="text-2xl font-bold text-fuchsia-600 z-10">
+          <span className="text-xl font-black text-fuchsia-600 z-10">
             <FancyPrice amount={kpiStats.gross} />
           </span>
           <div className="absolute bottom-0 left-0 w-full h-1 bg-gradient-to-r from-fuchsia-400 to-fuchsia-600"></div>
@@ -66,9 +66,9 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
       );
     case 'net':
       return (
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-emerald-100 relative overflow-hidden flex flex-col justify-between h-32">
+        <div className="bg-white p-3 rounded-lg shadow-sm border border-emerald-100 relative overflow-hidden flex flex-col justify-between h-24">
           <div className="flex justify-between items-start z-10">
-            <span className="text-[15px] font-bold text-emerald-500 uppercase">Ganancia Neta</span>
+            <span className="text-[11px] font-black text-emerald-500 uppercase tracking-wide">Ganancia Neta</span>
             <div className="flex items-center gap-1.5">
               <HintIcon
                 hint="Ganancia neta del periodo: ingreso bruto menos costos de productos vendidos y gastos registrados."
@@ -79,7 +79,7 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
             </div>
           </div>
           {/* ♻️ FIX: FancyPrice */}
-          <span className="text-2xl font-bold text-emerald-600 z-10">
+          <span className="text-xl font-black text-emerald-600 z-10">
             <FancyPrice amount={kpiStats.net} />
           </span>
           <div className="absolute bottom-0 left-0 w-full h-1 bg-emerald-400"></div>
@@ -87,9 +87,9 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
       );
     case 'opening':
       return (
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 relative overflow-hidden flex flex-col justify-between h-32">
+        <div className="bg-white p-3 rounded-lg shadow-sm border border-slate-200 relative overflow-hidden flex flex-col justify-between h-24">
           <div className="flex justify-between items-start mb-1 z-10">
-            <span className="text-[15px] font-bold text-slate-400 uppercase">Caja Inicial</span>
+            <span className="text-[11px] font-black text-slate-400 uppercase tracking-wide">Caja Inicial</span>
             {hasOwnerAccess(currentUser) && (
               <button
                 onClick={() => {
@@ -103,7 +103,7 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
             )}
           </div>
           {/* ♻️ FIX: FancyPrice */}
-          <span className="text-2xl font-bold text-slate-800 z-10">
+          <span className="text-xl font-black text-slate-800 z-10">
             <FancyPrice amount={openingBalance} />
           </span>
           <div className="absolute bottom-0 left-0 w-full h-1 bg-slate-300"></div>
@@ -111,13 +111,13 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
       );
     case 'average':
       return (
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-indigo-100 relative overflow-hidden flex flex-col justify-between h-32">
+        <div className="bg-white p-3 rounded-lg shadow-sm border border-indigo-100 relative overflow-hidden flex flex-col justify-between h-24">
           <div className="flex justify-between items-start z-10">
-            <span className="text-[15px] font-bold text-indigo-400 uppercase">Ticket Promedio</span>
+            <span className="text-[11px] font-black text-indigo-400 uppercase tracking-wide">Ticket Promedio</span>
             <Percent size={14} className="text-indigo-500" />
           </div>
           {/* ♻️ FIX: FancyPrice */}
-          <span className="text-2xl font-bold text-indigo-600 z-10">
+          <span className="text-xl font-black text-indigo-600 z-10">
             <FancyPrice amount={Math.round(averageTicket)} />
           </span>
           <div className="absolute bottom-0 left-0 w-full h-1 bg-indigo-400"></div>
@@ -125,9 +125,9 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
       );
     case 'expenses':
       return (
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-red-100 relative overflow-hidden flex flex-col justify-between h-32">
+        <div className="bg-white p-3 rounded-lg shadow-sm border border-red-100 relative overflow-hidden flex flex-col justify-between h-24">
           <div className="flex justify-between items-start z-10">
-            <span className="text-[15px] font-bold text-red-400 uppercase">{getPeriodText('Gastos')}</span>
+            <span className="text-[11px] font-black text-red-400 uppercase tracking-wide">{getPeriodText('Gastos')}</span>
             {onOpenExpenseModal && canManageExpenses && (
               <button
                 onClick={onOpenExpenseModal}
@@ -139,7 +139,7 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
             )}
           </div>
           {/* ♻️ FIX: FancyPrice */}
-          <span className="text-2xl font-bold text-red-600 z-10">
+          <span className="text-xl font-black text-red-600 z-10">
             <FancyPrice amount={totalExpenses} />
           </span>
           <div className="absolute bottom-0 left-0 w-full h-1 bg-gradient-to-r from-red-400 to-red-600"></div>
@@ -147,7 +147,7 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
       );
     case 'placeholder':
       return (
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-dashed border-slate-300 relative overflow-hidden flex flex-col justify-center items-center text-slate-300 h-32">
+        <div className="bg-white p-3 rounded-lg shadow-sm border border-dashed border-slate-300 relative overflow-hidden flex flex-col justify-center items-center text-slate-300 h-24">
           <Info size={24} className="mb-2 opacity-50" />
           <span className="text-xs text-center font-medium">Espacio Disponible</span>
         </div>

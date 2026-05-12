@@ -1,8 +1,16 @@
 // src/hooks/useDashboardData.js
 import { useMemo } from 'react';
 import { PAYMENT_METHODS } from '../data';
-import { isVentaLog, normalizeDate } from '../utils/helpers';
 import { getPaymentMethodTotals } from '../utils/paymentBreakdown';
+import {
+  buildInventoryLookups,
+  buildSalesDataset,
+  getItemCategories,
+  getLiveProduct,
+  makeDashboardRange,
+  normalizeText,
+  parseMetricDate,
+} from '../utils/salesMetricsCore';
 
 export default function useDashboardData({ 
   transactions, 
@@ -14,86 +22,51 @@ export default function useDashboardData({
   expenses = [] 
 }) {
   const currentHour = new Date().getHours();
+  const lookups = useMemo(() => buildInventoryLookups(inventory || []), [inventory]);
+  const dashboardRange = useMemo(() => makeDashboardRange(globalFilter), [globalFilter]);
+  const salesDataset = useMemo(() => buildSalesDataset({
+    transactions,
+    dailyLogs,
+    expenses,
+    inventory,
+    range: dashboardRange,
+    lookups,
+    filters: {
+      includeTest: false,
+      includeVoided: false,
+      status: 'all',
+      productType: 'all',
+    },
+  }), [transactions, dailyLogs, expenses, inventory, dashboardRange, lookups]);
 
   const safeParseDate = (dateStr) => {
-    if (!dateStr) return null;
-    if (dateStr instanceof Date) return dateStr;
-    if (typeof dateStr === 'string' && dateStr.includes('/')) {
-       const parts = dateStr.split('/');
-       if (parts.length === 3) {
-         let y = parseInt(parts[2], 10);
-         if (y < 100) y += 2000;
-         return new Date(y, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
-       }
-    }
-    return normalizeDate(dateStr);
+    return parseMetricDate(dateStr);
   };
 
-  const getLiveProductForItem = (item) => {
-    if (!inventory) return null;
-    const itemId = item?.id || item?.productId;
-    if (itemId !== undefined && itemId !== null) {
-      const byId = inventory.find((product) => String(product.id) === String(itemId));
-      if (byId) return byId;
-    }
+  const getLiveProductForItem = (item) => getLiveProduct(item, lookups);
 
-    const normalizedTitle = String(item?.title || '').trim().toLowerCase();
-    if (!normalizedTitle) return null;
-    return inventory.find((product) => String(product.title || '').trim().toLowerCase() === normalizedTitle) || null;
+  const getCategoryProductForItem = (item = {}) => {
+    const liveProduct = getLiveProductForItem(item);
+    if (liveProduct) return liveProduct;
+
+    const rawId = String(item.id || item.productId || item.product_id || '');
+    const rawTitle = String(item.title || item.product_title || item.name || '').trim();
+    const hasCustomMarker =
+      item.isCustom ||
+      item.is_custom ||
+      item.isTemporary ||
+      item.isTemporaryCustom ||
+      item.type === 'custom' ||
+      item.itemType === 'custom' ||
+      rawTitle.startsWith('*') ||
+      rawId.startsWith('custom_') ||
+      rawId.startsWith('temp-');
+
+    if (hasCustomMarker) return null;
+
+    const normalizedTitle = normalizeText(rawTitle);
+    return normalizedTitle ? lookups.byTitle.get(normalizedTitle) || null : null;
   };
-
-  const getProductById = (productId) => {
-    if (!inventory || productId === undefined || productId === null) return null;
-    return inventory.find((product) => String(product.id) === String(productId)) || null;
-  };
-
-  const getProductCost = (productId, fallbackCost = 0) => {
-    const product = getProductById(productId);
-    return Number(product?.purchasePrice ?? fallbackCost ?? 0) || 0;
-  };
-
-  const getStockChangeProductId = (change = {}) =>
-    change.productId || change.product_id || change.id || null;
-
-  const getStockChangeQty = (change = {}) =>
-    Math.abs(Number(change.quantitySold ?? change.quantityReserved ?? change.quantityChanged ?? change.quantity ?? change.qty ?? 0) || 0);
-
-  const shouldSkipCostItem = (item = {}) =>
-    item.isReward || item.isCustom || item.isDiscount || item.type === 'discount';
-
-  const getTransactionCost = (tx = {}) => {
-    const stockChanges = Array.isArray(tx.stockChanges) ? tx.stockChanges : [];
-    if (stockChanges.length > 0) {
-      return stockChanges.reduce((acc, change) => {
-        const productId = getStockChangeProductId(change);
-        const qty = getStockChangeQty(change);
-        if (!productId || qty <= 0) return acc;
-        return acc + (getProductCost(productId, change.purchasePrice ?? change.cost) * qty);
-      }, 0);
-    }
-
-    return (tx.items || []).reduce((acc, item) => {
-      if (shouldSkipCostItem(item)) return acc;
-
-      if (item?.isCombo && Array.isArray(item.productsIncluded) && item.productsIncluded.length > 0) {
-        const comboQty = Number(item.qty ?? item.quantity ?? 1) || 1;
-        const comboCost = item.productsIncluded.reduce((comboAcc, includedItem) => {
-          const includedProductId = includedItem.productId || includedItem.product_id || includedItem.id;
-          const includedQty = Number(includedItem.quantity ?? includedItem.qty ?? (includedItem.product_type === 'weight' ? 1000 : 1)) || 0;
-          if (!includedProductId || includedQty <= 0) return comboAcc;
-          return comboAcc + (getProductCost(includedProductId, includedItem.purchasePrice ?? includedItem.cost) * includedQty * comboQty);
-        }, 0);
-        return acc + comboCost;
-      }
-
-      const productId = item.productId || item.product_id || item.id;
-      const qty = Number(item.qty ?? item.quantity ?? 0) || 0;
-      if (!productId || qty <= 0) return acc;
-      return acc + (getProductCost(productId, item.purchasePrice ?? item.cost) * qty);
-    }, 0);
-  };
-
-  const getTransactionNet = (tx) => (Number(tx.total) || 0) - getTransactionCost(tx);
 
   const getRankingItemRevenue = (item, txTotal = 0) => {
     const qty = Number(item?.qty) || Number(item?.quantity) || 0;
@@ -142,104 +115,8 @@ export default function useDashboardData({
     return price >= 100 ? perKgRevenue : perGramRevenue;
   };
 
-  const isInRange = useMemo(() => {
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth();
-    const currentDay = now.getDate();
-    const annualStart = new Date(currentYear, currentMonth - 11, 1);
-    annualStart.setHours(0, 0, 0, 0);
-    
-    const todayNum = (currentYear * 10000) + ((currentMonth + 1) * 100) + currentDay;
-    
-    const weekAgo = new Date(now);
-    weekAgo.setDate(now.getDate() - 6); 
-    const weekAgoNum = (weekAgo.getFullYear() * 10000) + ((weekAgo.getMonth() + 1) * 100) + weekAgo.getDate();
-
-    const monthAgo = new Date(now);
-    monthAgo.setDate(now.getDate() - 29);
-    const monthAgoNum = (monthAgo.getFullYear() * 10000) + ((monthAgo.getMonth() + 1) * 100) + monthAgo.getDate();
-
-    return (dateObj) => {
-      if (!dateObj) return false;
-      const compYear = dateObj.getFullYear();
-      const compMonth = dateObj.getMonth();
-      const compDay = dateObj.getDate();
-      const compNum = (compYear * 10000) + ((compMonth + 1) * 100) + compDay;
-
-      if (globalFilter === 'day') return compNum === todayNum;
-      if (globalFilter === 'week') return compNum >= weekAgoNum && compNum <= todayNum;
-      if (globalFilter === 'month') return compNum >= monthAgoNum && compNum <= todayNum;
-      if (globalFilter === 'year') return dateObj >= annualStart && dateObj <= now;
-      return false;
-    };
-  }, [globalFilter]);
-
-  const filteredData = useMemo(() => {
-    const validTransactions = [];
-    const processedTxIds = new Set();
-
-    (transactions || []).forEach(tx => {
-      if (tx.status === 'voided') return;
-      const txDate = safeParseDate(tx.date); 
-      if (txDate && isInRange(txDate)) {
-        const net = getTransactionNet(tx);
-        const cost = getTransactionCost(tx);
-        validTransactions.push({
-          source: 'tx', id: tx.id, date: txDate, time: tx.time, total: Number(tx.total) || 0,
-          payment: tx.payment, items: tx.items || [],
-          paymentBreakdown: tx.paymentBreakdown || null,
-          installments: tx.installments || 0,
-          cashReceived: tx.cashReceived || 0,
-          cashChange: tx.cashChange || 0,
-          client: tx.client,
-          stockChanges: Array.isArray(tx.stockChanges) ? tx.stockChanges : [],
-          net,
-          cost,
-        });
-        processedTxIds.add(String(tx.id));
-      }
-    });
-
-    (dailyLogs || []).forEach(log => {
-      if (isVentaLog(log) && log.details) {
-        const txId = log.details.transactionId;
-        if (!processedTxIds.has(String(txId))) { 
-          const logDate = safeParseDate(log.date);
-          if (logDate && isInRange(logDate)) {
-            const logTxLike = {
-              total: Number(log.details.total) || 0,
-              items: log.details.items || [],
-              stockChanges: Array.isArray(log.details.stockChanges) ? log.details.stockChanges : [],
-            };
-            const net = getTransactionNet(logTxLike);
-            const cost = getTransactionCost(logTxLike);
-            validTransactions.push({
-              source: 'log', id: txId || log.id, date: logDate, time: log.timestamp || '00:00',
-              total: Number(log.details.total) || 0, payment: log.details.payment || 'Efectivo', items: log.details.items || [],
-              paymentBreakdown: log.details.paymentBreakdown || null,
-              installments: log.details.installments || 0,
-              cashReceived: log.details.cashReceived || 0,
-              cashChange: log.details.cashChange || 0,
-              client: log.details.client,
-              stockChanges: Array.isArray(log.details.stockChanges) ? log.details.stockChanges : [],
-              net,
-              cost,
-            });
-          }
-        }
-      }
-    });
-
-    return validTransactions;
-  }, [globalFilter, transactions, dailyLogs, isInRange, inventory]);
-
-  const filteredExpenses = useMemo(() => {
-    return (expenses || []).filter(exp => {
-      const expDate = safeParseDate(exp.date || exp.created_at || exp.createdAt);
-      return expDate && isInRange(expDate);
-    });
-  }, [expenses, isInRange]);
+  const filteredData = salesDataset.filteredTransactions;
+  const filteredExpenses = salesDataset.filteredExpenses;
 
   const expenseStats = useMemo(() => {
     const total = filteredExpenses.reduce((acc, exp) => acc + (Number(exp.amount) || 0), 0);
@@ -278,16 +155,13 @@ export default function useDashboardData({
   const buildDateKey = (dateObj) =>
     dateObj ? `${dateObj.getFullYear()}-${dateObj.getMonth()}-${dateObj.getDate()}` : '';
 
-  const kpiStats = useMemo(() => {
-    let gross = 0; let net = 0; let cost = 0; const count = filteredData.length;
-    filteredData.forEach(tx => {
-      gross += tx.total;
-      net += Number(tx.net) || 0;
-      cost += Number(tx.cost) || 0;
-    });
-    net -= expenseStats.total;
-    return { gross, net, cost, expenses: expenseStats.total, count };
-  }, [filteredData, inventory, expenseStats]);
+  const kpiStats = useMemo(() => ({
+    gross: salesDataset.stats.revenue,
+    net: salesDataset.stats.profit,
+    cost: salesDataset.stats.cost,
+    expenses: salesDataset.stats.expenses,
+    count: salesDataset.stats.salesCount,
+  }), [salesDataset]);
 
   const averageTicket = kpiStats.count > 0 ? kpiStats.gross / kpiStats.count : 0;
 
@@ -477,7 +351,7 @@ export default function useDashboardData({
           if (!isWeightItem) return;
           keys = [item.title || 'Desconocido'];
         } else {
-          let cats = [];
+          let cats = getItemCategories(item, getCategoryProductForItem(item));
           if (liveProduct) {
             if (Array.isArray(liveProduct.categories) && liveProduct.categories.length > 0) { cats = liveProduct.categories; } 
             else if (liveProduct.category) { cats = [liveProduct.category]; }

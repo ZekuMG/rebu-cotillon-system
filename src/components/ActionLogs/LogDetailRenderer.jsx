@@ -535,6 +535,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
 
   if (action === 'Presupuesto Editado') {
     const currentItems = resolveOrderDetailItems(details);
+    const itemCount = details.itemCount ?? currentItems.length;
     const previousItems = resolveOrderDetailItems(details, true);
     return (
       <div className="space-y-4">
@@ -542,14 +543,16 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
         <OrderClientCard details={details} memberLabel={clientDisplay} />
         <Card icon="🧾" title="Presupuesto Actualizado">
           <Item label="Cliente" value={details.customerName || 'Sin cliente'} />
+          {details.documentTitle && <Item label="Documento" value={details.documentTitle} />}
+          {details.eventLabel && <Item label="Evento" value={details.eventLabel} />}
           {details.totalAmount !== undefined && (
             <Item label="Total">
               <span className="text-[#4338ca] font-bold"><FancyPrice amount={details.totalAmount || 0} /></span>
             </Item>
           )}
-          {details.itemCount !== undefined && (
+          {itemCount !== undefined && (
             <Item label="Artículos">
-              <Badge color="indigo">{formatNumber(details.itemCount || 0)} items</Badge>
+              <Badge color="indigo">{formatNumber(itemCount || 0)} items</Badge>
             </Item>
           )}
         </Card>
@@ -563,16 +566,19 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
 
   if (action === 'Presupuesto Creado') {
     const currentItems = resolveOrderDetailItems(details);
+    const itemCount = details.itemCount ?? currentItems.length;
     return (
       <div className="space-y-4">
         <RecordLinksCard budgetId={details.id} sharedRecordId={details.sharedRecordId || details.id} />
         <OrderClientCard details={details} memberLabel={clientDisplay} />
         <Card icon="🧾" title="Presupuesto Generado">
           <Item label="Cliente" value={details.customerName || 'Sin cliente'} />
+          {details.documentTitle && <Item label="Documento" value={details.documentTitle} />}
+          {details.eventLabel && <Item label="Evento" value={details.eventLabel} />}
           {details.totalAmount !== undefined && <Item label="Total" value={<FancyPrice amount={details.totalAmount || 0} />} />}
-          {details.itemCount !== undefined && (
+          {itemCount !== undefined && (
             <Item label="Artículos">
-              <Badge color="indigo">{formatNumber(details.itemCount || 0)} items</Badge>
+              <Badge color="indigo">{formatNumber(itemCount || 0)} items</Badge>
             </Item>
           )}
         </Card>

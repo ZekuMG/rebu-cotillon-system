@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
-import { formatCurrency, formatNumber, isTestRecord, normalizeDate } from '../utils/helpers';
+import { formatCurrency, formatNumber, isTestRecord, isVentaLog, normalizeDate } from '../utils/helpers';
 import { getPaymentMethodLabel, getPaymentMethodTotals, normalizePaymentBreakdown } from '../utils/paymentBreakdown';
+import { buildSalesDataset, getExplicitItemUnitCost } from '../utils/salesMetricsCore';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -116,6 +117,11 @@ const getClientName = (tx) => {
   return tx.client || 'Consumidor Final';
 };
 
+const isFinalConsumerName = (value = '') => {
+  const normalized = normalizeText(value);
+  return !normalized || ['consumidor final', 'no asociado', 'cliente sin nombre'].includes(normalized);
+};
+
 const getClientKey = (tx) => {
   const name = getClientName(tx);
   const memberNumber = tx?.client?.memberNumber || tx?.memberNumber || '';
@@ -126,8 +132,34 @@ const getUserKey = (record = {}) => record.userId || record.user_id || normalize
 
 const getUserLabel = (record = {}) => record.user || record.user_name || record.userId || record.user_id || 'Sistema';
 
+const isTemporaryCustomItem = (item = {}) => {
+  const rawId = String(item.id ?? item.productId ?? item.product_id ?? '');
+  const rawTitle = String(item.title ?? item.product_title ?? item.name ?? '').trim();
+  const hasProductIdentity = Boolean(item.id ?? item.productId ?? item.product_id);
+  const isKnownNonInventoryItem = Boolean(
+    item.isCombo ||
+    item.is_combo ||
+    item.isDiscount ||
+    item.is_discount ||
+    item.isReward ||
+    item.is_reward
+  );
+
+  return Boolean(
+    item.isCustom ||
+    item.is_custom ||
+    item.isTemporary ||
+    item.isTemporaryCustom ||
+    item.type === 'custom' ||
+    item.itemType === 'custom' ||
+    rawTitle.startsWith('*') ||
+    ['custom_', 'temp-'].some((prefix) => rawId.startsWith(prefix)) ||
+    (!hasProductIdentity && !isKnownNonInventoryItem)
+  );
+};
+
 const shouldSkipCostItem = (item = {}) =>
-  item.isReward || item.isCustom || item.isDiscount || item.type === 'discount';
+  item.isReward || item.is_reward || item.isDiscount || item.is_discount || item.type === 'discount';
 
 const getProductId = (item = {}) => item.productId || item.product_id || item.id || null;
 
@@ -145,6 +177,8 @@ const buildInventoryLookups = (inventory = []) => {
 };
 
 const getLiveProduct = (item, lookups) => {
+  if (isTemporaryCustomItem(item)) return null;
+
   const productId = getProductId(item);
   if (productId !== null && productId !== undefined) {
     const byId = lookups.byId.get(String(productId));
@@ -162,6 +196,10 @@ const getItemRevenue = (item = {}) => {
 const getItemCost = (item = {}, lookups) => {
   if (shouldSkipCostItem(item)) return 0;
 
+  if (isTemporaryCustomItem(item)) {
+    return getExplicitItemUnitCost(item) * getItemQty(item);
+  }
+
   if (item?.isCombo && Array.isArray(item.productsIncluded) && item.productsIncluded.length > 0) {
     const comboQty = toNumber(item.qty ?? item.quantity ?? 1) || 1;
     return item.productsIncluded.reduce((sum, included) => {
@@ -177,13 +215,18 @@ const getItemCost = (item = {}, lookups) => {
 
 const getTransactionCost = (tx = {}, lookups) => {
   const stockChanges = Array.isArray(tx.stockChanges) ? tx.stockChanges : [];
+  const customItemsCost = (tx.items || []).reduce((sum, item) => {
+    if (!isTemporaryCustomItem(item) || shouldSkipCostItem(item)) return sum;
+    return sum + getItemCost(item, lookups);
+  }, 0);
+
   if (stockChanges.length > 0) {
     return stockChanges.reduce((sum, change) => {
       const productId = change.productId || change.product_id || change.id;
       const product = productId ? lookups.byId.get(String(productId)) : null;
       const qty = Math.abs(toNumber(change.quantitySold ?? change.quantityReserved ?? change.quantityChanged ?? change.quantity ?? change.qty));
       return sum + toNumber(product?.purchasePrice ?? change.purchasePrice ?? change.cost) * qty;
-    }, 0);
+    }, customItemsCost);
   }
   return (tx.items || []).reduce((sum, item) => sum + getItemCost(item, lookups), 0);
 };
@@ -217,6 +260,50 @@ const sortBy = (items, key, limit = 12) =>
   [...items].sort((a, b) => toNumber(b[key]) - toNumber(a[key])).slice(0, limit);
 
 const getSaleStatus = (tx = {}) => String(tx.status || 'completed').toLowerCase();
+
+const mergeTransactionsWithLogSales = (transactions = [], dailyLogs = []) => {
+  const merged = Array.isArray(transactions) ? [...transactions] : [];
+  const knownTransactionIds = new Set(
+    merged
+      .map((tx) => tx?.id)
+      .filter((id) => id !== undefined && id !== null)
+      .map((id) => String(id)),
+  );
+
+  (Array.isArray(dailyLogs) ? dailyLogs : []).forEach((log) => {
+    if (!isVentaLog(log) || !log?.details || typeof log.details !== 'object') return;
+
+    const details = log.details;
+    const transactionId = details.transactionId ?? details.transaction_id ?? details.id ?? null;
+    if (transactionId !== null && transactionId !== undefined && knownTransactionIds.has(String(transactionId))) return;
+
+    const id = transactionId ?? `log_${log.id}`;
+    if (id !== undefined && id !== null) knownTransactionIds.add(String(id));
+
+    merged.push({
+      id,
+      source: 'log',
+      date: log.date || log.createdAt || log.created_at,
+      time: log.timestamp || log.time || '00:00',
+      createdAt: log.createdAt || log.created_at || null,
+      total: toNumber(details.total),
+      payment: details.payment || details.paymentMethod || 'Efectivo',
+      paymentBreakdown: details.paymentBreakdown || null,
+      installments: details.installments || 0,
+      cashReceived: details.cashReceived || 0,
+      cashChange: details.cashChange || 0,
+      client: details.client,
+      items: Array.isArray(details.items) ? details.items : [],
+      stockChanges: Array.isArray(details.stockChanges) ? details.stockChanges : [],
+      user: details.user || log.user,
+      userId: details.userId || details.user_id || log.userId || log.user_id,
+      status: details.status || 'completed',
+      isTest: Boolean(log.isTest || details.isTest || isTestRecord(log)),
+    });
+  });
+
+  return merged;
+};
 
 const makeFilterOptions = ({ transactions, inventory, members, orders, budgets }) => {
   const users = new Map();
@@ -318,8 +405,9 @@ const filterRecordsByDate = (records, range, filters) =>
 
 const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, range, filters, lookups }) => {
   const isTodayRange = filters.preset === 'today';
-  const filteredTransactions = filterTransactions({ transactions, range, filters, lookups });
-  const filteredExpenses = filterExpenses({ expenses, range, filters });
+  const salesDataset = buildSalesDataset({ transactions, expenses, range, filters, lookups });
+  const filteredTransactions = salesDataset.filteredTransactions;
+  const filteredExpenses = salesDataset.filteredExpenses;
   const filteredBudgets = filterRecordsByDate(budgets, range, filters);
   const filteredOrders = filterRecordsByDate(orders, range, filters);
   const filteredClosures = filterRecordsByDate(closures, range, filters);
@@ -340,8 +428,8 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
 
   filteredTransactions.forEach((tx) => {
     const txRevenue = toNumber(tx.total);
-    const txCost = getTransactionCost(tx, lookups);
-    const txProfit = txRevenue - txCost;
+    const txCost = toNumber(tx.cost);
+    const txProfit = toNumber(tx.profit);
     revenue += txRevenue;
     cost += txCost;
 
@@ -379,11 +467,14 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
       salesCount: current.salesCount + 1,
     }));
 
-    addToMap(clientMap, getClientKey(tx), { name: getClientName(tx), revenue: 0, salesCount: 0, lastDate: tx.metricDate }, (current) => ({
-      revenue: current.revenue + txRevenue,
-      salesCount: current.salesCount + 1,
-      lastDate: !current.lastDate || tx.metricDate > current.lastDate ? tx.metricDate : current.lastDate,
-    }));
+    const clientName = getClientName(tx);
+    if (!isFinalConsumerName(clientName)) {
+      addToMap(clientMap, getClientKey(tx), { name: clientName, revenue: 0, salesCount: 0, lastDate: tx.metricDate }, (current) => ({
+        revenue: current.revenue + txRevenue,
+        salesCount: current.salesCount + 1,
+        lastDate: !current.lastDate || tx.metricDate > current.lastDate ? tx.metricDate : current.lastDate,
+      }));
+    }
 
     (tx.items || []).forEach((item) => {
       if (item?.isDiscount) return;
@@ -410,12 +501,25 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
       }));
 
       categories.forEach((category) => {
-        addToMap(categoryMap, category, { name: category, qty: 0, revenue: 0, cost: 0, profit: 0 }, (current) => ({
-          qty: current.qty + qty,
-          revenue: current.revenue + itemRevenue,
-          cost: current.cost + itemCost,
-          profit: current.profit + itemRevenue - itemCost,
-        }));
+        addToMap(categoryMap, category, { name: category, qty: 0, revenue: 0, cost: 0, profit: 0, products: new Map() }, (current) => {
+          const products = new Map(current.products || []);
+          const productEntry = products.get(productKey) || { key: productKey, name: title, qty: 0, revenue: 0, cost: 0, profit: 0 };
+          products.set(productKey, {
+            ...productEntry,
+            qty: productEntry.qty + qty,
+            revenue: productEntry.revenue + itemRevenue,
+            cost: productEntry.cost + itemCost,
+            profit: productEntry.profit + itemRevenue - itemCost,
+          });
+
+          return {
+            qty: current.qty + qty,
+            revenue: current.revenue + itemRevenue,
+            cost: current.cost + itemCost,
+            profit: current.profit + itemRevenue - itemCost,
+            products,
+          };
+        });
       });
     });
   });
@@ -458,15 +562,31 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
     periodLabelPlural: isTodayRange ? 'horarios' : 'días',
     productStats: sortBy([...productMap.values()].map((item) => ({
       ...item,
+      total: item.revenue + item.profit,
       marginRate: item.revenue ? (item.profit / item.revenue) * 100 : 0,
     })), 'revenue', 20),
-    categoryStats: sortBy([...categoryMap.values()].map((item) => ({
-      ...item,
-      marginRate: item.revenue ? (item.profit / item.revenue) * 100 : 0,
-    })), 'revenue', 16),
+    categoryStats: sortBy([...categoryMap.values()].map((item) => {
+      const products = [...(item.products || new Map()).values()]
+        .map((product) => ({
+          ...product,
+          total: product.revenue + product.profit,
+          marginRate: product.revenue ? (product.profit / product.revenue) * 100 : 0,
+        }))
+        .sort((a, b) => toNumber(b.revenue) - toNumber(a.revenue))
+        .slice(0, 12);
+
+      return {
+        ...item,
+        products: undefined,
+        productBreakdown: products,
+        total: item.revenue + item.profit,
+        marginRate: item.revenue ? (item.profit / item.revenue) * 100 : 0,
+      };
+    }), 'revenue', 16),
     paymentStats: sortBy([...paymentMap.values()], 'value', 10),
     userStats: sortBy([...userMap.values()].map((item) => ({
       ...item,
+      total: item.revenue + item.profit,
       averageTicket: item.salesCount ? item.revenue / item.salesCount : 0,
     })), 'revenue', 12),
     clientStats: sortBy([...clientMap.values()].map((item) => ({
@@ -481,7 +601,7 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
 };
 
 const buildStockStats = (inventory = []) => {
-  const activeProducts = inventory.filter((product) => product.is_active !== false);
+  const activeProducts = inventory.filter((product) => product.is_active !== false && !product.isTest && !isTestRecord(product));
   const totalCost = activeProducts.reduce((sum, product) => sum + toNumber(product.purchasePrice) * toNumber(product.stock), 0);
   const totalRetail = activeProducts.reduce((sum, product) => sum + toNumber(product.price) * toNumber(product.stock), 0);
   const lowStock = activeProducts.filter((product) => toNumber(product.stock) > 0 && toNumber(product.stock) < 10).sort((a, b) => toNumber(a.stock) - toNumber(b.stock));
@@ -637,6 +757,7 @@ const buildRecommendations = ({ current, previous, stockStats, orderStats, membe
 
 export default function useMetricsData({
   transactions = [],
+  dailyLogs = [],
   expenses = [],
   pastClosures = [],
   inventory = [],
@@ -646,12 +767,13 @@ export default function useMetricsData({
   filters = {},
 }) {
   return useMemo(() => {
+    const metricTransactions = mergeTransactionsWithLogSales(transactions, dailyLogs);
     const lookups = buildInventoryLookups(inventory);
     const range = makeRange(filters);
     const previousRange = makePreviousRange(range);
-    const filterOptions = makeFilterOptions({ transactions, inventory, members, orders, budgets });
+    const filterOptions = makeFilterOptions({ transactions: metricTransactions, inventory, members, orders, budgets });
     const current = analyzePeriod({
-      transactions,
+      transactions: metricTransactions,
       expenses,
       budgets,
       orders,
@@ -661,7 +783,7 @@ export default function useMetricsData({
       lookups,
     });
     const previous = analyzePeriod({
-      transactions,
+      transactions: metricTransactions,
       expenses,
       budgets,
       orders,
@@ -692,5 +814,5 @@ export default function useMetricsData({
         averageTicket: calculateChange(current.stats.averageTicket, previous.stats.averageTicket),
       },
     };
-  }, [transactions, expenses, pastClosures, inventory, members, budgets, orders, filters]);
+  }, [transactions, dailyLogs, expenses, pastClosures, inventory, members, budgets, orders, filters]);
 }

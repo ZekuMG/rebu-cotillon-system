@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   X,
   Search,
@@ -7,7 +7,11 @@ import {
   FileText,
   Barcode,
   Package,
-  ShoppingCart
+  ShoppingCart,
+  User,
+  Gift,
+  TicketPercent,
+  ChevronDown
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../../data';
 // ♻️ FIX: Importamos FancyPrice
@@ -24,16 +28,21 @@ import {
   getPaymentSummary,
   normalizePaymentBreakdown,
 } from '../../utils/paymentBreakdown';
+import { normalizeLegacyOffer } from '../../utils/offerHelpers';
 
 const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
 export const EditTransactionModal = ({
   transaction, onClose, inventory, setEditingTransaction,
   transactionSearch, setTransactionSearch,
-  editReason, setEditReason, onSave
+  editReason, setEditReason, onSave,
+  members = [],
+  offers = [],
 }) => {
   const searchInputRef = useRef(null);
   const { isPending, runAction } = usePendingAction();
+  const [showMemberMenu, setShowMemberMenu] = useState(false);
+  const [memberFilterSearch, setMemberFilterSearch] = useState('');
 
   // Auto-focus en el buscador para que la pistola láser funcione directo
   useEffect(() => {
@@ -133,7 +142,14 @@ export const EditTransactionModal = ({
           { ...secondarySource, amount: secondaryAmount },
         ]
       : [{ ...primarySource, amount: subtotal }];
-    const normalizedLines = normalizePaymentBreakdown(baseLines, primarySource.method || 'Efectivo', primarySource.installments || 0, 0, 0, subtotal);
+    const editLines = lineCount > 1
+      ? baseLines.map((line) =>
+          line.method === 'Efectivo'
+            ? { ...line, cashReceived: undefined, cashChange: 0 }
+            : line
+        )
+      : baseLines;
+    const normalizedLines = normalizePaymentBreakdown(editLines, primarySource.method || 'Efectivo', primarySource.installments || 0, 0, 0, subtotal);
     const totals = getPaymentBreakdownTotals(normalizedLines);
     const payment = getPaymentSummary(normalizedLines, normalizedLines[0]?.method || 'Efectivo', normalizedLines[0]?.installments || 0);
 
@@ -232,7 +248,14 @@ export const EditTransactionModal = ({
 
   const updatePaymentLines = (updater) => {
     const nextLines = typeof updater === 'function' ? updater(paymentLines.map((line) => ({ ...line }))) : updater;
-    applyTransactionState(transaction, transaction.items, nextLines);
+    const sanitizedLines = Array.isArray(nextLines) && nextLines.length > 1
+      ? nextLines.map((line) =>
+          line.method === 'Efectivo'
+            ? { ...line, cashReceived: undefined, cashChange: 0 }
+            : line
+        )
+      : nextLines;
+    applyTransactionState(transaction, transaction.items, sanitizedLines);
   };
 
   const handleSplitPaymentToggle = () => {
@@ -277,29 +300,139 @@ export const EditTransactionModal = ({
     ]);
   };
 
+  const discountBaseTotal = transaction.items.reduce((sum, item) => (
+    item.isDiscount || item.isReward || item.type === 'discount'
+      ? sum
+      : sum + getLineSubtotal(item)
+  ), 0);
+
+  const selectedMemberId =
+    transaction.client && typeof transaction.client === 'object'
+      ? String(transaction.client.id || '')
+      : '';
+  const selectedMember =
+    (members || []).find((member) => String(member.id) === selectedMemberId) ||
+    (transaction.client && typeof transaction.client === 'object' ? transaction.client : null);
+  const selectedMemberLabel = selectedMember
+    ? `${selectedMember.name || 'Socio'} #${selectedMember.memberNumber || selectedMember.member_number || '---'}`
+    : 'Sin socio';
+  const visibleMemberOptions = (members || []).filter((member) => {
+    const search = memberFilterSearch.trim().toLowerCase();
+    if (!search) return true;
+    return [
+      member.name,
+      member.memberNumber,
+      member.member_number,
+      member.dni,
+      member.phone,
+      member.email,
+    ].some((value) => String(value || '').toLowerCase().includes(search));
+  });
+
+  const compactOffers = (offers || [])
+    .map((offer) => ({ ...offer, canonical: offer.canonical || normalizeLegacyOffer(offer, {}, inventory) }))
+    .filter((offer) =>
+      offer.canonical?.benefitType === 'coupon' ||
+      offer.canonical?.benefitType === 'discount'
+    )
+    .slice(0, 5);
+
+  const handleMemberChange = (memberId) => {
+    if (!memberId) {
+      setEditingTransaction({
+        ...transaction,
+        client: null,
+        memberNumber: null,
+        pointsEarned: 0,
+        pointsSpent: 0,
+      });
+      return;
+    }
+
+    const member = (members || []).find((item) => String(item.id) === String(memberId));
+    if (!member) return;
+    setEditingTransaction({
+      ...transaction,
+      client: member,
+      memberNumber: member.memberNumber || member.member_number || null,
+      pointsEarned: Math.floor(Number(transaction.total || itemsSubtotal || 0) / 500),
+    });
+  };
+
+  const handlePointsSpentChange = (value) => {
+    const requestedPoints = Math.max(0, Number(value) || 0);
+    const selectedMember = (members || []).find((member) => String(member.id) === selectedMemberId);
+    const availablePoints = Number(selectedMember?.points || transaction.client?.points || 0);
+    setEditingTransaction({
+      ...transaction,
+      pointsSpent: selectedMember ? Math.min(requestedPoints, availablePoints) : requestedPoints,
+    });
+  };
+
+  const applyDiscountItem = ({ title, amount, originalOfferId = null, couponCode = '' }) => {
+    const discountAmount = Math.min(Math.abs(Number(amount) || 0), Math.max(discountBaseTotal, 0));
+    if (discountAmount <= 0) return;
+
+    const nextItems = [
+      ...transaction.items,
+      {
+        id: `edit_discount_${originalOfferId || Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        productId: null,
+        title,
+        price: -discountAmount,
+        qty: 1,
+        quantity: 1,
+        subtotal: -discountAmount,
+        product_type: 'quantity',
+        isDiscount: true,
+        type: 'discount',
+        originalOfferId,
+        couponCode,
+      },
+    ];
+    applyTransactionState(transaction, nextItems);
+  };
+
+  const handleApplyOffer = (offer) => {
+    const canonical = offer.canonical || normalizeLegacyOffer(offer, {}, inventory);
+    const rawValue = Number(canonical.discountValue || offer.discountValue || 0);
+    const discountAmount = canonical.discountMode === 'percentage'
+      ? Math.round((discountBaseTotal * rawValue) / 100)
+      : rawValue;
+
+    applyDiscountItem({
+      title: canonical.benefitType === 'coupon'
+        ? `Cupon ${canonical.couponCode || offer.name || 'Manual'}`
+        : offer.name || 'Descuento',
+      amount: discountAmount,
+      originalOfferId: offer.id || null,
+      couponCode: canonical.couponCode || '',
+    });
+  };
+
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-[200] p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-[16px] shadow-2xl w-full max-w-4xl flex flex-col max-h-[90vh] border border-slate-200">
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-[200] p-3 animate-in fade-in duration-200">
+      <div className="bg-white rounded-[14px] shadow-2xl w-full max-w-4xl flex flex-col max-h-[88vh] border border-slate-200">
         
         {/* HEADER */}
-        <div className="flex justify-between items-center p-3 border-b border-slate-100 bg-slate-50/50 rounded-t-[16px]">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shadow-sm">
-              <ShoppingCart size={17} />
+        <div className="flex justify-between items-center p-2.5 border-b border-slate-100 bg-slate-50/50 rounded-t-[14px]">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shadow-sm">
+              <ShoppingCart size={15} />
             </div>
             <div>
-              <h3 className="text-base font-bold text-slate-800">Modificar Venta #{transaction.id}</h3>
-              <p className="text-[11px] text-slate-500">Agrega, quita o ajusta cantidades</p>
+              <h3 className="text-[15px] font-bold text-slate-800">Modificar Venta #{transaction.id}</h3>
+              <p className="text-[10px] text-slate-500">Agrega, quita o ajusta cantidades</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 bg-white border border-slate-200 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-50 transition-colors">
-            <X size={18} />
+          <button onClick={onClose} className="p-1.5 bg-white border border-slate-200 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-50 transition-colors">
+            <X size={16} />
           </button>
         </div>
 
         {/* BODY */}
-        <div className="grid h-[min(66vh,580px)] min-h-0 grid-cols-1 overflow-hidden bg-[#f8fafc] lg:grid-cols-[330px_minmax(0,1fr)]">
-          <div className="min-h-0 space-y-2 overflow-y-auto border-r border-slate-200 p-3 custom-scrollbar">
+        <div className="grid h-[min(62vh,540px)] min-h-0 grid-cols-1 overflow-hidden bg-[#f8fafc] lg:grid-cols-[318px_minmax(0,1fr)]">
+          <div className="min-h-0 space-y-1.5 overflow-y-auto border-r border-slate-200 p-2.5 custom-scrollbar">
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
                 <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Subtotal</p>
@@ -317,7 +450,153 @@ export const EditTransactionModal = ({
               </div>
             )}
 
-            <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
+                  <User size={12} /> Socio y extras
+                </p>
+                <span className="text-[10px] font-bold text-slate-400">
+                  {transaction.pointsEarned || 0} pts ganados
+                </span>
+              </div>
+
+              <select
+                className="hidden"
+                value={selectedMemberId}
+                onChange={(e) => handleMemberChange(e.target.value)}
+              >
+                <option value="">Sin socio</option>
+                {(members || []).map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name} #{member.memberNumber || member.member_number || '---'}
+                  </option>
+                ))}
+              </select>
+
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowMemberMenu((prev) => !prev)}
+                  className={`flex h-8 w-full items-center gap-1.5 rounded-lg border px-2 text-left text-[11px] font-bold transition-all ${
+                    showMemberMenu || selectedMemberId
+                      ? 'border-blue-200 bg-blue-50 text-blue-700 shadow-sm'
+                      : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-white'
+                  }`}
+                  title="Filtrar por socio"
+                >
+                  <User size={13} className={selectedMemberId ? 'text-blue-500' : 'text-slate-400'} />
+                  <span className="min-w-0 flex-1 truncate">{selectedMemberLabel}</span>
+                  <ChevronDown size={13} className={`shrink-0 text-slate-400 transition-transform ${showMemberMenu ? 'rotate-180' : ''}`} />
+                </button>
+
+                {showMemberMenu && (
+                  <>
+                    <div className="fixed inset-0 z-[210]" onClick={() => setShowMemberMenu(false)} />
+                    <div className="absolute left-0 top-full z-[220] mt-1.5 w-full min-w-[260px] rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                      <div className="relative mb-2">
+                        <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          value={memberFilterSearch}
+                          onChange={(event) => setMemberFilterSearch(event.target.value)}
+                          placeholder="Buscar socio..."
+                          className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-2 text-xs font-semibold text-slate-700 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                          autoFocus
+                        />
+                      </div>
+                      <div className="custom-scrollbar max-h-52 overflow-y-auto pr-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleMemberChange('');
+                            setShowMemberMenu(false);
+                            setMemberFilterSearch('');
+                          }}
+                          className={`mb-1 flex h-8 w-full items-center rounded-lg px-2 text-left text-xs font-bold transition ${
+                            !selectedMemberId
+                              ? 'bg-blue-50 text-blue-700'
+                              : 'text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          Sin socio
+                        </button>
+                        {visibleMemberOptions.map((member) => {
+                          const memberNumber = member.memberNumber || member.member_number || '---';
+                          return (
+                            <button
+                              key={member.id}
+                              type="button"
+                              onClick={() => {
+                                handleMemberChange(member.id);
+                                setShowMemberMenu(false);
+                                setMemberFilterSearch('');
+                              }}
+                              className={`flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs font-bold transition ${
+                                String(member.id) === selectedMemberId
+                                  ? 'bg-blue-50 text-blue-700'
+                                  : 'text-slate-600 hover:bg-slate-50'
+                              }`}
+                              title={`${member.name} #${memberNumber}`}
+                            >
+                              <span className="min-w-0 flex-1 truncate">{member.name}</span>
+                              <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">#{memberNumber}</span>
+                            </button>
+                          );
+                        })}
+                        {visibleMemberOptions.length === 0 && (
+                          <p className="px-2 py-3 text-center text-xs font-semibold text-slate-400">Sin socios</p>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+                <label className="block">
+                  <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-[0.1em] text-fuchsia-600">
+                    <Gift size={11} /> Canje
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    className="mt-1 h-8 w-full rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-2 text-[11px] font-bold text-slate-800 outline-none focus:ring-2 focus:ring-fuchsia-400"
+                    value={transaction.pointsSpent || 0}
+                    onChange={(e) => handlePointsSpentChange(e.target.value)}
+                    disabled={!selectedMemberId}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => applyDiscountItem({ title: 'Descuento manual', amount: Math.round(discountBaseTotal * 0.1) })}
+                  className="mt-5 h-8 rounded-lg border border-emerald-200 bg-emerald-50 px-2 text-[10px] font-black text-emerald-700 transition hover:bg-emerald-100"
+                >
+                  -10%
+                </button>
+              </div>
+
+              {compactOffers.length > 0 && (
+                <div className="mt-2">
+                  <p className="mb-1 inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-[0.1em] text-emerald-600">
+                    <TicketPercent size={11} /> Cupones / descuentos
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {compactOffers.map((offer) => (
+                      <button
+                        key={offer.id || offer.name}
+                        type="button"
+                        onClick={() => handleApplyOffer(offer)}
+                        className="max-w-full truncate rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 transition hover:bg-emerald-100"
+                        title={offer.name}
+                      >
+                        {offer.canonical?.benefitType === 'coupon' ? `Cupon ${offer.canonical.couponCode || offer.name}` : offer.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Pago</p>
                 <button type="button" onClick={handleSplitPaymentToggle} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-black text-slate-600 transition hover:bg-slate-100">
@@ -349,7 +628,16 @@ export const EditTransactionModal = ({
                         </select>
                       )}
 
-                      {isCash && (
+                      {isCash && isSplitPayment && (
+                        <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5">
+                          <p className="text-[9px] font-black uppercase tracking-[0.1em] text-emerald-700">Pagado con efectivo</p>
+                          <p className="mt-0.5 text-[11px] font-black text-emerald-800">
+                            <FancyPrice amount={getPaymentLineChargedTotal(line)} />
+                          </p>
+                        </div>
+                      )}
+
+                      {isCash && !isSplitPayment && (
                         <div className="mt-2 grid grid-cols-2 gap-2">
                           <label className="block">
                             <span className="text-[9px] font-black uppercase tracking-[0.1em] text-emerald-700">Recibido</span>
@@ -405,7 +693,7 @@ export const EditTransactionModal = ({
 
           </div>
 
-          <div className="min-h-0 overflow-y-auto p-3 custom-scrollbar">
+          <div className="min-h-0 overflow-y-auto p-2.5 custom-scrollbar">
           <div className="relative mb-2">
             <div className="flex items-center border border-slate-200 rounded-xl px-3 bg-white shadow-sm focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-blue-500 transition-all">
               <Search size={16} className="text-slate-400" />
@@ -510,7 +798,7 @@ export const EditTransactionModal = ({
           void runAction(`edit-transaction:${transaction.id}`, async () => {
             await onSave(event);
           });
-        }} className="p-3 border-t border-slate-200 bg-white rounded-b-[16px]">
+        }} className="p-2.5 border-t border-slate-200 bg-white rounded-b-[14px]">
           <div className="hidden grid-cols-2 gap-3 mb-3">
             <div>
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Método de Pago</label>
@@ -600,12 +888,12 @@ export const EditTransactionModal = ({
             </div>
           )}
 
-          <div className="mb-4">
+          <div className="mb-2">
             <label className="text-[10px] font-bold text-amber-600 uppercase tracking-wide block mb-1 flex items-center gap-1"><FileText size={12} /> Motivo / Nota de la modificación (Opcional)</label>
             <textarea className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-amber-50 focus:ring-2 focus:ring-amber-500 outline-none text-amber-900" rows="2" placeholder="Ej: Me equivoqué en el precio, el cliente sumó un producto..." value={editReason} onChange={(e) => setEditReason(e.target.value)}></textarea>
           </div>
 
-          <AsyncActionButton type="submit" pending={isPending(`edit-transaction:${transaction.id}`)} disabled={transaction.items.length === 0 || cashMissingAmount > 0 || isPending(`edit-transaction:${transaction.id}`)} loadingLabel="Guardando..." className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-md disabled:bg-slate-300 disabled:cursor-not-allowed">
+          <AsyncActionButton type="submit" pending={isPending(`edit-transaction:${transaction.id}`)} disabled={transaction.items.length === 0 || cashMissingAmount > 0 || isPending(`edit-transaction:${transaction.id}`)} loadingLabel="Guardando..." className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-md disabled:bg-slate-300 disabled:cursor-not-allowed">
             Guardar y Aplicar Cambios
           </AsyncActionButton>
         </form>

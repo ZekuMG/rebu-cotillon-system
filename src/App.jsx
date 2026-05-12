@@ -47,6 +47,7 @@ import {
 } from './utils/supabaseSchemaFallback';
 import { buildBudgetExportConfig, buildExportItemsFromSnapshot, deriveOrderStatus, hydrateBudgetSnapshot } from './utils/budgetHelpers';
 import { buildLegacyOfferPayload } from './utils/offerHelpers';
+import { buildPointExpirationReport, normalizeMemberName } from './utils/memberPointsExpiration';
 import {
   bootstrapAppUsers,
   buildLegacyBootstrapSeed,
@@ -2825,6 +2826,19 @@ export default function PartySupplyApp() {
   useEffect(() => {
     saveUserSettings(userSettings);
   }, [userSettings]);
+
+  const currentTheme = currentUser?.theme === 'dark' ? 'dark' : 'light';
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const body = document.body;
+
+    root.dataset.theme = currentTheme;
+    body.dataset.theme = currentTheme;
+    root.style.colorScheme = currentTheme;
+    body.style.colorScheme = currentTheme;
+  }, [currentTheme]);
+
   const [cart, setCart] = useState([]);
 
   const [loginStep, setLoginStep] = useState('select');
@@ -3099,8 +3113,8 @@ export default function PartySupplyApp() {
   
   const [posSelectedCategory, setPosSelectedCategory] = useState('Todas');
   const [posViewMode, setPosViewMode] = useState('grid');
-  const [posGridColumns, setPosGridColumns] = useState(4);
-  const [inventoryGridColumns, setInventoryGridColumns] = useState(5);
+  const [posGridColumns, setPosGridColumns] = useState(6);
+  const [inventoryGridColumns, setInventoryGridColumns] = useState(6);
 
   const applyPosSnapshot = (snapshot) => {
     const hasPosData =
@@ -4167,6 +4181,38 @@ export default function PartySupplyApp() {
 
   const getSaleStockProductId = (item) => item?.productId || item?.product_id || item?.id || null;
 
+  const getSaleItemUnitCost = (item = {}) =>
+    Number(
+      item.cost ??
+        item.unitCost ??
+        item.unit_cost ??
+        item.purchasePrice ??
+        item.purchase_price ??
+        item.costPrice ??
+        item.cost_price ??
+        0
+    ) || 0;
+
+  const getSaleItemCostPayload = (item = {}) => {
+    const unitCost = getSaleItemUnitCost(item);
+    return {
+      cost: unitCost,
+      is_custom: Boolean(item.isCustom || item.is_custom || item.isTemporary),
+      is_discount: Boolean(item.isDiscount || item.is_discount),
+      is_combo: Boolean(item.isCombo || item.is_combo),
+    };
+  };
+
+  const getSaleItemSnapshotCost = (item = {}) => {
+    const unitCost = getSaleItemUnitCost(item);
+    return {
+      cost: unitCost,
+      unitCost,
+      purchasePrice: unitCost,
+      costSource: item.costSource || item.cost_source || null,
+    };
+  };
+
   const shouldSkipSaleStockProductId = (id) => {
     if (!id) return true;
     const normalizedId = String(id);
@@ -4479,6 +4525,7 @@ export default function PartySupplyApp() {
           : Number(item.qty || 0)),
       is_reward: false,
       product_type: item.product_type || 'quantity',
+      ...getSaleItemCostPayload(item),
     }));
 
     await insertRowsWithSchemaFallback('sale_items', itemsPayload);
@@ -4538,6 +4585,7 @@ export default function PartySupplyApp() {
       originalOfferId: item.originalOfferId || null,
       productsIncluded: Array.isArray(item.productsIncluded) ? item.productsIncluded : [],
       category: item.category || null,
+      ...getSaleItemSnapshotCost(item),
     }));
 
     const fallbackClientName = orderRecord.customerName || 'Cliente';
@@ -4592,6 +4640,7 @@ export default function PartySupplyApp() {
         isCombo: Boolean(item.isCombo),
         originalOfferId: item.originalOfferId || null,
         productsIncluded: Array.isArray(item.productsIncluded) ? item.productsIncluded : [],
+        ...getSaleItemSnapshotCost(item),
       }));
 
     await addLog(
@@ -5379,6 +5428,15 @@ export default function PartySupplyApp() {
          return null;
        }
        
+       const duplicatedName = members.some((member) =>
+         normalizeMemberName(member?.name) === normalizeMemberName(normalizedData.name)
+       );
+
+       if (duplicatedName && !normalizedData.dni) {
+         showNotification('error', 'Socio duplicado', 'Socio duplicado, elegir otro nombre o introducir DNI.');
+         return null;
+       }
+
        const payload = { 
          name: normalizedData.name, 
          dni: normalizedData.dni, 
@@ -5454,8 +5512,18 @@ export default function PartySupplyApp() {
         return null;
       }
 
-      // Buscar miembro anterior para comparar cambios
       const oldMember = members.find(m => m.id === id) || {};
+      const effectiveName = normalizedInput.name !== undefined ? normalizedInput.name : oldMember.name;
+      const effectiveDni = normalizedInput.dni !== undefined ? normalizedInput.dni : oldMember.dni;
+      const duplicatedName = members.some((member) =>
+        String(member?.id) !== String(id) &&
+        normalizeMemberName(member?.name) === normalizeMemberName(effectiveName)
+      );
+
+      if (duplicatedName && !effectiveDni) {
+        showNotification('error', 'Socio duplicado', 'Socio duplicado, elegir otro nombre o introducir DNI.');
+        return null;
+      }
       
       const dbUpdates = {};
       if (normalizedInput.name !== undefined) dbUpdates.name = normalizedInput.name;
@@ -5537,6 +5605,89 @@ export default function PartySupplyApp() {
       } else {
         showNotification('error', 'Error', `Fallo al actualizar el socio. ${getCloudErrorMessage(e)}`); 
       }
+    }
+  };
+
+  const handleCheckMemberPointExpirations = async () => {
+    if (blockIfOfflineReadonly('auditar puntos de socios')) return null;
+
+    const report = buildPointExpirationReport(members, transactions, { upcomingDays: 30 });
+    const expiredMembers = report.expiredMembers.filter((member) => member.expiredPoints > 0);
+
+    if (expiredMembers.length === 0) {
+      showNotification('info', 'Auditoria de puntos', 'No hay puntos vencidos para limpiar.');
+      return { ...report, applied: false };
+    }
+
+    try {
+      const updates = [];
+
+      for (const expiredMember of expiredMembers) {
+        const currentMember = members.find((member) => String(member.id) === String(expiredMember.memberId));
+        if (!currentMember) continue;
+
+        const previousPoints = Number(currentMember.points || 0);
+        const expiredPoints = Math.min(previousPoints, Number(expiredMember.expiredPoints || 0));
+        const nextPoints = Math.max(0, previousPoints - expiredPoints);
+
+        if (expiredPoints <= 0 || nextPoints === previousPoints) continue;
+
+        await updateWithSchemaFallback('clients', currentMember.id, { points: nextPoints }, CLOUD_SELECTS.clients);
+
+        updates.push({
+          id: currentMember.id,
+          name: currentMember.name || expiredMember.name,
+          memberNumber: currentMember.memberNumber || currentMember.member_number || expiredMember.memberNumber,
+          previousPoints,
+          expiredPoints,
+          newPoints: nextPoints,
+        });
+      }
+
+      if (updates.length === 0) {
+        showNotification('info', 'Auditoria de puntos', 'No hubo saldos para actualizar.');
+        return { ...report, applied: false };
+      }
+
+      setMembers((prev) =>
+        prev.map((member) => {
+          const update = updates.find((item) => String(item.id) === String(member.id));
+          return update ? { ...member, points: update.newPoints } : member;
+        }),
+      );
+
+      const totalExpiredPoints = updates.reduce((acc, item) => acc + item.expiredPoints, 0);
+
+      addLog(
+        'Auditoria de Puntos',
+        {
+          totalMembers: updates.length,
+          totalExpiredPoints,
+          members: updates,
+        },
+        'Vencimiento de puntos mayor a 6 meses',
+      );
+
+      showNotification(
+        'success',
+        'Auditoria completada',
+        `${updates.length} socios perdieron ${formatNumber(totalExpiredPoints)} puntos vencidos.`,
+      );
+
+      return {
+        ...report,
+        applied: true,
+        updatedMembers: updates,
+        totals: {
+          ...report.totals,
+          expiredMembers: updates.length,
+          expiredPoints: totalExpiredPoints,
+        },
+      };
+    } catch (e) {
+      console.error('Error auditando puntos vencidos:', e);
+      showNotification('error', 'Error', `No se pudo completar la auditoria. ${getCloudErrorMessage(e)}`);
+      throw e;
     }
   };
 
@@ -5897,13 +6048,16 @@ export default function PartySupplyApp() {
   };
   const buildFallbackReportItemLines = (tx = {}) =>
     (Array.isArray(tx.items) ? tx.items : [])
-      .filter((item) => !item?.isReward && !item?.isDiscount && !item?.isCustom)
+      .filter((item) => !item?.isReward && !item?.isDiscount)
       .map((item) => {
         const productId = item.productId || item.id || item.product_id || item.title;
         const qty = Number(item.qty || item.quantity || 0) || 0;
         if (!productId || qty <= 0) return null;
         const inventoryItem = inventory.find((product) => String(product.id) === String(item.productId || item.id));
-        const cost = Number(inventoryItem?.purchasePrice || 0) || 0;
+        const isCustomLike = Boolean(item?.isCustom || item?.is_custom || item?.isTemporary || String(productId).startsWith('custom_'));
+        const cost = isCustomLike
+          ? getSaleItemUnitCost(item)
+          : Number(inventoryItem?.purchasePrice || item.purchasePrice || item.purchase_price || item.cost || 0) || 0;
         const productType = item.product_type || item.productType || inventoryItem?.product_type || 'quantity';
         return {
           id: productId,
@@ -5912,6 +6066,7 @@ export default function PartySupplyApp() {
           product_type: productType,
           revenue: getReportLineSubtotal(item),
           cost: cost * qty,
+          isCustom: isCustomLike,
         };
       })
       .filter(Boolean);
@@ -5948,13 +6103,7 @@ export default function PartySupplyApp() {
   } = {}) => {
     setInventoryCategoryFilter(category || 'Todas');
 
-    if (mode === 'out_of_stock') {
-      setInventorySearch('AGOTADOS');
-    } else if (mode === 'expirations') {
-      setInventorySearch('VENCIMIENTOS');
-    } else {
-      setInventorySearch(searchQuery || '');
-    }
+    setInventorySearch(searchQuery || '');
 
     setInventoryNavigationRequest({
       token: Date.now(),
@@ -5964,6 +6113,22 @@ export default function PartySupplyApp() {
       productId,
     });
     setActiveTab('inventory');
+  };
+
+  const handleMainTabSelect = (tab) => {
+    if (tab === 'inventory') {
+      setInventorySearch('');
+      setInventoryCategoryFilter('Todas');
+      setInventoryNavigationRequest({
+        token: Date.now(),
+        searchQuery: '',
+        category: 'Todas',
+        mode: 'default',
+        productId: null,
+      });
+    }
+
+    setActiveTab(tab);
   };
 
   const navigateToHistoryFromDashboard = ({
@@ -6829,8 +6994,9 @@ export default function PartySupplyApp() {
     let totalCost = 0; 
     cycleTransactions.forEach(tx => {
       const stockLines = buildReportStockLinesFromChanges(tx);
-      const fallbackLines = stockLines.length > 0 ? [] : buildFallbackReportItemLines(tx);
-      const reportLines = stockLines.length > 0 ? stockLines : fallbackLines;
+      const fallbackLines = buildFallbackReportItemLines(tx);
+      const customCostLines = fallbackLines.filter((line) => line.isCustom);
+      const reportLines = stockLines.length > 0 ? [...stockLines, ...customCostLines] : fallbackLines;
       reportLines.forEach((line) => {
         if (!itemsSoldMap[line.id]) {
           itemsSoldMap[line.id] = {
@@ -7662,6 +7828,7 @@ export default function PartySupplyApp() {
           subtotal: (Number(i.price) || 0) * (Number(i.quantity) || 0),
           is_reward: !!i.isReward,
           product_type: i.product_type || 'quantity',
+          ...getSaleItemCostPayload(i),
         };
       });
       let stockChanges = [];
@@ -7767,6 +7934,7 @@ export default function PartySupplyApp() {
         product_type: item.product_type || 'quantity',
         isCustom: item.isCustom || false,
         isCombo: item.isCombo || false,
+        ...getSaleItemSnapshotCost(item),
         productsIncluded: (item.productsIncluded || []).map((includedItem) => ({
           id: includedItem.id,
           title: includedItem.title,
@@ -8056,7 +8224,9 @@ export default function PartySupplyApp() {
               product_title: i.title, 
               quantity: i.qty || i.quantity, 
               price: i.price, 
-              is_reward: !!i.isReward
+              is_reward: !!i.isReward,
+              product_type: i.product_type || 'quantity',
+              ...getSaleItemCostPayload(i),
           };
       });
       
@@ -8123,6 +8293,7 @@ export default function PartySupplyApp() {
            isCombo: !!i.isCombo,
            category: i.category || null,
            categories: Array.isArray(i.categories) ? i.categories : null,
+           ...getSaleItemSnapshotCost(i),
            productsIncluded: Array.isArray(i.productsIncluded) ? i.productsIncluded : undefined
          }))
       };
@@ -8294,16 +8465,40 @@ export default function PartySupplyApp() {
 
       // [Cálculo de puntos]
       let pointsChange = null;
-      let clientObj = editingTransaction.client || originalTx.client;
+      let clientObj = editingTransaction.client || null;
       let cName = null; let cNum = null;
+      const getMemberIdFromTx = (tx) => {
+        if (tx?.client && typeof tx.client === 'object' && tx.client.id) return tx.client.id;
+        const memberNumber = tx?.client?.memberNumber || tx?.memberNumber || null;
+        return memberNumber
+          ? members.find((member) => String(member.memberNumber) === String(memberNumber))?.id || null
+          : null;
+      };
+      const originalClientId = getMemberIdFromTx(originalTx);
+      const nextClientId = clientObj && typeof clientObj === 'object' && clientObj.id ? clientObj.id : null;
+      const nextPointsEarned = nextClientId ? Math.floor(finalTotal / 500) : 0;
+      const nextPointsSpent = nextClientId ? Number(editingTransaction.pointsSpent || 0) : 0;
+      const previousPointsEarned = Number(originalTx.pointsEarned || 0);
+      const previousPointsSpent = Number(originalTx.pointsSpent || 0);
 
       if (clientObj && typeof clientObj === 'object' && clientObj.name !== 'No asociado') {
-         cName = clientObj.name; cNum = clientObj.memberNumber;
-         const oldPts = Number(originalTx.pointsEarned || 0);
-         const newPts = Math.floor(finalTotal / 500); 
-         if (oldPts !== newPts) pointsChange = { previous: oldPts, new: newPts, diff: newPts - oldPts };
+         cName = clientObj.name; cNum = clientObj.memberNumber || clientObj.member_number || null;
       } else if (typeof clientObj === 'string' && clientObj !== 'No asociado') {
          cName = clientObj;
+      }
+
+      const previousNetPoints = previousPointsEarned - previousPointsSpent;
+      const nextNetPoints = nextPointsEarned - nextPointsSpent;
+      if (String(originalClientId || '') !== String(nextClientId || '') || previousNetPoints !== nextNetPoints) {
+        pointsChange = {
+          previous: previousNetPoints,
+          new: nextNetPoints,
+          diff: nextNetPoints - previousNetPoints,
+          previousClientId: originalClientId,
+          newClientId: nextClientId,
+          pointsEarned: nextPointsEarned,
+          pointsSpent: nextPointsSpent,
+        };
       }
 
       // ==========================================
@@ -8319,7 +8514,9 @@ export default function PartySupplyApp() {
           payment_method: editingTransaction.payment,
           payment_breakdown: editedPaymentBreakdown || null,
           installments: editingTransaction.installments || 0,
-          points_earned: pointsChange ? pointsChange.new : originalTx.pointsEarned,
+          client_id: nextClientId,
+          points_earned: nextPointsEarned,
+          points_spent: nextPointsSpent,
           cash_received: safeCashReceived,
           cash_change: safeCashChange
         },
@@ -8344,7 +8541,8 @@ export default function PartySupplyApp() {
           price: i.price,
           subtotal: i.subtotal,
           product_type: i.product_type || 'quantity',
-          is_reward: !!i.isReward
+          is_reward: !!i.isReward,
+          ...getSaleItemCostPayload(i),
         };
       });
       
@@ -8361,24 +8559,34 @@ export default function PartySupplyApp() {
       }
 
       // E. Actualizar Puntos Cliente
-      if (pointsChange && clientObj && clientObj.id) {
-         const clientDb = members.find(m => m.id === clientObj.id);
-         if (clientDb) {
-            const finalPoints = clientDb.points + pointsChange.diff;
-            await supabase.from('clients').update({ points: finalPoints }).eq('id', clientDb.id);
-            setMembers((prev) =>
-              prev.map((member) =>
-                member.id === clientDb.id
-                  ? {
-                      ...member,
-                      points: finalPoints,
-                      created_at: member.created_at || member.createdAt || null,
-                      createdAt: member.createdAt || member.created_at || null,
-                    }
-                  : member,
-              ),
-            );
-         }
+      if (pointsChange) {
+        const pointDeltas = new Map();
+        if (originalClientId) {
+          pointDeltas.set(String(originalClientId), (pointDeltas.get(String(originalClientId)) || 0) - previousNetPoints);
+        }
+        if (nextClientId) {
+          pointDeltas.set(String(nextClientId), (pointDeltas.get(String(nextClientId)) || 0) + nextNetPoints);
+        }
+
+        for (const [memberId, delta] of pointDeltas.entries()) {
+          if (!delta) continue;
+          const clientDb = members.find((member) => String(member.id) === String(memberId));
+          if (!clientDb) continue;
+          const finalPoints = Math.max(0, Number(clientDb.points || 0) + delta);
+          await supabase.from('clients').update({ points: finalPoints }).eq('id', memberId);
+          setMembers((prev) =>
+            prev.map((member) =>
+              String(member.id) === String(memberId)
+                ? {
+                    ...member,
+                    points: finalPoints,
+                    created_at: member.created_at || member.createdAt || null,
+                    createdAt: member.createdAt || member.created_at || null,
+                  }
+                : member,
+            ),
+          );
+        }
       }
 
       // F. Sincronizar UI Inmediatamente
@@ -8387,7 +8595,10 @@ export default function PartySupplyApp() {
          total: finalTotal,
          paymentBreakdown: editedPaymentBreakdown,
          items: finalItems, 
-         pointsEarned: pointsChange ? pointsChange.new : originalTx.pointsEarned,
+         client: nextClientId ? clientObj : null,
+         memberNumber: cNum,
+         pointsEarned: nextPointsEarned,
+         pointsSpent: nextPointsSpent,
          cashReceived: safeCashReceived,
          cashChange: safeCashChange
       };
@@ -8512,6 +8723,7 @@ export default function PartySupplyApp() {
 
   const mainContentClass = [
     'flex-1',
+    'min-w-0',
     'min-h-0',
     'p-4',
     'bg-slate-100',
@@ -8784,9 +8996,9 @@ export default function PartySupplyApp() {
 // --- MAIN LAYOUT ---
   return (
     <>
-      <div className="print:hidden flex h-screen bg-slate-100 font-sans text-slate-900 text-sm overflow-hidden">
-        <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} currentUser={currentUser} onLogout={handleLogout} />
-        <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+      <div data-theme={currentTheme} className="app-shell print:hidden flex h-screen bg-slate-100 font-sans text-slate-900 text-sm overflow-hidden">
+        <Sidebar activeTab={activeTab} setActiveTab={handleMainTabSelect} currentUser={currentUser} onLogout={handleLogout} />
+        <div className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden">
           
           {isTestActive && (
             <div className="bg-orange-500 text-white text-xs font-bold px-4 py-2.5 flex items-center justify-center gap-2 z-50 shadow-md w-full animate-in slide-in-from-top">
@@ -8795,8 +9007,8 @@ export default function PartySupplyApp() {
             </div>
           )}
 
-          <header className="relative bg-white border-b h-12 flex items-center justify-between px-5 shadow-sm z-10 shrink-0">
-            <div className="flex items-center gap-3">
+          <header className="relative z-10 flex h-12 shrink-0 items-center justify-between gap-4 border-b bg-white px-5 shadow-sm">
+            <div className="flex min-w-0 items-center gap-3">
               <div className="pl-1">
                 <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
                   {activeTabTitles[activeTab] || activeTab}
@@ -8812,7 +9024,7 @@ export default function PartySupplyApp() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex shrink-0 items-center gap-3">
               <div className="flex items-center gap-2">
                 <button
                   onClick={canManageRegister ? toggleRegisterStatus : undefined}
@@ -8920,7 +9132,7 @@ export default function PartySupplyApp() {
             )}
             {canAccessTab(currentUser, 'inventory') && <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={(prod) => { setEditingProduct(prod); setEditReason(''); }} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} closeDetailsToken={inventoryPanelCloseToken} navigationRequest={inventoryNavigationRequest} /></PersistentTabPanel>}
             <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{canUseAdminArea ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">Sistema o un Dueño deben abrir la caja para realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} offers={offers} currentUser={currentUser} userCatalog={userCatalog} />)}</PersistentTabPanel>
-            <PersistentTabPanel tab="clients" activeTab={activeTab} className="h-full min-h-0"><ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={() => {}} /></PersistentTabPanel>
+            <PersistentTabPanel tab="clients" activeTab={activeTab} className="h-full min-h-0"><ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={handleCheckMemberPointExpirations} /></PersistentTabPanel>
             {canViewAgenda && (
               <PersistentTabPanel tab="agenda" activeTab={activeTab} className="h-full min-h-0">
                 <AgendaView
@@ -9022,7 +9234,7 @@ export default function PartySupplyApp() {
         <ClosingTimeModal isOpen={isClosingTimeModalOpen} onClose={() => setIsClosingTimeModalOpen(false)} closingTime={closingTime} setClosingTime={setClosingTime} onSave={handleSaveClosingTime} />
         <AddProductModal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); }} newItem={newItem} setNewItem={setNewItem} categories={categories} onImageUpload={handleImageUpload} onAdd={handleAddItem} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} />
         <EditProductModal product={editingProduct} onClose={() => setEditingProduct(null)} setEditingProduct={setEditingProduct} categories={categories} onImageUpload={handleImageUpload} editReason={editReason} setEditReason={setEditReason} onSave={saveEditProduct} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} onDuplicate={handleDuplicateProduct} currentUser={currentUser} />
-        <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} />
+        <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} members={members} offers={offers} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} />
         <ImageModal isOpen={isImageModalOpen} image={selectedImage} onClose={() => setIsImageModalOpen(false)} />
         <RefundModal  transaction={transactionToRefund}  onClose={() => {   setTransactionToRefund(null);   setRefundReason('');  }}   refundReason={refundReason}  setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />
         <CloseCashModal isOpen={isClosingCashModalOpen} onClose={() => setIsClosingCashModalOpen(false)} salesCount={cycleSalesCount} totalSales={cycleTotalSales} totalExpenses={cycleTotalExpenses} cashExpenses={cycleCashExpenses} cashSales={cycleCashSales} openingBalance={openingBalance} onConfirm={handleConfirmCloseCash} />

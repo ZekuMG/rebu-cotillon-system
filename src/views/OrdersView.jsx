@@ -193,7 +193,7 @@ const buildRecordView = (record, membersMap, type) => {
 
 function MiniModal({ title, children, onClose, maxWidth = 'max-w-md' }) {
   return (
-    <div className="fixed inset-0 z-[85] flex items-center justify-center bg-slate-950/70 p-4">
+    <div className="orders-view fixed inset-0 z-[85] flex items-center justify-center bg-slate-950/70 p-4">
       <div className={`w-full ${maxWidth} max-h-[92vh] overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-2xl`}>
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
           <h3 className="text-sm font-black uppercase tracking-[0.16em] text-slate-800">{title}</h3>
@@ -234,7 +234,7 @@ function RecordCard({ record, isActive, onSelect }) {
   );
 }
 
-function OrderPaymentEditor({ draft, onChange, maxAmount, title = 'Abono', hint = '' }) {
+function OrderPaymentEditor({ draft, onChange, maxAmount, title = 'Abono', hint = '', compact = false }) {
   const normalizedLines = useMemo(() => getNormalizedOrderDraftLines(draft), [draft]);
   const totalAmount = Math.max(roundOrderPaymentValue(draft?.amountInput || 0), 0);
   const paymentSummary = getPaymentSummary(
@@ -338,8 +338,8 @@ function OrderPaymentEditor({ draft, onChange, maxAmount, title = 'Abono', hint 
     : normalizedLines[0]?.method || 'Efectivo';
 
   return (
-    <div className="space-y-3">
-      <label className="block rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+    <div className={compact ? 'space-y-2' : 'space-y-3'}>
+      <label className={`block border px-3 py-2 ${compact ? 'rounded-[14px] border-sky-100 bg-sky-50/70' : 'rounded-2xl border-slate-200 bg-slate-50'}`}>
         <span className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
           <Wallet size={11} />
           {title}
@@ -350,7 +350,7 @@ function OrderPaymentEditor({ draft, onChange, maxAmount, title = 'Abono', hint 
           step="0.01"
           value={draft?.amountInput || ''}
           onChange={(e) => onChange((prev) => setOrderPaymentDraftAmount(prev, e.target.value))}
-          className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none"
+          className="no-number-spinner w-full bg-transparent text-sm font-semibold text-slate-700 outline-none"
           placeholder="0"
         />
         <div className="mt-1 flex items-center justify-between text-[11px] font-semibold text-slate-500">
@@ -359,7 +359,7 @@ function OrderPaymentEditor({ draft, onChange, maxAmount, title = 'Abono', hint 
         </div>
       </label>
 
-      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+      <div className={`border p-3 ${compact ? 'rounded-[14px] border-sky-100 bg-sky-50/70' : 'rounded-2xl border-slate-200 bg-slate-50'}`}>
         <div className="flex items-center justify-between gap-2">
           <div>
             <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Métodos de pago</p>
@@ -409,10 +409,10 @@ function OrderPaymentEditor({ draft, onChange, maxAmount, title = 'Abono', hint 
             return (
               <div
                 key={line.id || `order_line_${index}`}
-                className={`rounded-2xl border p-3 ${
+                className={`border p-3 ${compact ? 'rounded-[14px]' : 'rounded-2xl'} ${
                   draft?.isSplitPayment && draft?.activeLineIndex === index
                     ? 'border-sky-200 bg-white shadow-sm'
-                    : 'border-slate-200 bg-white'
+                    : compact ? 'border-sky-100 bg-white/90' : 'border-slate-200 bg-white'
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -437,7 +437,7 @@ function OrderPaymentEditor({ draft, onChange, maxAmount, title = 'Abono', hint 
                   ) : null}
                 </div>
 
-                <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className={`mt-2 rounded-xl border px-3 py-2 ${compact ? 'border-sky-100 bg-white/90' : 'border-slate-200 bg-slate-50'}`}>
                   <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Monto</p>
                   {draft?.isSplitPayment && index === 0 ? (
                     <input
@@ -446,7 +446,7 @@ function OrderPaymentEditor({ draft, onChange, maxAmount, title = 'Abono', hint 
                       step="0.01"
                       value={line.amount}
                       onChange={(e) => handlePrimaryAmountChange(e.target.value)}
-                      className="mt-1 w-full bg-transparent text-sm font-black text-slate-800 outline-none"
+                      className="no-number-spinner mt-1 w-full bg-transparent text-sm font-black text-slate-800 outline-none"
                     />
                   ) : (
                     <p className="mt-1 text-sm font-black text-slate-800">{formatCurrency(line.amount || 0)}</p>
@@ -466,9 +466,9 @@ function OrderPaymentEditor({ draft, onChange, maxAmount, title = 'Abono', hint 
                   </select>
                 ) : null}
 
-                {line.method === 'Efectivo' ? (
+                {line.method === 'Efectivo' && !draft?.isSplitPayment ? (
                   <div className="mt-2 space-y-2">
-                    <label className="block rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <label className={`block rounded-xl border px-3 py-2 ${compact ? 'border-sky-100 bg-white/90' : 'border-slate-200 bg-slate-50'}`}>
                       <span className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Monto recibido</span>
                       <input
                         type="number"
@@ -477,7 +477,7 @@ function OrderPaymentEditor({ draft, onChange, maxAmount, title = 'Abono', hint 
                         value={line.cashReceived === '' ? '' : Number(line.cashReceived || 0)}
                         onChange={(e) => handleCashReceivedChange(index, e.target.value)}
                         placeholder="Ingresar efectivo recibido"
-                        className="mt-1 w-full bg-transparent text-sm font-black text-slate-800 outline-none"
+                        className="no-number-spinner mt-1 w-full bg-transparent text-sm font-black text-slate-800 outline-none"
                       />
                     </label>
                     <div className="grid grid-cols-2 gap-2 text-[11px] font-semibold">
@@ -737,7 +737,7 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
 
   return (
     <>
-      <div className="grid h-full min-h-0 gap-0 xl:grid-cols-[356px_minmax(0,1fr)]">
+      <div className="orders-view grid h-full min-h-0 gap-0 xl:grid-cols-[356px_minmax(0,1fr)]">
         <div className="min-h-0 border-b border-slate-200 bg-white xl:border-b-0 xl:border-r">
           <div className="flex h-full min-h-0 flex-col">
               <div className="border-b border-slate-200 px-2.5 py-1.5">
@@ -922,42 +922,42 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
 
       <BudgetBuilderModal isOpen={isBudgetModalOpen} onClose={() => { setIsBudgetModalOpen(false); setEditingBudget(null); }} inventory={inventory} categories={categories} members={members} offers={offers} initialRecord={editingBudget} onSave={handleSaveBudget} isSaving={isSavingBudget} />
 
-      {convertTarget && <MiniModal title="Convertir a pedido" maxWidth="max-w-4xl" onClose={() => { setConvertTarget(null); setConvertPaymentDraft(createOrderPaymentDraft(0)); }}><div className="grid gap-3 lg:grid-cols-[0.9fr_1.1fr]">
-        <div className="space-y-2">
-          <div className="rounded-[18px] border border-slate-200 bg-slate-50 p-3">
+      {convertTarget && <MiniModal title="Convertir a pedido" maxWidth="max-w-4xl" onClose={() => { setConvertTarget(null); setConvertPaymentDraft(createOrderPaymentDraft(0)); }}><div className="grid min-h-[420px] gap-2.5 lg:grid-cols-[1.05fr_0.85fr]">
+        <div className="flex min-h-0 flex-col gap-2">
+          <div className="shrink-0 rounded-[14px] border border-slate-200 bg-slate-50 p-2.5">
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] text-slate-500">Presupuesto</span>
               <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 font-mono text-[9px] font-black text-sky-700">{formatRecordCode(convertTarget)}</span>
             </div>
-            <p className="mt-2 text-[16px] font-black leading-tight text-slate-800">{convertTarget.customerName}</p>
+            <p className="mt-1.5 truncate text-[15px] font-black leading-tight text-slate-800" title={convertTarget.customerName}>{convertTarget.customerName}</p>
             <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{convertTarget.customerKind} - {convertTarget.customerPhone}</p>
             {convertTarget.eventLabel && <p className="mt-1 text-[11px] font-semibold text-slate-500">{convertTarget.eventLabel}</p>}
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <div className="rounded-[14px] border border-slate-200 bg-white px-2.5 py-2">
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <div className="rounded-[12px] border border-slate-200 bg-white px-2.5 py-1.5">
                 <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Total</p>
-                <p className="mt-0.5 text-[17px] font-black text-slate-800"><FancyPrice amount={convertTarget.totalAmount || 0} /></p>
+                <p className="mt-0.5 text-[16px] font-black text-slate-800"><FancyPrice amount={convertTarget.totalAmount || 0} /></p>
               </div>
-              <label className="block rounded-[14px] border border-slate-200 bg-white px-2.5 py-2">
+              <label className="block rounded-[12px] border border-slate-200 bg-white px-2.5 py-1.5">
                 <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-[0.1em] text-slate-400"><CalendarRange size={11} />Retiro</span>
                 <input type="date" value={pickupDate} onChange={(e) => setPickupDate(e.target.value)} className="mt-0.5 w-full bg-transparent text-[13px] font-black text-slate-800 outline-none" />
               </label>
             </div>
           </div>
-          <div className="rounded-[18px] border border-slate-200 bg-white p-2">
-            <div className="flex items-center justify-between gap-2 px-1">
+          <div className="flex min-h-0 flex-1 flex-col rounded-[14px] border border-slate-200 bg-white p-2">
+            <div className="flex shrink-0 items-center justify-between gap-2 px-1">
               <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Articulos</p>
               <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-black text-slate-500">{convertTarget.items?.length || 0}</span>
             </div>
-            <div className="mt-1.5 max-h-[238px] space-y-1.5 overflow-y-auto pr-1 scrollbar-hide">
+            <div className="scrollbar-visible mt-1.5 min-h-[170px] flex-1 space-y-1 overflow-y-auto pr-1">
               {(convertTarget.items || []).map((item) => {
                 const subtotal = calculateBudgetLineSubtotal(item);
                 return (
-                  <div key={item.id} className="grid grid-cols-[1fr_auto] gap-2 rounded-[13px] border border-slate-200 bg-slate-50 px-2.5 py-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-[12px] font-black text-slate-800">{item.title}</p>
+                  <div key={item.id} className="flex items-center gap-2 rounded-[11px] border border-slate-200 bg-slate-50 px-2 py-1.5">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[12px] font-black leading-tight text-slate-800" title={item.title}>{item.title}</p>
                       <p className="mt-0.5 text-[10px] font-semibold text-slate-500">{formatBudgetItemQuantity(item)} - {formatCurrency(item.newPrice)}</p>
                     </div>
-                    <p className="self-center text-[12px] font-black text-slate-800">{formatCurrency(subtotal)}</p>
+                    <p className="shrink-0 text-right text-[12px] font-black text-slate-800">{formatCurrency(subtotal)}</p>
                   </div>
                 );
               })}
@@ -965,19 +965,19 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
           </div>
         </div>
         <div className="flex min-h-0 flex-col gap-2">
-          <div className="rounded-[18px] border border-sky-200 bg-sky-50 px-3 py-2">
+          <div className="rounded-[14px] border border-sky-200 bg-sky-50 px-3 py-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-sky-600"><CreditCard size={12} />Sena inicial</p>
+                <p className="flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-sky-600"><CreditCard size={12} />Seña inicial</p>
                 <p className="mt-0.5 text-[11px] font-semibold text-sky-700">Puede quedar en cero si se convierte sin anticipo.</p>
               </div>
-              <div className="rounded-[13px] border border-white/80 bg-white px-2.5 py-1.5 text-right">
+              <div className="rounded-[11px] border border-white/80 bg-white px-2.5 py-1.5 text-right">
                 <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Restante estimado</p>
                 <p className="text-[14px] font-black text-slate-800">{formatCurrency(Math.max(Number(convertTarget.totalAmount || 0) - Number(depositAmount || 0), 0))}</p>
               </div>
             </div>
           </div>
-          <OrderPaymentEditor draft={convertPaymentDraft} onChange={setConvertPaymentDraft} maxAmount={convertTarget.totalAmount || 0} title="Monto de sena" hint="Podes cobrarla con uno o dos metodos." />
+          <OrderPaymentEditor compact draft={convertPaymentDraft} onChange={setConvertPaymentDraft} maxAmount={convertTarget.totalAmount || 0} title="Monto de seña" hint="Podes cobrarla con uno o dos metodos." />
           <div className="sticky bottom-0 mt-auto grid grid-cols-2 gap-2 border-t border-slate-200 bg-white pt-2">
             <button type="button" onClick={() => { setConvertTarget(null); setConvertPaymentDraft(createOrderPaymentDraft(0)); }} className="rounded-[14px] border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-100">Cancelar</button>
             <AsyncActionButton type="button" onAction={handleConvertBudget} pending={isConverting} disabled={isConverting} loadingLabel="Convirtiendo..." className="rounded-[14px] border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-black text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60">Crear pedido</AsyncActionButton>
@@ -986,7 +986,7 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
         {false && <div className="hidden">
         <label className="block rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2"><span className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400"><CreditCard size={11} />Seña inicial</span><input type="number" min="0" step="0.01" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none" /></label>
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-semibold text-slate-600">Total del presupuesto: <span className="font-black text-slate-800">{formatCurrency(convertTarget.totalAmount)}</span></div>
-        <OrderPaymentEditor draft={convertPaymentDraft} onChange={setConvertPaymentDraft} maxAmount={convertTarget.totalAmount || 0} title="Seña inicial" hint="Cada seña puede cobrarse con uno o dos métodos." />
+        <OrderPaymentEditor compact draft={convertPaymentDraft} onChange={setConvertPaymentDraft} maxAmount={convertTarget.totalAmount || 0} title="Seña inicial" hint="Cada seña puede cobrarse con uno o dos métodos." />
         <div className="flex gap-2 pt-1">
           <button type="button" onClick={() => { setConvertTarget(null); setConvertPaymentDraft(createOrderPaymentDraft(0)); }} className="flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-100">Cancelar</button>
           <AsyncActionButton type="button" onAction={handleConvertBudget} pending={isConverting} disabled={isConverting} loadingLabel="Convirtiendo..." className="flex-1 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-black text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60">Crear pedido</AsyncActionButton>
@@ -1005,7 +1005,3 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
     </>
   );
 }
-
-
-
-

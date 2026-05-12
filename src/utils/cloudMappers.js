@@ -61,7 +61,7 @@ export const mapInventoryRecords = (products = []) =>
     categories: product.category
       ? product.category.split(',').map((category) => category.trim()).filter(Boolean)
       : [],
-    purchasePrice: product.purchasePrice || 0,
+    purchasePrice: Number(product.purchasePrice ?? product.purchase_price ?? 0) || 0,
     expiration_date: product.expiration_date || null,
     activeOffers: Array.isArray(product.active_offers)
       ? product.active_offers
@@ -139,7 +139,13 @@ const mapSaleItemRecord = (item) => ({
   qty: Number(item.quantity ?? 0),
   price: Number(item.price ?? 0),
   subtotal: Number(item.subtotal ?? item.line_subtotal ?? 0) || undefined,
+  cost: Number(item.cost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  unitCost: Number(item.cost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  purchasePrice: Number(item.cost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
   isReward: Boolean(item.is_reward),
+  isCustom: Boolean(item.is_custom),
+  isDiscount: Boolean(item.is_discount),
+  isCombo: Boolean(item.is_combo),
   productId: item.product_id,
   product_type: item.product_type || null,
 });
@@ -150,6 +156,9 @@ const mapRecoveredSaleItem = (item) => ({
   qty: Number(item.quantity ?? item.qty ?? 1),
   price: Number(item.price ?? 0),
   subtotal: Number(item.subtotal ?? item.lineSubtotal ?? item.line_total ?? item.lineTotal ?? 0) || undefined,
+  cost: Number(item.cost ?? item.unitCost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  unitCost: Number(item.cost ?? item.unitCost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  purchasePrice: Number(item.cost ?? item.unitCost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
   isReward: Boolean(item.isReward ?? item.is_reward ?? false),
   isDiscount: Boolean(item.isDiscount ?? item.is_discount ?? false),
   discountMode: item.discountMode || item.discount_mode || null,
@@ -237,6 +246,9 @@ const enrichSaleItemsWithSnapshot = (items = [], snapshotItems = []) => {
       category: item.category || snapshotItem.category || null,
       categories: item.categories || snapshotItem.categories || null,
       productsIncluded: item.productsIncluded || snapshotItem.productsIncluded || [],
+      cost: item.cost || snapshotItem.cost || 0,
+      unitCost: item.unitCost || snapshotItem.unitCost || snapshotItem.cost || 0,
+      purchasePrice: item.purchasePrice || snapshotItem.purchasePrice || snapshotItem.cost || 0,
     };
   });
 

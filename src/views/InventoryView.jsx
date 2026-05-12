@@ -4,6 +4,7 @@ import {
   Search,
   Plus,
   Filter,
+  ChevronDown,
   Package,
   X,
   DollarSign,
@@ -18,17 +19,17 @@ import {
   Scale,
   PackageX,
   CalendarClock,
-  CalendarX, // ✨ NUEVO ICONO
-  ArrowDownUp // ✨ AÑADIDO PARA ORDENAR
+  CalendarX, // âœ¨ NUEVO ICONO
+  ArrowDownUp // âœ¨ AÃ‘ADIDO PARA ORDENAR
 } from 'lucide-react';
-// ♻️ FIX: Importamos FancyPrice junto con helpers
+// â™»ï¸ FIX: Importamos FancyPrice junto con helpers
 import { formatStock, formatNumber } from '../utils/helpers';
 import { hasPermission } from '../utils/userPermissions';
 import { FancyPrice } from '../components/FancyPrice';
 
 const INVENTORY_BATCH_SIZE = 50;
 
-// ✨ HELPER: Verifica si la fecha es menor a 14 días o ya pasó
+// âœ¨ HELPER: Verifica si la fecha es menor a 14 dÃ­as o ya pasÃ³
 const getExpirationInfo = (dateString) => {
   if (!dateString) return null;
   const today = new Date();
@@ -60,6 +61,18 @@ const isExpiringSoon = (dateString) => {
   return Boolean(expirationInfo?.isAlert);
 };
 
+const FILTER_MODE = {
+  normal: 'normal',
+  only: 'only',
+  exclude: 'exclude',
+};
+
+const getNextFilterMode = (currentMode) => {
+  if (currentMode === FILTER_MODE.normal) return FILTER_MODE.only;
+  if (currentMode === FILTER_MODE.only) return FILTER_MODE.exclude;
+  return FILTER_MODE.normal;
+};
+
 export default function InventoryView({
   inventory, categories, inventorySearch, setInventorySearch,
   inventoryCategoryFilter, setInventoryCategoryFilter,
@@ -71,34 +84,32 @@ export default function InventoryView({
 }) {
   const [selectedProduct, setSelectedProduct] = useState(null); 
   const [showGridMenu, setShowGridMenu] = useState(false);
+  const [showCategoryMenu, setShowCategoryMenu] = useState(false);
+  const [categoryFilterSearch, setCategoryFilterSearch] = useState('');
+  const [showSortMenu, setShowSortMenu] = useState(false);
+  const [sortFilterSearch, setSortFilterSearch] = useState('');
+  const [expandedCategoryProductId, setExpandedCategoryProductId] = useState(null);
   const canCreateProducts = hasPermission(currentUser, 'inventory.create');
   const canEditProducts = hasPermission(currentUser, 'inventory.edit');
   const canDeleteProducts = hasPermission(currentUser, 'inventory.delete');
   const hasInventoryWriteAccess = canEditProducts || canDeleteProducts;
   
-  // ✨ ESTADOS DE FILTROS RÁPIDOS
-  const [showOnlyOutOfStock, setShowOnlyOutOfStock] = useState(false);
-  const [showOnlyExpirations, setShowOnlyExpirations] = useState(false);
+  // âœ¨ ESTADOS DE FILTROS RÃPIDOS
+  const [stockFilterMode, setStockFilterMode] = useState(FILTER_MODE.normal);
+  const [expirationFilterMode, setExpirationFilterMode] = useState(FILTER_MODE.normal);
   
-  const [sortBy, setSortBy] = useState('title-asc'); // ✨ ESTADO PARA EL ORDEN
+  const [sortBy, setSortBy] = useState('title-asc'); // âœ¨ ESTADO PARA EL ORDEN
 
   const [visibleCount, setVisibleCount] = useState(INVENTORY_BATCH_SIZE);
 
-  // ✨ EFECTO "PUENTE": Atrapa la orden del Dashboard y activa los botones
+  // âœ¨ EFECTO "PUENTE": Atrapa la orden del Dashboard y activa los botones
   useEffect(() => {
-    if (inventorySearch === 'AGOTADOS' || inventorySearch === 'SIN STOCK') {
-      setShowOnlyOutOfStock(true);
-      setShowOnlyExpirations(false);
-      setInventorySearch(''); // Borramos la palabra del buscador
-    } else if (inventorySearch === 'VENCIMIENTOS') {
-      setShowOnlyExpirations(true);
-      setShowOnlyOutOfStock(false);
-      setInventorySearch(''); // Borramos la palabra del buscador
-    } else {
-      // Si el usuario busca algo normal, reseteamos la carga visible al primer lote
-      setVisibleCount(INVENTORY_BATCH_SIZE);
-    }
-  }, [inventorySearch, setInventorySearch]);
+    setVisibleCount(INVENTORY_BATCH_SIZE);
+  }, [inventorySearch]);
+
+  useEffect(() => {
+    setVisibleCount(INVENTORY_BATCH_SIZE);
+  }, [stockFilterMode, expirationFilterMode]);
 
   useEffect(() => {
     if (closeDetailsToken > 0) {
@@ -110,14 +121,14 @@ export default function InventoryView({
     if (!navigationRequest?.token) return;
 
     if (navigationRequest.mode === 'out_of_stock') {
-      setShowOnlyOutOfStock(true);
-      setShowOnlyExpirations(false);
+      setStockFilterMode(FILTER_MODE.only);
+      setExpirationFilterMode(FILTER_MODE.normal);
     } else if (navigationRequest.mode === 'expirations') {
-      setShowOnlyExpirations(true);
-      setShowOnlyOutOfStock(false);
+      setExpirationFilterMode(FILTER_MODE.only);
+      setStockFilterMode(FILTER_MODE.normal);
     } else {
-      setShowOnlyOutOfStock(false);
-      setShowOnlyExpirations(false);
+      setStockFilterMode(FILTER_MODE.normal);
+      setExpirationFilterMode(FILTER_MODE.normal);
     }
 
     if (navigationRequest.productId !== undefined && navigationRequest.productId !== null) {
@@ -150,20 +161,32 @@ export default function InventoryView({
         ? item.categories.includes(inventoryCategoryFilter)
         : item.category === inventoryCategoryFilter);
     
-    // ✨ APLICAMOS LOS FILTROS DE BOTONES
-    const matchesStock = showOnlyOutOfStock ? (Number(item.stock) <= 0) : true;
-    const matchesExpiration = showOnlyExpirations ? isExpiringSoon(item.expiration_date) : true;
+    // âœ¨ APLICAMOS LOS FILTROS DE BOTONES
+    const isStockEmpty = Number(item.stock) <= 0;
+    const hasExpirationAlert = isExpiringSoon(item.expiration_date);
+    const matchesStock =
+      stockFilterMode === FILTER_MODE.only
+        ? isStockEmpty
+        : stockFilterMode === FILTER_MODE.exclude
+          ? !isStockEmpty
+          : true;
+    const matchesExpiration =
+      expirationFilterMode === FILTER_MODE.only
+        ? hasExpirationAlert
+        : expirationFilterMode === FILTER_MODE.exclude
+          ? !hasExpirationAlert
+          : true;
         
     return matchesSearch && matchesCategory && matchesStock && matchesExpiration;
   });
 
-  // ✨ LÓGICA DE ORDENAMIENTO APLICADA SOBRE LOS FILTRADOS
+  // âœ¨ LÃ“GICA DE ORDENAMIENTO APLICADA SOBRE LOS FILTRADOS
   const sortedInventory = [...filteredInventory].sort((a, b) => {
     switch (sortBy) {
       case 'recent': {
         const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
         const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
-        return dateB - dateA; // Ordena de más nuevo a más viejo
+        return dateB - dateA; // Ordena de mÃ¡s nuevo a mÃ¡s viejo
       }
       case 'price-desc':
         return (Number(b.price) || 0) - (Number(a.price) || 0);
@@ -171,6 +194,8 @@ export default function InventoryView({
         return (Number(a.price) || 0) - (Number(b.price) || 0);
       case 'stock-desc':
         return (Number(b.stock) || 0) - (Number(a.stock) || 0);
+      case 'stock-asc':
+        return (Number(a.stock) || 0) - (Number(b.stock) || 0);
       case 'title-asc':
       default:
         return (a.title || '').localeCompare(b.title || '');
@@ -189,6 +214,61 @@ export default function InventoryView({
   const displayedInventory = sortedInventory.slice(0, visibleCount);
   const totalInventoryCount = (inventory || []).length;
   const visibleInventoryCount = filteredInventory.length;
+  const sortOptions = [
+    { value: 'title-asc', label: 'A-Z (Alfabetico)' },
+    { value: 'recent', label: 'Mas Recientes' },
+    { value: 'price-desc', label: 'Mayor Precio' },
+    { value: 'price-asc', label: 'Menor Precio' },
+    { value: 'stock-desc', label: 'Mayor Stock' },
+    { value: 'stock-asc', label: 'Menos Stock' },
+  ];
+  const selectedSortOption = sortOptions.find((option) => option.value === sortBy) || sortOptions[0];
+  const visibleSortOptions = sortOptions.filter((option) =>
+    option.label.toLowerCase().includes(sortFilterSearch.trim().toLowerCase())
+  );
+  const visibleCategoryOptions = (categories || []).filter((category) =>
+    String(category || '').toLowerCase().includes(categoryFilterSearch.trim().toLowerCase())
+  );
+  const stockModeMeta = {
+    [FILTER_MODE.normal]: {
+      label: 'Agotados',
+      title: 'Sin Stock: normal. Click para mostrar solo agotados.',
+      buttonClass: 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700',
+      iconClass: 'text-slate-400',
+    },
+    [FILTER_MODE.only]: {
+      label: 'Solo Agotados',
+      title: 'Sin Stock: mostrando solo agotados. Click para ocultarlos.',
+      buttonClass: 'bg-red-50 border-red-200 text-red-600 shadow-inner',
+      iconClass: 'text-red-500',
+    },
+    [FILTER_MODE.exclude]: {
+      label: 'Sin Agotados',
+      title: 'Sin Stock: anulados, no aparecen agotados. Click para volver a normal.',
+      buttonClass: 'bg-slate-100 border-slate-300 text-slate-400 shadow-inner',
+      iconClass: 'text-slate-400',
+    },
+  }[stockFilterMode];
+  const expirationModeMeta = {
+    [FILTER_MODE.normal]: {
+      label: 'Vencidos',
+      title: 'Vencimientos: normal. Click para mostrar solo vencidos o por vencer.',
+      buttonClass: 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700',
+      iconClass: 'text-slate-400',
+    },
+    [FILTER_MODE.only]: {
+      label: 'Solo Vencidos',
+      title: 'Vencimientos: mostrando solo vencidos o por vencer. Click para ocultarlos.',
+      buttonClass: 'bg-orange-50 border-orange-200 text-orange-600 shadow-inner',
+      iconClass: 'text-orange-500',
+    },
+    [FILTER_MODE.exclude]: {
+      label: 'Sin Vencidos',
+      title: 'Vencimientos: anulados, no aparecen vencidos ni por vencer. Click para volver a normal.',
+      buttonClass: 'bg-slate-100 border-slate-300 text-slate-400 shadow-inner',
+      iconClass: 'text-slate-400',
+    },
+  }[expirationFilterMode];
 
   const handleCardClick = (product) => {
     if (selectedProduct && selectedProduct.id === product.id) {
@@ -215,73 +295,175 @@ export default function InventoryView({
   const isOutOfStock = (product) => Number(product.stock) <= 0;
 
   return (
-    <div className="flex h-full overflow-hidden bg-slate-100">
+    <div className="inventory-view flex h-full overflow-hidden bg-slate-100">
       
       {/* COLUMNA IZQUIERDA */}
       <div className="flex-1 flex flex-col min-w-0 transition-all duration-300">
         
         {/* Header */}
-        <div className="p-4 bg-white border-b shrink-0 flex flex-wrap gap-3 justify-between items-center z-30 relative">
-          <div className="flex items-center gap-2 flex-1 min-w-[200px]">
-            <div className="relative flex-1 max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-              <input type="text" placeholder="Buscar producto..." className="w-full pl-10 pr-4 py-2 border rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-fuchsia-500 outline-none transition-all" value={inventorySearch} onChange={(e) => setInventorySearch(e.target.value)} />
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2 min-[1920px]:gap-3 min-[1920px]:p-2.5 bg-white border-b shrink-0 z-30 relative">
+          <div className="grid min-w-0 grid-cols-[132px_108px_168px_140px_140px] min-[1920px]:grid-cols-[180px_136px_208px_124px_140px] items-center gap-1.5 min-[1920px]:gap-2">
+            <div className="relative min-w-0">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+              <input type="text" placeholder="Buscar..." className="h-8 min-[1920px]:h-9 w-full pl-8 pr-2 min-[1920px]:pr-3 border border-slate-200 rounded-lg bg-slate-50 text-xs min-[1920px]:text-sm font-semibold text-slate-700 focus:bg-white focus:ring-2 focus:ring-fuchsia-500 outline-none transition-all" value={inventorySearch} onChange={(e) => setInventorySearch(e.target.value)} />
             </div>
-            <div className="relative">
-              <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-              <select className="pl-9 pr-8 py-2 border rounded-lg bg-slate-50 text-sm focus:ring-2 focus:ring-fuchsia-500 outline-none appearance-none cursor-pointer" value={inventoryCategoryFilter} onChange={(e) => setInventoryCategoryFilter(e.target.value)}>
-                <option value="Todas">Todas</option>
-                {categories.map((cat) => (<option key={cat} value={cat}>{cat}</option>))}
-              </select>
-            </div>
-
-            {/* ✨ DROPDOWN: ORDENAR POR */}
-            <div className="relative hidden md:block">
-              <ArrowDownUp className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-              <select 
-                className="pl-9 pr-8 py-2 border rounded-lg bg-slate-50 text-sm font-bold text-slate-600 focus:ring-2 focus:ring-fuchsia-500 outline-none appearance-none cursor-pointer" 
-                value={sortBy} 
-                onChange={(e) => setSortBy(e.target.value)}
+            <div className="relative min-w-0">
+              <button
+                type="button"
+                onClick={() => setShowCategoryMenu((prev) => !prev)}
+                className={`flex h-8 min-[1920px]:h-9 w-full items-center gap-1.5 rounded-lg border px-2 text-left text-xs font-semibold transition-all min-[1920px]:text-sm ${
+                  showCategoryMenu || inventoryCategoryFilter !== 'Todas'
+                    ? 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 shadow-sm'
+                    : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-white'
+                }`}
+                title="Filtrar por categoria"
               >
-                <option value="title-asc">A-Z (Alfabético)</option>
-                <option value="recent">⭐ Más Recientes</option>
-                <option value="price-desc">Mayor Precio</option>
-                <option value="price-asc">Menor Precio</option>
-                <option value="stock-desc">Mayor Stock</option>
-              </select>
+                <Filter size={14} className={inventoryCategoryFilter !== 'Todas' ? 'text-fuchsia-500' : 'text-slate-400'} />
+                <span className="min-w-0 flex-1 truncate">{inventoryCategoryFilter}</span>
+                <ChevronDown size={13} className={`shrink-0 text-slate-400 transition-transform ${showCategoryMenu ? 'rotate-180' : ''}`} />
+              </button>
+
+              {showCategoryMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowCategoryMenu(false)} />
+                  <div className="absolute left-0 top-full z-50 mt-1.5 w-64 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                    <div className="relative mb-2">
+                      <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        value={categoryFilterSearch}
+                        onChange={(event) => setCategoryFilterSearch(event.target.value)}
+                        placeholder="Buscar filtro..."
+                        className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-2 text-xs font-semibold text-slate-700 outline-none transition focus:border-fuchsia-300 focus:bg-white focus:ring-2 focus:ring-fuchsia-100"
+                        autoFocus
+                      />
+                    </div>
+                    <div className="custom-scrollbar max-h-64 overflow-y-auto pr-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInventoryCategoryFilter('Todas');
+                          setShowCategoryMenu(false);
+                          setCategoryFilterSearch('');
+                        }}
+                        className={`mb-1 flex h-8 w-full items-center rounded-lg px-2 text-left text-xs font-bold transition ${
+                          inventoryCategoryFilter === 'Todas'
+                            ? 'bg-fuchsia-50 text-fuchsia-700'
+                            : 'text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        Todas
+                      </button>
+                      {visibleCategoryOptions.map((cat) => (
+                        <button
+                          key={cat}
+                          type="button"
+                          onClick={() => {
+                            setInventoryCategoryFilter(cat);
+                            setShowCategoryMenu(false);
+                            setCategoryFilterSearch('');
+                          }}
+                          className={`flex h-8 w-full items-center rounded-lg px-2 text-left text-xs font-bold transition ${
+                            inventoryCategoryFilter === cat
+                              ? 'bg-fuchsia-50 text-fuchsia-700'
+                              : 'text-slate-600 hover:bg-slate-50'
+                          }`}
+                          title={cat}
+                        >
+                          <span className="truncate">{cat}</span>
+                        </button>
+                      ))}
+                      {visibleCategoryOptions.length === 0 && (
+                        <p className="px-2 py-3 text-center text-xs font-semibold text-slate-400">Sin filtros</p>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
-            {/* ✨ BOTÓN: SIN STOCK */}
+            {/* âœ¨ DROPDOWN: ORDENAR POR */}
+            <div className="relative min-w-0">
+              <button
+                type="button"
+                onClick={() => setShowSortMenu((prev) => !prev)}
+                className={`flex h-8 min-[1920px]:h-9 w-full items-center gap-1.5 rounded-lg border px-2 text-left text-xs font-semibold transition-all min-[1920px]:text-sm ${
+                  showSortMenu || sortBy !== 'title-asc'
+                    ? 'border-sky-200 bg-sky-50 text-sky-700 shadow-sm'
+                    : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-white'
+                }`}
+                title="Organizar productos"
+              >
+                <ArrowDownUp size={14} className={sortBy !== 'title-asc' ? 'text-sky-500' : 'text-slate-400'} />
+                <span className="min-w-0 flex-1 truncate">{selectedSortOption.label}</span>
+                <ChevronDown size={13} className={`shrink-0 text-slate-400 transition-transform ${showSortMenu ? 'rotate-180' : ''}`} />
+              </button>
+
+              {showSortMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowSortMenu(false)} />
+                  <div className="absolute left-0 top-full z-50 mt-1.5 w-64 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                    <div className="relative mb-2">
+                      <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        value={sortFilterSearch}
+                        onChange={(event) => setSortFilterSearch(event.target.value)}
+                        placeholder="Buscar orden..."
+                        className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-2 text-xs font-semibold text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-2 focus:ring-sky-100"
+                        autoFocus
+                      />
+                    </div>
+                    <div className="custom-scrollbar max-h-64 overflow-y-auto pr-1">
+                      {visibleSortOptions.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => {
+                            setSortBy(option.value);
+                            setShowSortMenu(false);
+                            setSortFilterSearch('');
+                          }}
+                          className={`flex h-8 w-full items-center rounded-lg px-2 text-left text-xs font-bold transition ${
+                            sortBy === option.value
+                              ? 'bg-sky-50 text-sky-700'
+                              : 'text-slate-600 hover:bg-slate-50'
+                          }`}
+                          title={option.label}
+                        >
+                          <span className="truncate">{option.label}</span>
+                        </button>
+                      ))}
+                      {visibleSortOptions.length === 0 && (
+                        <p className="px-2 py-3 text-center text-xs font-semibold text-slate-400">Sin opciones</p>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Boton: Sin stock */}
             <button
-              onClick={() => { setShowOnlyOutOfStock(!showOnlyOutOfStock); setShowOnlyExpirations(false); }}
-              title="Mostrar solo productos agotados"
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-bold transition-all ${
-                showOnlyOutOfStock 
-                  ? 'bg-red-50 border-red-200 text-red-600 shadow-inner' 
-                  : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700'
-              }`}
+              onClick={() => setStockFilterMode((currentMode) => getNextFilterMode(currentMode))}
+              title={stockModeMeta.title}
+              className={`flex h-8 min-[1920px]:h-9 min-w-0 items-center justify-center gap-1.5 rounded-lg border px-1.5 text-xs font-semibold transition-all ${stockModeMeta.buttonClass}`}
             >
-              <PackageX size={16} className={showOnlyOutOfStock ? 'text-red-500' : 'text-slate-400'} />
-              <span className="hidden sm:inline">Sin Stock</span>
+              <PackageX size={14} className={stockModeMeta.iconClass} />
+              <span className="inline truncate">{stockModeMeta.label}</span>
             </button>
 
-            {/* ✨ BOTÓN: VENCIMIENTOS */}
+            {/* âœ¨ BOTÃ“N: VENCIMIENTOS */}
             <button
-              onClick={() => { setShowOnlyExpirations(!showOnlyExpirations); setShowOnlyOutOfStock(false); }}
+              onClick={() => setExpirationFilterMode((currentMode) => getNextFilterMode(currentMode))}
               title="Mostrar próximos a vencer y vencidos"
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-bold transition-all ${
-                showOnlyExpirations 
-                  ? 'bg-orange-50 border-orange-200 text-orange-600 shadow-inner' 
-                  : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700'
-              }`}
+              className={`flex h-8 min-[1920px]:h-9 min-w-0 items-center justify-center gap-1.5 rounded-lg border px-1.5 text-xs font-semibold transition-all ${expirationModeMeta.buttonClass}`}
             >
-              <CalendarX size={16} className={showOnlyExpirations ? 'text-orange-500' : 'text-slate-400'} />
-              <span className="hidden sm:inline">Vencimientos</span>
+              <CalendarX size={14} className={expirationModeMeta.iconClass} />
+              <span className="inline truncate">{expirationModeMeta.label}</span>
             </button>
 
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-1.5 self-center">
             {inventoryViewMode === 'grid' && (
               <div className="relative">
                 <button onClick={() => setShowGridMenu(!showGridMenu)} className={`p-2 rounded-lg border transition-all ${showGridMenu ? 'bg-slate-100 ring-2 ring-slate-200' : 'bg-white hover:bg-slate-50'}`} title="Ajustar tamaño"><SlidersHorizontal size={20} className="text-slate-600" /></button>
@@ -297,20 +479,20 @@ export default function InventoryView({
                 )}
               </div>
             )}
-            <div className="flex bg-slate-100 p-1 rounded-lg border">
-              <button onClick={() => setInventoryViewMode('grid')} className={`p-1.5 rounded-md transition-all ${inventoryViewMode === 'grid' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`} title="Vista Cuadrícula"><LayoutGrid size={18} /></button>
+            <div className="flex h-8 min-[1920px]:h-9 bg-slate-100 p-0.5 rounded-lg border">
+              <button onClick={() => setInventoryViewMode('grid')} className={`p-1.5 rounded-md transition-all ${inventoryViewMode === 'grid' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`} title="Vista CuadrÃ­cula"><LayoutGrid size={18} /></button>
               <button onClick={() => setInventoryViewMode('list')} className={`p-1.5 rounded-md transition-all ${inventoryViewMode === 'list' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`} title="Vista Lista"><List size={18} /></button>
             </div>
-            <div className="hidden sm:flex items-center gap-2 px-3 py-2 rounded-lg border bg-slate-50 text-slate-600 shrink-0">
-              <Package size={16} className="text-fuchsia-500" />
-              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Productos</span>
-              <span className="text-sm font-extrabold text-slate-800">{formatNumber(visibleInventoryCount)}</span>
+            <div className="hidden sm:flex h-8 min-[1920px]:h-9 items-center gap-1.5 px-2 min-[1920px]:px-2.5 rounded-lg border bg-slate-50 text-slate-600 shrink-0">
+              <Package size={13} className="text-fuchsia-500" />
+              <span className="hidden text-[10px] font-bold uppercase tracking-wide text-slate-500 min-[1920px]:inline">Productos</span>
+              <span className="text-xs font-extrabold text-slate-800">{formatNumber(visibleInventoryCount)}</span>
               {visibleInventoryCount !== totalInventoryCount && (
                 <span className="text-[10px] font-semibold text-slate-400">de {formatNumber(totalInventoryCount)}</span>
               )}
             </div>
             {canCreateProducts && (
-              <button onClick={() => setIsModalOpen(true)} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg shadow-slate-900/20"><Plus size={18} /> <span className="hidden sm:inline">Nuevo</span></button>
+              <button onClick={() => setIsModalOpen(true)} className="h-8 min-[1920px]:h-9 bg-slate-900 hover:bg-slate-800 text-white px-2.5 min-[1920px]:px-3 rounded-lg font-bold flex items-center gap-1.5 transition-colors shadow-lg shadow-slate-900/20"><Plus size={15} /> <span className="hidden min-[1920px]:inline">Nuevo</span></button>
             )}
           </div>
         </div>
@@ -319,13 +501,13 @@ export default function InventoryView({
         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar" onScroll={handleScroll}>
           {filteredInventory.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-400">
-              {showOnlyOutOfStock || showOnlyExpirations ? (
+              {stockFilterMode !== FILTER_MODE.normal || expirationFilterMode !== FILTER_MODE.normal ? (
                 <>
                   <div className="w-16 h-16 rounded-full bg-green-50 flex items-center justify-center mb-4">
                     <CalendarX size={32} className="text-green-500" />
                   </div>
-                  <p className="text-lg font-bold text-slate-600">¡Todo en orden!</p>
-                  <p className="text-sm">No tienes productos en esta categoría de alerta.</p>
+                  <p className="text-lg font-bold text-slate-600">Â¡Todo en orden!</p>
+                  <p className="text-sm">No tienes productos en esta categorÃ­a de alerta.</p>
                 </>
               ) : (
                 <>
@@ -339,7 +521,7 @@ export default function InventoryView({
             <>
               {/* VISTA GRID */}
               {inventoryViewMode === 'grid' ? (
-                <div className="grid gap-3 transition-all duration-300" style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}>
+                <div className="grid gap-2.5 transition-all duration-300" style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}>
                   {displayedInventory.map((product) => {
                     const isSelected = selectedProduct?.id === product.id;
                     const stockColor = getStockColorClass(product);
@@ -351,8 +533,8 @@ export default function InventoryView({
                     const productImage = product.imageThumb || product.image_thumb || product.image;
 
                     return (
-                      <div key={product.id} onClick={() => handleCardClick(product)} className={`bg-white rounded-xl border overflow-hidden flex flex-col cursor-pointer transition-all hover:shadow-lg group relative ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 transform scale-[0.98]' : 'hover:border-fuchsia-200'} ${outOfStock ? 'grayscale opacity-75' : ''} ${hasExpirationAlert && !outOfStock ? (isExpired ? 'border-red-300 bg-red-50/30' : 'border-amber-200 bg-amber-50/30') : ''}`}>
-                        <div className="aspect-square bg-slate-50 relative overflow-hidden">
+                      <div key={product.id} onClick={() => handleCardClick(product)} className={`bg-white rounded-lg border overflow-hidden flex flex-col cursor-pointer transition-all hover:shadow-md group relative ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 transform scale-[0.98]' : 'hover:border-fuchsia-200'} ${outOfStock ? 'grayscale opacity-75' : ''} ${hasExpirationAlert && !outOfStock ? (isExpired ? 'border-red-300 bg-red-50/30' : 'border-amber-200 bg-amber-50/30') : ''}`}>
+                        <div className="aspect-[4/3] bg-slate-50 relative overflow-hidden">
                           {productImage ? (
                             <img src={productImage} alt={product.title} loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover transition-transform group-hover:scale-110 duration-500" />
                           ) : (
@@ -389,27 +571,27 @@ export default function InventoryView({
                           )}
                         </div>
                         
-                        <div className={`flex-1 flex flex-col z-20 bg-white ${gridColumns > 7 ? 'p-1.5' : 'p-3'}`}>
+                        <div className={`flex-1 flex flex-col z-20 bg-white ${gridColumns > 7 ? 'p-1.5' : 'p-2'}`}>
                           {gridColumns <= 7 && (
-                            <div className="mb-1">
+                            <div className="mb-0.5">
                               <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider truncate block">
                                 {Array.isArray(product.categories) ? product.categories[0] : product.category || 'Gral'}
                               </span>
                             </div>
                           )}
-                          <h3 className={`font-bold leading-tight mb-1 flex-1 ${gridColumns > 7 ? 'text-[10px] line-clamp-1' : 'text-sm line-clamp-2'} ${isExpired ? 'text-red-700' : 'text-slate-800'}`}>{product.title}</h3>
-                          <div className={`flex justify-between items-end mt-auto ${gridColumns > 7 ? 'pt-1' : 'pt-2 border-t border-slate-100'}`}>
+                          <h3 className={`font-bold leading-tight mb-1 flex-1 ${gridColumns > 7 ? 'text-[10px] line-clamp-1' : 'text-[12px] line-clamp-2'} ${isExpired ? 'text-red-700' : 'text-slate-800'}`}>{product.title}</h3>
+                          <div className={`flex justify-between items-end mt-auto ${gridColumns > 7 ? 'pt-1' : 'pt-1.5 border-t border-slate-100'}`}>
                             <div>
-                              {gridColumns <= 6 && <p className="text-[10px] text-slate-400">Precio</p>}
-                              <p className={`font-bold text-slate-900 ${gridColumns > 7 ? 'text-xs' : 'text-lg'}`}>
+                              {gridColumns <= 6 && <p className="text-[9px] text-slate-400 leading-none">Precio</p>}
+                              <p className={`font-bold text-slate-900 leading-tight ${gridColumns > 7 ? 'text-xs' : 'text-base'}`}>
                                 <FancyPrice amount={isWeight ? product.price * 1000 : product.price} />
                                 {isWeight && <span className="text-[9px] font-medium text-slate-400">/kg</span>}
                               </p>
                             </div>
                             {gridColumns <= 8 && (
                               <div className="text-right">
-                                {gridColumns <= 6 && <p className="text-[10px] text-slate-400">Stock</p>}
-                                <p className={`font-bold ${stockColor} ${gridColumns > 7 ? 'text-xs' : 'text-sm'}`}>
+                                {gridColumns <= 6 && <p className="text-[9px] text-slate-400 leading-none">Stock</p>}
+                                <p className={`font-bold leading-tight ${stockColor} ${gridColumns > 7 ? 'text-xs' : 'text-[13px]'}`}>
                                   {formatStock(product)}
                                 </p>
                               </div>
@@ -422,7 +604,14 @@ export default function InventoryView({
                 </div>
               ) : (
                 /* VISTA LISTA */
-                <div className="flex flex-col gap-2">
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                  <div className="sticky top-0 z-10 grid grid-cols-[132px_minmax(180px,1.65fr)_minmax(136px,1fr)_76px_88px] items-center gap-2 border-b border-slate-200 bg-slate-100/95 px-3 py-2 text-[10px] font-black uppercase text-slate-500 backdrop-blur min-[1920px]:grid-cols-[142px_minmax(0,2.25fr)_126px_104px_118px]">
+                    <span className="truncate">Codigo</span>
+                    <span className="truncate">Titulo</span>
+                    <span className="truncate">Categoria</span>
+                    <span className="text-right">Stock</span>
+                    <span className="text-right">Precio</span>
+                  </div>
                   {displayedInventory.map((product) => {
                     const isSelected = selectedProduct?.id === product.id;
                     const stockColor = getStockColorClass(product);
@@ -431,61 +620,57 @@ export default function InventoryView({
                     const expirationInfo = getExpirationInfo(product.expiration_date);
                     const hasExpirationAlert = Boolean(expirationInfo?.isAlert);
                     const isExpired = Boolean(expirationInfo?.isExpired);
-                    const productImage = product.imageThumb || product.image_thumb || product.image;
+                    const productCategories = (Array.isArray(product.categories) ? product.categories : [product.category])
+                      .map((category) => String(category || '').trim())
+                      .filter(Boolean);
+                    const visibleCategories = productCategories.length > 0 ? productCategories : ['Gral'];
+                    const hasMultipleCategories = visibleCategories.length > 1;
+                    const isCategoriesExpanded = String(expandedCategoryProductId) === String(product.id);
+                    const categoriesToRender = isCategoriesExpanded ? visibleCategories : visibleCategories.slice(0, 1);
+                    const categoryTitle = visibleCategories.join(', ');
 
                     return (
-                      <div key={product.id} onClick={() => handleCardClick(product)} className={`bg-white rounded-lg border p-3 flex items-center gap-4 cursor-pointer transition-all hover:shadow-md relative ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 bg-fuchsia-50' : 'hover:border-fuchsia-200'} ${outOfStock ? 'grayscale opacity-75' : ''} ${hasExpirationAlert && !outOfStock ? (isExpired ? 'bg-red-50/40 border-red-200' : 'bg-amber-50/50 border-amber-200') : ''}`}>
-                        {hasExpirationAlert && !outOfStock && (
-                          <div className={`absolute -top-2 right-3 max-w-[180px] rounded-md border px-1.5 py-0.5 text-[9px] font-black shadow-sm flex items-center gap-1 z-20 truncate ${isExpired ? 'bg-red-100 text-red-700 border-red-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`} title={expirationInfo.label}>
-                            {isExpired ? <CalendarX size={9} /> : <CalendarClock size={9} />}
-                            <span className="truncate">{expirationInfo.label}</span>
-                          </div>
-                        )}
-                        <div className="w-12 h-12 rounded-md bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border relative">
-                          {productImage ? (
-                            <img src={productImage} alt="" loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center bg-slate-200 text-[8px] font-bold text-center text-slate-500 leading-none p-1">{product.title.slice(0,10)}...</div>
-                          )}
-                          {outOfStock && (<div className="absolute inset-0 bg-white/60 flex items-center justify-center z-10"><X size={16} className="text-red-500"/></div>)}
-                          {isExpired && !outOfStock && (
-                            <div className="absolute inset-0 bg-red-600/15 flex items-center justify-center backdrop-blur-[1px] z-10 pointer-events-none">
-                               <CalendarX size={16} className="text-red-600 drop-shadow-md" />
-                            </div>
-                          )}
-                          {isWeight && !outOfStock && (<div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-0.5 py-0.5 z-20"><Scale size={7} className="text-white" /></div>)}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h4 className={`font-bold truncate ${hasExpirationAlert ? 'pr-28' : ''} ${isExpired ? 'text-red-700' : 'text-slate-800'}`}>
-                             {product.title}
-                          </h4>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded text-slate-500 font-bold border border-slate-200">
-                                {Array.isArray(product.categories) ? product.categories[0] : product.category}
+                      <div
+                        key={product.id}
+                        onClick={() => handleCardClick(product)}
+                        className={`grid grid-cols-[132px_minmax(180px,1.65fr)_minmax(136px,1fr)_76px_88px] items-center gap-2 border-b border-l-4 border-b-slate-100 px-3 py-1.5 text-[13px] cursor-pointer transition-all last:border-b-0 hover:bg-fuchsia-50/40 min-[1920px]:grid-cols-[142px_minmax(0,2.25fr)_126px_104px_118px] ${isSelected ? 'border-l-fuchsia-500 bg-fuchsia-50 ring-1 ring-inset ring-fuchsia-200' : 'border-l-transparent bg-white'} ${outOfStock ? 'bg-slate-50 text-slate-400' : ''} ${hasExpirationAlert && !outOfStock ? (isExpired ? 'border-l-red-500 bg-red-50/40' : 'border-l-amber-400 bg-amber-50/45') : ''}`}
+                      >
+                        <span className="min-w-0 truncate text-[11px] font-semibold leading-tight text-slate-400" title={product.barcode || 'Sin codigo'}>
+                          <ScanBarcode size={11} className="mr-1 inline text-slate-300" />
+                          {product.barcode || '-'}
+                        </span>
+                        <h4 className={`min-w-0 truncate text-[13px] font-semibold leading-tight ${isExpired ? 'text-red-700' : 'text-slate-800'}`} title={product.title}>
+                          {product.title || 'Sin titulo'}
+                        </h4>
+                        <div className={`flex min-w-0 items-center gap-1 overflow-hidden ${isCategoriesExpanded ? 'flex-wrap whitespace-normal' : 'whitespace-nowrap'}`} title={categoryTitle}>
+                          {categoriesToRender.map((category) => (
+                            <span key={category} className="inline-flex max-w-full min-w-0 w-fit shrink-0 truncate rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-bold leading-tight text-slate-500">
+                              {category}
                             </span>
-                            {isWeight && (
-                              <span className="text-[10px] bg-amber-100 px-2 py-0.5 rounded text-amber-600 font-bold border border-amber-200 flex items-center gap-0.5">
-                                <Scale size={8} /> Peso
-                              </span>
-                            )}
-                            <span className="text-xs text-slate-400 flex items-center gap-1"><ScanBarcode size={10} /> {product.barcode || '-'}</span>
-                          </div>
+                          ))}
+                          {hasMultipleCategories && (
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setExpandedCategoryProductId((currentId) =>
+                                  String(currentId) === String(product.id) ? null : product.id
+                                );
+                              }}
+                              className="shrink-0 rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-black leading-tight text-slate-500 transition hover:border-fuchsia-200 hover:text-fuchsia-600"
+                              title={isCategoriesExpanded ? 'Ocultar categorias' : categoryTitle}
+                            >
+                              {isCategoriesExpanded ? '-' : `+${visibleCategories.length - 1}`}
+                            </button>
+                          )}
                         </div>
-                        <div className="flex items-center gap-6 mr-2">
-                            <div className="text-right">
-                                <p className="text-[10px] text-slate-400 uppercase font-bold">Stock</p>
-                                <p className={`font-bold ${stockColor}`}>
-                                    {outOfStock ? 'AGOTADO' : formatStock(product)}
-                                </p>
-                            </div>
-                            <div className="text-right w-24">
-                                <p className="text-[10px] text-slate-400 uppercase font-bold">Precio</p>
-                                <p className="font-bold text-lg text-fuchsia-600">
-                                  <FancyPrice amount={isWeight ? product.price * 1000 : product.price} />
-                                  {isWeight && <span className="text-[10px] font-medium">/kg</span>}
-                                </p>
-                            </div>
-                        </div>
+                        <p className={`truncate text-right font-bold leading-tight ${stockColor}`}>
+                          {outOfStock ? 'Agotado' : formatStock(product)}
+                        </p>
+                        <p className="truncate text-right font-extrabold leading-tight text-slate-900">
+                          <FancyPrice amount={isWeight ? product.price * 1000 : product.price} />
+                          {isWeight && <span className="text-[10px] font-medium text-slate-400">/kg</span>}
+                        </p>
                       </div>
                     );
                   })}
@@ -504,7 +689,7 @@ export default function InventoryView({
         const isExpired = Boolean(expirationInfo?.isExpired);
 
         return (
-        <div className="w-[356px] bg-white border-l shadow-2xl flex flex-col shrink-0 animate-in slide-in-from-right duration-300 relative z-20">
+        <div className="w-[320px] bg-white border-l shadow-2xl flex flex-col shrink-0 animate-in slide-in-from-right duration-300 relative z-20">
           <div className="px-4 py-3 border-b flex justify-between items-start bg-slate-50">
             <div>
               <h3 className="font-bold text-slate-800 text-base">Gesti{"\u00f3"}n de Stock</h3>

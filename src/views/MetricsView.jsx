@@ -7,7 +7,6 @@ import {
   CreditCard,
   Download,
   FileText,
-  LineChart as LineChartIcon,
   PackageSearch,
   Printer,
   RefreshCw,
@@ -23,13 +22,9 @@ import {
 import {
   Area,
   AreaChart,
-  Bar,
-  BarChart,
   CartesianGrid,
   Cell,
   Legend,
-  Line,
-  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -291,8 +286,16 @@ const Table = ({ columns, rows, emptyText }) => (
             rows.map((row, index) => (
               <tr key={row.key || `${row.name || row.label}-${index}`} className="hover:bg-slate-50">
                 {columns.map((column) => (
-                  <td key={column.key} className={`px-3 py-2 font-semibold text-slate-700 ${column.align === 'right' ? 'text-right' : ''}`}>
-                    {column.render ? column.render(row, index) : row[column.key]}
+                  <td
+                    key={column.key}
+                    title={typeof row[column.key] === 'string' ? row[column.key] : undefined}
+                    className={`px-3 py-2 font-semibold text-slate-700 ${column.align === 'right' ? 'text-right' : ''}`}
+                  >
+                    {column.render ? column.render(row, index) : (
+                      typeof row[column.key] === 'string'
+                        ? <span className="block max-w-[220px] truncate">{row[column.key]}</span>
+                        : row[column.key]
+                    )}
                   </td>
                 ))}
               </tr>
@@ -302,6 +305,89 @@ const Table = ({ columns, rows, emptyText }) => (
       </table>
     </div>
   </div>
+);
+
+const StatStrip = ({ items = [] }) => (
+  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+    {items.map((item) => (
+            <div
+              key={item.label}
+              title={typeof item.value === 'string' ? item.value : undefined}
+              className={`rounded-lg border px-3 py-2 ${item.tone || 'border-slate-200 bg-slate-50 text-slate-700'}`}
+            >
+        <p className="text-[9px] font-black uppercase tracking-[0.12em] opacity-70">{item.label}</p>
+        <div className="mt-1 truncate text-base font-black">{item.value}</div>
+        {item.sub && <p className="mt-0.5 truncate text-[10px] font-semibold opacity-70">{item.sub}</p>}
+      </div>
+    ))}
+  </div>
+);
+
+const AreaMetricPanel = ({ data = [], areas = [], height = 280, yFormatter = (value) => `$${formatNumber(value)}` }) => (
+  data.length ? (
+    <ChartFrame height={height}>
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={data}>
+          <defs>
+            {areas.map((area) => (
+              <linearGradient key={area.key} id={`area-${area.key}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor={area.color} stopOpacity={0.22} />
+                <stop offset="95%" stopColor={area.color} stopOpacity={0} />
+              </linearGradient>
+            ))}
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+          <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#94a3b8" />
+          <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={yFormatter} />
+          <Tooltip content={<ChartTooltip />} />
+          <Legend />
+          {areas.map((area) => (
+            <Area
+              key={area.key}
+              type="monotone"
+              dataKey={area.key}
+              name={area.label}
+              stroke={area.color}
+              fill={`url(#area-${area.key})`}
+              strokeWidth={2}
+            />
+          ))}
+        </AreaChart>
+      </ResponsiveContainer>
+    </ChartFrame>
+  ) : <EmptyState />
+);
+
+const PieMetricPanel = ({ data = [], dataKey = 'value', nameKey = 'name', height = 260, onSliceClick, activeName }) => (
+  data.length ? (
+    <ChartFrame height={height}>
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie
+            data={data}
+            dataKey={dataKey}
+            nameKey={nameKey}
+            innerRadius={54}
+            outerRadius={92}
+            paddingAngle={3}
+            onClick={onSliceClick ? (entry) => onSliceClick(entry) : undefined}
+            className={onSliceClick ? 'cursor-pointer' : undefined}
+          >
+            {data.map((entry, index) => (
+              <Cell
+                key={index}
+                fill={COLORS[index % COLORS.length]}
+                stroke={activeName && entry?.[nameKey] === activeName ? '#0f172a' : '#fff'}
+                strokeWidth={activeName && entry?.[nameKey] === activeName ? 3 : 1}
+              />
+            ))}
+          </Pie>
+          <Tooltip content={<ChartTooltip />} />
+          <Legend />
+        </PieChart>
+      </ResponsiveContainer>
+    </ChartFrame>
+  ) : <EmptyState />
 );
 
 const exportCsv = (filename, rows) => {
@@ -380,12 +466,21 @@ export default function MetricsView({
   const [activeSection, setActiveSection] = useState('summary');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [summaryEvolutionMetrics, setSummaryEvolutionMetrics] = useState(['revenue']);
+  const [selectedCategoryName, setSelectedCategoryName] = useState(null);
 
   const canViewProfit = hasPermission(currentUser, 'metrics.viewProfit');
   const canViewUsers = hasPermission(currentUser, 'metrics.viewUsers');
   const canViewClients = hasPermission(currentUser, 'metrics.viewClients');
   const canExport = hasPermission(currentUser, 'metrics.export');
   const canConfigureAlerts = hasPermission(currentUser, 'metrics.configureAlerts');
+
+  useEffect(() => {
+    setSummaryEvolutionMetrics((current) => {
+      const next = current.filter((metric) => canViewProfit || metric !== 'profit');
+      return next.length ? next : ['revenue'];
+    });
+  }, [canViewProfit]);
 
   const metrics = useMetricsData({
     transactions,
@@ -428,11 +523,25 @@ export default function MetricsView({
   };
 
   const isHourlyMode = metrics.current.periodMode === 'hour';
+  const summaryEvolutionOptions = [
+    { id: 'revenue', label: 'Ingreso', color: '#0ea5e9', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
+    ...(canViewProfit ? [{ id: 'profit', label: 'Ganancia', color: '#10b981', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' }] : []),
+    { id: 'expenses', label: 'Gastos', color: '#ef4444', tone: 'border-rose-200 bg-rose-50 text-rose-700' },
+  ];
+  const activeEvolutionOptions = summaryEvolutionOptions.filter((option) => summaryEvolutionMetrics.includes(option.id));
+  const toggleSummaryEvolutionMetric = (metricId) => {
+    setSummaryEvolutionMetrics((current) => {
+      const exists = current.includes(metricId);
+      if (exists && current.length === 1) return current;
+      return exists ? current.filter((item) => item !== metricId) : [...current, metricId];
+    });
+  };
   const periodUnit = metrics.current.periodLabel || 'día';
   const periodUnitPlural = metrics.current.periodLabelPlural || 'días';
 
   const hasSourceData =
     transactions.length > 0 ||
+    dailyLogs.length > 0 ||
     expenses.length > 0 ||
     pastClosures.length > 0 ||
     inventory.length > 0 ||
@@ -481,7 +590,29 @@ export default function MetricsView({
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.45fr_0.9fr]">
         <Panel
           title={isHourlyMode ? 'Evolución de hoy por horario' : 'Evolución del período'}
-          icon={LineChartIcon}
+          icon={TrendingUp}
+          action={(
+            <div className="inline-flex flex-wrap gap-1 rounded-md border border-slate-200 bg-slate-50 p-0.5">
+              {summaryEvolutionOptions.map((option) => (
+                <label
+                  key={option.id}
+                  className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded border px-2 text-[10px] font-black transition ${
+                    summaryEvolutionMetrics.includes(option.id)
+                      ? option.tone
+                      : 'border-transparent text-slate-500 hover:bg-white'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={summaryEvolutionMetrics.includes(option.id)}
+                    onChange={() => toggleSummaryEvolutionMetric(option.id)}
+                    className="h-3 w-3 rounded border-slate-300"
+                  />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          )}
           hint={`Compara ingreso bruto, cantidad de ventas y, si tenés permiso, ganancia neta por ${periodUnit}.`}
         >
           {metrics.current.dailySeries.length ? (
@@ -489,23 +620,29 @@ export default function MetricsView({
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={metrics.current.dailySeries}>
                   <defs>
-                    <linearGradient id="metricsRevenue" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.26} />
-                      <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="metricsProfit" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.22} />
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                    </linearGradient>
+                    {summaryEvolutionOptions.map((option) => (
+                      <linearGradient key={option.id} id={`metrics-${option.id}`} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={option.color} stopOpacity={0.22} />
+                        <stop offset="95%" stopColor={option.color} stopOpacity={0} />
+                      </linearGradient>
+                    ))}
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#94a3b8" />
                   <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={(value) => `$${formatNumber(value)}`} />
                   <Tooltip content={<ChartTooltip />} />
                   <Legend />
-                  <Area type="monotone" dataKey="revenue" name="Ingreso" stroke="#0ea5e9" fill="url(#metricsRevenue)" strokeWidth={2} />
-                  {canViewProfit && <Area type="monotone" dataKey="profit" name="Ganancia" stroke="#10b981" fill="url(#metricsProfit)" strokeWidth={2} />}
-                  <Line type="monotone" dataKey="salesCount" name="Ventas" stroke="#8b5cf6" strokeWidth={2} dot={false} />
+                  {activeEvolutionOptions.map((option) => (
+                    <Area
+                      key={option.id}
+                      type="monotone"
+                      dataKey={option.id}
+                      name={option.label}
+                      stroke={option.color}
+                      fill={`url(#metrics-${option.id})`}
+                      strokeWidth={2}
+                    />
+                  ))}
                 </AreaChart>
               </ResponsiveContainer>
             </ChartFrame>
@@ -539,42 +676,70 @@ export default function MetricsView({
   );
 
   const renderSales = () => (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-      <Panel title={isHourlyMode ? 'Ventas por horario' : 'Ventas por día'} icon={TrendingUp}>
-        {metrics.current.dailySeries.length ? (
-          <ChartFrame height={310}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={metrics.current.dailySeries}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="salesCount" name="Ventas" fill="#8b5cf6" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartFrame>
-        ) : <EmptyState />}
+    <div className="space-y-4">
+      <StatStrip
+        items={[
+          { label: 'Ventas', value: formatNumber(metrics.current.stats.salesCount), sub: metrics.range.label, tone: 'border-violet-200 bg-violet-50 text-violet-700' },
+          { label: 'Ingreso', value: <FancyPrice amount={metrics.current.stats.revenue} />, sub: 'Total vendido', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
+          { label: 'Ticket prom.', value: <FancyPrice amount={metrics.current.stats.averageTicket} />, sub: 'Por venta', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
+          {
+            label: 'Mejor tramo',
+            value: metrics.current.dailySeries.reduce((best, row) => (
+              Number(row.revenue || 0) > Number(best?.revenue || 0) ? row : best
+            ), null)?.label || '-',
+            sub: 'Mayor ingreso',
+            tone: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+          },
+        ]}
+      />
+      <Panel title={isHourlyMode ? 'Evolucion de ventas por horario' : 'Evolucion de ventas'} icon={TrendingUp}>
+        <AreaMetricPanel
+          data={metrics.current.dailySeries}
+          areas={[{ key: 'salesCount', label: 'Ventas', color: '#8b5cf6' }]}
+          yFormatter={(value) => formatNumber(value)}
+          height={280}
+        />
+      </Panel>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      <Panel title={isHourlyMode ? 'Ventas por horario' : 'Ventas por dia'} icon={TrendingUp}>
+        <PieMetricPanel data={metrics.current.dailySeries.filter((row) => Number(row.salesCount || 0) > 0)} dataKey="salesCount" nameKey="label" height={250} />
+        <Table
+          emptyText="Sin ventas para estos filtros."
+          columns={[
+            { key: 'label', label: isHourlyMode ? 'Horario' : 'Dia' },
+            { key: 'salesCount', label: 'Ventas', align: 'right', render: (row) => formatNumber(row.salesCount) },
+            { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
+            ...(canViewProfit ? [{ key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }] : []),
+          ]}
+          rows={metrics.current.dailySeries}
+        />
       </Panel>
       <Panel title={isHourlyMode ? 'Ingreso por horario' : 'Horarios fuertes'} icon={CalendarDays}>
-        {(isHourlyMode ? metrics.current.dailySeries : metrics.current.hourStats).length ? (
-          <ChartFrame height={310}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={isHourlyMode ? metrics.current.dailySeries : metrics.current.hourStats}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="revenue" name="Ingreso" fill="#0ea5e9" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartFrame>
-        ) : <EmptyState />}
+        <PieMetricPanel data={(isHourlyMode ? metrics.current.dailySeries : metrics.current.hourStats).filter((row) => Number(row.revenue || 0) > 0)} dataKey="revenue" nameKey="label" height={250} />
+        <Table
+          emptyText="Sin horarios para estos filtros."
+          columns={[
+            { key: 'label', label: 'Horario' },
+            { key: 'salesCount', label: 'Ventas', align: 'right', render: (row) => formatNumber(row.salesCount) },
+            { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
+          ]}
+          rows={isHourlyMode ? metrics.current.dailySeries : metrics.current.hourStats}
+        />
       </Panel>
+      </div>
     </div>
   );
 
   const renderProfit = () => (
     <div className="space-y-4">
+      <StatStrip
+        items={[
+          { label: 'Ingreso', value: <FancyPrice amount={metrics.current.stats.revenue} />, sub: 'Bruto', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
+          { label: 'Ganancia', value: <FancyPrice amount={metrics.current.stats.profit} />, sub: 'Neta', tone: metrics.current.stats.profit >= 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700' },
+          { label: 'Gastos', value: <FancyPrice amount={metrics.current.stats.expenses} />, sub: `${metrics.current.filteredExpenses.length} movimientos`, tone: 'border-rose-200 bg-rose-50 text-rose-700' },
+          { label: 'Margen', value: `${formatNumber(metrics.current.stats.revenue ? (metrics.current.stats.profit / metrics.current.stats.revenue) * 100 : 0, 1)}%`, sub: 'Ganancia / ingreso', tone: 'border-slate-200 bg-slate-50 text-slate-700' },
+        ]}
+      />
       <Panel
         title="Resultado financiero"
         icon={WalletCards}
@@ -583,55 +748,81 @@ export default function MetricsView({
         <FinanceBreakdown stats={metrics.current.stats} />
       </Panel>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-      <Panel title={isHourlyMode ? 'Evolución financiera por horario' : 'Evolución financiera'} icon={LineChartIcon} hint={`Ingreso bruto, ganancia neta y gastos por ${periodUnit}. Sirve para ver en qué ${periodUnitPlural} se generó o se perdió margen.`}>
-        <ChartFrame height={280}>
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={metrics.current.dailySeries}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#94a3b8" />
-              <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={(value) => `$${formatNumber(value)}`} />
-              <Tooltip content={<ChartTooltip />} />
-              <Legend />
-              <Line type="monotone" dataKey="revenue" name="Ingreso" stroke="#0ea5e9" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="profit" name="Ganancia" stroke="#10b981" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="expenses" name="Gastos" stroke="#ef4444" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </ChartFrame>
-      </Panel>
-      <Panel title="Margen por producto" icon={ShoppingBag} hint="El margen es la ganancia estimada de cada producto sobre su ingreso. Puede variar si faltan costos de compra.">
-        <Table
-          emptyText="Sin productos vendidos."
-          columns={[
-            { key: 'name', label: 'Producto' },
-            { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-            { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
-            { key: 'marginRate', label: 'Margen', align: 'right', render: (row) => `${formatNumber(row.marginRate, 1)}%` },
+      <Panel title={isHourlyMode ? 'Evolucion de ganancia por horario' : 'Evolucion de ganancia'} icon={TrendingUp}>
+        <AreaMetricPanel
+          data={metrics.current.dailySeries}
+          areas={[
+            { key: 'revenue', label: 'Ingreso', color: '#0ea5e9' },
+            { key: 'profit', label: 'Ganancia', color: '#10b981' },
+            { key: 'expenses', label: 'Gastos', color: '#ef4444' },
           ]}
-          rows={metrics.current.productStats}
+          height={280}
         />
       </Panel>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <Panel title={isHourlyMode ? 'Detalle financiero por horario' : 'Detalle financiero por periodo'} icon={TrendingUp} hint={`Ingreso bruto, ganancia neta y gastos por ${periodUnit}.`}>
+          <PieMetricPanel
+            data={[
+              { name: 'Costo vendido', value: Math.max(Number(metrics.current.stats.cost || 0), 0) },
+              { name: 'Gastos', value: Math.max(Number(metrics.current.stats.expenses || 0), 0) },
+              { name: 'Ganancia', value: Math.max(Number(metrics.current.stats.profit || 0), 0) },
+            ].filter((item) => item.value > 0)}
+            height={250}
+          />
+          <Table
+            emptyText="Sin movimientos financieros."
+            columns={[
+              { key: 'label', label: isHourlyMode ? 'Horario' : 'Periodo' },
+              { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
+              { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
+              { key: 'expenses', label: 'Gastos', align: 'right', render: (row) => <FancyPrice amount={row.expenses} /> },
+            ]}
+            rows={metrics.current.dailySeries}
+          />
+        </Panel>
+        <Panel title="Margen por producto" icon={ShoppingBag} hint="El margen es la ganancia estimada de cada producto sobre su ingreso. Puede variar si faltan costos de compra.">
+          <Table
+            emptyText="Sin productos vendidos."
+            columns={[
+              { key: 'name', label: 'Producto' },
+              { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
+              { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
+              { key: 'total', label: 'Total', align: 'right', render: (row) => <FancyPrice amount={row.total} /> },
+              { key: 'marginRate', label: 'Margen', align: 'right', render: (row) => `${formatNumber(row.marginRate, 1)}%` },
+            ]}
+            rows={metrics.current.productStats}
+          />
+        </Panel>
       </div>
     </div>
   );
 
   const renderProducts = () => (
+    <div className="space-y-4">
+      <StatStrip
+        items={[
+          { label: 'Productos vendidos', value: formatNumber(metrics.current.productStats.length), sub: 'Con movimiento', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
+          { label: 'Unidades/items', value: formatNumber(metrics.current.stats.itemsSold), sub: 'Cantidad total', tone: 'border-violet-200 bg-violet-50 text-violet-700' },
+          { label: 'Ingreso productos', value: <FancyPrice amount={metrics.current.productStats.reduce((sum, item) => sum + Number(item.revenue || 0), 0)} />, sub: 'Ranking visible', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+          { label: 'Top producto', value: metrics.current.productStats[0]?.name || '-', sub: 'Mayor ingreso', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
+        ]}
+      />
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_0.9fr]">
       <Panel title="Ranking de productos" icon={ShoppingBag}>
-        {metrics.current.productStats.length ? (
-          <ChartFrame height={360}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={metrics.current.productStats.slice(0, 10)} layout="vertical" margin={{ left: 18 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis type="number" tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 10 }} stroke="#94a3b8" />
-                <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="revenue" name="Ingreso" fill="#0ea5e9" radius={[0, 6, 6, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartFrame>
-        ) : <EmptyState />}
+        <Table
+          emptyText="Sin productos vendidos."
+          columns={[
+            { key: 'name', label: 'Producto' },
+            { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
+            { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
+            ...(canViewProfit ? [
+              { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
+              { key: 'total', label: 'Total', align: 'right', render: (row) => <FancyPrice amount={row.total} /> },
+            ] : []),
+          ]}
+          rows={metrics.current.productStats}
+        />
       </Panel>
       <Panel title="Tipo de producto" icon={PackageSearch}>
         {metrics.current.typeStats.length ? (
@@ -649,39 +840,89 @@ export default function MetricsView({
         ) : <EmptyState />}
       </Panel>
     </div>
-  );
-
-  const renderCategories = () => (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-      <Panel title="Categorías por ingreso" icon={Boxes}>
-        {metrics.current.categoryStats.length ? (
-          <ChartFrame height={330}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={metrics.current.categoryStats.slice(0, 12)}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="name" tick={{ fontSize: 10 }} stroke="#94a3b8" />
-                <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="revenue" name="Ingreso" fill="#10b981" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartFrame>
-        ) : <EmptyState />}
-      </Panel>
-      <Panel title="Detalle de categorías" icon={Boxes}>
-        <Table
-          emptyText="Sin categorías vendidas."
-          columns={[
-            { key: 'name', label: 'Categoría' },
-            { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
-            { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-            ...(canViewProfit ? [{ key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }] : []),
-          ]}
-          rows={metrics.current.categoryStats}
-        />
-      </Panel>
     </div>
   );
+
+  const renderCategories = () => {
+    const categoryPieData = metrics.current.categoryStats.slice(0, 10);
+    const selectedCategory = selectedCategoryName
+      ? metrics.current.categoryStats.find((category) => category.name === selectedCategoryName)
+      : null;
+
+    return (
+      <div className="space-y-4">
+        <StatStrip
+          items={[
+            { label: 'Categorias', value: formatNumber(metrics.current.categoryStats.length), sub: 'Con ventas', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
+            { label: 'Top categoria', value: metrics.current.categoryStats[0]?.name || '-', sub: 'Mayor ingreso', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+            { label: 'Ingreso top', value: <FancyPrice amount={metrics.current.categoryStats[0]?.revenue || 0} />, sub: 'Categoria lider', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
+            ...(canViewProfit ? [{ label: 'Ganancia top', value: <FancyPrice amount={metrics.current.categoryStats[0]?.profit || 0} />, sub: 'Categoria lider', tone: 'border-violet-200 bg-violet-50 text-violet-700' }] : []),
+          ]}
+        />
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <Panel
+            title="Categorias por ingreso"
+            icon={Boxes}
+            hint="Toca una porcion para ver los articulos incluidos en esa categoria."
+          >
+            <PieMetricPanel
+              data={categoryPieData}
+              dataKey="revenue"
+              height={320}
+              activeName={selectedCategory?.name}
+              onSliceClick={(entry) => setSelectedCategoryName(entry?.name || null)}
+            />
+          </Panel>
+          <Panel title="Detalle de categorias" icon={Boxes}>
+            <Table
+              emptyText="Sin categorias vendidas."
+              columns={[
+                { key: 'name', label: 'Categoria' },
+                { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
+                { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
+                ...(canViewProfit ? [
+                  { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
+                  { key: 'total', label: 'Total', align: 'right', render: (row) => <FancyPrice amount={row.total} /> },
+                  { key: 'marginRate', label: 'Margen', align: 'right', render: (row) => `${formatNumber(row.marginRate, 1)}%` },
+                ] : []),
+              ]}
+              rows={metrics.current.categoryStats}
+            />
+          </Panel>
+        </div>
+
+        {selectedCategory && (
+          <Panel
+            title={`Articulos de ${selectedCategory.name}`}
+            icon={ShoppingBag}
+            action={(
+              <button
+                type="button"
+                onClick={() => setSelectedCategoryName(null)}
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-500 hover:bg-slate-50"
+              >
+                Limpiar
+              </button>
+            )}
+          >
+            <Table
+              emptyText="Sin articulos para esta categoria."
+              columns={[
+                { key: 'name', label: 'Articulo' },
+                { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
+                { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
+                ...(canViewProfit ? [
+                  { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
+                  { key: 'marginRate', label: 'Margen', align: 'right', render: (row) => `${formatNumber(row.marginRate, 1)}%` },
+                ] : []),
+              ]}
+              rows={selectedCategory.productBreakdown || []}
+            />
+          </Panel>
+        )}
+      </div>
+    );
+  };
 
   const renderPayments = () => (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1fr]">
@@ -714,21 +955,75 @@ export default function MetricsView({
     </div>
   );
 
-  const renderClients = () => (
-    <Panel title="Clientes y socios" icon={Users}>
-      <Table
-        emptyText="Sin clientes para estos filtros."
-        columns={[
-          { key: 'name', label: 'Cliente' },
-          { key: 'salesCount', label: 'Ventas', align: 'right', render: (row) => formatNumber(row.salesCount) },
-          { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-          { key: 'averageTicket', label: 'Ticket prom.', align: 'right', render: (row) => <FancyPrice amount={row.averageTicket} /> },
-          { key: 'lastDateLabel', label: 'Última compra', align: 'right' },
-        ]}
-        rows={metrics.current.clientStats}
-      />
-    </Panel>
-  );
+  const renderClients = () => {
+    const clients = metrics.current.clientStats;
+    const topClient = clients[0] || null;
+    const recurringClients = clients.filter((client) => Number(client.salesCount || 0) > 1).length;
+    const clientRevenue = clients.reduce((sum, client) => sum + Number(client.revenue || 0), 0);
+    const clientSales = clients.reduce((sum, client) => sum + Number(client.salesCount || 0), 0);
+    const clientAverageTicket = clientSales ? clientRevenue / clientSales : 0;
+
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <MetricCard label="Clientes con compras" value={formatNumber(clients.length)} sublabel="En el rango" tone="sky" />
+          <MetricCard label="Recurrentes" value={formatNumber(recurringClients)} sublabel="Mas de una compra" tone="emerald" />
+          <MetricCard label="Ingreso clientes" value={<FancyPrice amount={clientRevenue} />} sublabel="Total asociado" tone="violet" />
+          <MetricCard label="Ticket cliente" value={<FancyPrice amount={clientAverageTicket} />} sublabel="Promedio" tone="amber" />
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+          {topClient && (
+            <Panel title="Cliente destacado" icon={Users}>
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-100 bg-sky-50 px-4 py-3">
+                <div className="min-w-0">
+                  <p title={topClient.name} className="truncate text-base font-black text-slate-900">{topClient.name}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Ultima compra: {topClient.lastDateLabel}</p>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-right">
+                  <div className="rounded-lg bg-white px-3 py-2">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Ventas</p>
+                    <p className="text-sm font-black text-slate-800">{formatNumber(topClient.salesCount)}</p>
+                  </div>
+                  <div className="rounded-lg bg-white px-3 py-2">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Ingreso</p>
+                    <p className="text-sm font-black text-sky-700"><FancyPrice amount={topClient.revenue} /></p>
+                  </div>
+                  <div className="rounded-lg bg-white px-3 py-2">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Ticket</p>
+                    <p className="text-sm font-black text-amber-700"><FancyPrice amount={topClient.averageTicket} /></p>
+                  </div>
+                </div>
+              </div>
+            </Panel>
+          )}
+          <Panel title="Tipo de clientes" icon={Users}>
+            <PieMetricPanel
+              data={[
+                { name: 'Recurrentes', value: recurringClients },
+                { name: 'Una compra', value: Math.max(clients.length - recurringClients, 0) },
+              ].filter((item) => item.value > 0)}
+              height={220}
+            />
+          </Panel>
+        </div>
+
+        <Panel title="Clientes y socios" icon={Users}>
+          <Table
+            emptyText="Sin clientes para estos filtros."
+            columns={[
+              { key: 'name', label: 'Cliente' },
+              { key: 'salesCount', label: 'Ventas', align: 'right', render: (row) => formatNumber(row.salesCount) },
+              { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
+              { key: 'averageTicket', label: 'Ticket prom.', align: 'right', render: (row) => <FancyPrice amount={row.averageTicket} /> },
+              { key: 'lastDateLabel', label: 'Ultima compra', align: 'right' },
+            ]}
+            rows={clients}
+          />
+        </Panel>
+      </div>
+    );
+  };
 
   const renderStock = () => (
     <div className="space-y-4">
@@ -738,6 +1033,26 @@ export default function MetricsView({
         <MetricCard label="Bajo stock" value={formatNumber(metrics.stockStats.lowStock.length)} sublabel="Menos de 10 unidades" tone="amber" />
         <MetricCard label="Por vencer" value={formatNumber(metrics.stockStats.expiring.length)} sublabel="Ventana de 14 días" tone="violet" />
       </div>
+      <Panel title="Estado del stock" icon={PackageSearch}>
+        <PieMetricPanel
+          data={[
+            { name: 'Sin stock', value: metrics.stockStats.outOfStock.length },
+            { name: 'Bajo stock', value: metrics.stockStats.lowStock.length },
+            { name: 'Por vencer', value: metrics.stockStats.expiring.length },
+            {
+              name: 'Stock OK',
+              value: Math.max(
+                metrics.stockStats.activeProducts
+                  - metrics.stockStats.outOfStock.length
+                  - metrics.stockStats.lowStock.length
+                  - metrics.stockStats.expiring.length,
+                0,
+              ),
+            },
+          ].filter((item) => item.value > 0)}
+          height={240}
+        />
+      </Panel>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <Panel title="Sin stock" icon={PackageSearch}>
           <Table
@@ -779,65 +1094,83 @@ export default function MetricsView({
         <MetricCard label="Pedidos" value={formatNumber(metrics.orderStats.ordersCount)} sublabel={<FancyPrice amount={metrics.orderStats.totalOrders} />} tone="sky" />
         <MetricCard label="Presupuestos" value={formatNumber(metrics.orderStats.budgetsCount)} sublabel={<FancyPrice amount={metrics.orderStats.totalBudgets} />} tone="violet" />
         <MetricCard label="Saldo pendiente" value={<FancyPrice amount={metrics.orderStats.pendingAmount} />} sublabel="Por cobrar" tone="amber" />
-        <MetricCard label="Conversión" value={`${formatNumber(metrics.orderStats.conversionRate, 1)}%`} sublabel="Presupuesto a pedido" tone="emerald" />
+        <MetricCard label="Conversion" value={`${formatNumber(metrics.orderStats.conversionRate, 1)}%`} sublabel="Presupuesto a pedido" tone="emerald" />
       </div>
       <Panel title="Pedidos por estado" icon={FileText}>
-        {metrics.orderStats.byStatus.length ? (
-          <ChartFrame height={300}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={metrics.orderStats.byStatus}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="name" tick={{ fontSize: 10 }} stroke="#94a3b8" />
-                <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="total" name="Total" fill="#8b5cf6" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartFrame>
-        ) : <EmptyState />}
+        <PieMetricPanel data={metrics.orderStats.byStatus.filter((row) => Number(row.total || 0) > 0)} dataKey="total" height={240} />
+        <Table
+          emptyText="Sin pedidos para estos filtros."
+          columns={[
+            { key: 'name', label: 'Estado' },
+            { key: 'count', label: 'Pedidos', align: 'right', render: (row) => formatNumber(row.count) },
+            { key: 'total', label: 'Total', align: 'right', render: (row) => <FancyPrice amount={row.total} /> },
+            { key: 'pending', label: 'Pendiente', align: 'right', render: (row) => <FancyPrice amount={row.pending} /> },
+          ]}
+          rows={metrics.orderStats.byStatus}
+        />
       </Panel>
     </div>
   );
 
   const renderUsers = () => (
-    <Panel title="Rendimiento por usuario" icon={ShieldCheck}>
-      <Table
-        emptyText="Sin usuarios para estos filtros."
-        columns={[
-          { key: 'name', label: 'Usuario' },
-          { key: 'salesCount', label: 'Ventas', align: 'right', render: (row) => formatNumber(row.salesCount) },
-          { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-          { key: 'averageTicket', label: 'Ticket prom.', align: 'right', render: (row) => <FancyPrice amount={row.averageTicket} /> },
-          ...(canViewProfit ? [{ key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }] : []),
+    <div className="space-y-4">
+      <StatStrip
+        items={[
+          { label: 'Usuarios activos', value: formatNumber(metrics.current.userStats.length), sub: 'Con ventas', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
+          { label: 'Top usuario', value: metrics.current.userStats[0]?.name || '-', sub: 'Mayor ingreso', tone: 'border-violet-200 bg-violet-50 text-violet-700' },
+          { label: 'Ingreso top', value: <FancyPrice amount={metrics.current.userStats[0]?.revenue || 0} />, sub: 'Usuario lider', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+          { label: 'Ventas top', value: formatNumber(metrics.current.userStats[0]?.salesCount || 0), sub: 'Tickets', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
         ]}
-        rows={metrics.current.userStats}
       />
-    </Panel>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+        <Panel title="Participacion por usuario" icon={ShieldCheck}>
+          <PieMetricPanel data={metrics.current.userStats.filter((row) => Number(row.revenue || 0) > 0)} dataKey="revenue" height={260} />
+        </Panel>
+        <Panel title="Rendimiento por usuario" icon={ShieldCheck}>
+          <Table
+            emptyText="Sin usuarios para estos filtros."
+            columns={[
+              { key: 'name', label: 'Usuario' },
+              { key: 'salesCount', label: 'Ventas', align: 'right', render: (row) => formatNumber(row.salesCount) },
+              { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
+              { key: 'averageTicket', label: 'Ticket prom.', align: 'right', render: (row) => <FancyPrice amount={row.averageTicket} /> },
+              ...(canViewProfit ? [{ key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }] : []),
+            ]}
+            rows={metrics.current.userStats}
+          />
+        </Panel>
+      </div>
+    </div>
   );
 
   const renderCash = () => (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1.2fr]">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <MetricCard label="Cierres" value={formatNumber(metrics.closureStats.count)} sublabel={`${metrics.closureStats.manual} manuales / ${metrics.closureStats.automatic} auto`} />
-        <MetricCard label="Ventas cerradas" value={<FancyPrice amount={metrics.closureStats.totalSales} />} sublabel="Según reportes" tone="sky" />
-        <MetricCard label="Ganancia cierre" value={<FancyPrice amount={metrics.closureStats.netProfit} />} sublabel="Según reportes" tone="emerald" hidden={!canViewProfit} />
+        <MetricCard label="Ventas cerradas" value={<FancyPrice amount={metrics.closureStats.totalSales} />} sublabel="Segun reportes" tone="sky" />
+        <MetricCard label="Ganancia cierre" value={<FancyPrice amount={metrics.closureStats.netProfit} />} sublabel="Segun reportes" tone="emerald" hidden={!canViewProfit} />
         <MetricCard label="Ticket cierre" value={<FancyPrice amount={metrics.closureStats.averageTicket} />} sublabel="Promedio de cierres" tone="amber" />
       </div>
       <Panel title="Actividad de caja" icon={CalendarDays}>
-        <ChartFrame height={280}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={[
-              { name: 'Manual', count: metrics.closureStats.manual },
-              { name: 'Automático', count: metrics.closureStats.automatic },
-            ]}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="name" tick={{ fontSize: 11 }} stroke="#94a3b8" />
-              <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" />
-              <Tooltip />
-              <Bar dataKey="count" name="Cierres" fill="#0ea5e9" radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartFrame>
+        <PieMetricPanel
+          data={[
+            { name: 'Manual', count: metrics.closureStats.manual },
+            { name: 'Automatico', count: metrics.closureStats.automatic },
+          ].filter((item) => item.count > 0)}
+          dataKey="count"
+          height={220}
+        />
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {[
+            { name: 'Manual', count: metrics.closureStats.manual },
+            { name: 'Automatico', count: metrics.closureStats.automatic },
+          ].map((item) => (
+            <div key={item.name} className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">{item.name}</p>
+              <p className="mt-1 text-2xl font-black text-slate-800">{formatNumber(item.count)}</p>
+            </div>
+          ))}
+        </div>
       </Panel>
     </div>
   );
@@ -859,7 +1192,7 @@ export default function MetricsView({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-slate-100">
+    <div className="metrics-view flex h-full min-h-0 flex-col bg-slate-100">
       <div className="relative z-20 shrink-0 border-b border-slate-200 bg-white px-3 py-2 shadow-sm">
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-3">

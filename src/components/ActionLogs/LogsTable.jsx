@@ -102,30 +102,30 @@ const SortIcon = ({ column, sortColumn, sortDirection }) => {
 
 const s = {
   table: "w-full border-collapse bg-white",
-  th: "text-left p-[8px_10px] text-[9px] font-bold uppercase tracking-[0.5px] text-[#94a3b8] border-b border-[#e2e8f0] bg-[#f8fafc] cursor-pointer hover:bg-slate-100 select-none transition-colors whitespace-nowrap",
-  td: "p-[8px_10px] text-[10px] border-b border-[#f1f5f9] align-middle",
-  tr: "cursor-pointer transition-colors duration-150 hover:bg-[#fef3c7]",
-  trSelected: "bg-[#fef9c3]",
-  date: "font-bold text-[#1e293b] text-[10px]",
-  time: "font-mono text-[8px] text-[#94a3b8]",
-  al: "font-bold text-[9px] text-[#1e293b]", 
-  ubAdm: "inline-flex px-[7px] py-[2px] rounded-[5px] text-[9px] font-bold bg-[#eef2ff] text-[#4f46e5] border border-[#e0e7ff]",
-  ubSel: "inline-flex px-[7px] py-[2px] rounded-[5px] text-[9px] font-bold bg-[#ecfdf5] text-[#059669] border border-[#d1fae5]",
-  ubSys: "inline-flex px-[7px] py-[2px] rounded-[5px] text-[9px] font-bold bg-[#f1f5f9] text-[#64748b] border border-[#e2e8f0]",
+  th: "text-left p-[8px_10px] text-[9px] font-bold uppercase tracking-[0.5px] text-slate-400 border-b border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100 select-none transition-colors whitespace-nowrap",
+  td: "p-[8px_10px] text-[10px] border-b border-slate-100 align-middle",
+  tr: "cursor-pointer transition-colors duration-150 hover:bg-amber-50/80",
+  trSelected: "bg-amber-50",
+  date: "font-bold text-slate-900 text-[10px]",
+  time: "font-mono text-[8px] text-slate-400",
+  al: "font-bold text-[9px] text-slate-900",
+  ubAdm: "inline-flex px-[7px] py-[2px] rounded-[5px] text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100",
+  ubSel: "inline-flex px-[7px] py-[2px] rounded-[5px] text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-100",
+  ubSys: "inline-flex px-[7px] py-[2px] rounded-[5px] text-[9px] font-bold bg-slate-100 text-slate-500 border border-slate-200",
   sr: "flex items-center gap-[5px] flex-wrap",
-  se: "text-[9px] text-[#64748b]", 
-  ss: "w-[1px] h-[11px] bg-[#e2e8f0]", 
-  ib: "w-[24px] h-[24px] rounded-[6px] text-[#94a3b8] flex items-center justify-center transition-all duration-150 hover:bg-[#fef3c7] hover:text-[#d97706] hover:scale-110 mx-auto",
+  se: "text-[9px] text-slate-500",
+  ss: "w-[1px] h-[11px] bg-slate-200",
+  ib: "w-[24px] h-[24px] rounded-[6px] text-slate-400 flex items-center justify-center transition-all duration-150 hover:bg-amber-50 hover:text-amber-600 hover:scale-110 mx-auto",
   b: "inline-flex items-center gap-[3px] px-[7px] py-[2px] rounded-[4px] text-[9px] font-bold",
 };
 
 const c = {
-  bg: "bg-[#dcfce7] text-[#15803d]",
-  br: "bg-[#fee2e2] text-[#dc2626]",
-  bb: "bg-[#dbeafe] text-[#2563eb]",
-  bv: "bg-[#ede9fe] text-[#6d28d9]",
-  ba: "bg-[#fef3c7] text-[#b45309]",
-  bs: "bg-[#f1f5f9] text-[#475569] border border-[#e2e8f0]",
+  bg: "bg-emerald-50 text-emerald-700",
+  br: "bg-red-50 text-red-600",
+  bb: "bg-blue-50 text-blue-700",
+  bv: "bg-violet-50 text-violet-700",
+  ba: "bg-amber-50 text-amber-700",
+  bs: "bg-slate-100 text-slate-600 border border-slate-200",
   bk: "bg-[#1e293b] text-white",
 };
 
@@ -177,6 +177,21 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
           <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.customerName || 'Sin cliente'}</span>
           {d.totalAmount !== undefined && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}><FancyPrice amount={d.totalAmount || 0} /></span></>}
           {d.itemCount !== undefined && <><div className={s.ss}></div><span className={s.se}>{formatNumber(d.itemCount)} items</span></>}
+          {getLogReasonUI(log)}
+        </div>
+      );
+    }
+
+    if (action === 'Presupuesto Creado') {
+      return (
+        <div className={s.sr}>
+          <span className={`${s.b} ${c.bv}`}>Presupuesto</span>
+          {getSharedRecordId(d) && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}>{formatEntityCode('PRES', getSharedRecordId(d))}</span></>}
+          <div className={s.ss}></div>
+          <span style={{ fontSize: '10px', fontWeight: 700, color: '#334155' }}>{d.customerName || 'Sin cliente'}</span>
+          {d.totalAmount !== undefined && <><div className={s.ss}></div><span className={`${s.b} ${c.bs}`}><FancyPrice amount={d.totalAmount || 0} /></span></>}
+          {d.itemCount !== undefined && <><div className={s.ss}></div><span className={s.se}>{formatNumber(d.itemCount)} items</span></>}
+          {d.eventLabel && <><div className={s.ss}></div><span className={s.se}>{d.eventLabel}</span></>}
           {getLogReasonUI(log)}
         </div>
       );
@@ -826,7 +841,7 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
   };
 
   return (
-    <div className="flex-1 overflow-y-auto" onScroll={onScroll}>
+    <div className="action-logs-table flex-1 overflow-y-auto" onScroll={onScroll}>
       <table className={s.table}>
         <thead className="sticky top-0 z-10">
           <tr>
@@ -874,9 +889,9 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
           
           {(!sortedLogs || sortedLogs.length === 0) && (
             <tr>
-              <td colSpan={5} className="text-center py-12 text-[#94a3b8] border-b border-[#f1f5f9]">
+              <td colSpan={5} className="text-center py-12 text-slate-400 border-b border-slate-100">
                 <div className="flex flex-col items-center gap-2">
-                  <Search size={28} className="text-[#e2e8f0]" />
+                  <Search size={28} className="text-slate-200" />
                   <p className="text-[11px] font-medium">No se encontraron registros que coincidan.</p>
                 </div>
               </td>

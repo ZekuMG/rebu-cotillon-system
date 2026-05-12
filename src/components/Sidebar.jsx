@@ -36,21 +36,22 @@ const SidebarButton = ({ onClick, isActive, icon: Icon, label, accentColor = '#c
     : undefined;
 
   return (
-    <div className="relative group flex justify-center">
+    <div className="relative group flex shrink-0 justify-center">
       <button
         onClick={onClick}
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => setShowTooltip(false)}
-        className={`flex h-10 w-10 items-center justify-center rounded-lg transition-all ${
+        title={label}
+        className={`flex h-9 w-9 min-[1920px]:h-10 min-[1920px]:w-10 shrink-0 items-center justify-center rounded-lg transition-all ${
           isActive ? '' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
         }`}
         style={activeStyle}
       >
-        <Icon size={20} />
+        <Icon size={18} />
       </button>
 
       {showTooltip && (
-        <div className="pointer-events-none absolute left-14 top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-xs text-white shadow-lg">
+        <div className="pointer-events-none absolute left-12 min-[1920px]:left-14 top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-xs text-white shadow-lg">
           {label}
           <div className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-slate-800" />
         </div>
@@ -91,16 +92,16 @@ export default function Sidebar({ activeTab, setActiveTab, currentUser, onLogout
   }, []);
 
   return (
-    <div className="relative z-40 flex w-16 flex-col items-center gap-4 bg-slate-900 py-4 shadow-xl">
-      <div className="mb-2">
+    <div className="relative z-40 flex h-full min-h-0 w-14 min-w-[3.5rem] min-[1920px]:w-16 min-[1920px]:min-w-[4rem] shrink-0 flex-col items-center gap-2.5 min-[1920px]:gap-3 overflow-visible bg-slate-900 py-3 min-[1920px]:py-4 shadow-xl">
+      <div className="mb-1 shrink-0">
         <img
           src={logoRebuImg}
           alt="Rebu"
-          className="h-10 w-10 rounded-xl object-contain drop-shadow-[0_4px_12px_rgba(236,72,153,0.35)]"
+          className="h-9 w-9 min-[1920px]:h-10 min-[1920px]:w-10 shrink-0 rounded-xl object-contain drop-shadow-[0_4px_12px_rgba(236,72,153,0.35)]"
         />
       </div>
 
-      <nav className="flex w-full flex-1 flex-col items-center space-y-2">
+      <nav className="flex min-h-0 w-full flex-1 flex-col items-center space-y-1.5 min-[1920px]:space-y-2 overflow-y-auto overflow-x-visible py-1 overscroll-contain scrollbar-hide">
         {canViewDashboard && <SidebarButton onClick={() => setActiveTab('dashboard')} isActive={activeTab === 'dashboard'} icon={LayoutDashboard} label="Control de Caja" accentColor={navAccentColor} />}
         {canViewInventory && <SidebarButton onClick={() => setActiveTab('inventory')} isActive={activeTab === 'inventory'} icon={Package} label="Inventario" accentColor={navAccentColor} />}
         {canViewPos && <SidebarButton onClick={() => setActiveTab('pos')} isActive={activeTab === 'pos'} icon={ShoppingCart} label="Punto de Venta" accentColor={navAccentColor} />}
@@ -111,7 +112,7 @@ export default function Sidebar({ activeTab, setActiveTab, currentUser, onLogout
         {canViewMetrics && <SidebarButton onClick={() => setActiveTab('metrics')} isActive={activeTab === 'metrics'} icon={BarChart3} label="Métricas" accentColor={navAccentColor} />}
       </nav>
 
-      <div className="flex w-full flex-col items-center gap-2 pb-1">
+      <div className="flex w-full shrink-0 flex-col items-center gap-2 pb-1">
         {canViewReports && (
           <SidebarButton
             onClick={() => setActiveTab('reports')}
@@ -130,10 +131,10 @@ export default function Sidebar({ activeTab, setActiveTab, currentUser, onLogout
         />}
       </div>
 
-      <div className="relative flex w-full flex-col items-center gap-3 border-t border-slate-800 pt-4" ref={menuRef}>
+      <div className="relative flex w-full shrink-0 flex-col items-center gap-2.5 min-[1920px]:gap-3 border-t border-slate-800 pt-3 min-[1920px]:pt-4" ref={menuRef}>
         <button
           onClick={() => setShowUserMenu((prev) => !prev)}
-          className={`flex h-8 w-8 items-center justify-center rounded-full text-[10px] font-bold text-white transition-transform hover:scale-110 ${
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white transition-transform hover:scale-110 ${
             canUseAdminArea
               ? 'bg-blue-600 ring-2 ring-transparent hover:ring-blue-400'
               : 'bg-green-600 ring-2 ring-transparent hover:ring-green-400'
@@ -154,7 +155,7 @@ export default function Sidebar({ activeTab, setActiveTab, currentUser, onLogout
         </button>
 
         {showUserMenu && (
-          <div className="absolute bottom-0 left-14 z-50 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
+          <div className="absolute bottom-0 left-12 min-[1920px]:left-14 z-50 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
             <div className="border-b border-slate-100 bg-slate-50 px-3 py-2">
               <p className="text-xs font-bold text-slate-700">Menú de usuario</p>
               <div className="mt-1 flex items-center gap-2">
@@ -240,7 +241,7 @@ export default function Sidebar({ activeTab, setActiveTab, currentUser, onLogout
           </div>
         )}
 
-        <button onClick={onLogout} className="p-2 text-red-400 hover:text-red-300" title="Cerrar sesión">
+        <button onClick={onLogout} className="shrink-0 p-2 text-red-400 hover:text-red-300" title="Cerrar sesión">
           <LogOut size={20} />
         </button>
       </div>

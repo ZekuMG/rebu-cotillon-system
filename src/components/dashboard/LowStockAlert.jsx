@@ -18,22 +18,22 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
   });
 
   return (
-    <div className="bg-white p-5 rounded-xl shadow-sm border border-red-100 h-full min-h-0 flex flex-col">
+    <div className="bg-white p-3.5 rounded-lg shadow-sm border border-red-100 h-full min-h-0 flex flex-col">
       
       {/* HEADER COMPACTO Y ALINEADO */}
-      <div className="flex justify-between items-center mb-4 gap-2 shrink-0">
+      <div className="flex justify-between items-start mb-2.5 gap-2 shrink-0">
         
-        <div className="flex items-center gap-3">
-          <h3 className="font-bold text-slate-800 flex items-center gap-1.5 whitespace-nowrap text-sm">
-            <AlertTriangle size={16} className={activeTab === 'stock' ? 'text-red-500' : 'text-orange-500'} />
+        <div className="flex min-w-0 items-start gap-2">
+          <h3 className="flex h-[24px] items-center gap-1.5 whitespace-nowrap text-[13px] font-bold text-slate-800">
+            <AlertTriangle size={15} className={activeTab === 'stock' ? 'text-red-500' : 'text-orange-500'} />
             Alertas
           </h3>
-          <div className="flex items-center gap-1.5">
+          <div className="flex min-h-[24px] min-w-0 flex-wrap items-center gap-1">
             {outOfStockProducts.length > 0 && (
                // ✨ NUEVO: Convertido a botón clickeable
               <button 
                 onClick={() => onAlertClick && onAlertClick('out_of_stock')}
-                className="bg-red-100 text-red-700 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider hover:bg-red-200 transition-colors cursor-pointer"
+                className="bg-red-100 text-red-700 text-[9px] font-bold px-2 py-1 rounded uppercase leading-none tracking-wider hover:bg-red-200 transition-colors cursor-pointer"
               >
                 {outOfStockProducts.length} Agotados
               </button>
@@ -42,7 +42,7 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
               // ✨ NUEVO: Convertido a botón clickeable
               <button 
                 onClick={() => onAlertClick && onAlertClick('expirations')}
-                className="bg-orange-100 text-orange-700 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider hover:bg-orange-200 transition-colors cursor-pointer"
+                className="bg-orange-100 text-orange-700 text-[9px] font-bold px-2 py-1 rounded uppercase leading-none tracking-wider hover:bg-orange-200 transition-colors cursor-pointer"
               >
                 {expiringProducts.length} Vencidos
               </button>
@@ -51,10 +51,10 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
         </div>
 
         {/* SELECTOR DE MODO COMPACTO */}
-        <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 overflow-hidden shrink-0">
+        <div className="flex h-[28px] shrink-0 items-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 p-0.5">
           <button
             onClick={() => setActiveTab('stock')}
-            className={`px-2 py-1 text-[10px] rounded font-bold transition-all ${
+            className={`h-[22px] px-2.5 text-[10px] rounded-md font-bold leading-none transition-all ${
               activeTab === 'stock' ? 'bg-white shadow text-red-600' : 'text-slate-400 hover:text-slate-600'
             }`}
           >
@@ -62,7 +62,7 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
           </button>
           <button
             onClick={() => setActiveTab('expirations')}
-            className={`px-2 py-1 text-[10px] rounded font-bold transition-all ${
+            className={`h-[22px] px-2.5 text-[10px] rounded-md font-bold leading-none transition-all ${
               activeTab === 'expirations' ? 'bg-white shadow text-orange-600' : 'text-slate-400 hover:text-slate-600'
             }`}
           >
@@ -73,30 +73,35 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
 
       {/* BODY */}
       {!hasAlerts ? (
-        <div className="flex-1 flex flex-col items-center justify-center opacity-60 min-h-[250px]">
-          <Info size={32} className="text-slate-300 mb-2" />
-          <p className="text-sm font-medium text-slate-500 text-center">Todo en orden</p>
+        <div className="flex-1 flex flex-col items-center justify-center opacity-60 min-h-0">
+          <Info size={28} className="text-slate-300 mb-2" />
+          <p className="text-xs font-medium text-slate-500 text-center">Todo en orden</p>
           <p className="text-xs text-slate-400 text-center">Sin productos agotados ni próximos a vencer.</p>
         </div>
       ) : (
         <div
-          className="custom-scrollbar flex-1 min-h-[280px] overflow-y-auto pr-1"
+          className="custom-scrollbar flex-1 min-h-0 overflow-y-auto pr-1"
           onScroll={activeTab === 'stock' ? stockFeed.handleScroll : expirationFeed.handleScroll}
         >
               
             {/* VISTA: AGOTADOS */}
             {activeTab === 'stock' && (
-              <div className="space-y-2">
+              <div className="space-y-1">
                 {stockFeed.visibleItems.length > 0 ? stockFeed.visibleItems.map((product) => {
                   const isWeight = product.product_type === 'weight';
                   return (
-                    <button key={`stk-${product.id}`} type="button" onClick={() => onAlertClick && onAlertClick({ type: 'product', product, alertType: 'out_of_stock' })} className="flex w-full justify-between items-center p-2.5 rounded-lg border bg-slate-50 border-slate-200 hover:border-red-200 transition-colors text-left">
-                      <div className="flex-1 min-w-0 pr-3 flex items-center gap-2">
-                        <Package size={14} className="text-slate-400 shrink-0" />
-                        <p className="font-bold text-xs text-slate-700 truncate">{product.title}</p>
+                    <button key={`stk-${product.id}`} type="button" onClick={() => onAlertClick && onAlertClick({ type: 'product', product, alertType: 'out_of_stock' })} className="flex w-full justify-between items-center px-2 py-1.5 rounded-md border bg-slate-50 border-slate-200 hover:border-red-300 hover:bg-white transition-colors text-left">
+                      <div className="flex-1 min-w-0 pr-2 flex items-center gap-1.5">
+                        <div className="shrink-0 w-5 h-5 rounded-full flex items-center justify-center shadow-sm border bg-red-50 text-red-600 border-red-200">
+                          <Package size={11} />
+                        </div>
+                        <div className="flex min-w-0 flex-col">
+                          <p className="font-bold text-[11px] text-slate-700 truncate leading-tight">{product.title}</p>
+                          <p className="text-[8px] font-medium text-slate-400 truncate leading-tight">Sin stock disponible</p>
+                        </div>
                       </div>
                       <div className="text-right shrink-0">
-                        <p className="font-bold text-xs text-red-600 bg-red-100 px-2 py-0.5 rounded">
+                        <p className="font-bold text-[11px] text-red-600 bg-red-100 px-1.5 py-0.5 rounded">
                           {formatNumber(product.stock)} {isWeight ? 'g' : 'u'}
                         </p>
                       </div>
@@ -115,20 +120,24 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
 
             {/* VISTA: VENCIMIENTOS */}
             {activeTab === 'expirations' && (
-              <div className="space-y-2">
+              <div className="space-y-1">
                 {expirationFeed.visibleItems.length > 0 ? expirationFeed.visibleItems.map((product) => {
                   const isExpired = product.daysUntil <= 0;
                   return (
-                    <button key={`exp-${product.id}`} type="button" onClick={() => onAlertClick && onAlertClick({ type: 'product', product, alertType: 'expirations' })} className={`flex w-full justify-between items-center p-2.5 rounded-lg border transition-colors text-left ${isExpired ? 'bg-red-50 border-red-200 hover:border-red-300' : 'bg-orange-50 border-orange-200 hover:border-orange-300'}`}>
-                      <div className="flex-1 min-w-0 pr-3">
-                        <p className={`font-bold text-xs truncate ${isExpired ? 'text-red-800' : 'text-orange-800'}`}>{product.title}</p>
-                        <p className={`text-[10px] flex items-center gap-1 mt-0.5 font-medium ${isExpired ? 'text-red-600' : 'text-orange-600'}`}>
-                          <CalendarX size={12} />
+                    <button key={`exp-${product.id}`} type="button" onClick={() => onAlertClick && onAlertClick({ type: 'product', product, alertType: 'expirations' })} className={`flex w-full justify-between items-center px-2 py-1.5 rounded-md border transition-colors text-left ${isExpired ? 'bg-red-50 border-red-200 hover:border-red-300' : 'bg-orange-50 border-orange-200 hover:border-orange-300'}`}>
+                      <div className="flex-1 min-w-0 pr-2 flex items-center gap-1.5">
+                        <div className={`shrink-0 w-5 h-5 rounded-full flex items-center justify-center shadow-sm border ${isExpired ? 'bg-red-50 text-red-600 border-red-200' : 'bg-orange-50 text-orange-600 border-orange-200'}`}>
+                          <CalendarX size={11} />
+                        </div>
+                        <div className="flex min-w-0 flex-col">
+                        <p className={`font-bold text-[11px] truncate leading-tight ${isExpired ? 'text-red-800' : 'text-orange-800'}`}>{product.title}</p>
+                        <p className={`text-[8px] flex items-center gap-1 font-medium leading-tight ${isExpired ? 'text-red-600' : 'text-orange-600'}`}>
                           {isExpired ? '¡VENCIDO!' : `Vence en ${product.daysUntil} días`}
                         </p>
+                        </div>
                       </div>
                       <div className="text-right shrink-0">
-                        <p className={`font-bold text-xs bg-white px-2 py-0.5 rounded border ${isExpired ? 'text-red-700 border-red-200' : 'text-orange-700 border-orange-200'}`}>
+                        <p className={`font-bold text-[11px] bg-white px-1.5 py-0.5 rounded border ${isExpired ? 'text-red-700 border-red-200' : 'text-orange-700 border-orange-200'}`}>
                           {new Date(product.expiration_date).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
                         </p>
                       </div>

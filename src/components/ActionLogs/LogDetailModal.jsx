@@ -86,15 +86,15 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
   const displayUser = getActionLogUserPresentation(selectedLog, userCatalog);
 
   const colorMap = {
-    green: 'bg-[#dcfce7] text-[#15803d]',
-    red: 'bg-[#fee2e2] text-[#dc2626]',
-    blue: 'bg-[#dbeafe] text-[#2563eb]',
-    violet: 'bg-[#ede9fe] text-[#6d28d9]',
-    fuchsia: 'bg-[#fae8ff] text-[#a21caf]',
-    amber: 'bg-[#fef3c7] text-[#b45309]',
-    slate: 'bg-[#f1f5f9] text-[#475569]',
-    indigo: 'bg-[#e0e7ff] text-[#4338ca]',
-    purple: 'bg-[#fae8ff] text-[#a21caf]',
+    green: 'bg-emerald-50 text-emerald-700 border border-emerald-100',
+    red: 'bg-red-50 text-red-600 border border-red-100',
+    blue: 'bg-blue-50 text-blue-700 border border-blue-100',
+    violet: 'bg-violet-50 text-violet-700 border border-violet-100',
+    fuchsia: 'bg-fuchsia-50 text-fuchsia-700 border border-fuchsia-100',
+    amber: 'bg-amber-50 text-amber-700 border border-amber-100',
+    slate: 'bg-slate-100 text-slate-600 border border-slate-200',
+    indigo: 'bg-indigo-50 text-indigo-700 border border-indigo-100',
+    purple: 'bg-fuchsia-50 text-fuchsia-700 border border-fuchsia-100',
   };
 
   const getDisplayAmount = () => {
@@ -170,6 +170,7 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
         const exportConfig = d.snapshot?.config || d.config || {};
         return exportConfig.isForClient ? exportConfig.clientName || 'Presupuesto Cliente' : 'Reporte Interno';
       }
+      case 'Presupuesto Creado':
       case 'Presupuesto Editado':
         return d.totalAmount != null ? <FancyPrice amount={d.totalAmount} /> : 'Presupuesto';
       case 'Pedido Creado':
@@ -246,6 +247,8 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
         const exportConfig = d.snapshot?.config || d.config || {};
         return exportConfig.isForClient ? exportConfig.clientName || 'Presupuesto Cliente' : 'Reporte Interno';
       }
+      case 'Presupuesto Creado':
+        return d.customerName || d.eventLabel || 'Presupuesto generado';
       case 'Presupuesto Editado':
         return d.customerName || 'Presupuesto actualizado';
       case 'Pedido Creado':
@@ -274,19 +277,19 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
         onClick={onClose}
       />
       <div
-        className={`fixed top-0 right-0 w-full max-w-[560px] h-[100vh] z-[201] flex flex-col bg-[#eef1f6] border-l border-[#d4d9e3] shadow-[-8px_0_35px_rgba(0,0,0,0.1)] transition-transform duration-350 ease-[cubic-bezier(0.4,0,0.2,1)] ${isVisible ? 'translate-x-0' : 'translate-x-full'}`}
+        className={`action-log-detail fixed top-0 right-0 w-full max-w-[560px] h-[100vh] z-[201] flex flex-col bg-slate-100 border-l border-slate-200 shadow-[-8px_0_35px_rgba(0,0,0,0.1)] transition-transform duration-350 ease-[cubic-bezier(0.4,0,0.2,1)] ${isVisible ? 'translate-x-0' : 'translate-x-full'}`}
       >
         <div className="absolute -top-[80px] -right-[80px] w-[350px] h-[350px] bg-[radial-gradient(circle,rgba(192,38,211,0.1)_0%,transparent_70%)] rounded-full pointer-events-none z-0" />
         <div className="absolute -bottom-[80px] -left-[80px] w-[350px] h-[350px] bg-[radial-gradient(circle,rgba(37,99,235,0.08)_0%,transparent_70%)] rounded-full pointer-events-none z-0" />
 
         <button
           onClick={onClose}
-          className="absolute top-[14px] right-[14px] w-[30px] h-[30px] rounded-full flex items-center justify-center z-10 transition-colors bg-white text-[#a1a1aa] shadow-[0_1px_4px_rgba(0,0,0,0.06)] hover:text-[#1e293b]"
+          className="absolute top-[14px] right-[14px] w-[30px] h-[30px] rounded-full flex items-center justify-center z-10 transition-colors bg-white text-slate-400 shadow-[0_1px_4px_rgba(0,0,0,0.06)] hover:text-slate-900"
         >
           <X size={14} />
         </button>
 
-        <div className="p-[22px_18px_18px] text-center border-b border-[#d4d9e3] bg-[rgba(255,255,255,0.45)] relative z-[1]">
+        <div className="p-[22px_18px_18px] text-center border-b border-slate-200 bg-white/45 relative z-[1]">
           <style>{`
             @keyframes floatAnim {
               0%, 100% { transform: translateY(0); }
@@ -299,22 +302,22 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
           <span className={`inline-flex px-[16px] py-[5px] rounded-[20px] text-[10px] font-extrabold tracking-[0.5px] ${colorMap[color] || colorMap.slate}`}>
             {action === 'Modificación Pedido' ? 'Venta Modificada' : action}
           </span>
-          <div className="text-[34px] flex justify-center items-center font-extrabold text-[#1e293b] mt-2.5 tracking-[-1px] leading-none" style={{ fontFamily: "'Outfit', sans-serif" }}>
+          <div className="text-[34px] flex justify-center items-center font-extrabold text-slate-900 mt-2.5 tracking-[-1px] leading-none" style={{ fontFamily: "'Outfit', sans-serif" }}>
             {getDisplayAmount()}
           </div>
-          <div className="text-[13px] font-semibold text-[#64748b] mt-[3px] px-4 truncate">
+          <div className="text-[13px] font-semibold text-slate-500 mt-[3px] px-4 truncate">
             {getDisplaySubTitle()}
           </div>
           <div className="mt-2 flex justify-center">
             <UserDisplayBadge user={displayUser.badgeUser} userCatalog={userCatalog} size="sm" />
           </div>
-          <div className="text-[10px] text-[#94a3b8] mt-[6px] font-mono">
+          <div className="text-[10px] text-slate-400 mt-[6px] font-mono">
             {selectedLog.date} · {selectedLog.timestamp} · {selectedLog.user} · ID: {selectedLog.id}
           </div>
         </div>
 
         {isLoading ? (
-          <div className="border-b border-[#dbe4f0] bg-[linear-gradient(180deg,rgba(248,250,252,0.98)_0%,rgba(241,245,249,0.98)_100%)] px-[18px] py-[12px] relative z-[1]">
+          <div className="border-b border-slate-200 bg-slate-50 px-[18px] py-[12px] relative z-[1]">
             <div className="flex items-center gap-3 rounded-[14px] border border-slate-200 bg-white/80 px-3 py-3 shadow-[0_6px_18px_rgba(15,23,42,0.05)]">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-fuchsia-50 text-fuchsia-600">
                 <RefreshCw size={16} className="animate-spin" />
@@ -360,10 +363,10 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
           </Suspense>
         </div>
 
-        <div className="p-[14px_18px] border-t border-[#d4d9e3] flex justify-end bg-[rgba(255,255,255,0.4)] relative z-[1]">
+        <div className="p-[14px_18px] border-t border-slate-200 flex justify-end bg-white/40 relative z-[1]">
           <button
             onClick={onClose}
-            className="px-[24px] py-[9px] rounded-[10px] bg-[#1e293b] text-white text-[11px] font-bold hover:bg-[#334155] transition-colors"
+            className="px-[24px] py-[9px] rounded-[10px] bg-slate-900 text-white text-[11px] font-bold hover:bg-slate-700 transition-colors"
             style={{ fontFamily: "'DM Sans', sans-serif" }}
           >
             Cerrar Detalle

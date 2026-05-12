@@ -19,7 +19,8 @@ import {
   ClipboardCheck,
   CalendarDays, 
   Clock, 
-  ArrowUpDown 
+  ArrowUpDown,
+  ChevronDown
 } from 'lucide-react';
 import { formatNumber, isTestRecord } from '../utils/helpers'; // ✨ Importado isTestRecord
 import AsyncActionButton from '../components/AsyncActionButton';
@@ -27,6 +28,7 @@ import { FancyPrice } from '../components/FancyPrice';
 import { hasPermission } from '../utils/userPermissions';
 import useIncrementalFeed from '../hooks/useIncrementalFeed';
 import usePendingAction from '../hooks/usePendingAction';
+import { buildPointExpirationReport, normalizeMemberName } from '../utils/memberPointsExpiration';
 
 const sanitizeOptionalMemberField = (value) => {
   if (value === undefined || value === null) return '';
@@ -42,6 +44,12 @@ const sanitizeMemberFormData = (data = {}) => ({
   extraInfo: sanitizeOptionalMemberField(data.extraInfo),
   points: Number(data.points) || 0,
 });
+
+const AUDIT_RANGE_OPTIONS = [
+  { label: '1 mes', days: 30 },
+  { label: '3 meses', days: 90 },
+  { label: '6 meses', days: 180 },
+];
 
 export default function ClientsView({ 
   members, 
@@ -77,6 +85,10 @@ export default function ClientsView({
 
   const [isDrawerEditMode, setIsDrawerEditMode] = useState(false);
   const [drawerFormData, setDrawerFormData] = useState({});
+  const [showExpirationDetails, setShowExpirationDetails] = useState(false);
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
+  const [auditReport, setAuditReport] = useState(null);
+  const [auditRangeDays, setAuditRangeDays] = useState(90);
   const { isPending, runAction } = usePendingAction();
 
   const formatShortDate = (isoString) => {
@@ -298,6 +310,61 @@ export default function ClientsView({
   const visibleMembersFeed = useIncrementalFeed(sortedMembers, {
     resetKey: `${searchTerm}|${sortBy}|${sortedMembers.length}`,
   });
+  const pointsExpirationReport = useMemo(
+    () => buildPointExpirationReport(members, transactions, { upcomingDays: 30 }),
+    [members, transactions],
+  );
+  const auditFutureReport = useMemo(() => {
+    if (!isAuditModalOpen) return pointsExpirationReport;
+    return buildPointExpirationReport(members, transactions, { upcomingDays: auditRangeDays });
+  }, [auditRangeDays, isAuditModalOpen, members, pointsExpirationReport, transactions]);
+  const selectedAuditRange =
+    AUDIT_RANGE_OPTIONS.find((option) => option.days === auditRangeDays) || AUDIT_RANGE_OPTIONS[1];
+  const auditPreviewReport = auditReport || pointsExpirationReport;
+  const auditExpiredMemberRows = useMemo(() => {
+    if (Array.isArray(auditReport?.updatedMembers) && auditReport.updatedMembers.length > 0) {
+      return auditReport.updatedMembers.map((member) => ({
+        memberId: member.id,
+        memberNumber: member.memberNumber,
+        name: member.name || 'Socio sin nombre',
+        currentPoints: Number(member.previousPoints || 0),
+        expiredPoints: Number(member.expiredPoints || 0),
+        newPoints: Number(member.newPoints || 0),
+      }));
+    }
+
+    return (auditPreviewReport.expiredMembers || []).map((member) => {
+      const currentPoints = Number(member.currentPoints || 0);
+      const expiredPoints = Number(member.expiredPoints || 0);
+
+      return {
+        ...member,
+        currentPoints,
+        expiredPoints,
+        newPoints: Math.max(0, currentPoints - expiredPoints),
+      };
+    });
+  }, [auditReport, auditPreviewReport]);
+  const duplicateFormMember = useMemo(() => {
+    const cleanName = normalizeMemberName(formData.name);
+    const cleanDni = sanitizeOptionalMemberField(formData.dni);
+    if (!cleanName || cleanDni) return null;
+
+    return (Array.isArray(members) ? members : []).find((member) =>
+      String(member?.id) !== String(formData.id || '') &&
+      normalizeMemberName(member?.name) === cleanName
+    ) || null;
+  }, [formData, members]);
+  const duplicateDrawerMember = useMemo(() => {
+    const cleanName = normalizeMemberName(drawerFormData.name);
+    const cleanDni = sanitizeOptionalMemberField(drawerFormData.dni);
+    if (!cleanName || cleanDni || !selectedMember) return null;
+
+    return (Array.isArray(members) ? members : []).find((member) =>
+      String(member?.id) !== String(selectedMember.id) &&
+      normalizeMemberName(member?.name) === cleanName
+    ) || null;
+  }, [drawerFormData, members, selectedMember]);
 
   const openCreateModal = () => {
     setModalMode('create');
@@ -324,6 +391,7 @@ export default function ClientsView({
     await runAction(`member-form:${modalMode}`, async () => {
       const cleanData = sanitizeMemberFormData(formData);
       if (!cleanData.name) return;
+      if (duplicateFormMember && !cleanData.dni) return;
 
       if (modalMode === 'create') {
         await addMember(cleanData);
@@ -342,6 +410,7 @@ export default function ClientsView({
     // 🔧 Convertir points a número antes de enviar
     await runAction(`member-drawer:${selectedMember?.id || 'unknown'}`, async () => {
       const cleanData = sanitizeMemberFormData(drawerFormData);
+      if (duplicateDrawerMember && !cleanData.dni) return;
       await updateMember(selectedMember.id, cleanData);
       setSelectedMember({ ...selectedMember, ...cleanData });
       setIsDrawerEditMode(false);
@@ -403,19 +472,22 @@ export default function ClientsView({
     }
   };
 
-  const handleRunAudit = async () => {
-    if (window.confirm("🛡️ AUDITORÍA RETROACTIVA\n\nSe buscarán puntos con más de 6 meses de antigüedad en todo el historial y se eliminarán del saldo actual.\n\n¿Confirmar limpieza?")) {
-      if (checkExpirations) {
-        await runAction('clients-audit', async () => {
-          await checkExpirations();
-        }); 
-        alert("✅ Auditoría completada. Los saldos han sido actualizados.");
-      }
-    }
+  const openAuditModal = () => {
+    setAuditReport(null);
+    setIsAuditModalOpen(true);
+  };
+
+  const handleApplyAudit = async () => {
+    if (!checkExpirations) return;
+
+    await runAction('clients-audit', async () => {
+      const result = await checkExpirations();
+      if (result) setAuditReport(result);
+    });
   };
 
   return (
-    <div className="h-full min-h-0 flex flex-col relative overflow-hidden bg-slate-50 p-4">
+    <div className="clients-view h-full min-h-0 flex flex-col relative overflow-hidden bg-slate-50 p-4">
       
       {/* HEADER COMPACTO */}
       <div className="bg-white p-2 rounded-lg shadow-sm border border-slate-200 mb-3 flex flex-wrap items-center justify-between gap-2 shrink-0 z-10">
@@ -472,7 +544,7 @@ export default function ClientsView({
 
           {checkExpirations && canAuditClients && (
             <AsyncActionButton
-              onAction={handleRunAudit}
+              onAction={openAuditModal}
               pending={isPending('clients-audit')}
               loadingLabel="Auditando..."
               className="py-1.5 px-3 text-slate-600 bg-white border border-slate-200 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
@@ -492,6 +564,51 @@ export default function ClientsView({
           </button>}
         </div>
       </div>
+
+      {(pointsExpirationReport.totals.upcomingMembers > 0 || pointsExpirationReport.totals.expiredMembers > 0) && (
+        <div className="mb-3 shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <AlertTriangle size={16} className="shrink-0 text-amber-600" />
+              <div className="min-w-0">
+                <p className="text-xs font-black uppercase tracking-[0.08em]">Vencimiento de puntos</p>
+                <p className="text-xs font-semibold text-amber-800">
+                  {pointsExpirationReport.totals.upcomingMembers > 0
+                    ? `${pointsExpirationReport.totals.upcomingMembers} socios tienen ${formatNumber(pointsExpirationReport.totals.upcomingPoints)} pts a vencer en ${pointsExpirationReport.upcomingDays} dias.`
+                    : 'No hay puntos a vencer en los proximos dias.'}
+                  {pointsExpirationReport.totals.expiredMembers > 0 && (
+                    <span className="ml-1 font-black text-red-700">
+                      {pointsExpirationReport.totals.expiredMembers} socios ya tienen puntos vencidos.
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+            {pointsExpirationReport.upcomingGroups.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowExpirationDetails((prev) => !prev)}
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-amber-200 bg-white px-3 text-xs font-black text-amber-800 transition hover:bg-amber-100"
+              >
+                Ver fechas
+                <ChevronDown size={14} className={`transition-transform ${showExpirationDetails ? 'rotate-180' : ''}`} />
+              </button>
+            )}
+          </div>
+          {showExpirationDetails && pointsExpirationReport.upcomingGroups.length > 0 && (
+            <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {pointsExpirationReport.upcomingGroups.map((group) => (
+                <div key={group.dateKey} className="rounded-lg border border-amber-200 bg-white px-3 py-2">
+                  <p className="text-[10px] font-black uppercase tracking-[0.08em] text-amber-600">{group.displayDate}</p>
+                  <p className="mt-0.5 text-xs font-bold text-slate-700">
+                    {formatNumber(group.points)} pts · {group.memberCount} socios
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       
       {/* TABLA DE SOCIOS */}
@@ -665,6 +782,11 @@ export default function ClientsView({
                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre Completo</label>
                     <input className="w-full rounded-lg border p-2.5 outline-none focus:ring-2 focus:ring-blue-100" value={drawerFormData.name} onChange={e => setDrawerFormData({...drawerFormData, name: e.target.value})} required />
                   </div>
+                  {duplicateDrawerMember && (
+                    <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
+                      Socio duplicado, elegir otro nombre o introducir DNI.
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">DNI</label><input className="w-full rounded-lg border p-2.5 outline-none focus:ring-2 focus:ring-blue-100" value={drawerFormData.dni} onChange={e => setDrawerFormData({...drawerFormData, dni: e.target.value})} /></div>
                     <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Teléfono</label><input className="w-full rounded-lg border p-2.5 outline-none focus:ring-2 focus:ring-blue-100" value={drawerFormData.phone} onChange={e => setDrawerFormData({...drawerFormData, phone: e.target.value})} /></div>
@@ -922,6 +1044,11 @@ export default function ClientsView({
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre Completo *</label><input type="text" required className="w-full rounded-lg border border-gray-300 p-2.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 font-medium" placeholder="Ej: Juan Pérez" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} autoFocus /></div>
+              {duplicateFormMember && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
+                  Socio duplicado, elegir otro nombre o introducir DNI.
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1">DNI <span className="text-[9px] font-normal lowercase">(Opcional)</span></label>
@@ -947,6 +1074,192 @@ export default function ClientsView({
       )}
 
       {/* --- MODAL CONFIRMAR ELIMINACIÓN --- */}
+      {isAuditModalOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+          <div className="flex h-[86vh] max-h-[86vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl animate-in fade-in zoom-in duration-200">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 bg-slate-50 px-5 py-4">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Auditoria de puntos</p>
+                <h3 className="text-lg font-black text-slate-900">Puntos vencidos</h3>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  Se revisan puntos ganados hace mas de 6 meses y todavia disponibles.
+                </p>
+              </div>
+              <button onClick={() => setIsAuditModalOpen(false)} className="rounded-full p-2 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-hidden px-5 py-4">
+              <div className="grid h-full min-h-0 gap-4 overflow-hidden lg:grid-cols-2">
+                <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-red-100 bg-red-50/70">
+                  <div className="border-b border-red-100 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-red-500">Vencidos ahora</p>
+                    <h4 className="text-sm font-black text-slate-900">Puntos para auditar</h4>
+                    <p className="mt-0.5 text-xs font-semibold text-slate-500">
+                      Solo esta columna se modifica al aplicar auditoria.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 px-3 py-3">
+                    <div className="rounded-xl bg-white px-3 py-2">
+                      <p className="text-[10px] font-black uppercase text-red-400">Socios</p>
+                      <p className="text-base font-black text-red-700">{formatNumber(auditPreviewReport.totals.expiredMembers)}</p>
+                    </div>
+                    <div className="rounded-xl bg-white px-3 py-2">
+                      <p className="text-[10px] font-black uppercase text-red-400">Puntos</p>
+                      <p className="text-base font-black text-red-700">{formatNumber(auditPreviewReport.totals.expiredPoints)}</p>
+                    </div>
+                    <div className="rounded-xl bg-white px-3 py-2">
+                      <p className="text-[10px] font-black uppercase text-slate-400">Estado</p>
+                      <p className="text-xs font-black text-slate-700">{auditReport?.applied ? 'Aplicada' : 'Vista previa'}</p>
+                    </div>
+                  </div>
+                  <div className="scrollbar-visible min-h-0 flex-1 overflow-y-scroll overscroll-contain px-3 pb-3 pr-2">
+                    {auditExpiredMemberRows.length > 0 ? (
+                      <div className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-red-100 bg-white">
+                        <div className="bg-red-50/60 px-3 py-2 text-[10px] font-black uppercase tracking-[0.12em] text-red-500">
+                          Socios que pierden puntos
+                        </div>
+                        {auditExpiredMemberRows.slice(0, 80).map((member) => (
+                          <div key={member.memberId} className="flex items-center justify-between gap-3 px-3 py-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-black text-slate-800">{member.name}</p>
+                              <p className="text-[11px] font-semibold text-slate-400">
+                                #{String(member.memberNumber || '---').padStart(4, '0')} - saldo {formatNumber(member.currentPoints)} &gt; {formatNumber(member.newPoints)} pts
+                              </p>
+                            </div>
+                            <span className="shrink-0 rounded-full bg-red-100 px-2.5 py-1 text-xs font-black text-red-700">
+                              Pierde {formatNumber(member.expiredPoints)} pts
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border border-dashed border-red-100 bg-white px-4 py-8 text-center">
+                        <ClipboardCheck className="mx-auto text-emerald-500" size={28} />
+                        <p className="mt-2 text-sm font-black text-slate-700">No hay puntos vencidos</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-400">Los saldos actuales no requieren auditoria.</p>
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-blue-100 bg-blue-50/70">
+                  <div className="border-b border-blue-100 px-4 py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.12em] text-blue-500">Consulta futura</p>
+                        <h4 className="text-sm font-black text-slate-900">Puntos a vencer</h4>
+                        <p className="mt-0.5 text-xs font-semibold text-slate-500">
+                          Muestra puntos que venceran desde hoy hasta dentro de {selectedAuditRange.label}.
+                        </p>
+                      </div>
+                      <div className="inline-flex shrink-0 rounded-lg border border-blue-100 bg-white p-1 shadow-sm">
+                        {AUDIT_RANGE_OPTIONS.map((option) => (
+                          <button
+                            key={option.days}
+                            type="button"
+                            onClick={() => setAuditRangeDays(option.days)}
+                            className={`h-8 rounded-md px-3 text-xs font-black transition ${
+                              auditRangeDays === option.days
+                                ? 'bg-blue-600 text-white shadow-sm'
+                                : 'text-slate-500 hover:bg-blue-50 hover:text-blue-700'
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 px-3 py-3">
+                    <div className="rounded-xl bg-white px-3 py-2">
+                      <p className="text-[10px] font-black uppercase text-slate-400">Rango</p>
+                      <p className="text-base font-black text-slate-800">{selectedAuditRange.label}</p>
+                    </div>
+                    <div className="rounded-xl bg-white px-3 py-2">
+                      <p className="text-[10px] font-black uppercase text-slate-400">Socios</p>
+                      <p className="text-base font-black text-blue-700">{formatNumber(auditFutureReport.totals.upcomingMembers)}</p>
+                    </div>
+                    <div className="rounded-xl bg-white px-3 py-2">
+                      <p className="text-[10px] font-black uppercase text-slate-400">Puntos</p>
+                      <p className="text-base font-black text-blue-700">{formatNumber(auditFutureReport.totals.upcomingPoints)}</p>
+                    </div>
+                  </div>
+
+                  <div className="scrollbar-visible min-h-0 flex-1 overflow-y-scroll overscroll-contain px-3 pb-3 pr-2">
+                    <div className="overflow-hidden rounded-xl border border-blue-100 bg-white">
+                      {auditFutureReport.upcomingMembers.length > 0 ? (
+                        <div className="divide-y divide-slate-100">
+                          <div className="bg-blue-50/60 px-3 py-2 text-[10px] font-black uppercase tracking-[0.12em] text-blue-500">
+                            Socios con puntos proximos a vencer
+                          </div>
+                          {auditFutureReport.upcomingMembers.slice(0, 60).map((member) => (
+                            <div key={member.memberId} className="flex items-center justify-between gap-3 px-3 py-2">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-black text-slate-800">{member.name}</p>
+                                <p className="text-[11px] font-semibold text-slate-400">
+                                  #{String(member.memberNumber || '---').padStart(4, '0')} - saldo {formatNumber(member.currentPoints)} pts
+                                </p>
+                              </div>
+                              <span className="shrink-0 rounded-full bg-blue-100 px-2.5 py-1 text-xs font-black text-blue-700">
+                                Vence {formatNumber(member.upcomingPoints)} pts
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="px-4 py-8 text-center">
+                          <p className="text-sm font-black text-slate-700">No hay puntos a vencer en este rango</p>
+                          <p className="mt-1 text-xs font-semibold text-slate-400">Proba con un rango mas amplio.</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {auditFutureReport.upcomingGroups.length > 0 && (
+                      <div className="mt-3">
+                        <p className="mb-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Por fecha</p>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {auditFutureReport.upcomingGroups.slice(0, 6).map((group) => (
+                            <div key={group.dateKey} className="rounded-lg border border-blue-100 bg-white px-3 py-2">
+                              <p className="text-[10px] font-black uppercase text-blue-500">{group.displayDate}</p>
+                              <p className="mt-0.5 text-xs font-bold text-slate-700">
+                                {formatNumber(group.points)} pts - {group.memberCount} socios
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </section>
+              </div>
+            </div>
+
+            <div className="flex gap-3 border-t border-slate-100 bg-slate-50 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setIsAuditModalOpen(false)}
+                className="flex-1 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-100"
+              >
+                Cerrar
+              </button>
+              {auditPreviewReport.totals.expiredPoints > 0 && !auditReport?.applied && (
+                <AsyncActionButton
+                  onAction={handleApplyAudit}
+                  pending={isPending('clients-audit')}
+                  loadingLabel="Aplicando..."
+                  className="flex-1 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-black text-white shadow-sm transition hover:bg-red-700 disabled:cursor-wait disabled:opacity-60"
+                >
+                  Aplicar auditoria
+                </AsyncActionButton>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {isDeleteModalOpen && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200">

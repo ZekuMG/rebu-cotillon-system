@@ -31,7 +31,7 @@ export const HintIcon = ({ hint, size = 16, className = '', side = 'right', tool
 
   return (
     <div
-      className={`relative inline-flex ${className}`}
+      className={`relative z-[60] inline-flex ${className}`}
       onMouseEnter={() => setShowTooltip(true)}
       onMouseLeave={() => setShowTooltip(false)}
       onMouseMove={handlePointerMove}
@@ -44,7 +44,7 @@ export const HintIcon = ({ hint, size = 16, className = '', side = 'right', tool
 
       {showTooltip && hint && (
         <div
-          className="fixed z-[9999] pointer-events-none"
+          className="fixed z-[2147483647] pointer-events-none"
           style={{
             left: cursorPosition.x,
             top: cursorPosition.y,

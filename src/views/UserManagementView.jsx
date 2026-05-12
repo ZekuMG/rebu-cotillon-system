@@ -169,9 +169,6 @@ function UserFormCard({ mode = 'create', value, onChange, onSubmit, onCancel, is
               <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
                 Tema
               </span>
-              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-amber-700">
-                Standby
-              </span>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               {['light', 'dark'].map((themeOption) => (
@@ -409,7 +406,7 @@ export default function UserManagementView({
   };
 
   return (
-    <div className="h-full overflow-y-auto rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(248,250,252,0.98)_100%)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_18px_36px_rgba(15,23,42,0.06)]">
+    <div className="user-management-view h-full overflow-y-auto rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(248,250,252,0.98)_100%)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_18px_36px_rgba(15,23,42,0.06)]">
       <div className="mb-4">
         <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
           {isCurrentUserSystem ? 'Sistema' : 'Dueño'}

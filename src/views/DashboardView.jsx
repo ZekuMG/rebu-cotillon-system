@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ShoppingCart, 
   TrendingDown, 
-  FileText, 
+  FileText,
   Clock,
   ChevronRight
 } from 'lucide-react';
@@ -12,7 +12,6 @@ import { hasOwnerAccess } from '../utils/appUsers';
 import { canAccessTab, getAllowedDashboardFilters } from '../utils/userPermissions';
 import {
   KpiCard,
-  SalesChart,
   PaymentBreakdown,
   TopRanking,
   LowStockAlert,
@@ -22,9 +21,46 @@ import {
 import { FancyPrice } from '../components/FancyPrice';
 import { isTestRecord } from '../utils/helpers'; // ✨ Importado el escudo anti-test
 
-const DEFAULT_BOTTOM_ORDER = ['chart', 'payments', 'topProducts', 'lowStock', 'financialActivity', 'systemLogs'];
+const DEFAULT_BOTTOM_ORDER = ['payments', 'topProducts', 'lowStock', 'financialActivity'];
 const DEFAULT_TOP_ORDER = ['sales', 'revenue', 'net', 'opening', 'average', 'expenses'];
 const DASHBOARD_FEED_BATCH = 50;
+const RETIRED_BOTTOM_WIDGETS = new Set(['chart', 'expirations', 'systemLogs']);
+const BOTTOM_WIDGETS = new Set(DEFAULT_BOTTOM_ORDER);
+
+const safeParseDashboardOrder = (value) => {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const normalizeBottomOrder = (order) => {
+  const source = Array.isArray(order) ? [...order] : [...DEFAULT_BOTTOM_ORDER];
+  const migrated = [];
+
+  source.forEach((widgetKey) => {
+    if (widgetKey === 'activityPanel') {
+      migrated.push('financialActivity');
+      return;
+    }
+    migrated.push(widgetKey);
+  });
+
+  const normalized = migrated.filter((widgetKey, index, list) => (
+    BOTTOM_WIDGETS.has(widgetKey) &&
+    !RETIRED_BOTTOM_WIDGETS.has(widgetKey) &&
+    list.indexOf(widgetKey) === index
+  ));
+
+  DEFAULT_BOTTOM_ORDER.forEach((widgetKey) => {
+    if (!normalized.includes(widgetKey)) normalized.push(widgetKey);
+  });
+
+  return normalized;
+};
 
 export default function DashboardView({
   openingBalance,
@@ -69,19 +105,8 @@ export default function DashboardView({
   }, [availableDashboardFilters, globalFilter]);
 
   const [widgetOrder, setWidgetOrder] = useState(() => {
-    const saved = localStorage.getItem('party_dashboard_order_bottom');
-    if (saved) {
-      let parsed = JSON.parse(saved);
-      if (parsed.includes('activityPanel')) {
-        const idx = parsed.indexOf('activityPanel');
-        parsed.splice(idx, 1, 'financialActivity', 'systemLogs');
-      } else {
-        if (!parsed.includes('financialActivity')) parsed.push('financialActivity');
-        if (!parsed.includes('systemLogs')) parsed.push('systemLogs');
-      }
-      return parsed.filter(w => w !== 'expirations'); 
-    }
-    return DEFAULT_BOTTOM_ORDER;
+    const saved = safeParseDashboardOrder(localStorage.getItem('party_dashboard_order_bottom'));
+    return normalizeBottomOrder(saved);
   });
 
   const [topWidgetOrder, setTopWidgetOrder] = useState(() => {
@@ -100,13 +125,24 @@ export default function DashboardView({
   const [draggedTopItem, setDraggedTopItem] = useState(null);
 
   useEffect(() => {
+    const rawSavedBottom = localStorage.getItem('party_dashboard_order_bottom');
+    if (!rawSavedBottom) return;
+
+    const parsed = safeParseDashboardOrder(rawSavedBottom);
+    const normalized = normalizeBottomOrder(parsed);
+    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
+      localStorage.setItem('party_dashboard_order_bottom', JSON.stringify(normalized));
+    }
+  }, []);
+
+  useEffect(() => {
     const savedBottom = localStorage.getItem('party_dashboard_order_bottom');
     const savedTop = localStorage.getItem('party_dashboard_order_top');
 
     const currentBottomStr = JSON.stringify(widgetOrder);
     const currentTopStr = JSON.stringify(topWidgetOrder);
 
-    const savedBottomStr = savedBottom || JSON.stringify(DEFAULT_BOTTOM_ORDER);
+    const savedBottomStr = JSON.stringify(normalizeBottomOrder(safeParseDashboardOrder(savedBottom)));
     const savedTopStr = savedTop || JSON.stringify(DEFAULT_TOP_ORDER);
 
     if (currentBottomStr !== savedBottomStr || currentTopStr !== savedTopStr) {
@@ -134,8 +170,6 @@ export default function DashboardView({
   const {
     kpiStats,
     averageTicket,
-    chartData,
-    maxSales,
     paymentStats,
     rankingStats,
     lowStockProducts,
@@ -200,8 +234,6 @@ export default function DashboardView({
 
   const renderWidget = (widgetKey) => {
     switch (widgetKey) {
-      case 'chart':
-        return <SalesChart chartData={chartData} maxSales={maxSales} globalFilter={globalFilter} getEmptyStateMessage={getEmptyStateMessage} />;
       case 'payments':
         return <PaymentBreakdown paymentStats={paymentStats} totalGross={kpiStats.gross} globalFilter={globalFilter} />;
       case 'topProducts':
@@ -246,11 +278,11 @@ export default function DashboardView({
         );
       case 'financialActivity':
         return (
-            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 h-full min-h-0 flex flex-col">
-              <div className="flex justify-between items-center mb-4 gap-2 shrink-0">
+            <div className="bg-white p-3.5 rounded-lg shadow-sm border border-slate-200 h-full min-h-0 flex flex-col">
+              <div className="flex justify-between items-center mb-2.5 gap-2 shrink-0">
                 <div className="flex items-center gap-3">
-                  <h3 className="font-bold text-slate-800 flex items-center gap-1.5 whitespace-nowrap text-sm">
-                    <Clock size={16} className="text-blue-500"/> Actividad Financiera
+                  <h3 className="font-bold text-slate-800 flex items-center gap-1.5 whitespace-nowrap text-[13px]">
+                    <Clock size={15} className="text-blue-500"/> Actividad Financiera
                   </h3>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -259,7 +291,7 @@ export default function DashboardView({
                   </span>
                   <button 
                     onClick={() => onNavigate && onNavigate('history')}
-                    className="text-[9px] font-bold text-slate-500 bg-white border border-slate-200 px-1.5 py-0.5 rounded uppercase tracking-wider hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-0.5"
+                    className="text-[8px] font-bold text-slate-500 bg-white border border-slate-200 px-1.5 py-0.5 rounded uppercase tracking-wider hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-0.5"
                   >
                     Ver todo <ChevronRight size={10} />
                   </button>
@@ -267,10 +299,10 @@ export default function DashboardView({
               </div>
 
               <div
-                className="custom-scrollbar flex-1 min-h-[280px] overflow-y-auto pr-1"
+                className="custom-scrollbar flex-1 min-h-0 overflow-y-auto pr-1"
                 onScroll={(event) => handleInfiniteFeedScroll(event, combinedActivity.length, setVisibleActivityCount)}
               >
-                  <div className="space-y-2">
+                  <div className="space-y-1">
                     {combinedActivity.length > 0 ? (
                       (() => {
                         let lastDateStr = null;
@@ -317,33 +349,33 @@ export default function DashboardView({
                             <div 
                               key={idx} 
                               onClick={handleItemClick}
-                              className={`flex justify-between items-center p-2.5 rounded-lg border bg-slate-50 transition-colors ${
+                              className={`flex justify-between items-center px-2 py-1.5 rounded-md border bg-slate-50 transition-colors ${
                                 isSale ? 'hover:border-blue-300 hover:bg-white cursor-pointer border-slate-200' : 'border-slate-200'
                               }`}
                             >
-                              <div className="flex-1 min-w-0 pr-3 flex items-center gap-2">
-                                <div className={`shrink-0 w-6 h-6 rounded-full flex items-center justify-center shadow-sm border ${isSale ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-red-50 text-red-600 border-red-200'}`}>
-                                  {isSale ? <ShoppingCart size={12} /> : <TrendingDown size={12} />}
+                              <div className="flex-1 min-w-0 pr-2 flex items-center gap-1.5">
+                                <div className={`shrink-0 w-5 h-5 rounded-full flex items-center justify-center shadow-sm border ${isSale ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-red-50 text-red-600 border-red-200'}`}>
+                                  {isSale ? <ShoppingCart size={11} /> : <TrendingDown size={11} />}
                                 </div>
                                 <div className="flex flex-col min-w-0">
                                   {isSale ? (
-                                    <p className="font-bold text-xs text-slate-700 truncate" title={`${clientName}${memberNum} | Ticket #${item.id}`}>
+                                    <p className="font-bold text-[11px] text-slate-700 truncate leading-tight" title={`${clientName}${memberNum} | Ticket #${item.id}`}>
                                       {clientName} <span className="text-slate-400 font-medium">{memberNum}</span> <span className="text-slate-300 mx-1">|</span> <span className="text-blue-500 font-mono">#{item.id}</span>
                                     </p>
                                   ) : (
-                                    <p className="font-bold text-xs text-slate-700 truncate">{clientName}</p>
+                                    <p className="font-bold text-[11px] text-slate-700 truncate leading-tight">{clientName}</p>
                                   )}
-                                  <p className="text-[9px] font-medium text-slate-400 truncate">
+                                  <p className="text-[8px] font-medium text-slate-400 truncate leading-tight">
                                     {isSale ? `${item.payment} • ${item.items?.length || 0} ítems` : `${item.paymentMethod} • ${item.description || item.note || '-'}`}
                                   </p>
                                 </div>
                               </div>
                               <div className="text-right shrink-0 flex flex-col items-end">
-                                <p className={`font-bold text-xs flex items-center gap-0.5 ${isSale ? 'text-emerald-600' : 'text-red-600'}`}>
+                                <p className={`font-bold text-[11px] flex items-center gap-0.5 leading-tight ${isSale ? 'text-emerald-600' : 'text-red-600'}`}>
                                   <span>{isSale ? '+' : '-'}</span>
                                   <FancyPrice amount={isSale ? item.total : item.amount} />
                                 </p>
-                                <p className="text-[9px] font-bold text-slate-400 mt-0.5">
+                                <p className="text-[8px] font-bold text-slate-400 mt-0.5 leading-tight">
                                   {item.time || new Date(item.sortTime).toLocaleTimeString('es-AR', {hour: '2-digit', minute:'2-digit'})}
                                 </p>
                               </div>
@@ -453,12 +485,12 @@ export default function DashboardView({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="dashboard-view flex h-full min-h-0 flex-col">
       <div className="custom-scrollbar flex-1 min-h-0 overflow-y-auto pr-1">
-        <div className="mx-auto max-w-7xl space-y-6 pb-10">
-      <div className="flex flex-col lg:flex-row justify-between items-center gap-4">
+        <div className="mx-auto max-w-7xl space-y-4 pb-6">
+      <div className="flex flex-col lg:flex-row justify-between items-center gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">Panel de Control</h2>
+          <h2 className="text-2xl font-bold text-slate-800 leading-tight">Panel de Control</h2>
           <p className="text-xs text-slate-400">Resumen de operaciones en tiempo real</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -472,7 +504,7 @@ export default function DashboardView({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
         {topWidgetOrder.map((widgetKey, index) => (
           <div
             key={widgetKey}
@@ -496,17 +528,19 @@ export default function DashboardView({
             <div className="group relative h-full">
               {isAdmin && (
                 <div
-                  draggable
-                  onDragStart={(e) => {
-                    setDraggedTopItem(widgetKey);
-                    e.dataTransfer.effectAllowed = 'move';
-                  }}
-                  onDragEnd={() => setDraggedTopItem(null)}
-                  className="absolute inset-x-0 top-0 z-20 h-6 cursor-grab active:cursor-grabbing"
+                  className="pointer-events-none absolute inset-x-0 top-0 z-10 h-4"
                   aria-label="Reordenar metrica"
                   title="Arrastrar desde el cabezal"
                 >
-                  <div className="pointer-events-none mx-auto mt-2 h-1.5 w-12 rounded-full bg-slate-200/70 opacity-0 transition duration-150 group-hover:opacity-100 group-hover:bg-slate-300/80" />
+                  <div
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggedTopItem(widgetKey);
+                      e.dataTransfer.effectAllowed = 'move';
+                    }}
+                    onDragEnd={() => setDraggedTopItem(null)}
+                    className="pointer-events-auto mx-auto mt-1.5 h-1 w-8 cursor-grab rounded-full bg-slate-200/70 opacity-0 transition duration-150 active:cursor-grabbing group-hover:opacity-100 group-hover:bg-slate-300/80"
+                  />
                 </div>
               )}
               <KpiCard
@@ -526,19 +560,16 @@ export default function DashboardView({
         ))}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:auto-rows-auto">
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:auto-rows-auto">
         {widgetOrder.map((widgetKey, index) => (
           (() => {
-            const isExpandedAnnualChart = widgetKey === 'chart' && globalFilter === 'year';
-            const isChartWidget = widgetKey === 'chart';
             const isPaymentsWidget = widgetKey === 'payments';
-            const widgetDesktopHeight = isExpandedAnnualChart
-              ? 'lg:col-span-2 lg:h-[24rem]'
-              : isChartWidget
-                ? 'lg:h-[18.5rem]'
-                : isPaymentsWidget
-                  ? 'lg:min-h-[16rem]'
-                : 'lg:h-[26rem]';
+            const isTopProductsWidget = widgetKey === 'topProducts';
+            const widgetDesktopHeight = isPaymentsWidget
+                  ? 'lg:h-[17rem]'
+                : isTopProductsWidget
+                  ? 'lg:h-[17rem]'
+                : 'lg:h-[19rem]';
             return (
               <div
                 key={widgetKey}
@@ -562,17 +593,19 @@ export default function DashboardView({
                 <div className="group relative h-full min-h-0">
                   {isAdmin && (
                     <div
-                      draggable
-                      onDragStart={(e) => {
-                        setDraggedItem(widgetKey);
-                        e.dataTransfer.effectAllowed = 'move';
-                      }}
-                      onDragEnd={() => setDraggedItem(null)}
-                      className="absolute inset-x-0 top-0 z-20 h-7 cursor-grab active:cursor-grabbing"
+                      className="pointer-events-none absolute inset-x-0 top-0 z-10 h-4"
                       aria-label="Reordenar widget"
                       title="Arrastrar desde el cabezal"
                     >
-                      <div className="pointer-events-none mx-auto mt-2 h-1.5 w-14 rounded-full bg-slate-200/70 opacity-0 transition duration-150 group-hover:opacity-100 group-hover:bg-slate-300/80" />
+                      <div
+                        draggable
+                        onDragStart={(e) => {
+                          setDraggedItem(widgetKey);
+                          e.dataTransfer.effectAllowed = 'move';
+                        }}
+                        onDragEnd={() => setDraggedItem(null)}
+                        className="pointer-events-auto mx-auto mt-1.5 h-1 w-9 cursor-grab rounded-full bg-slate-200/70 opacity-0 transition duration-150 active:cursor-grabbing group-hover:opacity-100 group-hover:bg-slate-300/80"
+                      />
                     </div>
                   )}
                   {renderWidget(widgetKey)}

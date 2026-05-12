@@ -130,6 +130,45 @@ const matchesHistorySearchQuery = (tx, query) => {
   const haystack = getHistorySearchHaystack(tx);
   return tokens.every((token) => haystack.includes(token));
 };
+const UNCATEGORIZED_LABEL = 'Sin categoria';
+const normalizeCategoryFilterText = (value = '') => normalizeSearchText(value);
+const splitCategoryText = (value = '') =>
+  String(value || '')
+    .split(',')
+    .map((category) => category.trim())
+    .filter(Boolean);
+const getHistoryItemCategoryLabels = (item = {}, product = null) => {
+  const fromItemCategories = Array.isArray(item.categories)
+    ? item.categories.map((category) => String(category || '').trim()).filter(Boolean)
+    : [];
+  if (fromItemCategories.length > 0) return fromItemCategories;
+
+  const fromProductCategories = Array.isArray(product?.categories)
+    ? product.categories.map((category) => String(category || '').trim()).filter(Boolean)
+    : [];
+  if (fromProductCategories.length > 0) return fromProductCategories;
+
+  const fromText = splitCategoryText(item.category || product?.category || '');
+  return fromText.length > 0 ? fromText : [UNCATEGORIZED_LABEL];
+};
+const getHistoryInventoryProduct = (item = {}, inventory = []) => {
+  const itemProductId = item.productId || item.product_id || item.id;
+  const itemTitle = String(item.title || item.product_title || item.name || '').trim();
+  return (inventory || []).find(
+    (product) =>
+      (itemProductId !== undefined && itemProductId !== null && String(product.id) === String(itemProductId)) ||
+      (itemTitle && product.title === itemTitle),
+  );
+};
+const matchesHistoryCategoryFilter = (item = {}, inventory = [], filterCategory = '') => {
+  const normalizedFilter = normalizeCategoryFilterText(filterCategory);
+  if (!normalizedFilter) return true;
+
+  const invProduct = getHistoryInventoryProduct(item, inventory);
+  return getHistoryItemCategoryLabels(item, invProduct).some(
+    (category) => normalizeCategoryFilterText(category) === normalizedFilter,
+  );
+};
 const isRedemptionItem = (item = {}) =>
   Boolean(item.isReward || item.is_reward || /^canje\s*:/i.test(String(item.title || item.product_title || item.name || '')));
 const getHistoryItemTitle = (item = {}) =>
@@ -248,13 +287,7 @@ const filterHistoryTransactions = ({
 
   if (filterCategory) {
     txList = txList.filter((tx) =>
-      (tx.items || []).some((item) => {
-        const invProduct = (inventory || []).find(
-          (p) => String(p.id) === String(item.productId || item.id) || p.title === item.title
-        );
-        const catString = item.category || invProduct?.category || '';
-        return catString.split(',').map((c) => c.trim().toLowerCase()).includes(filterCategory.toLowerCase());
-      }),
+      (tx.items || []).some((item) => matchesHistoryCategoryFilter(item, inventory, filterCategory)),
     );
   }
 
@@ -778,13 +811,7 @@ export default function HistoryView({
     // 5. FILTRO DE CATEGORÍA
     if (filterCategory) {
       txList = txList.filter((tx) =>
-        (tx.items || []).some((item) => {
-          const invProduct = (inventory || []).find(
-            (p) => String(p.id) === String(item.productId || item.id) || p.title === item.title
-          );
-          const catString = item.category || invProduct?.category || '';
-          return catString.split(',').map(c => c.trim().toLowerCase()).includes(filterCategory.toLowerCase());
-        })
+        (tx.items || []).some((item) => matchesHistoryCategoryFilter(item, inventory, filterCategory))
       );
     }
 
@@ -870,6 +897,12 @@ export default function HistoryView({
   const categoriesList = useMemo(() => {
     const cats = new Set();
     (inventory || []).forEach(p => {
+      if (Array.isArray(p.categories)) {
+        p.categories.forEach((category) => {
+          const trimmed = String(category || '').trim();
+          if (trimmed) cats.add(trimmed);
+        });
+      }
       if (p.category) {
         p.category.split(',').forEach(c => {
           const trimmed = c.trim();
@@ -877,6 +910,7 @@ export default function HistoryView({
         });
       }
     });
+    cats.add(UNCATEGORIZED_LABEL);
     return Array.from(cats).sort();
   }, [inventory]);
 
@@ -982,7 +1016,7 @@ export default function HistoryView({
 
   if ((isLoading || (isActive && isRemoteTransactionsLoading)) && activeTransactions.length === 0 && visibleHistoricTransactions.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="history-view flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="text-center">
           <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Cargando historial</p>
           <p className="mt-2 text-sm font-medium text-slate-500">Estamos trayendo ventas y movimientos sin bloquear el resto del sistema.</p>
@@ -993,7 +1027,7 @@ export default function HistoryView({
 
   if (emptyStateMessage && !hasHistorySourceData) {
     return (
-      <div className="flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="history-view flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="max-w-md text-center">
           <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Historial no disponible</p>
           <p className="mt-2 text-sm font-medium text-slate-500">{emptyStateMessage}</p>
@@ -1003,7 +1037,7 @@ export default function HistoryView({
   }
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border overflow-hidden h-full min-h-0 flex flex-col">
+    <div className="history-view bg-white rounded-xl shadow-sm border overflow-hidden h-full min-h-0 flex flex-col">
       {/* HEADER Y FILTROS */}
       <div className="border-b bg-slate-50 px-3 py-2 shrink-0">
         <div className="history-filter-scroll flex flex-nowrap items-center gap-1.5 overflow-x-auto pb-1 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-track]:bg-transparent" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e1 transparent' }}>

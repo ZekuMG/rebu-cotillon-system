@@ -111,6 +111,7 @@ export const SCHEMA_OPTIONAL_COLUMNS = {
   ]),
   sale_items: new Set([
     'product_id',
+    'cost',
     'subtotal',
     'line_subtotal',
     'product_type',

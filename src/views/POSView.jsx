@@ -11,6 +11,9 @@ import {
   CheckCircle,
   Package,
   X,
+  Filter,
+  ChevronDown,
+  ArrowDownUp,
   SlidersHorizontal,
   LayoutGrid,
   List,
@@ -98,7 +101,7 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
 
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden border border-slate-200">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full overflow-hidden border border-slate-200">
         <div className="p-4 bg-amber-50 border-b border-amber-100 flex justify-between items-center">
           <div className="flex items-center gap-2">
             <Scale size={18} className="text-amber-600" />
@@ -160,19 +163,63 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
   );
 };
 
-const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
+const normalizeCustomSearchText = (value = '') =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+const getReferenceProductUnitCost = (product = {}) =>
+  Number(
+    product.purchasePrice ??
+      product.purchase_price ??
+      product.cost ??
+      product.unitCost ??
+      product.unit_cost ??
+      product.costPrice ??
+      product.cost_price ??
+      0
+  ) || 0;
+
+const CustomProductModal = ({ isOpen, onClose, onConfirm, inventory = [] }) => {
   const [title, setTitle] = useState('');
   const [type, setType] = useState('quantity'); 
   const [price, setPrice] = useState(''); 
+  const [cost, setCost] = useState('');
   const [amount, setAmount] = useState(''); 
+
+  const similarProducts = useMemo(() => {
+    const normalizedTitle = normalizeCustomSearchText(title.replace(/^\*\s*/, ''));
+    const tokens = normalizedTitle.split(/\s+/).filter((token) => token.length >= 3);
+    if (tokens.length === 0) return [];
+
+    return (inventory || [])
+      .map((product) => {
+        const normalizedProductTitle = normalizeCustomSearchText(product?.title);
+        if (!normalizedProductTitle) return null;
+        const matchedTokens = tokens.filter((token) => normalizedProductTitle.includes(token));
+        const startsWithScore = normalizedProductTitle.startsWith(normalizedTitle) ? 2 : 0;
+        const exactScore = normalizedProductTitle === normalizedTitle ? 4 : 0;
+        const score = matchedTokens.length + startsWithScore + exactScore;
+        if (score <= 0) return null;
+        return { product, score, unitCost: getReferenceProductUnitCost(product) };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score || b.unitCost - a.unitCost)
+      .slice(0, 6);
+  }, [inventory, title]);
 
   if (!isOpen) return null;
 
   const p = Number(price) || 0;
+  const c = Number(cost);
   const a = Number(amount) || 0;
-  const isValid = title.trim().length > 0 && p > 0 && a > 0;
+  const hasValidCost = cost.trim() !== '' && Number.isFinite(c) && c >= 0;
+  const isValid = title.trim().length > 0 && p > 0 && a > 0 && hasValidCost;
   
   const totalEstimado = type === 'quantity' ? (p * a) : ((p / 1000) * a);
+  const totalCostEstimado = hasValidCost ? (type === 'quantity' ? c * a : ((c / 1000) * a)) : 0;
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -180,10 +227,15 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
 
     const customId = `custom_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     
+    const normalizedUnitCost = type === 'weight' ? c / 1000 : c;
     const customProduct = {
       id: customId,
       title: `* ${title.trim()}`, 
       price: type === 'weight' ? p / 1000 : p,
+      cost: normalizedUnitCost,
+      unitCost: normalizedUnitCost,
+      purchasePrice: normalizedUnitCost,
+      costSource: 'manual_custom',
       product_type: type,
       stock: 999999, // Ficticio para que no joda
       isCustom: true
@@ -194,13 +246,14 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
     setTitle('');
     setType('quantity');
     setPrice('');
+    setCost('');
     setAmount('');
     onClose();
   };
 
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden border border-slate-200">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full overflow-hidden border border-slate-200">
         <div className="p-4 bg-fuchsia-50 border-b border-fuchsia-100 flex justify-between items-center">
           <div className="flex items-center gap-2">
             <Wand2 size={18} className="text-fuchsia-600" />
@@ -208,7 +261,8 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
           </div>
           <button onClick={onClose}><X size={18} className="text-fuchsia-400 hover:text-fuchsia-600" /></button>
         </div>
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="grid gap-0 md:grid-cols-[1fr_280px]">
+          <div className="p-5 space-y-4">
           
           <div>
             <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Nombre del Artículo *</label>
@@ -228,14 +282,14 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
             <div className="flex bg-slate-100 p-1 rounded-lg border h-[42px] items-center">
               <button
                 type="button"
-                onClick={() => { setType('quantity'); setAmount(''); setPrice(''); }}
+                onClick={() => { setType('quantity'); setAmount(''); setPrice(''); setCost(''); }}
                 className={`flex-1 h-full rounded-md text-sm font-bold transition-all flex items-center justify-center gap-1 ${type === 'quantity' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
               >
                 <Package size={14}/> Unidad
               </button>
               <button
                 type="button"
-                onClick={() => { setType('weight'); setAmount(''); setPrice(''); }}
+                onClick={() => { setType('weight'); setAmount(''); setPrice(''); setCost(''); }}
                 className={`flex-1 h-full rounded-md text-sm font-bold transition-all flex items-center justify-center gap-1 ${type === 'weight' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
               >
                 <Scale size={14}/> Peso
@@ -243,7 +297,7 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
                 {type === 'quantity' ? 'Precio Unit. ($)' : 'Precio x Kg ($)'} *
@@ -257,6 +311,21 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
                 className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-bold text-slate-800" 
                 value={price} 
                 onChange={(e) => setPrice(e.target.value)} 
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
+                {type === 'quantity' ? 'Costo Unit. ($)' : 'Costo x Kg ($)'} *
+              </label>
+              <input 
+                type="number" 
+                min="0" 
+                step="1" 
+                required
+                placeholder="0" 
+                className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-bold text-slate-800" 
+                value={cost} 
+                onChange={(e) => setCost(e.target.value)} 
               />
             </div>
             <div>
@@ -277,9 +346,15 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
           </div>
 
           {totalEstimado > 0 && (
-            <div className="bg-slate-50 rounded-xl p-3 border text-center mt-2">
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              <div className="bg-slate-50 rounded-xl p-3 border text-center">
               <p className="text-[10px] text-slate-400 uppercase font-bold">Total del artículo</p>
-              <p className="text-2xl font-black text-slate-900"><FancyPrice amount={totalEstimado} /></p>
+              <p className="text-xl font-black text-slate-900"><FancyPrice amount={totalEstimado} /></p>
+              </div>
+              <div className="bg-emerald-50 rounded-xl p-3 border border-emerald-100 text-center">
+                <p className="text-[10px] text-emerald-600 uppercase font-bold">Costo estimado</p>
+                <p className="text-xl font-black text-emerald-800"><FancyPrice amount={totalCostEstimado} /></p>
+              </div>
             </div>
           )}
 
@@ -288,6 +363,46 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm }) => {
             <button type="submit" disabled={!isValid} className={`flex-1 py-3 rounded-xl font-bold transition-colors ${isValid ? 'bg-fuchsia-600 text-white hover:bg-fuchsia-700 shadow-md' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
               Agregar al Carrito
             </button>
+          </div>
+          </div>
+
+          <div className="border-t md:border-l md:border-t-0 border-slate-200 bg-slate-50/80 p-4">
+            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Referencia de costos</p>
+            <h4 className="mt-1 text-sm font-black text-slate-900">Productos similares</h4>
+            <p className="mt-1 text-[11px] font-semibold leading-snug text-slate-500">
+              Usalo como guia para cargar el costo del articulo libre.
+            </p>
+
+            <div className="mt-3 max-h-[270px] space-y-2 overflow-y-auto pr-1">
+              {similarProducts.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-white p-4 text-center">
+                  <p className="text-xs font-bold text-slate-500">Escribi un nombre para buscar referencias.</p>
+                </div>
+              ) : (
+                similarProducts.map(({ product, unitCost }) => {
+                  const displayCost = product.product_type === 'weight' ? unitCost * 1000 : unitCost;
+                  return (
+                    <button
+                      key={product.id || product.title}
+                      type="button"
+                      onClick={() => setCost(String(Math.round(displayCost)))}
+                      className="w-full rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition-colors hover:border-fuchsia-200 hover:bg-fuchsia-50"
+                      title={product.title}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="line-clamp-2 text-xs font-black leading-snug text-slate-800">{product.title}</p>
+                        <span className="shrink-0 rounded-lg bg-emerald-50 px-2 py-1 text-[11px] font-black text-emerald-700">
+                          <FancyPrice amount={displayCost} />
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[10px] font-bold uppercase text-slate-400">
+                        {product.product_type === 'weight' ? 'Costo x kg' : 'Costo unitario'}
+                      </p>
+                    </button>
+                  );
+                })
+              )}
+            </div>
           </div>
         </form>
       </div>
@@ -310,6 +425,11 @@ export default function POSView({
   userCatalog: _userCatalog = null,
 }) {
   const [showGridMenu, setShowGridMenu] = useState(false);
+  const [showCategoryMenu, setShowCategoryMenu] = useState(false);
+  const [categoryFilterSearch, setCategoryFilterSearch] = useState('');
+  const [showSortMenu, setShowSortMenu] = useState(false);
+  const [sortFilterSearch, setSortFilterSearch] = useState('');
+  const [sortBy, setSortBy] = useState('title-asc');
   const [weightModalProduct, setWeightModalProduct] = useState(null);
   const [editingWeightItemId, setEditingWeightItemId] = useState(null);
   const [editingWeightValue, setEditingWeightValue] = useState('');
@@ -373,7 +493,7 @@ export default function POSView({
 
   useEffect(() => {
     setVisibleCount(POS_BATCH_SIZE);
-  }, [posSearch, selectedCategory]);
+  }, [posSearch, selectedCategory, sortBy]);
 
   useEffect(() => {
     if (cart.length === 0) {
@@ -1001,18 +1121,57 @@ export default function POSView({
     });
   }, [inventory, posSearch, selectedCategory]);
 
+  const sortedProducts = useMemo(() => {
+    return [...filteredProducts].sort((a, b) => {
+      switch (sortBy) {
+        case 'recent': {
+          const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+          return dateB - dateA;
+        }
+        case 'price-desc':
+          return (Number(b.price) || 0) - (Number(a.price) || 0);
+        case 'price-asc':
+          return (Number(a.price) || 0) - (Number(b.price) || 0);
+        case 'stock-desc':
+          return (Number(b.stock) || 0) - (Number(a.stock) || 0);
+        case 'stock-asc':
+          return (Number(a.stock) || 0) - (Number(b.stock) || 0);
+        case 'title-asc':
+        default:
+          return (a.title || '').localeCompare(b.title || '');
+      }
+    });
+  }, [filteredProducts, sortBy]);
+
+  const sortOptions = [
+    { value: 'title-asc', label: 'A-Z (Alfabetico)' },
+    { value: 'recent', label: 'Mas Recientes' },
+    { value: 'price-desc', label: 'Mayor Precio' },
+    { value: 'price-asc', label: 'Menor Precio' },
+    { value: 'stock-desc', label: 'Mayor Stock' },
+    { value: 'stock-asc', label: 'Menos Stock' },
+  ];
+  const selectedSortOption = sortOptions.find((option) => option.value === sortBy) || sortOptions[0];
+  const visibleSortOptions = sortOptions.filter((option) =>
+    option.label.toLowerCase().includes(sortFilterSearch.trim().toLowerCase())
+  );
+  const visibleCategoryOptions = (categories || []).filter((category) =>
+    String(category || '').toLowerCase().includes(categoryFilterSearch.trim().toLowerCase())
+  );
+
   const handleScroll = (e) => {
     const { scrollTop, clientHeight, scrollHeight } = e.target;
     if (scrollHeight - scrollTop <= clientHeight + 400) {
-      if (visibleCount < filteredProducts.length) {
+      if (visibleCount < sortedProducts.length) {
         setVisibleCount((prev) => prev + POS_BATCH_SIZE);
       }
     }
   };
 
   const displayedProducts = useMemo(
-    () => filteredProducts.slice(0, visibleCount),
-    [filteredProducts, visibleCount]
+    () => sortedProducts.slice(0, visibleCount),
+    [sortedProducts, visibleCount]
   );
   const productsByCategory = useMemo(
     () =>
@@ -1163,47 +1322,48 @@ export default function POSView({
   }, [cart.length, isSplitPaymentMode, subtotal, selectedPayment, installments]);
 
   return (
-    <div className="flex h-full overflow-hidden bg-slate-100 relative">
+    <div className="pos-view flex h-full overflow-hidden bg-slate-100 relative">
       
       {/* COLUMNA IZQUIERDA: CATÁLOGO */}
       <div className="flex-1 min-w-0 min-h-0 flex flex-col">
         
         {/* Header POS */}
-        <div className="p-3 bg-white border-b shrink-0 flex gap-2.5 items-center z-30 relative">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 bg-white border-b p-2 min-[1920px]:gap-3 min-[1920px]:p-3 shrink-0 z-30 relative">
           
           {/* BOTÓN DE OFERTAS */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="grid min-w-0 grid-cols-[max-content_220px_176px_218px] min-[1536px]:grid-cols-[max-content_240px_190px_230px] min-[1920px]:grid-cols-[max-content_280px_220px_250px] items-center gap-1.5 min-[1920px]:gap-2">
+          <div className="flex min-w-0 items-center gap-1.5 shrink-0">
             {selectableOffers.length > 0 && (
               <button 
                 onClick={() => setIsOffersDrawerOpen(true)}
-                className="bg-violet-100 hover:bg-violet-200 text-violet-700 border border-violet-200 px-2.5 py-2.5 rounded-xl font-black flex items-center gap-1.5 shadow-sm transition-colors"
+                className="flex h-8 min-[1920px]:h-9 items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2 text-[11px] font-black uppercase tracking-wide text-violet-700 shadow-sm transition-colors hover:bg-violet-100 min-[1920px]:text-xs"
                 title="Ver Combos y Ofertas"
               >
-                <TicketPercent size={20} />
-                <span className="hidden md:inline uppercase text-xs tracking-wider">Combos</span>
+                <TicketPercent size={15} />
+                <span className="hidden min-[1440px]:inline">Combos</span>
               </button>
             )}
             <button
               onClick={() => setIsDiscountDrawerOpen(true)}
               disabled={discountBaseTotal <= 0}
-              className={`px-2.5 py-2.5 rounded-xl font-black flex items-center gap-1.5 shadow-sm border transition-colors ${
+              className={`flex h-8 min-[1920px]:h-9 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-black uppercase tracking-wide shadow-sm transition-colors min-[1920px]:text-xs ${
                 discountBaseTotal > 0
-                  ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-700 border-emerald-200'
+                  ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
                   : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
               }`}
               title={discountBaseTotal > 0 ? 'Aplicar descuento manual' : 'Agrega productos para habilitar descuentos'}
             >
-              <TicketPercent size={20} />
-              <span className="hidden md:inline uppercase text-xs tracking-wider">Descuentos</span>
+              <TicketPercent size={15} />
+              <span className="hidden min-[1440px]:inline">Descuentos</span>
             </button>
           </div>
 
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+          <div className="relative min-w-0">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
             <input
               type="text"
-              placeholder="Buscar producto, oferta o cupon..."
-              className="w-full pl-10 pr-10 py-2.5 border rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-fuchsia-500 outline-none transition-all font-medium text-sm"
+              placeholder="Buscar producto..."
+              className="h-8 min-[1920px]:h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-9 text-xs min-[1920px]:text-sm font-semibold text-slate-700 outline-none transition-all focus:bg-white focus:ring-2 focus:ring-fuchsia-500"
               value={posSearch}
               onChange={(e) => setPosSearch(e.target.value)}
               onKeyDown={handlePosSearchKeyDown}
@@ -1213,24 +1373,156 @@ export default function POSView({
               <button
                 type="button"
                 onClick={() => setPosSearch('')}
-                className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                className="absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
                 title="Limpiar búsqueda"
               >
-                <X size={16} />
+                <X size={14} />
               </button>
             )}
           </div>
-          <div className="w-36 relative hidden sm:block">
+          <div className="relative min-w-0">
+            <button
+              type="button"
+              onClick={() => setShowCategoryMenu((prev) => !prev)}
+              className={`flex h-8 min-[1920px]:h-9 w-full items-center gap-1.5 rounded-lg border px-2 text-left text-xs font-semibold transition-all min-[1920px]:text-sm ${
+                showCategoryMenu || selectedCategory !== 'Todas'
+                  ? 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 shadow-sm'
+                  : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-white'
+              }`}
+              title="Filtrar por categoria"
+            >
+              <Filter size={14} className={selectedCategory !== 'Todas' ? 'text-fuchsia-500' : 'text-slate-400'} />
+              <span className="min-w-0 flex-1 truncate">{selectedCategory}</span>
+              <ChevronDown size={13} className={`shrink-0 text-slate-400 transition-transform ${showCategoryMenu ? 'rotate-180' : ''}`} />
+            </button>
+            {showCategoryMenu && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowCategoryMenu(false)} />
+                <div className="absolute left-0 top-full z-50 mt-1.5 w-64 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                  <div className="relative mb-2">
+                    <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      value={categoryFilterSearch}
+                      onChange={(event) => setCategoryFilterSearch(event.target.value)}
+                      placeholder="Buscar filtro..."
+                      className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-2 text-xs font-semibold text-slate-700 outline-none transition focus:border-fuchsia-300 focus:bg-white focus:ring-2 focus:ring-fuchsia-100"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="custom-scrollbar max-h-64 overflow-y-auto pr-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCategory('Todas');
+                        setShowCategoryMenu(false);
+                        setCategoryFilterSearch('');
+                      }}
+                      className={`mb-1 flex h-8 w-full items-center rounded-lg px-2 text-left text-xs font-bold transition ${
+                        selectedCategory === 'Todas'
+                          ? 'bg-fuchsia-50 text-fuchsia-700'
+                          : 'text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      Todas
+                    </button>
+                    {visibleCategoryOptions.map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => {
+                          setSelectedCategory(cat);
+                          setShowCategoryMenu(false);
+                          setCategoryFilterSearch('');
+                        }}
+                        className={`flex h-8 w-full items-center rounded-lg px-2 text-left text-xs font-bold transition ${
+                          selectedCategory === cat
+                            ? 'bg-fuchsia-50 text-fuchsia-700'
+                            : 'text-slate-600 hover:bg-slate-50'
+                        }`}
+                        title={cat}
+                      >
+                        <span className="truncate">{cat}</span>
+                      </button>
+                    ))}
+                    {visibleCategoryOptions.length === 0 && (
+                      <p className="px-2 py-3 text-center text-xs font-semibold text-slate-400">Sin filtros</p>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="relative min-w-0">
+            <button
+              type="button"
+              onClick={() => setShowSortMenu((prev) => !prev)}
+              className={`flex h-8 min-[1920px]:h-9 w-full items-center gap-1.5 rounded-lg border px-2 text-left text-xs font-semibold transition-all min-[1920px]:text-sm ${
+                showSortMenu || sortBy !== 'title-asc'
+                  ? 'border-sky-200 bg-sky-50 text-sky-700 shadow-sm'
+                  : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-white'
+              }`}
+              title="Organizar productos"
+            >
+              <ArrowDownUp size={14} className={sortBy !== 'title-asc' ? 'text-sky-500' : 'text-slate-400'} />
+              <span className="min-w-0 flex-1 truncate">{selectedSortOption.label}</span>
+              <ChevronDown size={13} className={`shrink-0 text-slate-400 transition-transform ${showSortMenu ? 'rotate-180' : ''}`} />
+            </button>
+            {showSortMenu && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowSortMenu(false)} />
+                <div className="absolute left-0 top-full z-50 mt-1.5 w-64 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                  <div className="relative mb-2">
+                    <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      value={sortFilterSearch}
+                      onChange={(event) => setSortFilterSearch(event.target.value)}
+                      placeholder="Buscar orden..."
+                      className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-2 text-xs font-semibold text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-2 focus:ring-sky-100"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="custom-scrollbar max-h-64 overflow-y-auto pr-1">
+                    {visibleSortOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          setSortBy(option.value);
+                          setShowSortMenu(false);
+                          setSortFilterSearch('');
+                        }}
+                        className={`flex h-8 w-full items-center rounded-lg px-2 text-left text-xs font-bold transition ${
+                          sortBy === option.value
+                            ? 'bg-sky-50 text-sky-700'
+                            : 'text-slate-600 hover:bg-slate-50'
+                        }`}
+                        title={option.label}
+                      >
+                        <span className="truncate">{option.label}</span>
+                      </button>
+                    ))}
+                    {visibleSortOptions.length === 0 && (
+                      <p className="px-2 py-3 text-center text-xs font-semibold text-slate-400">Sin opciones</p>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="hidden">
             <select className="w-full px-3 py-2.5 border rounded-xl bg-slate-50 font-medium text-sm outline-none focus:ring-2 focus:ring-fuchsia-500 appearance-none cursor-pointer" value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)}>
               <option value="Todas">Categorías</option>
               {categories.map((c) => (<option key={c} value={c}>{c}</option>))}
             </select>
             <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">?</div>
           </div>
-          <div className="flex items-center gap-2">
+          </div>
+          <div className="flex items-center gap-1.5 min-[1920px]:gap-2">
             {posViewMode === 'grid' && (
               <div className="relative">
-                <button onClick={() => setShowGridMenu(!showGridMenu)} className={`p-2.5 rounded-xl border transition-all ${showGridMenu ? 'bg-slate-100 ring-2 ring-slate-200' : 'bg-white hover:bg-slate-50'}`}><SlidersHorizontal size={18} className="text-slate-600" /></button>
+                <button onClick={() => setShowGridMenu(!showGridMenu)} className={`flex h-8 min-[1920px]:h-9 w-9 items-center justify-center rounded-lg border transition-all ${showGridMenu ? 'bg-slate-100 ring-2 ring-slate-200' : 'bg-white hover:bg-slate-50'}`}><SlidersHorizontal size={17} className="text-slate-600" /></button>
                 {showGridMenu && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowGridMenu(false)}></div>
@@ -1242,15 +1534,15 @@ export default function POSView({
                 )}
               </div>
             )}
-            <div className="flex bg-slate-100 p-1 rounded-xl border h-[42px] items-center">
-              <button onClick={() => setPosViewMode('grid')} className={`p-2 rounded-lg transition-all h-full flex items-center ${posViewMode === 'grid' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><LayoutGrid size={18} /></button>
-              <button onClick={() => setPosViewMode('list')} className={`p-2 rounded-lg transition-all h-full flex items-center ${posViewMode === 'list' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><List size={18} /></button>
+            <div className="flex h-8 min-[1920px]:h-9 items-center rounded-lg border bg-slate-100 p-0.5">
+              <button onClick={() => setPosViewMode('grid')} className={`flex h-full items-center rounded-md px-2 transition-all ${posViewMode === 'grid' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><LayoutGrid size={17} /></button>
+              <button onClick={() => setPosViewMode('list')} className={`flex h-full items-center rounded-md px-2 transition-all ${posViewMode === 'list' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><List size={17} /></button>
             </div>
           </div>
         </div>
 
         {/* Grid / Lista de Productos con onScroll */}
-        <div className="flex-1 overflow-y-auto p-3 custom-scrollbar bg-slate-100/50" onScroll={handleScroll}>
+        <div className="flex-1 overflow-y-auto p-2.5 min-[1920px]:p-3 custom-scrollbar bg-slate-100/50" onScroll={handleScroll}>
           {matchingPosOffers.length > 0 && (
             <div className="mb-4 space-y-2">
               <p className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-600">Coincidencias en ofertas y descuentos</p>
@@ -1296,17 +1588,17 @@ export default function POSView({
           )}
           
           {posViewMode === 'grid' ? (
-            <div className="grid gap-2.5 transition-all duration-300" style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}>
+            <div className="grid gap-2 transition-all duration-300 min-[1920px]:gap-2.5" style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}>
               
               {/* TARJETA: ARTÍCULO PERSONALIZADO (GRILLA) */}
               <button
                 onClick={() => setIsCustomModalOpen(true)}
-                className="group bg-fuchsia-50 border-2 border-dashed border-fuchsia-300 rounded-xl overflow-hidden shadow-sm hover:shadow-md hover:bg-fuchsia-100 hover:border-fuchsia-400 transition-all text-center flex flex-col items-center justify-center min-h-[124px] active:scale-[0.98]"
+                className="group flex min-h-[104px] flex-col items-center justify-center overflow-hidden rounded-lg border-2 border-dashed border-fuchsia-300 bg-fuchsia-50 text-center shadow-sm transition-all hover:border-fuchsia-400 hover:bg-fuchsia-100 hover:shadow-md active:scale-[0.98] min-[1920px]:min-h-[124px]"
               >
-                <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm mb-2 text-fuchsia-500 group-hover:scale-110 transition-transform">
-                  <Wand2 size={20} />
+                <div className="mb-1.5 flex h-8 w-8 items-center justify-center rounded-full bg-white text-fuchsia-500 shadow-sm transition-transform group-hover:scale-110 min-[1920px]:mb-2 min-[1920px]:h-10 min-[1920px]:w-10">
+                  <Wand2 size={18} />
                 </div>
-                <span className={`font-bold text-fuchsia-700 leading-snug px-2 ${gridColumns > 6 ? 'text-[11px]' : 'text-sm'}`}>Articulo Libre</span>
+                <span className={`font-bold text-fuchsia-700 leading-snug px-2 ${gridColumns > 6 ? 'text-[10px]' : 'text-xs min-[1920px]:text-sm'}`}>Articulo Libre</span>
                 <span className={`text-fuchsia-500 mt-1 ${gridColumns > 6 ? 'text-[9px]' : 'text-[10px]'}`}>Precio manual</span>
               </button>
 
@@ -1320,9 +1612,9 @@ export default function POSView({
                 const productImage = product.imageThumb || product.image_thumb || product.image;
 
                 return (
-                  <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`group bg-white border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all text-left flex flex-col relative ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed' : 'hover:border-fuchsia-300 active:scale-[0.98]'}`}>
-                    <div className="aspect-[4/3] bg-slate-50 relative overflow-hidden w-full">
-                      {productImage ? (<img src={productImage} alt={product.title} loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-500" />) : (<div className="w-full h-full flex flex-col items-center justify-center bg-slate-200/50 p-2 text-center group-hover:bg-slate-200 transition-colors"><span className={`font-bold text-slate-500 uppercase leading-tight ${gridColumns > 6 ? 'text-[10px]' : 'text-xs'}`}>{product.title}</span></div>)}
+                  <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`group relative flex flex-col overflow-hidden rounded-lg border bg-white text-left shadow-sm transition-all hover:shadow-md ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed' : 'hover:border-fuchsia-300 active:scale-[0.98]'}`}>
+                    <div className="aspect-[4/3] w-full overflow-hidden bg-slate-50 relative">
+                      {productImage ? (<img src={productImage} alt={product.title} loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-500" />) : (<div className="flex h-full w-full flex-col items-center justify-center bg-slate-200/50 p-2 text-center transition-colors group-hover:bg-slate-200"><span className={`line-clamp-3 font-bold uppercase leading-tight text-slate-500 ${gridColumns > 6 ? 'text-[9px]' : 'text-[11px] min-[1920px]:text-xs'}`}>{product.title}</span></div>)}
                       
                       {expired && !isOutOfStock && (
                         <div className="absolute inset-0 bg-red-500/10 flex items-center justify-center z-10 pointer-events-none backdrop-blur-[0.5px]">
@@ -1332,29 +1624,29 @@ export default function POSView({
                         </div>
                       )}
 
-                      <div className={`absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold shadow-sm backdrop-blur-sm z-20 ${stockBadgeClass}`}>
+                      <div className={`absolute right-1.5 top-1.5 z-20 rounded px-1.5 py-0.5 text-[9px] font-bold shadow-sm backdrop-blur-sm min-[1920px]:right-2 min-[1920px]:top-2 min-[1920px]:px-2 min-[1920px]:text-[10px] ${stockBadgeClass}`}>
                         {isOutOfStock ? 'SIN STOCK' : (isWeight ? formatWeight(effectiveStock) : `${effectiveStock} u.`)}
                       </div>
                       
                       {isWeight && !isOutOfStock && (
-                        <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-500 text-white text-[9px] font-bold shadow-sm flex items-center gap-0.5 z-20">
+                        <div className="absolute left-1.5 top-1.5 z-20 flex items-center gap-0.5 rounded bg-amber-500 px-1.5 py-0.5 text-[9px] font-bold text-white shadow-sm min-[1920px]:left-2 min-[1920px]:top-2">
                           <Scale size={8} /> PESO
                         </div>
                       )}
                     </div>
-                    <div className={`flex flex-col flex-1 w-full z-20 bg-white ${gridColumns > 6 ? 'p-2' : 'p-2.5'}`}>
-                      <h3 className={`font-bold leading-snug mb-0.5 line-clamp-2 ${gridColumns > 6 ? 'text-[10px]' : 'text-[13px]'} ${expired ? 'text-red-700' : 'text-slate-800'}`}>
+                    <div className={`z-20 flex w-full flex-1 flex-col bg-white ${gridColumns > 6 ? 'p-1.5' : 'p-2 min-[1920px]:p-2.5'}`}>
+                      <h3 className={`mb-0.5 line-clamp-2 font-bold leading-snug ${gridColumns > 6 ? 'text-[10px]' : 'text-[12px] min-[1920px]:text-[13px]'} ${expired ? 'text-red-700' : 'text-slate-800'}`} title={product.title}>
                         {product.title}
                       </h3>
-                      <div className="mt-auto pt-1.5 flex items-end justify-between">
-                        <span className={`font-bold text-fuchsia-600 ${gridColumns > 6 ? 'text-[13px]' : 'text-base'}`}>
+                      <div className="mt-auto flex items-end justify-between pt-1">
+                        <span className={`font-bold text-fuchsia-600 ${gridColumns > 6 ? 'text-[12px]' : 'text-sm min-[1920px]:text-base'}`}>
                           {isWeight ? (
                             <><FancyPrice amount={product.price * 1000} /><span className="text-[10px] font-medium text-fuchsia-400">/kg</span></>
                           ) : (
                             <><FancyPrice amount={product.price} /></>
                           )}
                         </span>
-                        <div className={`w-5 h-5 rounded-full ${isWeight ? 'bg-amber-500' : 'bg-slate-900'} text-white flex items-center justify-center shadow-lg transition-colors ${gridColumns > 8 || isOutOfStock ? 'hidden' : 'flex'}`}>
+                        <div className={`h-4 w-4 rounded-full ${isWeight ? 'bg-amber-500' : 'bg-slate-900'} items-center justify-center text-white shadow-lg transition-colors min-[1920px]:h-5 min-[1920px]:w-5 ${gridColumns > 8 || isOutOfStock ? 'hidden' : 'flex'}`}>
                           {isWeight ? <Scale size={10} /> : <Plus size={12} />}
                         </div>
                       </div>
@@ -1454,18 +1746,18 @@ export default function POSView({
         className="bg-white border-l flex flex-col min-h-0 shadow-2xl z-20 shrink-0"
       >
         
-        <div className="border-b bg-white px-3 py-2.5">
+        <div className="border-b bg-white px-3 py-2 min-[1920px]:py-2.5">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="inline-flex h-6 min-w-0 items-center gap-1.5 text-[15px] font-bold leading-none text-slate-800">
-              <ShoppingCart size={18} className="shrink-0 text-fuchsia-600" /> Pedido Actual
+            <h2 className="inline-flex h-5 min-w-0 items-center gap-1.5 text-[14px] font-bold leading-none text-slate-800 min-[1920px]:h-6 min-[1920px]:text-[15px]">
+              <ShoppingCart size={16} className="shrink-0 text-fuchsia-600 min-[1920px]:h-[18px] min-[1920px]:w-[18px]" /> Pedido Actual
             </h2>
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
               {pointsHeaderText && (
-                <span className={`inline-flex h-6 shrink-0 items-center rounded-full border px-2 text-[10px] font-bold leading-none ${pointsHeaderTone}`}>
+                <span className={`inline-flex h-5 shrink-0 items-center rounded-full border px-1.5 text-[9px] font-bold leading-none min-[1920px]:h-6 min-[1920px]:px-2 min-[1920px]:text-[10px] ${pointsHeaderTone}`}>
                   {pointsHeaderText}
                 </span>
               )}
-              <span className="inline-flex h-6 shrink-0 items-center rounded-full bg-fuchsia-100 px-1.5 text-[11px] font-bold leading-none text-fuchsia-700">
+              <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-fuchsia-100 px-1.5 text-[10px] font-bold leading-none text-fuchsia-700 min-[1920px]:h-6 min-[1920px]:text-[11px]">
                 {cart.reduce((acc, item) => acc + (item.product_type === 'weight' ? 1 : item.quantity), 0)} items
               </span>
             </div>
@@ -1473,8 +1765,8 @@ export default function POSView({
           <div className="min-w-0">
             {hasVisibleSelectedClient ? (
               isGuestSelectedClient ? (
-                <div className="mt-1.5 flex items-center gap-1.5">
-                  <div className="inline-flex h-6 items-center gap-1 rounded-md border border-slate-300 bg-slate-50 px-1.5 py-1 text-[10px] font-bold text-slate-600 shadow-sm">
+                <div className="mt-1 flex items-center gap-1.5 min-[1920px]:mt-1.5">
+                  <div className="inline-flex h-5 items-center gap-1 rounded-md border border-slate-300 bg-slate-50 px-1.5 text-[9px] font-bold text-slate-600 shadow-sm min-[1920px]:h-6 min-[1920px]:py-1 min-[1920px]:text-[10px]">
                     <User size={11} /> Consumidor final
                   </div>
                   <button
@@ -1486,7 +1778,7 @@ export default function POSView({
                   </button>
                 </div>
               ) : (
-                <div className="mt-1 rounded-lg border border-fuchsia-200 bg-fuchsia-50/40 px-2 py-1.5 shadow-sm transition-colors">
+                <div className="mt-1 rounded-lg border border-fuchsia-200 bg-fuchsia-50/40 px-2 py-1 shadow-sm transition-colors min-[1920px]:py-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <div>
@@ -1495,13 +1787,13 @@ export default function POSView({
                             <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white text-fuchsia-500 shadow-sm">
                               <User size={11} />
                             </span>
-                            <span className="truncate text-[13px] font-bold text-slate-800">
+                  <span className="truncate text-[12px] font-bold text-slate-800 min-[1920px]:text-[13px]">
                               {selectedClient.name}
                               {selectedClient.memberNumber ? ` #${selectedClient.memberNumber}` : ''}
                             </span>
                           </div>
                           <div className="ml-auto flex shrink-0 items-center justify-end">
-                            <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
+                            <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[9px] font-bold text-slate-600 min-[1920px]:text-[10px]">
                               {selectedClient.points} Puntos
                             </span>
                           </div>
@@ -1511,7 +1803,7 @@ export default function POSView({
                     <div className="flex shrink-0 gap-1.5">
                       <button
                         onClick={openMemberRedeemPanel}
-                        className="rounded-md border border-fuchsia-200 bg-white px-1.5 py-0.5 text-[10px] font-bold text-fuchsia-600 transition-colors hover:bg-fuchsia-50"
+                        className="rounded-md border border-fuchsia-200 bg-white px-1.5 py-0.5 text-[9px] font-bold text-fuchsia-600 transition-colors hover:bg-fuchsia-50 min-[1920px]:text-[10px]"
                       >
                         Canjear
                       </button>
@@ -1527,10 +1819,10 @@ export default function POSView({
                 </div>
               )
             ) : (
-              <div className="mt-1.5">
+              <div className="mt-1 min-[1920px]:mt-1.5">
                 <button
                   onClick={openMemberSelectPanel}
-                  className="inline-flex h-6 items-center gap-1 rounded-md border border-fuchsia-200 bg-fuchsia-50 px-1.5 py-1 text-[10px] font-bold text-fuchsia-600 transition-colors hover:bg-fuchsia-100 hover:text-fuchsia-700"
+                  className="inline-flex h-5 items-center gap-1 rounded-md border border-fuchsia-200 bg-fuchsia-50 px-1.5 text-[9px] font-bold text-fuchsia-600 transition-colors hover:bg-fuchsia-100 hover:text-fuchsia-700 min-[1920px]:h-6 min-[1920px]:py-1 min-[1920px]:text-[10px]"
                 >
                   <User size={11} /> Asignar socio
                 </button>
@@ -1539,7 +1831,7 @@ export default function POSView({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
+        <div className="flex-1 overflow-y-auto space-y-1.5 p-2 min-[1920px]:space-y-2 min-[1920px]:p-2.5">
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-300">
               <ShoppingCart size={64} className="mb-4 opacity-50" />
@@ -1571,8 +1863,8 @@ export default function POSView({
                 : [];
 
               return (
-                <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`group flex gap-2 rounded-lg border p-2 shadow-sm transition-colors ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : isDiscount ? 'bg-emerald-50/50 border-emerald-200' : isCustom ? 'bg-indigo-50/40 border-indigo-100' : isCombo ? 'bg-violet-50/50 border-violet-200' : 'bg-white hover:border-fuchsia-200'}`}>
-                  <div className={`relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border ${item.isReward ? 'bg-fuchsia-100' : isCombo ? 'bg-violet-100' : isDiscount ? 'bg-emerald-100' : 'bg-slate-50'}`}>
+                <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`group flex gap-1.5 rounded-lg border p-1.5 shadow-sm transition-colors min-[1920px]:gap-2 min-[1920px]:p-2 ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : isDiscount ? 'bg-emerald-50/50 border-emerald-200' : isCustom ? 'bg-indigo-50/40 border-indigo-100' : isCombo ? 'bg-violet-50/50 border-violet-200' : 'bg-white hover:border-fuchsia-200'}`}>
+                  <div className={`relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border min-[1920px]:h-10 min-[1920px]:w-10 ${item.isReward ? 'bg-fuchsia-100' : isCombo ? 'bg-violet-100' : isDiscount ? 'bg-emerald-100' : 'bg-slate-50'}`}>
                     {cartItemImage ? (
                       <img src={cartItemImage} alt="" loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover" />
                     ) : (
@@ -1585,7 +1877,7 @@ export default function POSView({
                       ) : isCombo ? (
                          <TicketPercent size={16} className="text-violet-500" />
                       ) : (
-                         <div className="w-full h-full flex items-center justify-center bg-slate-100 text-[9px] font-bold text-slate-400 text-center p-1 leading-none">{item.title.slice(0,12)}..</div>
+                         <div className="flex h-full w-full items-center justify-center bg-slate-100 p-1 text-center text-[8px] font-bold leading-none text-slate-400 min-[1920px]:text-[9px]">{item.title.slice(0,12)}..</div>
                       )
                     )}
                     {isWeight && <div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-0.5 py-0.5"><Scale size={7} className="text-white" /></div>}
@@ -1593,7 +1885,7 @@ export default function POSView({
                   
                   <div className="flex-1 min-w-0 flex flex-col justify-between">
                     <div className="flex justify-between items-start gap-2">
-                      <h4 className={`line-clamp-2 text-[12px] font-bold leading-tight ${item.isReward ? 'text-fuchsia-700' : isDiscount ? 'text-emerald-700' : isCustom ? 'text-indigo-800' : isCombo ? 'text-violet-800' : expired ? 'text-red-700' : 'text-slate-800'}`}>
+                      <h4 className={`line-clamp-2 text-[11px] font-bold leading-tight min-[1920px]:text-[12px] ${item.isReward ? 'text-fuchsia-700' : isDiscount ? 'text-emerald-700' : isCustom ? 'text-indigo-800' : isCombo ? 'text-violet-800' : expired ? 'text-red-700' : 'text-slate-800'}`}>
                         {item.isReward && <Gift size={11} className="inline mr-1 text-fuchsia-500" />}
                         {item.title}
                         {expired && <AlertTriangle size={12} className="inline ml-1 text-red-500" title="¡Producto Vencido!" />}
@@ -1637,7 +1929,7 @@ export default function POSView({
                               <span className="text-[10px] text-amber-600 font-bold">g</span>
                             </div>
                           ) : (
-                            <button onClick={() => { setEditingWeightItemId(item.id); setEditingWeightValue(String(item.quantity)); }} className="flex items-center gap-1 rounded-lg bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-700 transition-colors hover:bg-amber-200" title="Click para editar gramos">
+                            <button onClick={() => { setEditingWeightItemId(item.id); setEditingWeightValue(String(item.quantity)); }} className="flex items-center gap-1 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 transition-colors hover:bg-amber-200 min-[1920px]:rounded-lg min-[1920px]:text-[11px]" title="Click para editar gramos">
                               <Scale size={9} />
                               {formatWeight(item.quantity)}
                               <Edit2 size={8} className="ml-0.5 opacity-50" />
@@ -1646,7 +1938,7 @@ export default function POSView({
                         </div>
                       ) : (
                         <div className="flex items-center gap-1 rounded-md border bg-slate-50 p-[2px]">
-                          <button onClick={() => updateCartItemQty(item.id, item.quantity - 1)} className="flex h-5 w-5 items-center justify-center rounded bg-white shadow-sm hover:text-red-500 disabled:opacity-50" disabled={item.quantity <= 1 || item.isReward || isDiscount}><Minus size={11} /></button>
+                          <button onClick={() => updateCartItemQty(item.id, item.quantity - 1)} className="flex h-4 w-4 items-center justify-center rounded bg-white shadow-sm hover:text-red-500 disabled:opacity-50 min-[1920px]:h-5 min-[1920px]:w-5" disabled={item.quantity <= 1 || item.isReward || isDiscount}><Minus size={10} /></button>
                           <input
                             type="number"
                             min="1"
@@ -1656,13 +1948,13 @@ export default function POSView({
                               if (e.target.value === '') return;
                               updateCartItemQty(item.id, e.target.value);
                             }}
-                            className="h-5 w-11 rounded bg-white px-1 text-center text-[11px] font-bold text-slate-700 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            className="h-4 w-9 rounded bg-white px-1 text-center text-[10px] font-bold text-slate-700 outline-none [appearance:textfield] min-[1920px]:h-5 min-[1920px]:w-11 min-[1920px]:text-[11px] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                             disabled={item.isReward || isCombo || isDiscount}
                           />
-                          <button onClick={() => updateCartItemQty(item.id, item.quantity + 1)} className="flex h-5 w-5 items-center justify-center rounded bg-white shadow-sm hover:text-green-500 disabled:opacity-50" disabled={item.isReward || isCombo || isDiscount}><Plus size={11} /></button>
+                          <button onClick={() => updateCartItemQty(item.id, item.quantity + 1)} className="flex h-4 w-4 items-center justify-center rounded bg-white shadow-sm hover:text-green-500 disabled:opacity-50 min-[1920px]:h-5 min-[1920px]:w-5" disabled={item.isReward || isCombo || isDiscount}><Plus size={10} /></button>
                         </div>
                       )}
-                      <p className={`text-[13px] font-bold ${item.isReward ? 'text-fuchsia-600' : isDiscount ? 'text-emerald-600' : isCombo ? 'text-violet-700' : 'text-slate-800'}`}>
+                      <p className={`text-[12px] font-bold min-[1920px]:text-[13px] ${item.isReward ? 'text-fuchsia-600' : isDiscount ? 'text-emerald-600' : isCombo ? 'text-violet-700' : 'text-slate-800'}`}>
                         {item.isReward ? (
                           <span className="font-black text-fuchsia-600">-<FancyPrice amount={Math.abs(item.price * item.quantity)} /></span>
                         ) : isDiscount ? (
@@ -1678,7 +1970,7 @@ export default function POSView({
         </div>
 
         {/* Footer */}
-        <div className="space-y-1.5 border-t bg-slate-50/95 p-2">
+        <div className="space-y-1 border-t bg-slate-50/95 p-1.5 min-[1920px]:space-y-1.5 min-[1920px]:p-2">
           <div className="grid grid-cols-5 gap-1">
             {PAYMENT_METHODS.map((method) => {
               const activeMethod = isSplitPaymentMode ? (activeSplitLineIndex === 1 ? rawSplitSecondaryLine.method : rawSplitPrimaryLine.method) : currentPaymentMethod;
@@ -1687,11 +1979,11 @@ export default function POSView({
                 <button
                   key={method.id}
                   onClick={() => handleSelectPaymentMethod(method.id)}
-                  className={`flex h-11 flex-col items-center justify-center rounded-lg border px-1 py-0.5 text-[10px] font-bold transition-all ${isSelected ? 'scale-[1.03] border-slate-800 bg-slate-800 text-white shadow-md' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-100'}`}
+                  className={`flex h-9 flex-col items-center justify-center rounded-lg border px-1 py-0.5 text-[9px] font-bold transition-all min-[1920px]:h-11 min-[1920px]:text-[10px] ${isSelected ? 'scale-[1.03] border-slate-800 bg-slate-800 text-white shadow-md' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-100'}`}
                 >
-                  {method.id === 'Efectivo' && <Banknote size={14} className="mb-0.5" />}
-                  {method.id === 'MercadoPago' && <Smartphone size={14} className="mb-0.5" />}
-                  {(method.id === 'Debito' || method.id === 'Credito') && <CreditCard size={14} className="mb-0.5" />}
+                  {method.id === 'Efectivo' && <Banknote size={12} className="mb-0.5 min-[1920px]:h-[14px] min-[1920px]:w-[14px]" />}
+                  {method.id === 'MercadoPago' && <Smartphone size={12} className="mb-0.5 min-[1920px]:h-[14px] min-[1920px]:w-[14px]" />}
+                  {(method.id === 'Debito' || method.id === 'Credito') && <CreditCard size={12} className="mb-0.5 min-[1920px]:h-[14px] min-[1920px]:w-[14px]" />}
                   <span className="text-center leading-tight">{method.label}</span>
                 </button>
               );
@@ -1699,9 +1991,9 @@ export default function POSView({
             <button
               type="button"
               onClick={handleToggleSplitPaymentMode}
-              className={`flex h-11 flex-col items-center justify-center rounded-lg border px-1 py-0.5 text-[10px] font-bold transition-all ${isSplitPaymentMode ? 'scale-[1.03] border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700 shadow-md' : 'border-slate-200 bg-white text-slate-500 hover:border-fuchsia-200 hover:bg-fuchsia-50/50'}`}
+              className={`flex h-9 flex-col items-center justify-center rounded-lg border px-1 py-0.5 text-[9px] font-bold transition-all min-[1920px]:h-11 min-[1920px]:text-[10px] ${isSplitPaymentMode ? 'scale-[1.03] border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700 shadow-md' : 'border-slate-200 bg-white text-slate-500 hover:border-fuchsia-200 hover:bg-fuchsia-50/50'}`}
             >
-              <SlidersHorizontal size={14} className="mb-0.5" />
+              <SlidersHorizontal size={12} className="mb-0.5 min-[1920px]:h-[14px] min-[1920px]:w-[14px]" />
               <span className="text-center leading-tight">Agregar otro pago</span>
             </button>
           </div>
@@ -1773,14 +2065,14 @@ export default function POSView({
 
               {currentPaymentMethod === 'Efectivo' && (
                 <div className="space-y-1.5 animate-in fade-in slide-in-from-bottom-2">
-                  <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-white/90 px-3 py-2 shadow-sm transition-all focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-200">
+                  <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-white/90 px-2.5 py-1.5 shadow-sm transition-all focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-200 min-[1920px]:px-3 min-[1920px]:py-2">
                     <input
                       type="text"
                       inputMode="decimal"
                       value={currentCashInputValue}
                       onChange={(e) => handleCashReceivedChange(e.target.value)}
                       placeholder="Ingresar el total en efectivo"
-                      className="w-full appearance-none bg-transparent text-[15px] font-black text-slate-800 outline-none placeholder:text-slate-400 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      className="w-full appearance-none bg-transparent text-[13px] font-black text-slate-800 outline-none placeholder:text-slate-400 min-[1920px]:text-[15px] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                     />
                     <HintIcon
                       hint="Ingresa el monto total de efectivo recibido para calcular el cambio del pedido."
@@ -1801,25 +2093,25 @@ export default function POSView({
             </>
           )}
 
-          <div className="space-y-1.5 border-t border-slate-200 pt-2">
-            <div className="flex justify-between text-xs text-slate-500"><span>Subtotal</span><span><FancyPrice amount={displaySubtotal} /></span></div>
+          <div className="space-y-1 border-t border-slate-200 pt-1.5 min-[1920px]:space-y-1.5 min-[1920px]:pt-2">
+            <div className="flex justify-between text-[11px] text-slate-500 min-[1920px]:text-xs"><span>Subtotal</span><span><FancyPrice amount={displaySubtotal} /></span></div>
             {cartDiscountTotal > 0 && (
-              <div className="flex justify-between text-xs font-bold text-fuchsia-600">
+              <div className="flex justify-between text-[11px] font-bold text-fuchsia-600 min-[1920px]:text-xs">
                 <span>Descuentos</span>
                 <span>-<FancyPrice amount={cartDiscountTotal} /></span>
               </div>
             )}
-            <div className="flex justify-between text-xs text-slate-500"><span>Pago</span><span>{paymentSummary}</span></div>
-            {paymentTotals.surchargeTotal > 0 && (<div className="flex justify-between text-xs font-bold text-amber-600"><span>Recargo credito</span><span>+<FancyPrice amount={paymentTotals.surchargeTotal} /></span></div>)}
-            {!isSplitPaymentMode && cashReceivedAmount > 0 && <div className="flex justify-between text-xs text-slate-500"><span>Efectivo recibido</span><span><FancyPrice amount={cashReceivedAmount} /></span></div>}
-            {!isSplitPaymentMode && cashChangeAmount > 0 && <div className="flex justify-between text-xs font-bold text-emerald-600"><span>Devolucion</span><span><FancyPrice amount={cashChangeAmount} /></span></div>}
-            <div className="flex justify-between items-end pt-2">
-              <span className="text-sm font-bold text-slate-800 uppercase">Total a Pagar</span>
-              <span className="text-[24px] font-black text-slate-900"><FancyPrice amount={total} /></span>
+            <div className="flex justify-between text-[11px] text-slate-500 min-[1920px]:text-xs"><span>Pago</span><span>{paymentSummary}</span></div>
+            {paymentTotals.surchargeTotal > 0 && (<div className="flex justify-between text-[11px] font-bold text-amber-600 min-[1920px]:text-xs"><span>Recargo credito</span><span>+<FancyPrice amount={paymentTotals.surchargeTotal} /></span></div>)}
+            {!isSplitPaymentMode && cashReceivedAmount > 0 && <div className="flex justify-between text-[11px] text-slate-500 min-[1920px]:text-xs"><span>Efectivo recibido</span><span><FancyPrice amount={cashReceivedAmount} /></span></div>}
+            {!isSplitPaymentMode && cashChangeAmount > 0 && <div className="flex justify-between text-[11px] font-bold text-emerald-600 min-[1920px]:text-xs"><span>Devolucion</span><span><FancyPrice amount={cashChangeAmount} /></span></div>}
+            <div className="flex justify-between items-end pt-1.5 min-[1920px]:pt-2">
+              <span className="text-[13px] font-bold text-slate-800 uppercase min-[1920px]:text-sm">Total a Pagar</span>
+              <span className="text-[22px] font-black text-slate-900 min-[1920px]:text-[24px]"><FancyPrice amount={total} /></span>
             </div>
           </div>
 
-          <AsyncActionButton onAction={() => runAction('checkout:pos', handlePreCheckout)} pending={isPending('checkout:pos')} loadingLabel="Cobrando..." disabled={cart.length === 0 || Math.abs(remainingBaseAmount) > 0.009 || hasOverassignedPayments || cashMissingAmount > 0} className="group flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-slate-900 to-slate-800 py-3 text-[15px] font-bold text-white shadow-lg transition-all hover:from-black hover:to-slate-900 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50">
+          <AsyncActionButton onAction={() => runAction('checkout:pos', handlePreCheckout)} pending={isPending('checkout:pos')} loadingLabel="Cobrando..." disabled={cart.length === 0 || Math.abs(remainingBaseAmount) > 0.009 || hasOverassignedPayments || cashMissingAmount > 0} className="group flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-slate-900 to-slate-800 py-2.5 text-[14px] font-bold text-white shadow-lg transition-all hover:from-black hover:to-slate-900 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50 min-[1920px]:py-3 min-[1920px]:text-[15px]">
             <CheckCircle className="group-hover:scale-110 transition-transform" />
             {cart.length === 0 ? 'CARRITO VACIO' : 'COBRAR'}
           </AsyncActionButton>
@@ -1841,6 +2133,7 @@ export default function POSView({
           isOpen={isCustomModalOpen} 
           onClose={() => setIsCustomModalOpen(false)} 
           onConfirm={handleCustomConfirm} 
+          inventory={inventory}
         />
       )}
       {/* DRAWER DE OFERTAS Y COMBOS */}

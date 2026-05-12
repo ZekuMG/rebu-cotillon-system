@@ -88,7 +88,7 @@ export const CLOUD_SELECTS = {
     'user_id',
     'user_role',
     'user_name',
-    'sale_items(product_id,product_title,quantity,price,subtotal,line_subtotal,is_reward,product_type)',
+    'sale_items(product_id,product_title,quantity,price,subtotal,line_subtotal,cost,is_reward,is_custom,is_discount,is_combo,product_type)',
     'clients(name,member_number)',
   ].join(','),
   salesHistorySummary: [
@@ -107,7 +107,7 @@ export const CLOUD_SELECTS = {
     'user_id',
     'user_role',
     'user_name',
-    'sale_items(product_id,product_title,quantity,price,subtotal,line_subtotal,is_reward,product_type)',
+    'sale_items(product_id,product_title,quantity,price,subtotal,line_subtotal,cost,is_reward,is_custom,is_discount,is_combo,product_type)',
     'clients(name,member_number)',
   ].join(','),
   logs: [
