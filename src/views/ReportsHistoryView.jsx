@@ -168,7 +168,7 @@ export default function ReportsHistoryView({
 
   if (isLoading && (!pastClosures || pastClosures.length === 0)) {
     return (
-      <div className="flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="reports-history-view flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="text-center">
           <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Cargando cierres</p>
           <p className="mt-2 text-sm font-medium text-slate-500">Estamos trayendo reportes y cierres de caja.</p>
@@ -179,7 +179,7 @@ export default function ReportsHistoryView({
 
   if (emptyStateMessage && (!pastClosures || pastClosures.length === 0)) {
     return (
-      <div className="flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="reports-history-view flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="max-w-md text-center">
           <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Cierres no disponibles</p>
           <p className="mt-2 text-sm font-medium text-slate-500">{emptyStateMessage}</p>
@@ -189,7 +189,7 @@ export default function ReportsHistoryView({
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-slate-100">
+    <div className="reports-history-view flex h-full flex-col overflow-hidden bg-slate-100">
       <div className="relative z-30 flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-white p-4 shadow-sm">
         <div className="flex min-w-[300px] flex-1 items-center gap-2">
           <div className="relative max-w-md flex-1">

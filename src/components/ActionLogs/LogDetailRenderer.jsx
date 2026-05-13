@@ -8,6 +8,7 @@ import { HintIcon } from '../HintIcon';
 import { extractRealNote, normalizeLogAction } from './logHelpers';
 import UserDisplayBadge from '../UserDisplayBadge';
 import { APP_PERMISSION_GROUPS, getEffectivePermissions, getPermissionSummary } from '../../utils/userPermissions';
+import { getPaymentBreakdownDisplayItems, getPaymentSummary } from '../../utils/paymentBreakdown';
 
 // ════════════════════════════════════════════
 //  HELPERS EXPORTABLES
@@ -64,7 +65,7 @@ const getManagedUserRoleLabel = (role) => {
 const Card = ({ icon, title, children }) => (
   <div className="bg-white border border-[#d4d9e3] rounded-[14px] p-3.5 shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
     <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-2.5 flex items-center gap-2">
-      <span className="text-[13px] leading-none">{icon}</span> {title}
+      <span className="text-[13px] leading-none">{title === 'Pago Resultante' ? '$' : icon}</span> {title}
     </div>
     <div className="space-y-1.5">
       {children}
@@ -141,6 +142,71 @@ const ChangeRow = ({ field, oldVal, newVal, isPrice = false }) => (
     </div>
   </div>
 );
+
+const PaymentLineItem = ({ line }) => (
+  <div className="flex justify-between items-start gap-3 px-3 py-2 bg-[#f4f6f9] rounded-[9px] text-[11px] border border-[#eaecf1]">
+    <div className="min-w-0">
+      <span className="block font-bold text-slate-800 truncate">{line.title || line.label || line.method}</span>
+      {line.method === 'Efectivo' && (
+        <span className="mt-0.5 block text-[10px] font-semibold text-emerald-600">
+          Recibido: <FancyPrice amount={Number(line.cashReceived || line.chargedAmount || 0)} />
+          {Number(line.cashChange || 0) > 0 && (
+            <> · Devolucion: <FancyPrice amount={Number(line.cashChange || 0)} /></>
+          )}
+        </span>
+      )}
+    </div>
+    <span className="font-bold whitespace-nowrap text-slate-800">
+      <FancyPrice amount={Number(line.chargedAmount ?? line.amount ?? 0)} />
+    </span>
+  </div>
+);
+
+const getSalePaymentTotal = (details = {}, totalOverride = undefined) => {
+  const candidates = [
+    totalOverride,
+    details.newTotal,
+    details.total,
+    details.originalTotal,
+    details.changes?.total?.new,
+    details.changes?.total?.old,
+  ];
+  for (const value of candidates) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric !== 0) return numeric;
+  }
+  return 0;
+};
+
+const SalePaymentCard = ({ details = {}, title = 'Pago', totalLabel = 'Total', totalOverride }) => {
+  if (!details || typeof details !== 'object') return null;
+
+  const total = getSalePaymentTotal(details, totalOverride);
+  const fallbackPayment = typeof details.payment === 'string' && details.payment !== 'N/A'
+    ? details.payment
+    : 'Efectivo';
+  const paymentItems = getPaymentBreakdownDisplayItems(
+    details.paymentBreakdown,
+    fallbackPayment,
+    details.installments || 0,
+    details.cashReceived,
+    details.cashChange,
+    total,
+  );
+  const paymentSummary = getPaymentSummary(details.paymentBreakdown, fallbackPayment, details.installments || 0);
+
+  return (
+    <Card icon="$" title={title}>
+      <Item label={totalLabel}>
+        <FancyPrice amount={total} />
+      </Item>
+      <Item label="Medio de pago" value={paymentSummary} />
+      {paymentItems.map((line) => (
+        <PaymentLineItem key={line.key || line.id || `${line.method}-${line.amount}`} line={line} />
+      ))}
+    </Card>
+  );
+};
 
 const Badge = ({ color, children }) => {
   const classes = {
@@ -723,9 +789,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
             ))}
           </Card>
         )}
-        <Card icon="💳" title="Pago">
-          <Item label="Método de pago" value={getFormattedPayment(details.payment, details.installments)} />
-        </Card>
+        <SalePaymentCard details={details} title="Pago Registrado" totalLabel="Total de la venta" />
         <MemberImpactCard
           clientDisplay={clientDisplay}
           pointsChange={details.pointsChange}
@@ -1121,9 +1185,7 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
             </Card>
           )}
 
-          <Card icon="💳" title="Pago">
-            <Item label="Método de pago" value={getFormattedPayment(details.payment, details.installments)} />
-          </Card>
+          <SalePaymentCard details={details} title="Pago Registrado" totalLabel="Total de la venta" />
 
           <MemberImpactCard 
             clientDisplay={clientDisplay} 
@@ -1148,6 +1210,13 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
              <ChangeRow field="Monto Anulado" oldVal={details.originalTotal || details.total} newVal={0} isPrice={true} />
              {paymentMethod && <Item label="Método de Pago devuelto" value={paymentMethod} />}
           </Card>
+
+          <SalePaymentCard
+            details={details}
+            title="Pago Original"
+            totalLabel="Total original"
+            totalOverride={details.originalTotal || details.total}
+          />
 
           <Card icon="📦" title="Productos Devueltos al Stock">
             {items.map((item, idx) => (
@@ -1195,6 +1264,8 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
              <ChangeRow field="Monto Recuperado" oldVal={0} newVal={details.total} isPrice={true} />
              {paymentMethod && <Item label="Ingresado a caja como" value={paymentMethod} />}
           </Card>
+
+          <SalePaymentCard details={details} title="Pago Restaurado" totalLabel="Total recuperado" />
 
           <Card icon="📦" title="Productos Vueltos a Vender">
             {items.map((item, idx) => (
@@ -1257,6 +1328,17 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
 
       const isTotalActuallyChanged = changes.total && (changes.total.old !== changes.total.new);
       const isPaymentActuallyChanged = oldPayText !== newPayText;
+      const finalTotal = Number(details.newTotal ?? details.total ?? changes.total?.new ?? 0) || 0;
+      const paymentBreakdown = details.paymentBreakdown || [];
+      const paymentItems = getPaymentBreakdownDisplayItems(
+        paymentBreakdown,
+        basePayment,
+        details.installments || 0,
+        details.cashReceived,
+        details.cashChange,
+        finalTotal,
+      );
+      const paymentSummary = getPaymentSummary(paymentBreakdown, basePayment, details.installments || 0);
 
       return (
         <div className="space-y-4"> 
@@ -1314,9 +1396,21 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
              )}
           </Card>
 
+          <Card icon="ðŸ’³" title="Pago Resultante">
+             <Item label="Total final">
+               <FancyPrice amount={finalTotal} />
+             </Item>
+             <Item label="Medio de pago" value={paymentSummary} />
+             {paymentItems.map((line) => (
+               <PaymentLineItem key={line.key || line.id || `${line.method}-${line.amount}`} line={line} />
+             ))}
+          </Card>
+
           <MemberImpactCard 
             clientDisplay={clientDisplay} 
             pointsChange={details.pointsChange} 
+            pointsEarned={details.pointsEarned}
+            pointsSpent={details.pointsSpent}
           />
 
           <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
@@ -2101,6 +2195,14 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
             )}
             {paymentMethod && <Item label="Método de Pago" value={paymentMethod} />}
           </Card>
+
+          {typeof details === 'object' && (
+            <SalePaymentCard
+              details={details}
+              title="Pago Eliminado"
+              totalLabel="Total eliminado"
+            />
+          )}
 
           {items.length > 0 && (
             <Card icon="📦" title="Productos del Registro Eliminado">

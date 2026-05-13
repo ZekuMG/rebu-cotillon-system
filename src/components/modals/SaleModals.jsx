@@ -118,8 +118,8 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
-      <div className="mx-auto flex max-h-[92vh] w-full max-w-[1120px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl animate-in fade-in zoom-in duration-300">
+    <div className="sale-success-modal fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
+      <div className="sale-success-panel mx-auto flex max-h-[92vh] w-full max-w-[1120px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl animate-in fade-in zoom-in duration-300">
         <div className="bg-gradient-to-r from-green-500 to-emerald-500 px-5 py-2.5 text-center">
           <div className="mx-auto mb-1.5 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-lg">
             <CheckCircle size={26} className="text-green-500" />
@@ -128,7 +128,7 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
           <p className="text-sm text-green-100">La transacción se registró correctamente.</p>
         </div>
 
-        <div className="grid min-h-0 flex-1 gap-0 overflow-hidden lg:grid-cols-[260px_minmax(360px,1fr)_300px]">
+        <div className="grid min-h-0 flex-1 gap-0 overflow-hidden lg:grid-cols-[300px_minmax(360px,1fr)_300px]">
           <div className="order-2 min-h-0 space-y-2 overflow-y-auto px-3.5 pb-3.5 pt-1 md:px-4 md:pb-4 md:pt-1.5">
             <div className="hidden">
               <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">Número de compra</p>
@@ -398,8 +398,8 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
               </span>
             </div>
 
-            <div className="mt-2.5 flex min-h-0 flex-1 items-start justify-center overflow-y-auto rounded-lg border border-slate-200 bg-slate-200 p-2.5">
-              <div className="mx-auto w-[82%] overflow-hidden rounded-sm bg-white px-[3%] py-2.5 shadow-md">
+            <div className="sale-success-ticket-frame mt-2.5 flex min-h-[440px] flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+              <div className="sale-success-ticket-paper flex h-full min-h-full flex-1 w-full flex-col overflow-y-auto bg-white px-2.5 py-3">
                 <TicketPrintLayout transaction={transaction} />
               </div>
             </div>

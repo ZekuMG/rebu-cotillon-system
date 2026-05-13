@@ -159,7 +159,9 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
         return `${d.count || (Array.isArray(d.items) ? d.items.length : 0)} cambios`;
       case 'Modificación Pedido':
       case 'Venta Modificada':
-        return d.changes?.total ? <FancyPrice amount={d.changes.total.new} /> : 'Editado';
+        return d.changes?.total || d.newTotal || d.total
+          ? <FancyPrice amount={d.changes?.total?.new ?? d.newTotal ?? d.total} />
+          : 'Editado';
       case 'Ajustes de Usuario':
       case 'Usuario Creado':
       case 'Usuario Editado':

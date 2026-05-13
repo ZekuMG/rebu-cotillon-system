@@ -1674,7 +1674,7 @@ export default function ExtrasView({
   // RENDERIZADO PRINCIPAL
   // ============================================================================
   return (
-    <div className="extras-view-scrollless flex h-full min-h-0 flex-col overflow-hidden animate-in fade-in duration-300">
+    <div className="extras-view extras-view-scrollless flex h-full min-h-0 flex-col overflow-hidden animate-in fade-in duration-300">
       <style>{`
         .extras-view-scrollless * {
           scrollbar-width: none;

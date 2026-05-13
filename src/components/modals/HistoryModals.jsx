@@ -113,10 +113,17 @@ export const TransactionDetailModal = ({
     if (isRedemptionItem(item)) return sum;
     return sum + (Number(item.qty || item.quantity || 0) || 0);
   }, 0);
-  const statusLabel = isVoided ? 'Anulada' : transaction.isHistoric ? 'Historica' : 'Completada';
+  const isModified = Boolean(transaction.isModified);
+  const modificationDetails = transaction.modificationDetails || {};
+  const modifiedAt = transaction.modifiedAt || null;
+  const modificationOldTotal = modificationDetails?.changes?.total?.old ?? modificationDetails?.previousTotal;
+  const modificationNewTotal = modificationDetails?.changes?.total?.new ?? modificationDetails?.newTotal ?? modificationDetails?.total;
+  const statusLabel = isVoided ? 'Anulada' : isModified ? 'Modificada' : transaction.isHistoric ? 'Historica' : 'Completada';
   const statusClass = isVoided
     ? 'border-red-200 bg-red-50 text-red-700'
-    : transaction.isHistoric
+    : isModified
+      ? 'border-amber-200 bg-amber-50 text-amber-700'
+      : transaction.isHistoric
       ? 'border-slate-200 bg-slate-50 text-slate-600'
       : 'border-emerald-200 bg-emerald-50 text-emerald-700';
   const hasCashPayment = paymentItems.some((item) => item.method === 'Efectivo');
@@ -140,6 +147,11 @@ export const TransactionDetailModal = ({
             {transaction.isHistoric && !isVoided && (
               <span className="bg-slate-200 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider border border-slate-300">
                 Histórica
+              </span>
+            )}
+            {isModified && !isVoided && (
+              <span className="bg-amber-100 text-amber-700 text-[10px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider border border-amber-200">
+                Modificada
               </span>
             )}
           </div>
@@ -251,12 +263,22 @@ export const TransactionDetailModal = ({
               <span className={`inline-block rounded-lg border px-2 py-1 text-[10px] font-black uppercase tracking-wider ${statusClass}`}>
                 {statusLabel}
               </span>
+              {isModified && modifiedAt && (
+                <p className="mt-1 truncate text-[9px] font-bold text-amber-600" title={modifiedAt}>
+                  Ult. ajuste: {modifiedAt}
+                </p>
+              )}
             </div>
             <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
               <p className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Total</p>
               <p className={`truncate text-[16px] font-black ${isVoided ? 'text-red-700 line-through' : 'text-blue-600'}`}>
                 <FancyPrice amount={Number(transaction.total) || 0} />
               </p>
+              {isModified && modificationOldTotal !== undefined && Number(modificationOldTotal) !== Number(modificationNewTotal) && (
+                <p className="mt-0.5 truncate text-[9px] font-bold text-amber-600">
+                  Antes: <FancyPrice amount={Number(modificationOldTotal) || 0} />
+                </p>
+              )}
             </div>
           </div>
 

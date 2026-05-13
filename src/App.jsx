@@ -5,10 +5,15 @@ import {
   ChevronRight,
   ArrowLeft,
   RefreshCw,
-  AlertTriangle
+  AlertTriangle,
+  Database,
+  WifiOff,
+  Moon,
+  Sun
 } from 'lucide-react';
 import Swal from 'sweetalert2';
 import logoRebuImg from './assets/logo-rebu.jpg';
+import appPackage from '../package.json';
 
 // --- CONEXIÓN A LA NUBE ---
 import { supabase } from './supabase/client';
@@ -135,6 +140,7 @@ import { ExportPdfLayout } from './components/ExportPdfLayout';
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 
 const OFFLINE_CORE_CACHE_KEY = 'party_cloud_snapshot_core_v2';
+const APP_VERSION = appPackage?.version || '1.0.0';
 const OFFLINE_TRANSACTIONS_CACHE_KEY = 'party_cloud_snapshot_transactions_v1';
 const OFFLINE_DASHBOARD_CACHE_KEY = 'party_cloud_snapshot_dashboard_v2';
 const OFFLINE_HISTORY_CACHE_KEY = 'party_cloud_snapshot_history_v1';
@@ -146,6 +152,8 @@ const OFFLINE_POS_CACHE_KEY = 'party_pos_snapshot_v1';
 const OFFLINE_LOGIN_CACHE_KEY = 'party_offline_login_verifiers_v1';
 const LEGACY_OFFLINE_CACHE_KEY = 'party_cloud_snapshot_v1';
 const USER_SETTINGS_KEY = 'party_user_settings_v1';
+const LOGIN_THEME_KEY = 'party_login_theme_v1';
+const REMEMBERED_SESSION_KEY = 'party_remembered_session_v1';
 const APP_TEXT_ENCODING_VERSION = 'utf8-clean';
 const CLOUD_FETCH_BATCH_SIZE = 200;
 const CLOUD_RECENT_SYNC_LIMIT = 250;
@@ -171,10 +179,40 @@ const HISTORY_LOG_RECENT_SYNC_LIMIT = 50;
 const SESSION_ABSENT_MS = 10 * 60 * 1000;
 const SESSION_EXPIRED_MS = 60 * 60 * 1000;
 const SESSION_ACTIVITY_UPDATE_THROTTLE_MS = 5000;
+const LOCAL_TRANSACTION_OVERRIDE_TTL_MS = 45 * 1000;
 const APP_USERS_FRESHNESS_MS = 15 * 1000;
 const OFFLINE_BOOT_TIMEOUT_MS = 5500;
 const OFFLINE_LOGIN_TIMEOUT_MS = 6500;
 const REPORT_LOG_ACTIONS = ['Cierre de Caja', 'Cierre Automático'];
+
+const AppVersionBadge = () => (
+  <div className="pointer-events-none absolute bottom-4 right-4 hidden items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/70 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-slate-400 shadow-sm backdrop-blur sm:inline-flex">
+    <span>Version</span>
+    <span className="text-slate-500">v{APP_VERSION}</span>
+  </div>
+);
+
+const LoginThemeToggle = ({ theme = 'light', onToggle }) => {
+  const isDarkTheme = theme === 'dark';
+
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={isDarkTheme ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}
+      aria-pressed={isDarkTheme}
+      title={isDarkTheme ? 'Tema oscuro' : 'Tema claro'}
+      className={`absolute right-5 top-5 inline-flex h-9 items-center gap-2 rounded-full border px-3 text-[10px] font-black uppercase tracking-[0.12em] shadow-sm backdrop-blur transition hover:-translate-y-0.5 ${
+        isDarkTheme
+          ? 'border-slate-700 bg-slate-900/90 text-amber-100'
+          : 'border-slate-200 bg-white/80 text-slate-500 hover:text-slate-700'
+      }`}
+    >
+      {isDarkTheme ? <Moon size={14} /> : <Sun size={14} />}
+      <span className="hidden sm:inline">{isDarkTheme ? 'Oscuro' : 'Claro'}</span>
+    </button>
+  );
+};
 
 const isBrowserOffline = () =>
   typeof navigator !== 'undefined' && navigator.onLine === false;
@@ -1258,6 +1296,23 @@ const buildGuestPosClient = () => ({
   usedCoupons: [],
 });
 
+const isUuidLike = (value) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ''));
+
+const isNumericDbId = (value) => {
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0;
+  return /^[1-9]\d*$/.test(String(value || '').trim());
+};
+
+const toOptionalDbId = (value) => {
+  if (value === null || value === undefined) return null;
+  const normalized = String(value).trim();
+  if (!normalized || ['guest', 'no asociado', 'consumer-final'].includes(normalized.toLowerCase())) return null;
+  if (normalized.startsWith('legacy-')) return null;
+  if (isNumericDbId(normalized) || isUuidLike(normalized)) return value;
+  return null;
+};
+
 const getPrimaryLocalIp = (networkInterfaces = {}) => {
   try {
     for (const interfaces of Object.values(networkInterfaces)) {
@@ -1495,6 +1550,63 @@ const saveUserSettings = (settings) => {
   }
 };
 
+const loadLoginThemePreference = () => {
+  try {
+    if (typeof window === 'undefined') return 'light';
+    return window.localStorage.getItem(LOGIN_THEME_KEY) === 'dark' ? 'dark' : 'light';
+  } catch (error) {
+    console.error('No se pudo leer el tema del ingreso:', error);
+    return 'light';
+  }
+};
+
+const saveLoginThemePreference = (theme) => {
+  try {
+    window.localStorage.setItem(LOGIN_THEME_KEY, theme === 'dark' ? 'dark' : 'light');
+  } catch (error) {
+    console.error('No se pudo guardar el tema del ingreso:', error);
+  }
+};
+
+const loadRememberedSession = () => {
+  try {
+    if (typeof window === 'undefined') return null;
+    const rawSession = window.sessionStorage.getItem(REMEMBERED_SESSION_KEY);
+    if (!rawSession) return null;
+    const parsedSession = JSON.parse(rawSession);
+    if (!parsedSession?.userId || !parsedSession?.sessionMeta?.sessionId) return null;
+    return parsedSession;
+  } catch (error) {
+    console.error('No se pudo leer la sesion recordada:', error);
+    return null;
+  }
+};
+
+const saveRememberedSession = (user, sessionMeta) => {
+  try {
+    if (typeof window === 'undefined' || !user?.id || !sessionMeta?.sessionId) return;
+    window.sessionStorage.setItem(
+      REMEMBERED_SESSION_KEY,
+      JSON.stringify({
+        userId: user.id,
+        savedAt: new Date().toISOString(),
+        sessionMeta,
+      }),
+    );
+  } catch (error) {
+    console.error('No se pudo recordar la sesion:', error);
+  }
+};
+
+const clearRememberedSession = () => {
+  try {
+    if (typeof window === 'undefined') return;
+    window.sessionStorage.removeItem(REMEMBERED_SESSION_KEY);
+  } catch (error) {
+    console.error('No se pudo limpiar la sesion recordada:', error);
+  }
+};
+
 function PersistentTabPanel({ tab, activeTab, className = '', children }) {
   const cachedChildrenRef = useRef(children);
   const hasMountedRef = useRef(activeTab === tab);
@@ -1535,6 +1647,19 @@ const getPayloadKeyForMissingColumn = (payload, missingColumn) => {
   return Object.keys(payload).find((key) => key.toLowerCase() === columnName.toLowerCase()) || null;
 };
 
+const getPayloadKeyForInvalidInput = (payload, error, table) => {
+  if (!payload || typeof payload !== 'object') return null;
+  const errorText = [error?.message, error?.details, error?.hint].filter(Boolean).join(' ');
+  const invalidValue = errorText.match(/invalid input syntax for type \w+:\s*"([^"]+)"/i)?.[1];
+  if (!invalidValue) return null;
+
+  return Object.keys(payload).find((key) => {
+    if (!isOptionalSchemaColumn(table, key)) return false;
+    const value = payload[key];
+    return value !== null && value !== undefined && String(value) === invalidValue;
+  }) || null;
+};
+
 const insertWithSchemaFallback = async (table, payload, selectColumns = '*') => {
   let safePayload = { ...payload };
   let safeSelect = selectColumns;
@@ -1542,6 +1667,12 @@ const insertWithSchemaFallback = async (table, payload, selectColumns = '*') => 
   while (true) {
     const { data, error } = await supabase.from(table).insert([safePayload]).select(safeSelect).single();
     if (!error) return { data, payload: safePayload };
+
+    const invalidPayloadKey = getPayloadKeyForInvalidInput(safePayload, error, table);
+    if (invalidPayloadKey) {
+      safePayload = { ...safePayload, [invalidPayloadKey]: null };
+      continue;
+    }
 
     const missingColumn = extractSchemaMissingColumn(error);
     const missingPayloadKey = getPayloadKeyForMissingColumn(safePayload, missingColumn);
@@ -1572,6 +1703,15 @@ const insertRowsWithSchemaFallback = async (table, rows) => {
     const { data, error } = await supabase.from(table).insert(safeRows);
     if (!error) return { data, payload: safeRows };
 
+    const invalidPayloadKey = safeRows.reduce(
+      (foundKey, row) => foundKey || getPayloadKeyForInvalidInput(row, error, table),
+      null,
+    );
+    if (invalidPayloadKey) {
+      safeRows = safeRows.map((row) => ({ ...row, [invalidPayloadKey]: null }));
+      continue;
+    }
+
     const missingColumn = extractSchemaMissingColumn(error);
     const canDropMissingColumn =
       missingColumn &&
@@ -1598,6 +1738,12 @@ const updateWithSchemaFallback = async (table, id, payload, selectColumns = '*')
   while (true) {
     const { data, error } = await supabase.from(table).update(safePayload).eq('id', id).select(safeSelect).single();
     if (!error) return { data, payload: safePayload };
+
+    const invalidPayloadKey = getPayloadKeyForInvalidInput(safePayload, error, table);
+    if (invalidPayloadKey) {
+      safePayload = { ...safePayload, [invalidPayloadKey]: null };
+      continue;
+    }
 
     const missingColumn = extractSchemaMissingColumn(error);
     const missingPayloadKey = getPayloadKeyForMissingColumn(safePayload, missingColumn);
@@ -1981,7 +2127,11 @@ export default function PartySupplyApp() {
 
   const applyTransactionsPayload = (payload, { merge = false } = {}) => {
     if (payload.transactions !== null) {
-      setTransactions((prev) => (merge ? mergeLatestRecords(prev, payload.transactions) : payload.transactions));
+      setTransactions((prev) =>
+        applyLocalTransactionOverrides(
+          merge ? mergeLatestRecords(prev, payload.transactions) : payload.transactions,
+        ),
+      );
     }
   };
 
@@ -2101,7 +2251,11 @@ export default function PartySupplyApp() {
 
   const loadTransactionsCloudData = async ({ force = false } = {}) => {
     if (moduleLoadPromisesRef.current.transactions) {
-      return moduleLoadPromisesRef.current.transactions;
+      if (!force) return moduleLoadPromisesRef.current.transactions;
+      await moduleLoadPromisesRef.current.transactions.catch((error) => {
+        console.warn('La carga previa de transacciones fallo antes de forzar recarga:', error);
+        return false;
+      });
     }
 
     const currentState = moduleLoadStateRef.current.transactions;
@@ -2110,6 +2264,7 @@ export default function PartySupplyApp() {
     }
 
     const run = async () => {
+      const requestStartedAt = Date.now();
       setModuleState('transactions', { status: 'loading', dirty: false });
       const latestTransactionCreatedAt = getLatestCreatedAt(dataStateRef.current.transactions);
       const useRecentSync =
@@ -2126,6 +2281,11 @@ export default function PartySupplyApp() {
           : await fetchTransactionsCloudPayload();
 
         if (!payload?.hasCloudConnection) {
+          if (!force && Number(localDataMutationRef.current.transactions || 0) > requestStartedAt) {
+            setModuleState('transactions', { status: 'loaded', dirty: true, lastLoadedAt: Date.now() });
+            return true;
+          }
+
           const cachedSnapshot =
             loadOfflineTransactionsSnapshot() || loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
           if (applyTransactionsSnapshot(cachedSnapshot)) {
@@ -2137,14 +2297,20 @@ export default function PartySupplyApp() {
           return false;
         }
 
+        if (!force && Number(localDataMutationRef.current.transactions || 0) > requestStartedAt) {
+          setModuleState('transactions', { status: 'loaded', dirty: true, lastLoadedAt: Date.now() });
+          return true;
+        }
+
         applyTransactionsPayload(payload, { merge: useRecentSync });
         setIsOfflineReadOnly(false);
-        const nextTransactions =
+        const rawNextTransactions =
           payload.transactions === null
             ? dataStateRef.current.transactions ?? []
             : useRecentSync
               ? mergeLatestRecords(dataStateRef.current.transactions, payload.transactions)
               : payload.transactions;
+        const nextTransactions = applyLocalTransactionOverrides(rawNextTransactions);
 
         const nextSnapshot = {
           savedAt: new Date().toISOString(),
@@ -2155,6 +2321,11 @@ export default function PartySupplyApp() {
         return true;
       } catch (error) {
         console.error('Error general de conexión (transactions):', error);
+        if (!force && Number(localDataMutationRef.current.transactions || 0) > requestStartedAt) {
+          setModuleState('transactions', { status: 'loaded', dirty: true, lastLoadedAt: Date.now() });
+          return true;
+        }
+
         const cachedSnapshot =
           loadOfflineTransactionsSnapshot() || loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
         if (applyTransactionsSnapshot(cachedSnapshot)) {
@@ -2273,7 +2444,11 @@ export default function PartySupplyApp() {
 
   const loadHistoryCloudData = async ({ force = false } = {}) => {
     if (moduleLoadPromisesRef.current.history) {
-      return moduleLoadPromisesRef.current.history;
+      if (!force) return moduleLoadPromisesRef.current.history;
+      await moduleLoadPromisesRef.current.history.catch((error) => {
+        console.warn('La carga previa de historial fallo antes de forzar recarga:', error);
+        return false;
+      });
     }
 
     const currentState = moduleLoadStateRef.current.history;
@@ -2781,6 +2956,8 @@ export default function PartySupplyApp() {
   const [currentSessionMeta, setCurrentSessionMeta] = useState(null);
   const [activeTab, setActiveTab] = useState('pos');
   const [userSettings, setUserSettings] = useState(() => loadUserSettings());
+  const [loginTheme, setLoginTheme] = useState(() => loadLoginThemePreference());
+  const [isThemeSaving, setIsThemeSaving] = useState(false);
   const [authMode, setAuthMode] = useState(() =>
     loadOfflineSharedUsersSnapshot()?.authMode === 'supabase' ? 'supabase' : 'legacy'
   );
@@ -2796,6 +2973,10 @@ export default function PartySupplyApp() {
   const forcedDisabledUserLogoutRef = useRef(null);
   const forcedPermissionsLogoutRef = useRef(null);
   const writeLogEntryRef = useRef(null);
+  const lastLogWritePromiseRef = useRef(null);
+  const localDataMutationRef = useRef({ transactions: 0 });
+  const localTransactionOverridesRef = useRef(new Map());
+  const pendingThemeSaveRef = useRef(null);
   const showNotificationRef = useRef(null);
   const productThumbBackfillInFlightRef = useRef(false);
   const productThumbBackfillDisabledRef = useRef(false);
@@ -2817,6 +2998,48 @@ export default function PartySupplyApp() {
     offers,
   };
 
+  function pruneLocalTransactionOverrides() {
+    const now = Date.now();
+    localTransactionOverridesRef.current.forEach((entry, key) => {
+      if (!entry?.expiresAt || entry.expiresAt <= now) {
+        localTransactionOverridesRef.current.delete(key);
+      }
+    });
+  }
+
+  function applyLocalTransactionOverrides(records = []) {
+    pruneLocalTransactionOverrides();
+
+    const overrides = localTransactionOverridesRef.current;
+    const sourceRecords = Array.isArray(records) ? records : [];
+    if (overrides.size === 0) return sourceRecords;
+
+    const seenIds = new Set();
+    const mergedRecords = sourceRecords.map((record) => {
+      const key = String(record?.id ?? '');
+      if (!key) return record;
+      seenIds.add(key);
+      return overrides.get(key)?.transaction || record;
+    });
+
+    overrides.forEach((entry, key) => {
+      if (!seenIds.has(key) && entry?.transaction) {
+        mergedRecords.unshift(entry.transaction);
+      }
+    });
+
+    return mergedRecords;
+  }
+
+  function rememberLocalTransactionOverride(transaction) {
+    if (!transaction?.id) return;
+    pruneLocalTransactionOverrides();
+    localTransactionOverridesRef.current.set(String(transaction.id), {
+      transaction,
+      expiresAt: Date.now() + LOCAL_TRANSACTION_OVERRIDE_TTL_MS,
+    });
+  }
+
   useEffect(() => {
     if (activeTab === 'rewards') {
       setActiveTab('extras');
@@ -2827,7 +3050,11 @@ export default function PartySupplyApp() {
     saveUserSettings(userSettings);
   }, [userSettings]);
 
-  const currentTheme = currentUser?.theme === 'dark' ? 'dark' : 'light';
+  useEffect(() => {
+    saveLoginThemePreference(loginTheme);
+  }, [loginTheme]);
+
+  const currentTheme = currentUser ? (currentUser.theme === 'dark' ? 'dark' : 'light') : loginTheme;
 
   useEffect(() => {
     const root = document.documentElement;
@@ -2844,6 +3071,7 @@ export default function PartySupplyApp() {
   const [loginStep, setLoginStep] = useState('select');
   const [selectedUserIdForLogin, setSelectedUserIdForLogin] = useState(null);
   const [passwordInput, setPasswordInput] = useState('');
+  const [rememberLoginSession, setRememberLoginSession] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [systemLogoTapCount, setSystemLogoTapCount] = useState(0);
   const systemLogoTapTimeoutRef = useRef(null);
@@ -2887,6 +3115,39 @@ export default function PartySupplyApp() {
   }, [activeTab, currentUser]);
 
   useEffect(() => {
+    if (currentUser || isAuthBootLoading || appUsers.length === 0) return;
+    const rememberedSession = loadRememberedSession();
+    if (!rememberedSession) return;
+
+    const rememberedUser = appUsers.find((user) => String(user.id) === String(rememberedSession.userId));
+    if (!rememberedUser || rememberedUser.isActive === false) {
+      clearRememberedSession();
+      return;
+    }
+
+    const restoredSession = {
+      ...rememberedSession.sessionMeta,
+      userId: rememberedUser.id || rememberedSession.sessionMeta.userId,
+      userName: rememberedUser.displayName || rememberedUser.name || rememberedSession.sessionMeta.userName,
+      role: rememberedUser.role,
+      avatar: rememberedUser.avatar,
+      permissionsVersion: Number(rememberedUser.permissionsVersion || rememberedSession.sessionMeta.permissionsVersion || 1),
+      status: 'Activa',
+      rememberedSession: true,
+      expiredAt: null,
+      closedAt: null,
+      lastActivityAt: new Date().toISOString(),
+    };
+
+    currentUserRef.current = rememberedUser;
+    currentSessionMetaRef.current = restoredSession;
+    setCurrentUser(rememberedUser);
+    setCurrentSessionMeta(restoredSession);
+    setActiveTab(getDefaultTabForUser(rememberedUser));
+    saveRememberedSession(rememberedUser, restoredSession);
+  }, [appUsers, currentUser, isAuthBootLoading]);
+
+  useEffect(() => {
     if (!currentUser) return;
     void loadModuleForTab(activeTab);
   }, [activeTab, currentUser]);
@@ -2908,11 +3169,15 @@ export default function PartySupplyApp() {
 
     if (latestCurrentUser.isActive !== false) {
       forcedDisabledUserLogoutRef.current = null;
+      const pendingThemeSave = pendingThemeSaveRef.current;
+      const shouldSyncTheme =
+        !pendingThemeSave && latestCurrentUser.theme !== currentUser.theme;
+
       if (
         latestCurrentUser.displayName !== currentUser.displayName ||
         latestCurrentUser.nameColor !== currentUser.nameColor ||
         latestCurrentUser.avatar !== currentUser.avatar ||
-        latestCurrentUser.theme !== currentUser.theme
+        shouldSyncTheme
       ) {
         setCurrentUser((prev) =>
           prev
@@ -2922,7 +3187,7 @@ export default function PartySupplyApp() {
                 name: latestCurrentUser.displayName,
                 nameColor: latestCurrentUser.nameColor,
                 avatar: latestCurrentUser.avatar,
-                theme: latestCurrentUser.theme,
+                theme: shouldSyncTheme ? latestCurrentUser.theme : prev.theme,
                 isActive: latestCurrentUser.isActive,
                 updatedAt: latestCurrentUser.updatedAt,
               }
@@ -3230,7 +3495,7 @@ export default function PartySupplyApp() {
     if (sessionMeta.expiredAt || sessionMeta.status === 'Expirada') return 'Expirada';
 
     const inactivityMs = getSessionInactivityMs(sessionMeta, nowMs);
-    if (inactivityMs >= SESSION_EXPIRED_MS) return 'Expirada';
+    if (!sessionMeta.rememberedSession && inactivityMs >= SESSION_EXPIRED_MS) return 'Expirada';
     if (sessionMeta.status === 'Ausente' || sessionMeta.absentAt || inactivityMs >= SESSION_ABSENT_MS) return 'Ausente';
     return 'Activa';
   };
@@ -3375,11 +3640,13 @@ export default function PartySupplyApp() {
         }
     }
 
-    await writeLogEntry({
+    const logWritePromise = writeLogEntry({
       action,
       details,
       reason: finalReason,
     });
+    lastLogWritePromiseRef.current = logWritePromise;
+    await logWritePromise;
   };
 
   const buildSessionMeta = (user) => {
@@ -3408,6 +3675,7 @@ export default function PartySupplyApp() {
   };
 
   const clearAuthenticatedState = () => {
+    clearRememberedSession();
     currentSessionMetaRef.current = null;
     currentUserRef.current = null;
     setCurrentSessionMeta(null);
@@ -3417,6 +3685,7 @@ export default function PartySupplyApp() {
     setLoginStep('select');
     setSelectedUserIdForLogin(null);
     setPasswordInput('');
+    setRememberLoginSession(false);
     setLoginError('');
   };
 
@@ -3743,7 +4012,7 @@ export default function PartySupplyApp() {
     if (blockIfOfflineReadonly('crear presupuestos')) return;
     try {
       const payload = {
-        member_id: budgetData.memberId || null,
+        member_id: toOptionalDbId(budgetData.memberId),
         customer_name: budgetData.customerName || '',
         customer_phone: budgetData.customerPhone || '',
         customer_note: budgetData.customerNote || '',
@@ -3792,7 +4061,7 @@ export default function PartySupplyApp() {
     try {
       const previousBudget = budgets.find((budget) => String(budget.id) === String(id)) || null;
       const payload = {
-        member_id: budgetData.memberId || null,
+        member_id: toOptionalDbId(budgetData.memberId),
         customer_name: budgetData.customerName || '',
         customer_phone: budgetData.customerPhone || '',
         customer_note: budgetData.customerNote || '',
@@ -3902,7 +4171,7 @@ export default function PartySupplyApp() {
       }
 
       const payload = {
-        member_id: orderPreview.memberId || null,
+        member_id: toOptionalDbId(orderPreview.memberId),
         customer_name: orderPreview.customerName || '',
         customer_phone: orderPreview.customerPhone || '',
         customer_note: orderPreview.customerNote || '',
@@ -4480,7 +4749,7 @@ export default function PartySupplyApp() {
     }
 
     const totalAmount = Number(orderRecord.totalAmount || 0);
-    const clientId = orderRecord.memberId || null;
+    const clientId = toOptionalDbId(orderRecord.memberId);
     const pointsEarned = clientId ? Math.floor(totalAmount / 500) : 0;
     const pointsSpent = 0;
     const actor = getActorContext();
@@ -4505,7 +4774,7 @@ export default function PartySupplyApp() {
       client_id: clientId,
       points_earned: clientId ? pointsEarned : 0,
       points_spent: 0,
-      user_id: actor.userId,
+      user_id: toOptionalDbId(actor.userId),
       user_role: actor.userRole,
       user_name: actor.userName,
     }, 'id');
@@ -4719,7 +4988,7 @@ export default function PartySupplyApp() {
 
       const payload = {
         budget_id: budgetRecord.id,
-        member_id: budgetRecord.memberId || null,
+        member_id: toOptionalDbId(budgetRecord.memberId),
         customer_name: budgetRecord.customerName || '',
         customer_phone: budgetRecord.customerPhone || '',
         customer_note: budgetRecord.customerNote || '',
@@ -5368,7 +5637,7 @@ export default function PartySupplyApp() {
         amount: safeAmount,
         category: expenseData.category || 'Varios',
         payment_method: expenseData.paymentMethod || 'Efectivo',
-        user_id: actor.userId,
+        user_id: toOptionalDbId(actor.userId),
         user_role: actor.userRole,
         user_name: actor.userName,
       };
@@ -5979,19 +6248,75 @@ export default function PartySupplyApp() {
     if (Number.isFinite(explicitSubtotal) && explicitSubtotal !== 0) return explicitSubtotal;
     return (Number(item.price) || 0) * (Number(item.qty || item.quantity || 0) || 0);
   };
+  const clearSaleLineDerivedTotals = (item = {}) => {
+    const { subtotal, lineSubtotal, line_subtotal, lineTotal, line_total, ...rest } = item;
+    return rest;
+  };
+
   const getSaleLineSubtotal = (item = {}) => {
-    const explicitSubtotal = Number(item.subtotal ?? item.lineSubtotal ?? item.line_subtotal);
-    if (Number.isFinite(explicitSubtotal) && explicitSubtotal !== 0) return explicitSubtotal;
     const price = Number(item.price || 0);
-    const qty = Number(item.qty || item.quantity || 0);
-    if ((item.product_type || 'quantity') !== 'weight') return price * qty;
-    return price >= 100 ? price * (qty / 1000) : price * qty;
+    const qty = Number(item.qty ?? item.quantity ?? 0);
+    if (Number.isFinite(price) && Number.isFinite(qty) && qty !== 0) {
+      if ((item.product_type || 'quantity') !== 'weight') return price * qty;
+      return price >= 100 ? price * (qty / 1000) : price * qty;
+    }
+    const explicitSubtotal = Number(item.subtotal ?? item.lineSubtotal ?? item.line_subtotal);
+    return Number.isFinite(explicitSubtotal) ? explicitSubtotal : 0;
   };
   const getSaleItemsSubtotal = (items = []) =>
     (items || []).reduce((acc, item) => acc + getSaleLineSubtotal(item), 0);
   const getEditedTransactionTotal = (items = [], payment = 'Efectivo') => {
     const subtotal = getSaleItemsSubtotal(items);
     return payment === 'Credito' ? subtotal * 1.1 : subtotal;
+  };
+  const roundSaleCurrency = (value = 0) =>
+    Math.round((Number(value) || 0) * 100) / 100;
+  const buildEditedPaymentLine = (line = {}, amount = 0) => {
+    const method = line.method || line.payment_method || 'Efectivo';
+    return {
+      id: line.id,
+      method,
+      amount: roundSaleCurrency(amount),
+      installments: method === 'Credito' ? Number(line.installments || 1) || 1 : 0,
+      cashReceived: method === 'Efectivo' ? undefined : 0,
+      cashChange: 0,
+    };
+  };
+  const buildEditedTransactionPaymentBreakdown = (tx = {}, baseTotal = 0) => {
+    const safeBaseTotal = roundSaleCurrency(baseTotal);
+    const legacyChargedTotal = getEditedTransactionTotal(tx.items || [], tx.payment);
+    const sourceLines = normalizePaymentBreakdown(
+      tx.paymentBreakdown,
+      tx.payment,
+      tx.installments,
+      tx.cashReceived,
+      tx.cashChange,
+      legacyChargedTotal,
+    );
+    const lineCount = sourceLines.length > 1 ? 2 : 1;
+    const primarySource = sourceLines[0] || { method: tx.payment || 'Efectivo' };
+    const primaryAmount = lineCount > 1
+      ? Math.min(Math.max(roundSaleCurrency(primarySource.amount || 0), 0), safeBaseTotal)
+      : safeBaseTotal;
+
+    const baseLines = lineCount > 1
+      ? [
+          buildEditedPaymentLine(primarySource, primaryAmount),
+          buildEditedPaymentLine(
+            sourceLines[1] || { method: primarySource.method === 'Efectivo' ? 'Debito' : 'Efectivo' },
+            Math.max(roundSaleCurrency(safeBaseTotal - primaryAmount), 0),
+          ),
+        ]
+      : [buildEditedPaymentLine(primarySource, safeBaseTotal)];
+
+    return normalizePaymentBreakdown(
+      baseLines,
+      primarySource.method || tx.payment || 'Efectivo',
+      primarySource.installments || tx.installments || 0,
+      0,
+      0,
+      safeBaseTotal,
+    );
   };
   const getReportStockChangeId = (change = {}) => change.productId || change.product_id || change.id || null;
   const getReportStockChangeQty = (change = {}) =>
@@ -6369,18 +6694,28 @@ export default function PartySupplyApp() {
     setSelectedUserIdForLogin(userId);
     setLoginStep('password');
     setPasswordInput('');
+    setRememberLoginSession(false);
     setLoginError('');
   };
 
-  const finalizeLogin = async (verifiedUser, { offline = false } = {}) => {
-    const nextSession = buildSessionMeta(verifiedUser);
+  const finalizeLogin = async (verifiedUser, { offline = false, rememberSession = false } = {}) => {
+    const nextSession = {
+      ...buildSessionMeta(verifiedUser),
+      rememberedSession: Boolean(rememberSession),
+    };
     setCurrentUser(verifiedUser);
     setCurrentSessionMeta(nextSession);
     setActiveTab(getDefaultTabForUser(verifiedUser));
     setLoginStep('select');
     setSelectedUserIdForLogin(null);
     setPasswordInput('');
+    setRememberLoginSession(false);
     setLoginError('');
+    if (rememberSession) {
+      saveRememberedSession(verifiedUser, nextSession);
+    } else {
+      clearRememberedSession();
+    }
     await writeLogEntry({
       action: 'Sesion Iniciada',
       details: nextSession,
@@ -6471,7 +6806,10 @@ export default function PartySupplyApp() {
         return;
       }
 
-      await finalizeLogin(verifiedUser, { offline: shouldSkipCloudLoginLog });
+      await finalizeLogin(verifiedUser, {
+        offline: shouldSkipCloudLoginLog,
+        rememberSession: rememberLoginSession,
+      });
     } catch (error) {
       console.error('No se pudo iniciar sesión:', error);
       setLoginError(error?.message || 'No se pudo iniciar sesión.');
@@ -6494,7 +6832,8 @@ export default function PartySupplyApp() {
     }
   };
 
-  const handleSaveUserSettings = async (updates) => {
+  const handleSaveUserSettings = async (updates, options = {}) => {
+    const { silent = false, skipReload = false, skipCurrentUserApply = false } = options;
     const role = currentUser?.role;
     if (!role) return;
 
@@ -6528,10 +6867,16 @@ export default function PartySupplyApp() {
         }
 
         nextUser = updatedProfile || nextUser;
-        const refreshedUsers = await loadAppUsers({ force: true });
-        nextUser =
-          refreshedUsers.find((user) => String(user.id) === String(currentUser.id)) ||
-          nextUser;
+        if (skipReload) {
+          setAppUsers((prev) =>
+            prev.map((user) => (String(user.id) === String(currentUser.id) ? { ...user, ...nextUser } : user)),
+          );
+        } else {
+          const refreshedUsers = await loadAppUsers({ force: true });
+          nextUser =
+            refreshedUsers.find((user) => String(user.id) === String(currentUser.id)) ||
+            nextUser;
+        }
       } else {
         const settingsKey = role === 'system' ? 'admin' : 'seller';
         const nextUserSettings = {
@@ -6546,18 +6891,22 @@ export default function PartySupplyApp() {
         setAppUsers(buildLegacyUsers(USERS, nextUserSettings));
       }
 
-      setCurrentUser(nextUser);
-      setCurrentSessionMeta((prev) =>
-        prev
-          ? {
-              ...prev,
-              userId: nextUser.id || prev.userId,
-              userName: nextUser.displayName || nextUser.name,
-              role: nextUser.role,
-              avatar: nextUser.avatar,
-            }
-          : prev,
-      );
+      if (!skipCurrentUserApply) {
+        setCurrentUser(nextUser);
+        setCurrentSessionMeta((prev) =>
+          prev
+            ? {
+                ...prev,
+                userId: nextUser.id || prev.userId,
+                userName: nextUser.displayName || nextUser.name,
+                role: nextUser.role,
+                avatar: nextUser.avatar,
+              }
+            : prev,
+        );
+      }
+
+      if (silent) return nextUser;
 
       await writeLogEntry({
         action: 'Ajustes de Usuario',
@@ -6578,6 +6927,37 @@ export default function PartySupplyApp() {
       console.error('No se pudieron guardar los ajustes del usuario:', error);
       showNotification('error', 'No se pudo guardar', error?.message || 'Falló la actualización del perfil.');
     }
+  };
+
+  const handleToggleCurrentTheme = () => {
+    if (isThemeSaving) return;
+
+    const nextTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    const previousTheme = currentTheme;
+
+    pendingThemeSaveRef.current = nextTheme;
+    setIsThemeSaving(true);
+    setCurrentUser((prev) => (prev ? { ...prev, theme: nextTheme } : prev));
+
+    void handleSaveUserSettings(
+      { theme: nextTheme },
+      { silent: true, skipReload: true, skipCurrentUserApply: true },
+    )
+      .then((savedUser) => {
+        if (pendingThemeSaveRef.current !== nextTheme) return;
+        if (!savedUser) {
+          setCurrentUser((prev) => (prev ? { ...prev, theme: previousTheme } : prev));
+        }
+      })
+      .finally(() => {
+        if (pendingThemeSaveRef.current !== nextTheme) return;
+        pendingThemeSaveRef.current = null;
+        setIsThemeSaving(false);
+      });
+  };
+
+  const handleToggleLoginTheme = () => {
+    setLoginTheme((prevTheme) => (prevTheme === 'dark' ? 'light' : 'dark'));
   };
 
   const handleCreateManagedUser = async (payload) => {
@@ -6792,10 +7172,7 @@ export default function PartySupplyApp() {
       });
     }
 
-    setCurrentSessionMeta(null);
-    setCurrentUser(null);
-    setCart([]);
-    setPosSelectedClient(null);
+    clearAuthenticatedState();
   };
 
   const handleImageUpload = async (file, isEditing = false) => {
@@ -7055,6 +7432,9 @@ export default function PartySupplyApp() {
       .map((member) => ({
         name: member.name || 'Socio',
         number: member.memberNumber || member.member_number || '---',
+        phone: member.phone || member.contact || member.contactNumber || '',
+        email: member.email || '',
+        contact: member.phone || member.email || member.contact || member.contactNumber || '',
         time: formatTimeFullAR(member.createdAt || member.created_at),
       }));
 
@@ -7124,7 +7504,7 @@ export default function PartySupplyApp() {
             date: formatDateAR(closeDate),
             open_time: openTime,
             close_time: closeTime,
-            user_id: actor.userId,
+            user_id: toOptionalDbId(actor.userId),
             user_role: actor.userRole,
             user_name: user,
             type: type,
@@ -7792,7 +8172,7 @@ export default function PartySupplyApp() {
 
       const pointsEarned = Math.floor(total / 500)
       const pointsSpent = cart.reduce((acc, i) => acc + (i.isReward ? i.pointsCost : 0), 0);
-      const clientId = posSelectedClient?.id && posSelectedClient.id !== 'guest' ? posSelectedClient.id : null;
+      const clientId = toOptionalDbId(posSelectedClient?.id);
       const actor = getActorContext();
 
       const salePayload = {
@@ -7803,7 +8183,7 @@ export default function PartySupplyApp() {
         client_id: clientId,
         points_earned: clientId ? pointsEarned : 0,
         points_spent: pointsSpent,
-        user_id: actor.userId,
+        user_id: toOptionalDbId(actor.userId),
         user_role: actor.userRole,
         user_name: actor.userName,
         cash_received: cashReceived,
@@ -8130,6 +8510,9 @@ export default function PartySupplyApp() {
       
       Swal.close();
       showNotification('success', 'Venta Anulada', 'El stock y los puntos han sido restaurados.');
+      if (!transactionsReloaded || !historyReloaded) {
+        showNotification('warning', 'Actualizacion parcial', 'La venta se guardo, pero no se pudo refrescar todo el historial automaticamente.');
+      }
 
     } catch (error) {
       console.error("? ERROR CRÍTICO EN ANULACIÓN:", error);
@@ -8197,7 +8580,7 @@ export default function PartySupplyApp() {
           payment_method: (tx.payment && tx.payment !== 'N/A') ? tx.payment : 'Efectivo',
           payment_breakdown: tx.paymentBreakdown || null,
           installments: tx.installments || 0,
-          client_id: clientId,
+          client_id: toOptionalDbId(clientId),
           points_earned: tx.pointsEarned || 0,
           points_spent: tx.pointsSpent || 0,
           user_name: tx.user || currentUser.name
@@ -8334,7 +8717,13 @@ export default function PartySupplyApp() {
     let updatedItems;
     if (existingItemIndex !== -1) {
       updatedItems = editingTransaction.items.map((i, idx) =>
-        idx === existingItemIndex ? { ...i, qty: (Number(i.qty) || 0) + qtyToAdd } : i
+        idx === existingItemIndex
+          ? {
+              ...clearSaleLineDerivedTotals(i),
+              qty: (Number(i.qty ?? i.quantity ?? 0) || 0) + qtyToAdd,
+              quantity: (Number(i.qty ?? i.quantity ?? 0) || 0) + qtyToAdd,
+            }
+          : i
       );
     } else {
       const maxUniqueId = Math.max(0, ...editingTransaction.items.map((i) => i.uniqueId || 0));
@@ -8373,7 +8762,7 @@ export default function PartySupplyApp() {
     if (isNaN(qty) || qty < 1) return;
     const updatedItems = editingTransaction.items.map((item, idx) => {
       if (idx === itemIndex) {
-        return { ...item, qty: qty };
+        return { ...clearSaleLineDerivedTotals(item), qty, quantity: qty };
       }
       return item;
     });
@@ -8406,14 +8795,7 @@ export default function PartySupplyApp() {
       transactions.find((t) => String(t.id) === String(editingTransaction.id)) ||
       editingTransaction;
     const editedBaseTotal = getEditedTransactionTotal(editingTransaction.items, 'Efectivo');
-    const editedPaymentBreakdown = normalizePaymentBreakdown(
-      editingTransaction.paymentBreakdown,
-      editingTransaction.payment,
-      editingTransaction.installments,
-      editingTransaction.cashReceived,
-      editingTransaction.cashChange,
-      editedBaseTotal,
-    );
+    const editedPaymentBreakdown = buildEditedTransactionPaymentBreakdown(editingTransaction, editedBaseTotal);
     const editedPaymentTotals = getPaymentBreakdownTotals(editedPaymentBreakdown);
     const finalTotal = editedPaymentTotals.baseTotal > 0
       ? editedPaymentTotals.chargedTotal
@@ -8445,13 +8827,18 @@ export default function PartySupplyApp() {
       }
 
       // 2. Normalización absoluta de items
-      const finalItems = editingTransaction.items.map(i => ({
-          ...i,
-          qty: Number(i.qty || i.quantity || 0),
+      const finalItems = editingTransaction.items.map((i) => {
+        const normalizedItem = {
+          ...clearSaleLineDerivedTotals(i),
+          qty: Number(i.qty ?? i.quantity ?? 0),
           price: Number(i.price || 0),
-          subtotal: getSaleLineSubtotal(i),
-          title: i.title || i.product_title || i.name || 'Producto'
-      }));
+          title: i.title || i.product_title || i.name || 'Producto',
+        };
+        return {
+          ...normalizedItem,
+          subtotal: getSaleLineSubtotal(normalizedItem),
+        };
+      });
 
       // [Cálculo de diferencias para stock]
       const previousRequiredStock = buildSaleRequiredStock(originalTx.items || []);
@@ -8514,7 +8901,7 @@ export default function PartySupplyApp() {
           payment_method: editingTransaction.payment,
           payment_breakdown: editedPaymentBreakdown || null,
           installments: editingTransaction.installments || 0,
-          client_id: nextClientId,
+          client_id: toOptionalDbId(nextClientId),
           points_earned: nextPointsEarned,
           points_spent: nextPointsSpent,
           cash_received: safeCashReceived,
@@ -8605,24 +8992,54 @@ export default function PartySupplyApp() {
       
       finalTx.isTest = isTestRecord(finalTx);
       
-      setTransactions((prev) => {
-        const exists = prev.some((t) => String(t.id) === String(editingTransaction.id));
-        return exists
-          ? prev.map((t) => (String(t.id) === String(editingTransaction.id) ? finalTx : t))
-          : [finalTx, ...prev];
+      const currentTransactionsSnapshot = Array.isArray(dataStateRef.current.transactions)
+        ? dataStateRef.current.transactions
+        : [];
+      const nextTransactionsSnapshot = currentTransactionsSnapshot.some((t) => String(t.id) === String(editingTransaction.id))
+        ? currentTransactionsSnapshot.map((t) => (String(t.id) === String(editingTransaction.id) ? finalTx : t))
+        : [finalTx, ...currentTransactionsSnapshot];
+
+      rememberLocalTransactionOverride(finalTx);
+      localDataMutationRef.current.transactions = Date.now();
+      dataStateRef.current = {
+        ...dataStateRef.current,
+        transactions: nextTransactionsSnapshot,
+      };
+      setTransactions(nextTransactionsSnapshot);
+      saveOfflineTransactionsSnapshot({
+        savedAt: new Date().toISOString(),
+        transactions: nextTransactionsSnapshot,
       });
+      setModuleState('transactions', { status: 'loaded', dirty: true, lastLoadedAt: Date.now() });
 
       // G. Log
       const logDetails = {
          transactionId: editingTransaction.id, client: cName, memberNumber: cNum,
+         total: finalTotal,
+         previousTotal: Number(originalTx.total || 0),
+         newTotal: finalTotal,
          payment: editingTransaction.payment,
          paymentBreakdown: editedPaymentBreakdown,
          installments: editingTransaction.installments || 0,
+         pointsEarned: nextPointsEarned,
+         pointsSpent: nextPointsSpent,
          cashReceived: safeCashReceived,
          cashChange: safeCashChange,
          changes, productChanges, stockChanges, itemsSnapshot: finalItems, pointsChange
       };
       addLog('Modificación Pedido', logDetails, editReason || 'Ajuste manual');
+
+      await lastLogWritePromiseRef.current;
+
+      Swal.update?.({
+        title: 'Actualizando historial...',
+        text: 'Sincronizando la venta modificada y el registro de acciones.',
+      });
+
+      const [transactionsReloaded, historyReloaded] = await Promise.all([
+        loadTransactionsCloudData({ force: true }),
+        loadHistoryCloudData({ force: true }),
+      ]);
 
       setEditingTransaction(null);
       setEditReason('');
@@ -8808,29 +9225,35 @@ export default function PartySupplyApp() {
 
     if (isAuthBootLoading || isCloudLoading || isAnyModuleLoading || isReconnectAttempting) {
       return {
-        dotClass: 'bg-amber-500 shadow-[0_0_0_4px_rgba(245,158,11,0.15)]',
-        badgeClass: 'border-amber-200 bg-amber-50 text-amber-700',
+        shellClass: 'border-amber-200 bg-amber-50/90 text-amber-800 shadow-[0_8px_18px_rgba(245,158,11,0.10)]',
+        iconClass: 'text-amber-600',
+        dotClass: 'bg-amber-500 shadow-[0_0_0_3px_rgba(245,158,11,0.16)] animate-pulse',
         title: 'Cargando',
         detail: isReconnectAttempting ? 'Reconectando...' : 'Sincronizando...',
+        icon: 'loading',
       };
     }
 
     if (isOfflineReadOnly) {
       return {
-        dotClass: 'bg-rose-500 shadow-[0_0_0_4px_rgba(244,63,94,0.14)]',
-        badgeClass: 'border-rose-200 bg-rose-50 text-rose-700',
+        shellClass: 'border-rose-200 bg-rose-50/90 text-rose-800 shadow-[0_8px_18px_rgba(244,63,94,0.10)]',
+        iconClass: 'text-rose-600',
+        dotClass: 'bg-rose-500 shadow-[0_0_0_3px_rgba(244,63,94,0.14)]',
         title: 'Sin conexión',
         detail: offlineSnapshotAt
           ? `Snapshot: ${formatDateAR(offlineSnapshotAt)}`
           : 'Datos locales.',
+        icon: 'offline',
       };
     }
 
     return {
-      dotClass: 'bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.15)]',
-      badgeClass: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+      shellClass: 'border-emerald-200 bg-emerald-50/90 text-emerald-800 shadow-[0_8px_18px_rgba(16,185,129,0.10)]',
+      iconClass: 'text-emerald-600',
+      dotClass: 'bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.16)]',
       title: 'Conectada',
       detail: 'Sincronizada',
+      icon: 'online',
     };
   })();
 
@@ -8866,7 +9289,8 @@ export default function PartySupplyApp() {
     if (loginStep === 'password') {
       const user = selectedLoginUser;
       return (
-        <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-6 py-10">
+        <div className="relative flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-6 py-10">
+          <AppVersionBadge />
           <div className="relative w-full max-w-md rounded-[34px] border border-slate-200/80 bg-white/95 p-6 shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur">
             {user?.role === 'system' && (
               <button
@@ -8918,6 +9342,28 @@ export default function PartySupplyApp() {
                 </label>
                 {loginError && <p className="mt-2 text-center text-xs font-semibold text-red-500">{loginError}</p>}
                 <button
+                  type="button"
+                  onClick={() => setRememberLoginSession((prev) => !prev)}
+                  aria-pressed={rememberLoginSession}
+                  className={`mt-4 flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left transition ${
+                    rememberLoginSession
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)]'
+                      : 'border-slate-200 bg-slate-50 text-slate-500 hover:border-slate-300 hover:bg-white'
+                  }`}
+                >
+                  <span>
+                    <span className="block text-xs font-black">Recordar sesion iniciada</span>
+                    <span className="block text-[10px] font-semibold opacity-75">Hasta cerrar la app o cerrar usuario</span>
+                  </span>
+                  <span
+                    className={`flex h-5 w-5 items-center justify-center rounded-full border text-[11px] font-black ${
+                      rememberLoginSession
+                        ? 'border-emerald-500 bg-emerald-500 text-white'
+                        : 'border-slate-300 bg-white text-transparent'
+                    }`}
+                  />
+                </button>
+                <button
                   type="submit"
                   className="mt-4 w-full rounded-2xl bg-slate-900 py-3 text-sm font-black text-white transition-colors hover:bg-slate-800"
                 >
@@ -8931,8 +9377,10 @@ export default function PartySupplyApp() {
     }
 
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-6 py-10">
-        <div className="w-full max-w-5xl rounded-[34px] border border-slate-200/80 bg-white/95 p-8 text-center shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur">
+      <div className="relative flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-6 py-10">
+        <AppVersionBadge />
+        <div className="relative w-full max-w-5xl rounded-[34px] border border-slate-200/80 bg-white/95 p-8 text-center shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur">
+          <LoginThemeToggle theme={loginTheme} onToggle={handleToggleLoginTheme} />
           <div className="mb-5 flex justify-center">
             <button
               type="button"
@@ -8997,7 +9445,15 @@ export default function PartySupplyApp() {
   return (
     <>
       <div data-theme={currentTheme} className="app-shell print:hidden flex h-screen bg-slate-100 font-sans text-slate-900 text-sm overflow-hidden">
-        <Sidebar activeTab={activeTab} setActiveTab={handleMainTabSelect} currentUser={currentUser} onLogout={handleLogout} />
+        <Sidebar
+          activeTab={activeTab}
+          setActiveTab={handleMainTabSelect}
+          currentUser={currentUser}
+          currentTheme={currentTheme}
+          isThemeSaving={isThemeSaving}
+          onToggleTheme={handleToggleCurrentTheme}
+          onLogout={handleLogout}
+        />
         <div className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden">
           
           {isTestActive && (
@@ -9007,18 +9463,24 @@ export default function PartySupplyApp() {
             </div>
           )}
 
-          <header className="relative z-10 flex h-12 shrink-0 items-center justify-between gap-4 border-b bg-white px-5 shadow-sm">
+          <header className="relative z-10 flex h-14 shrink-0 items-center justify-between gap-4 border-b bg-white px-5 shadow-sm">
             <div className="flex min-w-0 items-center gap-3">
               <div className="pl-1">
                 <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
                   {activeTabTitles[activeTab] || activeTab}
                 </h2>
-                <div className="-mt-2 flex items-center gap-2 text-[12px] font-bold text-slate-500">
-                  <div className="flex items-center gap-1">
-                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${cloudStatusMeta.dotClass}`} />
-                    <span className={`inline-flex items-center rounded-full border px-1 py-0 text-[7px] font-bold uppercase tracking-[0.08em] ${cloudStatusMeta.badgeClass}`}>
-                      {cloudStatusMeta.title}
-                    </span>
+                <div className="mt-0.5 flex items-center gap-2 text-[12px] font-bold text-slate-500">
+                  <div
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] backdrop-blur ${cloudStatusMeta.shellClass}`}
+                    title={`${cloudStatusMeta.title} - ${cloudStatusMeta.detail}`}
+                  >
+                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${cloudStatusMeta.dotClass}`} />
+                    {cloudStatusMeta.icon === 'offline' ? (
+                      <WifiOff size={12} className={cloudStatusMeta.iconClass} />
+                    ) : (
+                      <Database size={12} className={cloudStatusMeta.iconClass} />
+                    )}
+                    <span className="truncate">{cloudStatusMeta.title}</span>
                   </div>
                   <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>
                 </div>

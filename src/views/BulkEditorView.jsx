@@ -451,7 +451,7 @@ export default function BulkEditorView({
   };
 
   return (
-    <div className="flex flex-col h-full gap-3 overflow-hidden">
+    <div className="bulk-editor-view flex flex-col h-full gap-3 overflow-hidden">
       
       <style>{`
         .no-spinners::-webkit-outer-spin-button,

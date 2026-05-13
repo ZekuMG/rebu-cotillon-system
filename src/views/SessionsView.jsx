@@ -367,7 +367,7 @@ export default function SessionsView({
 
   if (error && filteredSessions.length === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center rounded-[28px] border border-rose-200 bg-white px-6 text-center shadow-sm">
+      <div className="sessions-view flex h-full flex-col items-center justify-center rounded-[28px] border border-rose-200 bg-white px-6 text-center shadow-sm">
         <AlertTriangle size={32} className="text-rose-500" />
         <p className="mt-3 text-sm font-black uppercase tracking-[0.18em] text-rose-500">
           Error cargando sesiones
@@ -389,7 +389,7 @@ export default function SessionsView({
 
   return (
     <div
-      className="h-full overflow-y-auto rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(248,250,252,0.98)_100%)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_18px_36px_rgba(15,23,42,0.06)]"
+      className="sessions-view h-full overflow-y-auto rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.95)_0%,rgba(248,250,252,0.98)_100%)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_18px_36px_rgba(15,23,42,0.06)]"
       onScroll={handleScroll}
     >
       <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
@@ -427,7 +427,7 @@ export default function SessionsView({
               type="date"
               value={dayFilter}
               onChange={(event) => setDayFilter(event.target.value)}
-              className="w-[132px] bg-transparent text-[13px] font-bold text-slate-700 outline-none [color-scheme:light]"
+              className="w-[132px] bg-transparent text-[13px] font-bold text-slate-700 outline-none"
             />
           </label>
 

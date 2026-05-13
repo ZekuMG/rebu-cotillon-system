@@ -229,18 +229,25 @@ export const DailyReportModal = ({ isOpen, onClose, report }) => {
                             <th className="py-3 px-4 font-bold">Hora</th>
                             <th className="py-3 px-4 font-bold">N° Socio</th>
                             <th className="py-3 px-4 font-bold">Nombre</th>
-                            <th className="py-3 px-4 font-bold">Contacto (Email)</th>
+                            <th className="py-3 px-4 font-bold">Numero</th>
+                            <th className="py-3 px-4 font-bold">Contacto</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {visibleNewClients.map((client, idx) => (
-                            <tr key={idx} className="hover:bg-slate-50">
-                              <td className="py-3 px-4 font-mono text-slate-500">{client.time}</td>
-                              <td className="py-3 px-4 font-bold text-slate-700">#{String(client.number).padStart(4, '0')}</td>
-                              <td className="py-3 px-4 font-medium text-slate-800">{client.name}</td>
-                              <td className="py-3 px-4 text-slate-600">{client.email}</td>
-                            </tr>
-                          ))}
+                          {visibleNewClients.map((client, idx) => {
+                            const phone = client.phone || client.phoneNumber || client.contactNumber || '';
+                            const contact = client.email || client.contact || phone || 'Sin datos';
+
+                            return (
+                              <tr key={idx} className="hover:bg-slate-50">
+                                <td className="py-3 px-4 font-mono text-slate-500">{client.time}</td>
+                                <td className="py-3 px-4 font-bold text-slate-700">#{String(client.number).padStart(4, '0')}</td>
+                                <td className="py-3 px-4 font-medium text-slate-800">{client.name}</td>
+                                <td className="py-3 px-4 text-slate-700">{phone || 'Sin numero'}</td>
+                                <td className="py-3 px-4 text-slate-600">{contact}</td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                     </table>
                 </div>

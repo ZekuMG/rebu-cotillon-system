@@ -299,6 +299,27 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm, inventory = [] }) => {
 
           <div className="grid grid-cols-3 gap-3">
             <div>
+              <label className="mb-1 flex items-center gap-1 text-xs font-bold uppercase text-slate-500">
+                <span>{type === 'quantity' ? 'Costo Unit. ($)' : 'Costo x Kg ($)'} *</span>
+                <HintIcon
+                  size={13}
+                  side="center-left"
+                  hint="Costo de compra o referencia.
+No lo ve el cliente; sirve para calcular margen y costo estimado."
+                />
+              </label>
+              <input 
+                type="number" 
+                min="0" 
+                step="1" 
+                required
+                placeholder="0" 
+                className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-bold text-slate-800" 
+                value={cost} 
+                onChange={(e) => setCost(e.target.value)} 
+              />
+            </div>
+            <div>
               <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
                 {type === 'quantity' ? 'Precio Unit. ($)' : 'Precio x Kg ($)'} *
               </label>
@@ -311,21 +332,6 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm, inventory = [] }) => {
                 className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-bold text-slate-800" 
                 value={price} 
                 onChange={(e) => setPrice(e.target.value)} 
-              />
-            </div>
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
-                {type === 'quantity' ? 'Costo Unit. ($)' : 'Costo x Kg ($)'} *
-              </label>
-              <input 
-                type="number" 
-                min="0" 
-                step="1" 
-                required
-                placeholder="0" 
-                className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-bold text-slate-800" 
-                value={cost} 
-                onChange={(e) => setCost(e.target.value)} 
               />
             </div>
             <div>

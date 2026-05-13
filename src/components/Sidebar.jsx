@@ -9,11 +9,13 @@ import {
   LayoutDashboard,
   LogOut,
   Monitor,
+  Moon,
   Package,
   Percent,
   Settings2,
   ShoppingCart,
   SlidersHorizontal,
+  Sun,
   Users,
 } from 'lucide-react';
 import {
@@ -60,10 +62,19 @@ const SidebarButton = ({ onClick, isActive, icon: Icon, label, accentColor = '#c
   );
 };
 
-export default function Sidebar({ activeTab, setActiveTab, currentUser, onLogout }) {
+export default function Sidebar({
+  activeTab,
+  setActiveTab,
+  currentUser,
+  currentTheme = 'light',
+  isThemeSaving = false,
+  onToggleTheme,
+  onLogout,
+}) {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const menuRef = useRef(null);
   const currentUserPresentation = resolveUserPresentation(currentUser);
+  const isDarkTheme = currentTheme === 'dark';
   const canUseAdminArea = hasOwnerAccess(currentUser);
   const canViewDashboard = canAccessTab(currentUser, 'dashboard');
   const canViewInventory = canAccessTab(currentUser, 'inventory');
@@ -156,7 +167,30 @@ export default function Sidebar({ activeTab, setActiveTab, currentUser, onLogout
 
         {showUserMenu && (
           <div className="absolute bottom-0 left-12 min-[1920px]:left-14 z-50 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
-            <div className="border-b border-slate-100 bg-slate-50 px-3 py-2">
+            <div className="relative border-b border-slate-100 bg-slate-50 px-3 py-2 pr-16">
+              <button
+                type="button"
+                onClick={onToggleTheme}
+                disabled={isThemeSaving}
+                aria-label={isDarkTheme ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}
+                aria-pressed={isDarkTheme}
+                aria-busy={isThemeSaving}
+                title={isThemeSaving ? 'Guardando tema...' : isDarkTheme ? 'Tema oscuro' : 'Tema claro'}
+                className={`absolute right-3 top-2 h-7 w-12 rounded-full border p-0.5 transition-colors ${
+                  isDarkTheme
+                    ? 'border-slate-700 bg-slate-950'
+                    : 'border-slate-200 bg-slate-200'
+                } ${isThemeSaving ? 'cursor-wait opacity-70' : 'hover:brightness-105'}`}
+              >
+                <span
+                  className={`flex h-5 w-5 items-center justify-center rounded-full shadow-sm transition-transform ${
+                    isDarkTheme ? 'translate-x-5 text-amber-200' : 'translate-x-0 text-amber-500'
+                  }`}
+                  style={{ backgroundColor: isDarkTheme ? '#1e293b' : '#ffffff' }}
+                >
+                  {isDarkTheme ? <Moon size={12} /> : <Sun size={12} />}
+                </span>
+              </button>
               <p className="text-xs font-bold text-slate-700">Menú de usuario</p>
               <div className="mt-1 flex items-center gap-2">
                 <UserAvatar

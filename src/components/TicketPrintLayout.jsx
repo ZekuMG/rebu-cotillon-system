@@ -168,7 +168,8 @@ export const TicketPrintLayout = ({ transaction }) => {
   lines.push(center('Gracias por tu'));
   lines.push(center('compra!'));
   lines.push(center('Volve pronto :D'));
-  lines.push('\n\n.');
+  lines.push('');
+  lines.push('');
 
   return (
     <div id="printable-area">

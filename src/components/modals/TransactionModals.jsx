@@ -87,13 +87,20 @@ export const EditTransactionModal = ({
   if (!transaction) return null;
 
   // ── LÓGICA LOCAL DEL MODAL (Evita errores del padre) ──
+  const clearDerivedLineTotals = (item = {}) => {
+    const { subtotal, lineSubtotal, line_subtotal, lineTotal, line_total, ...rest } = item;
+    return rest;
+  };
+
   const getLineSubtotal = (item = {}) => {
-    const explicitSubtotal = Number(item.subtotal ?? item.lineSubtotal ?? item.line_subtotal);
-    if (Number.isFinite(explicitSubtotal) && explicitSubtotal !== 0) return explicitSubtotal;
     const price = Number(item.price || 0);
-    const qty = Number(item.qty || item.quantity || 0);
-    if (item.product_type !== 'weight') return price * qty;
-    return price >= 100 ? price * (qty / 1000) : price * qty;
+    const qty = Number(item.qty ?? item.quantity ?? 0);
+    if (Number.isFinite(price) && Number.isFinite(qty) && qty !== 0) {
+      if ((item.product_type || 'quantity') !== 'weight') return price * qty;
+      return price >= 100 ? price * (qty / 1000) : price * qty;
+    }
+    const explicitSubtotal = Number(item.subtotal ?? item.lineSubtotal ?? item.line_subtotal);
+    return Number.isFinite(explicitSubtotal) ? explicitSubtotal : 0;
   };
 
   const getItemsSubtotal = (items = []) =>
@@ -187,7 +194,13 @@ export const EditTransactionModal = ({
     const existingIdx = newItems.findIndex(i => (i.id || i.productId) === product.id);
     
     if (existingIdx >= 0) {
-      newItems[existingIdx].qty = Number(newItems[existingIdx].qty) + 1;
+      const currentItem = clearDerivedLineTotals(newItems[existingIdx]);
+      const currentQty = Number(currentItem.qty ?? currentItem.quantity ?? 0) || 0;
+      newItems[existingIdx] = {
+        ...currentItem,
+        qty: currentQty + 1,
+        quantity: currentQty + 1,
+      };
     } else {
       newItems.push({
         id: product.id,
@@ -205,7 +218,9 @@ export const EditTransactionModal = ({
   const handleUpdateItem = (index, field, value) => {
     const newItems = [...transaction.items];
     const numValue = value === '' ? '' : Number(value);
-    newItems[index] = { ...newItems[index], [field]: numValue };
+    const nextItem = { ...clearDerivedLineTotals(newItems[index]), [field]: numValue };
+    if (field === 'qty') nextItem.quantity = numValue;
+    newItems[index] = nextItem;
     applyTransactionState(transaction, newItems);
   };
 

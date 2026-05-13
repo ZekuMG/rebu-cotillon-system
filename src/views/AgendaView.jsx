@@ -412,7 +412,7 @@ export default function AgendaView({
   };
 
   return (
-    <div className="relative flex h-full min-h-0 gap-4">
+    <div className="agenda-view relative flex h-full min-h-0 gap-4">
       <section className="flex min-h-0 flex-1 flex-col rounded-[28px] border border-slate-200 bg-white/90 shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
         <div className="border-b border-slate-200 px-4 py-3">
           <div className="flex flex-wrap items-start justify-between gap-3">

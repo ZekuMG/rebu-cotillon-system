@@ -473,7 +473,7 @@ export default function LogsView({
 
   if (hasRemoteLoadError) {
     return (
-      <div className="flex h-full flex-col items-center justify-center rounded-xl border border-rose-200 bg-white px-6 text-center shadow-sm">
+      <div className="logs-view flex h-full flex-col items-center justify-center rounded-xl border border-rose-200 bg-white px-6 text-center shadow-sm">
         <AlertTriangle size={32} className="text-rose-500" />
         <p className="mt-3 text-sm font-black uppercase tracking-[0.18em] text-rose-500">
           Error cargando logs
@@ -495,7 +495,7 @@ export default function LogsView({
 
   if (showRemoteLoadingState) {
     return (
-      <div className="flex h-full flex-col items-center justify-center rounded-xl border border-slate-200 bg-white px-6 text-center shadow-sm">
+      <div className="logs-view flex h-full flex-col items-center justify-center rounded-xl border border-slate-200 bg-white px-6 text-center shadow-sm">
         <RefreshCw size={32} className="animate-spin text-fuchsia-500" />
         <p className="mt-3 text-sm font-black uppercase tracking-[0.18em] text-slate-500">
           Cargando registro...
@@ -508,7 +508,7 @@ export default function LogsView({
   }
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden h-full flex flex-col">
+    <div className="logs-view bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden h-full flex flex-col">
       <LogsControls
         totalLogs={visibleLogs.length}
         uniqueActions={uniqueActions}

@@ -79,6 +79,36 @@ const getTransactionSortDate = (tx) => {
   return parseHistoryDateTime(tx?.date, tx?.timestamp || tx?.time) || normalizeDate(tx?.date) || null;
 };
 
+const getLogSortDate = (log) => {
+  const createdAtDate = log?.createdAt || log?.created_at ? new Date(log.createdAt || log.created_at) : null;
+  if (createdAtDate && !Number.isNaN(createdAtDate.getTime())) return createdAtDate;
+  return parseHistoryDateTime(log?.date, log?.timestamp || log?.time) || normalizeDate(log?.date) || null;
+};
+
+const normalizeHistoryAction = (value = '') =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+const isSaleModificationLog = (log = {}) => {
+  const action = normalizeHistoryAction(log.action);
+  return action === 'venta modificada' || (action.includes('modificaci') && action.includes('pedido'));
+};
+
+const getSaleLogTransactionId = (log = {}) =>
+  log.details?.transactionId || log.details?.id || log.details?.oldTransactionId || null;
+
+const getFirstFiniteNumber = (...values) => {
+  for (const value of values) {
+    if (value === undefined || value === null || value === '') continue;
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) return numericValue;
+  }
+  return 0;
+};
+
 const getVoidedSaleOriginalSortDate = (voidLog, creationLog) => {
   const originalCreatedAt = voidLog?.details?.originalCreatedAt || voidLog?.details?.createdAt || null;
   if (originalCreatedAt) {
@@ -447,6 +477,22 @@ export default function HistoryView({
     return Array.from(byId.values());
   }, [dailyLogs, remoteHistoryLogs]);
 
+  const latestSaleModificationLogsById = useMemo(() => {
+    const byId = new Map();
+    (combinedHistoryLogs || []).forEach((log) => {
+      if (!isSaleModificationLog(log) || !log.details) return;
+      const txId = getSaleLogTransactionId(log);
+      if (!txId) return;
+
+      const sortDate = getLogSortDate(log) || new Date(0);
+      const currentEntry = byId.get(String(txId));
+      if (!currentEntry || sortDate.getTime() >= currentEntry.sortDate.getTime()) {
+        byId.set(String(txId), { log, sortDate });
+      }
+    });
+    return byId;
+  }, [combinedHistoryLogs]);
+
   const logVoidedTransactionIds = useMemo(() => {
     const ids = new Set();
     (combinedHistoryLogs || []).forEach((log) => {
@@ -543,7 +589,30 @@ export default function HistoryView({
 
         const logDate = normalizeDate(log.date);
         if (logDate) {
-            const safeTotal = Number(log.details.total) || getVentaTotal(log.details) || 0;
+            const modificationEntry = latestSaleModificationLogsById.get(txId);
+            const modificationDetails = modificationEntry?.log?.details || null;
+            const resolvedDetails = modificationDetails || log.details;
+            const safeTotal = getFirstFiniteNumber(
+              resolvedDetails?.newTotal,
+              resolvedDetails?.total,
+              resolvedDetails?.changes?.total?.new,
+              getVentaTotal(resolvedDetails),
+              log.details.total,
+              getVentaTotal(log.details),
+            );
+            const resolvedItems =
+              resolvedDetails?.itemsSnapshot ||
+              resolvedDetails?.items ||
+              log.details.items ||
+              [];
+            const resolvedCashReceived = getFirstFiniteNumber(
+              resolvedDetails?.cashReceived,
+              log.details?.cashReceived,
+            );
+            const resolvedCashChange = getFirstFiniteNumber(
+              resolvedDetails?.cashChange,
+              log.details?.cashChange,
+            );
 
             txList.push({
                 id: txId,
@@ -553,35 +622,93 @@ export default function HistoryView({
                 user: log.user,
                 userId: log.userId || null,
                 userRole: log.userRole || null,
-                items: log.details.items || [],
-                payment: log.details.payment || 'N/A',
+                items: resolvedItems,
+                payment: resolvedDetails.payment || log.details.payment || 'N/A',
                 paymentBreakdown: normalizePaymentBreakdown(
-                  log.details?.paymentBreakdown,
-                  log.details?.payment,
-                  log.details?.installments,
-                  log.details?.cashReceived,
-                  log.details?.cashChange,
+                  resolvedDetails?.paymentBreakdown || log.details?.paymentBreakdown,
+                  resolvedDetails?.payment || log.details?.payment,
+                  resolvedDetails?.installments ?? log.details?.installments,
+                  resolvedCashReceived,
+                  resolvedCashChange,
                   safeTotal,
                 ),
-                cashReceived: Number(log.details?.cashReceived || 0),
-                cashChange: Number(log.details?.cashChange || 0),
-                installments: log.details.installments || 0,
+                cashReceived: resolvedCashReceived,
+                cashChange: resolvedCashChange,
+                installments: resolvedDetails.installments ?? log.details.installments ?? 0,
                 total: safeTotal,
-                client: log.details.client || log.details.memberName || null,
-                memberNumber: log.details.client?.memberNumber || log.details.memberNumber || null,
+                client: resolvedDetails.client || resolvedDetails.memberName || log.details.client || log.details.memberName || null,
+                memberNumber: resolvedDetails.client?.memberNumber || resolvedDetails.memberNumber || log.details.client?.memberNumber || log.details.memberNumber || null,
                 
                 //  FIX: AHORA S? RESCATAMOS LOS PUNTOS DEL FANTASMA
-                pointsEarned: log.details.pointsEarned || 0,
-                pointsSpent: log.details.pointsSpent || 0,
+                pointsEarned: resolvedDetails.pointsEarned ?? log.details.pointsEarned ?? 0,
+                pointsSpent: resolvedDetails.pointsSpent ?? log.details.pointsSpent ?? 0,
                 
                 status: voidedIds.has(txId) ? 'voided' : 'completed',
                 isHistoric: true,
                 sortDate: logDate, 
                 isTest: log.isTest,
-                isRestored: false // Generalmente los anulados hist?ricos no est?n restaurados
+                isRestored: false, // Generalmente los anulados hist?ricos no est?n restaurados
+                isModified: Boolean(modificationEntry),
+                modifiedAt: modificationEntry?.log
+                  ? `${modificationEntry.log.date || ''}${modificationEntry.log.timestamp ? ` ${modificationEntry.log.timestamp}` : ''}`.trim()
+                  : null,
+                modificationDetails,
+                modificationLogId: modificationEntry?.log?.id || null,
             });
         }
       }
+    });
+    latestSaleModificationLogsById.forEach((entry, txId) => {
+      const { log, sortDate } = entry;
+      const details = log.details || {};
+      if (activeIds.has(txId) || permanentlyDeletedIds.has(txId) || restoredSourceIds.has(txId)) return;
+      if (txList.some((tx) => String(tx.id) === String(txId))) return;
+
+      const safeTotal = getFirstFiniteNumber(
+        details.newTotal,
+        details.total,
+        details.changes?.total?.new,
+        getVentaTotal(details),
+      );
+      const resolvedCashReceived = getFirstFiniteNumber(details.cashReceived);
+      const resolvedCashChange = getFirstFiniteNumber(details.cashChange);
+
+      txList.push({
+        id: txId,
+        date: details.date || log.date,
+        timestamp: details.timestamp || log.timestamp,
+        fullDate: `${details.date || log.date}, ${details.timestamp || log.timestamp || '00:00'}:00`,
+        user: log.user,
+        userId: log.userId || details.userId || null,
+        userRole: log.userRole || details.userRole || null,
+        items: details.itemsSnapshot || details.items || [],
+        payment: details.payment || 'N/A',
+        paymentBreakdown: normalizePaymentBreakdown(
+          details.paymentBreakdown,
+          details.payment,
+          details.installments,
+          resolvedCashReceived,
+          resolvedCashChange,
+          safeTotal,
+        ),
+        cashReceived: resolvedCashReceived,
+        cashChange: resolvedCashChange,
+        installments: details.installments || 0,
+        total: safeTotal,
+        client: details.client || details.memberName || null,
+        memberNumber: details.client?.memberNumber || details.memberNumber || null,
+        pointsEarned: details.pointsEarned || 0,
+        pointsSpent: details.pointsSpent || 0,
+        status: voidedIds.has(txId) ? 'voided' : 'completed',
+        isHistoric: true,
+        sortDate,
+        isTest: log.isTest,
+        isRestored: false,
+        isModified: true,
+        modifiedAt: `${log.date || ''}${log.timestamp ? ` ${log.timestamp}` : ''}`.trim(),
+        modificationDetails: details,
+        modificationLogId: log.id || null,
+      });
     });
     (combinedHistoryLogs || []).forEach((log) => {
       if (log.action !== 'Venta Anulada' || !log.details) return;
@@ -636,7 +763,7 @@ export default function HistoryView({
     });
 
     return txList;
-  }, [combinedHistoryLogs, remoteTransactions, transactions]);
+  }, [combinedHistoryLogs, latestSaleModificationLogsById, remoteTransactions, transactions]);
 
   // =====================================================
   // TRANSACCIONES ACTIVAS
@@ -649,26 +776,43 @@ export default function HistoryView({
       const creationLog = (combinedHistoryLogs || []).find(log => 
         (log.action === 'Venta Realizada' && String(log.details?.transactionId) === String(tx.id))
       );
+      const modificationEntry = latestSaleModificationLogsById.get(String(tx.id));
+      const modificationDetails = modificationEntry?.log?.details || null;
       
       if (!resolvedUser || resolvedUser === 'Desconocido') {
           if (creationLog) resolvedUser = creationLog.user;
       }
 
-      if (creationLog?.details?.items?.length) {
+      if (modificationDetails?.itemsSnapshot?.length) {
+        resolvedItems = modificationDetails.itemsSnapshot;
+      } else if ((!resolvedItems || resolvedItems.length === 0) && creationLog?.details?.items?.length) {
         resolvedItems = creationLog.details.items;
       }
 
-      const resolvedCashReceived =
-        Number(tx.cashReceived || 0) || Number(creationLog?.details?.cashReceived || 0);
-      const resolvedCashChange =
-        Number(tx.cashChange || 0) || Number(creationLog?.details?.cashChange || 0);
+      const resolvedTotal = getFirstFiniteNumber(
+        modificationDetails?.newTotal,
+        modificationDetails?.total,
+        modificationDetails?.changes?.total?.new,
+        tx.total,
+        creationLog?.details?.total,
+      );
+      const resolvedCashReceived = getFirstFiniteNumber(
+        modificationDetails?.cashReceived,
+        tx.cashReceived,
+        creationLog?.details?.cashReceived,
+      );
+      const resolvedCashChange = getFirstFiniteNumber(
+        modificationDetails?.cashChange,
+        tx.cashChange,
+        creationLog?.details?.cashChange,
+      );
       const resolvedPaymentBreakdown = normalizePaymentBreakdown(
-        tx.paymentBreakdown || creationLog?.details?.paymentBreakdown,
-        tx.payment,
-        tx.installments,
+        modificationDetails?.paymentBreakdown || tx.paymentBreakdown || creationLog?.details?.paymentBreakdown,
+        modificationDetails?.payment || tx.payment,
+        modificationDetails?.installments ?? tx.installments,
         resolvedCashReceived,
         resolvedCashChange,
-        tx.total,
+        resolvedTotal,
       );
 
       return {
@@ -676,15 +820,27 @@ export default function HistoryView({
         status: logVoidedTransactionIds.has(String(tx.id)) ? 'voided' : (tx.status || 'completed'),
         user: resolvedUser || 'Desconocido',
         items: resolvedItems,
+        total: resolvedTotal,
         paymentBreakdown: resolvedPaymentBreakdown,
-        payment: getPaymentSummary(resolvedPaymentBreakdown, tx.payment, tx.installments),
+        payment: getPaymentSummary(resolvedPaymentBreakdown, modificationDetails?.payment || tx.payment, modificationDetails?.installments ?? tx.installments),
         cashReceived: resolvedCashReceived,
         cashChange: resolvedCashChange,
+        installments: modificationDetails?.installments ?? tx.installments,
+        pointsEarned: modificationDetails?.pointsEarned ?? tx.pointsEarned,
+        pointsSpent: modificationDetails?.pointsSpent ?? tx.pointsSpent,
+        client: modificationDetails?.client || tx.client,
+        memberNumber: modificationDetails?.memberNumber || tx.memberNumber,
+        isModified: Boolean(modificationEntry),
+        modifiedAt: modificationEntry?.log
+          ? `${modificationEntry.log.date || ''}${modificationEntry.log.timestamp ? ` ${modificationEntry.log.timestamp}` : ''}`.trim()
+          : null,
+        modificationDetails,
+        modificationLogId: modificationEntry?.log?.id || null,
         isHistoric: false,
         sortDate: getTransactionSortDate(tx) || logDate || new Date(), 
       };
     });
-  }, [transactions, combinedHistoryLogs, logVoidedTransactionIds]);
+  }, [transactions, combinedHistoryLogs, latestSaleModificationLogsById, logVoidedTransactionIds]);
 
   const activeTransactions = useMemo(() => {
     const withVoidedStatus = (records = []) =>
@@ -1235,6 +1391,11 @@ export default function HistoryView({
                             Eliminado
                           </span>
                         )}
+                        {!isVoided && !isDeleted && tx.isModified && (
+                          <span className="shrink-0 rounded border border-amber-200 bg-amber-100 px-1.5 py-[1px] text-[8px] font-black uppercase tracking-wider text-amber-700">
+                            Modificada
+                          </span>
+                        )}
                         {!isVoided && !isDeleted && isRestored && (
                           <span className="shrink-0 rounded border border-emerald-200 bg-emerald-100 px-1.5 py-[1px] text-[8px] font-black uppercase tracking-wider text-emerald-600">
                             {restoredAt ? `Restaurado \u00B7 ${restoredAt}` : 'Restaurado'}
@@ -1244,6 +1405,11 @@ export default function HistoryView({
                       <span className="mt-0.5 block truncate font-medium text-slate-400">
                         {formatDisplayDate(tx.date)} {(tx.time || tx.timestamp) && ` ${tx.time || tx.timestamp}`}
                       </span>
+                      {tx.isModified && tx.modifiedAt && (
+                        <span className="mt-0.5 block truncate font-bold text-amber-600">
+                          Modificada {tx.modifiedAt}
+                        </span>
+                      )}
                     </div>
                   </td>
                   
