@@ -80,7 +80,13 @@ const makeRange = (filters = {}) => {
   }
 
   if (filters.preset === 'today') return { start: todayStart, end: todayEnd, label: 'Hoy' };
+  if (filters.preset === 'yesterday') {
+    const yesterday = new Date(todayStart.getTime() - DAY_MS);
+    return { start: startOfDay(yesterday), end: endOfDay(yesterday), label: 'Ayer' };
+  }
+  if (filters.preset === '3d') return { start: startOfDay(new Date(todayStart.getTime() - 2 * DAY_MS)), end: todayEnd, label: 'Últimos 3 días' };
   if (filters.preset === '7d') return { start: startOfDay(new Date(todayStart.getTime() - 6 * DAY_MS)), end: todayEnd, label: 'Últimos 7 días' };
+  if (filters.preset === '14d') return { start: startOfDay(new Date(todayStart.getTime() - 13 * DAY_MS)), end: todayEnd, label: 'Últimas 2 semanas' };
   if (filters.preset === '90d') return { start: startOfDay(new Date(todayStart.getTime() - 89 * DAY_MS)), end: todayEnd, label: 'Últimos 90 días' };
   if (filters.preset === 'year') return { start: new Date(now.getFullYear(), 0, 1), end: todayEnd, label: 'Año actual' };
 
@@ -404,7 +410,7 @@ const filterRecordsByDate = (records, range, filters) =>
     });
 
 const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, range, filters, lookups }) => {
-  const isTodayRange = filters.preset === 'today';
+  const isHourlyRange = ['today', 'yesterday', '3d'].includes(filters.preset);
   const salesDataset = buildSalesDataset({ transactions, expenses, range, filters, lookups });
   const filteredTransactions = salesDataset.filteredTransactions;
   const filteredExpenses = salesDataset.filteredExpenses;
@@ -433,9 +439,9 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
     revenue += txRevenue;
     cost += txCost;
 
-    const periodKey = isTodayRange ? getHourKey(tx.metricDate) : formatDateKey(tx.metricDate);
-    const periodLabel = isTodayRange ? getHourLabel(tx.metricDate) : formatShortDate(tx.metricDate);
-    addToMap(periodMap, periodKey, { label: periodLabel, revenue: 0, profit: 0, expenses: 0, salesCount: 0 }, (current) => ({
+    const periodKey = isHourlyRange ? getHourKey(tx.metricDate) : formatDateKey(tx.metricDate);
+    const periodLabel = isHourlyRange ? getHourLabel(tx.metricDate) : formatShortDate(tx.metricDate);
+    addToMap(periodMap, periodKey, { label: periodLabel, revenue: 0, profit: 0, expenses: 0, expenseCount: 0, salesCount: 0 }, (current) => ({
       revenue: current.revenue + txRevenue,
       profit: current.profit + txProfit,
       salesCount: current.salesCount + 1,
@@ -526,10 +532,11 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
 
   const totalExpenses = filteredExpenses.reduce((sum, expense) => sum + toNumber(expense.amount), 0);
   filteredExpenses.forEach((expense) => {
-    const periodKey = isTodayRange ? getHourKey(expense.metricDate) : formatDateKey(expense.metricDate);
-    const periodLabel = isTodayRange ? getHourLabel(expense.metricDate) : formatShortDate(expense.metricDate);
-    addToMap(periodMap, periodKey, { label: periodLabel, revenue: 0, profit: 0, expenses: 0, salesCount: 0 }, (current) => ({
+    const periodKey = isHourlyRange ? getHourKey(expense.metricDate) : formatDateKey(expense.metricDate);
+    const periodLabel = isHourlyRange ? getHourLabel(expense.metricDate) : formatShortDate(expense.metricDate);
+    addToMap(periodMap, periodKey, { label: periodLabel, revenue: 0, profit: 0, expenses: 0, expenseCount: 0, salesCount: 0 }, (current) => ({
       expenses: current.expenses + toNumber(expense.amount),
+      expenseCount: current.expenseCount + 1,
       profit: current.profit - toNumber(expense.amount),
     }));
   });
@@ -557,9 +564,9 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
     filteredClosures,
     dailySeries: periodSeries,
     periodSeries,
-    periodMode: isTodayRange ? 'hour' : 'day',
-    periodLabel: isTodayRange ? 'horario' : 'día',
-    periodLabelPlural: isTodayRange ? 'horarios' : 'días',
+    periodMode: isHourlyRange ? 'hour' : 'day',
+    periodLabel: isHourlyRange ? 'horario' : 'día',
+    periodLabelPlural: isHourlyRange ? 'horarios' : 'días',
     productStats: sortBy([...productMap.values()].map((item) => ({
       ...item,
       total: item.revenue + item.profit,
@@ -812,6 +819,7 @@ export default function useMetricsData({
         profit: calculateChange(current.stats.profit, previous.stats.profit),
         salesCount: calculateChange(current.stats.salesCount, previous.stats.salesCount),
         averageTicket: calculateChange(current.stats.averageTicket, previous.stats.averageTicket),
+        expenses: calculateChange(current.stats.expenses, previous.stats.expenses),
       },
     };
   }, [transactions, dailyLogs, expenses, pastClosures, inventory, members, budgets, orders, filters]);

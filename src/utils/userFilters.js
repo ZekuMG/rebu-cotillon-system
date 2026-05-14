@@ -2,19 +2,42 @@ import { APP_USER_ROLE_META, normalizeAppUserRole, normalizeUserText } from './a
 import { resolveUserPresentation } from './userPresentation';
 
 const SYSTEM_ALIASES = ['system', 'sistema', 'admin'];
-const LEGACY_HUMAN_CAJA_ALIASES = [
-  'caja',
-  'vendedor',
-  'seller',
-  'dueno',
-  'dueño',
-  'due?o',
-  'owner',
+const LEGACY_USER_OPTIONS = [
+  {
+    key: 'legacy_user:dueno',
+    bucket: 'legacy_user',
+    role: 'owner',
+    displayName: 'Due\u00f1o',
+    color: APP_USER_ROLE_META.owner.color,
+    aliases: ['dueno', 'duenio', 'due\u00f1o', 'owner'],
+    remoteAliases: ['Due\u00f1o', 'Dueno', 'Duenio', 'owner'],
+  },
+  {
+    key: 'legacy_user:vendedor',
+    bucket: 'legacy_user',
+    role: 'seller',
+    displayName: 'Vendedor',
+    color: APP_USER_ROLE_META.seller.color,
+    aliases: ['vendedor', 'seller'],
+    remoteAliases: ['Vendedor', 'seller'],
+  },
+  {
+    key: 'legacy_user:caja',
+    bucket: 'legacy_user',
+    role: 'seller',
+    displayName: 'Caja',
+    color: APP_USER_ROLE_META.seller.color,
+    aliases: ['caja'],
+    remoteAliases: ['Caja'],
+  },
 ];
 
 const SYSTEM_ALIAS_SET = new Set(SYSTEM_ALIASES.map((value) => normalizeUserText(value)));
-const LEGACY_HUMAN_CAJA_ALIAS_SET = new Set(
-  LEGACY_HUMAN_CAJA_ALIASES.map((value) => normalizeUserText(value)),
+const LEGACY_OPTIONS_BY_KEY = new Map(LEGACY_USER_OPTIONS.map((option) => [option.key, option]));
+const LEGACY_OPTIONS_BY_ALIAS = new Map(
+  LEGACY_USER_OPTIONS.flatMap((option) =>
+    option.aliases.map((alias) => [normalizeUserText(alias), option])
+  )
 );
 
 const SYSTEM_FILTER_KEY = 'bucket:system';
@@ -52,8 +75,39 @@ const toUserCandidate = (record) => {
   };
 };
 
+const buildSystemOptionSeed = () => ({
+  key: SYSTEM_FILTER_KEY,
+  bucket: 'system',
+  displayName: 'Sistema',
+  color: APP_USER_ROLE_META.system.color,
+  userIds: [],
+  aliases: [...SYSTEM_ALIAS_SET],
+  remoteAliases: [...SYSTEM_ALIASES],
+});
+
+const buildLegacyUserOptionSeed = (option) => ({
+  key: option.key,
+  bucket: option.bucket,
+  role: option.role,
+  displayName: option.displayName,
+  color: option.color,
+  userIds: [],
+  aliases: uniqueNormalized(option.aliases),
+  remoteAliases: uniqueStrings(option.remoteAliases),
+});
+
+const buildLegacyHumanCajaOptionSeed = () => ({
+  key: LEGACY_HUMAN_CAJA_FILTER_KEY,
+  bucket: 'legacy_user_group',
+  displayName: 'Due\u00f1o / Vendedor / Caja',
+  color: APP_USER_ROLE_META.seller.color,
+  userIds: [],
+  aliases: uniqueNormalized(LEGACY_USER_OPTIONS.flatMap((option) => option.aliases)),
+  remoteAliases: uniqueStrings(LEGACY_USER_OPTIONS.flatMap((option) => option.remoteAliases)),
+});
+
 const isSystemName = (value) => SYSTEM_ALIAS_SET.has(normalizeUserText(value));
-const isLegacyHumanCajaName = (value) => LEGACY_HUMAN_CAJA_ALIAS_SET.has(normalizeUserText(value));
+const getLegacyOptionByName = (value) => LEGACY_OPTIONS_BY_ALIAS.get(normalizeUserText(value)) || null;
 
 const isGenericLegacyHumanUser = (user) => {
   if (!user) return false;
@@ -61,7 +115,7 @@ const isGenericLegacyHumanUser = (user) => {
   const normalizedRole = normalizeAppUserRole(user.role);
   if (!['owner', 'seller'].includes(normalizedRole)) return false;
 
-  return isLegacyHumanCajaName(user.displayName || user.name);
+  return Boolean(getLegacyOptionByName(user.displayName || user.name));
 };
 
 const findCatalogUserByPersonalName = (userCatalog, normalizedName) => {
@@ -76,26 +130,6 @@ const findCatalogUserByPersonalName = (userCatalog, normalizedName) => {
     }) || null
   );
 };
-
-const buildSystemOptionSeed = () => ({
-  key: SYSTEM_FILTER_KEY,
-  bucket: 'system',
-  displayName: 'Sistema',
-  color: APP_USER_ROLE_META.system.color,
-  userIds: [],
-  aliases: [...SYSTEM_ALIAS_SET],
-  remoteAliases: [...SYSTEM_ALIASES],
-});
-
-const buildLegacyHumanCajaOptionSeed = () => ({
-  key: LEGACY_HUMAN_CAJA_FILTER_KEY,
-  bucket: 'legacy_human_caja',
-  displayName: 'Caja',
-  color: APP_USER_ROLE_META.seller.color,
-  userIds: [],
-  aliases: [...LEGACY_HUMAN_CAJA_ALIAS_SET],
-  remoteAliases: [...LEGACY_HUMAN_CAJA_ALIASES],
-});
 
 const classifyUnifiedUserCandidate = (rawRecord, userCatalog = null) => {
   const candidate = toUserCandidate(rawRecord);
@@ -117,17 +151,16 @@ const classifyUnifiedUserCandidate = (rawRecord, userCatalog = null) => {
     return seed;
   }
 
-  if (
-    isGenericLegacyHumanUser(catalogUserById) ||
-    isLegacyHumanCajaName(catalogName) ||
-    isLegacyHumanCajaName(normalizedName) ||
-    (!candidate.id && ['owner', 'seller'].includes(explicitRole || '') && !normalizedName)
-  ) {
-    const seed = buildLegacyHumanCajaOptionSeed();
-    if (candidate.id) {
-      seed.userIds.push(String(candidate.id));
-    }
-    return seed;
+  const legacyOptionByName = getLegacyOptionByName(normalizedName);
+  if (!candidate.id && legacyOptionByName) {
+    return buildLegacyUserOptionSeed(legacyOptionByName);
+  }
+
+  if (!candidate.id && !normalizedName && ['owner', 'seller'].includes(explicitRole || '')) {
+    const roleFallback = explicitRole === 'owner'
+      ? LEGACY_OPTIONS_BY_KEY.get('legacy_user:dueno')
+      : LEGACY_OPTIONS_BY_KEY.get('legacy_user:vendedor');
+    return buildLegacyUserOptionSeed(roleFallback);
   }
 
   const matchedRealUser =
@@ -168,6 +201,7 @@ const mergeFilterOption = (target, source) => {
   const next = target || {
     key: source.key,
     bucket: source.bucket,
+    role: source.role,
     displayName: source.displayName,
     color: source.color,
     userIds: [],
@@ -206,7 +240,9 @@ export const buildUnifiedUserFilterOptions = ({
 
   if (includeBaseBuckets) {
     pushCandidate({ role: 'system', displayName: 'Sistema' });
-    pushCandidate({ role: 'seller', displayName: 'Caja' });
+    LEGACY_USER_OPTIONS.forEach((option) => {
+      groupedEntries.set(option.key, mergeFilterOption(groupedEntries.get(option.key), buildLegacyUserOptionSeed(option)));
+    });
   }
 
   (Array.isArray(catalogUsers) ? catalogUsers : []).forEach((user) => pushCandidate(user));
@@ -222,8 +258,8 @@ export const buildUnifiedUserFilterOptions = ({
     .sort((a, b) => {
       if (a.bucket === 'system' && b.bucket !== 'system') return -1;
       if (b.bucket === 'system' && a.bucket !== 'system') return 1;
-      if (a.bucket === 'legacy_human_caja' && b.bucket === 'real_user') return -1;
-      if (b.bucket === 'legacy_human_caja' && a.bucket === 'real_user') return 1;
+      if (a.bucket === 'legacy_user' && b.bucket === 'real_user') return -1;
+      if (b.bucket === 'legacy_user' && a.bucket === 'real_user') return 1;
       return a.displayName.localeCompare(b.displayName, 'es');
     });
 };
@@ -236,6 +272,10 @@ export const matchesUnifiedUserFilter = (record, selectedFilter, userCatalog = n
 
   if (classification.key === selectedFilter.key) return true;
 
+  if (selectedFilter.bucket === 'legacy_user_group') {
+    return classification.bucket === 'legacy_user';
+  }
+
   if (selectedFilter.bucket === 'real_user') {
     const selectedUserIds = Array.isArray(selectedFilter.userIds) ? selectedFilter.userIds.map(String) : [];
     const classificationUserIds = Array.isArray(classification.userIds) ? classification.userIds.map(String) : [];
@@ -247,7 +287,7 @@ export const matchesUnifiedUserFilter = (record, selectedFilter, userCatalog = n
   return false;
 };
 
-const buildFallbackFilterOptionFromKey = (filterKey) => {
+export const buildFallbackFilterOptionFromKey = (filterKey) => {
   const normalizedKey = String(filterKey || '').trim();
   if (!normalizedKey) return null;
 
@@ -257,6 +297,11 @@ const buildFallbackFilterOptionFromKey = (filterKey) => {
 
   if (normalizedKey === LEGACY_HUMAN_CAJA_FILTER_KEY) {
     return buildLegacyHumanCajaOptionSeed();
+  }
+
+  const legacyOption = LEGACY_OPTIONS_BY_KEY.get(normalizedKey);
+  if (legacyOption) {
+    return buildLegacyUserOptionSeed(legacyOption);
   }
 
   if (normalizedKey.startsWith('user:')) {

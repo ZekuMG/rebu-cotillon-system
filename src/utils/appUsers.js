@@ -21,6 +21,8 @@ export const APP_USER_NAME_COLORS = [
   '#0891b2',
 ];
 
+export const normalizeMetricsViewMode = (value) => (value === 'legacy' ? 'legacy' : 'modern');
+
 export const APP_USER_ROLE_META = {
   system: { label: 'Sistema', avatar: 'SI', color: '#334155' },
   owner: { label: 'Dueño', avatar: 'DU', color: '#4f46e5' },
@@ -82,6 +84,9 @@ export const normalizeAppUserRecord = (record) => {
     avatar: normalizedAvatar,
     nameColor: record.name_color || record.nameColor || APP_USER_ROLE_META[role]?.color || '#0f172a',
     theme: record.theme || 'light',
+    metricsViewMode: record.metrics_view_mode || record.metricsViewMode
+      ? normalizeMetricsViewMode(record.metrics_view_mode || record.metricsViewMode)
+      : undefined,
     isActive: record.is_active !== false && record.isActive !== false,
     permissionsOverride: normalizePermissionsOverride(record.permissions_override || record.permissionsOverride),
     permissionsVersion: Number(record.permissions_version || record.permissionsVersion || 1),
@@ -112,6 +117,7 @@ export const buildLegacyBootstrapSeed = (legacyUsers = {}, legacySettings = {}) 
       avatar: String(adminSettings.avatar || 'SI').trim().slice(0, 4).toUpperCase(),
       name_color: adminSettings.nameColor || '#4f46e5',
       theme: adminSettings.theme || 'light',
+      metrics_view_mode: normalizeMetricsViewMode(adminSettings.metricsViewMode),
       password: adminSettings.password || adminSeed.password || '1234',
     },
     sellerUser: {
@@ -120,6 +126,7 @@ export const buildLegacyBootstrapSeed = (legacyUsers = {}, legacySettings = {}) 
       avatar: String(sellerSettings.avatar || sellerSeed.avatar || 'VE').trim().slice(0, 4).toUpperCase(),
       name_color: sellerSettings.nameColor || '#059669',
       theme: sellerSettings.theme || 'light',
+      metrics_view_mode: normalizeMetricsViewMode(sellerSettings.metricsViewMode),
       password: sellerSettings.password || sellerSeed.password || '4321',
     },
   };
@@ -136,6 +143,7 @@ export const buildLegacyUsers = (legacyUsers = {}, legacySettings = {}) => {
       avatar: seed.systemUser.avatar,
       name_color: seed.systemUser.name_color,
       theme: seed.systemUser.theme,
+      metrics_view_mode: seed.systemUser.metrics_view_mode,
       is_active: true,
       source: 'legacy',
     }),
@@ -146,6 +154,7 @@ export const buildLegacyUsers = (legacyUsers = {}, legacySettings = {}) => {
       avatar: seed.sellerUser.avatar,
       name_color: seed.sellerUser.name_color,
       theme: seed.sellerUser.theme,
+      metrics_view_mode: seed.sellerUser.metrics_view_mode,
       is_active: true,
       source: 'legacy',
     }),
@@ -344,8 +353,8 @@ export const verifyAppUserLogin = async ({ userId, password }) => {
   return normalizeAppUserRecord(data || null);
 };
 
-export const createAppUser = async ({ actorId, displayName, role, password, avatar, nameColor, theme }) => {
-  const { data, error } = await supabase.rpc('create_app_user', {
+export const createAppUser = async ({ actorId, displayName, role, password, avatar, nameColor, theme, metricsViewMode }) => {
+  const payload = {
     p_actor_id: actorId,
     p_display_name: displayName,
     p_role: role,
@@ -353,15 +362,26 @@ export const createAppUser = async ({ actorId, displayName, role, password, avat
     p_avatar: avatar,
     p_name_color: nameColor,
     p_theme: theme,
-  });
+    p_metrics_view_mode: normalizeMetricsViewMode(metricsViewMode),
+  };
+
+  let { data, error } = await supabase.rpc('create_app_user', payload);
+
+  if (error && /p_metrics_view_mode|metrics_view_mode|function .*create_app_user/i.test(String(error.message || ''))) {
+    const legacyPayload = { ...payload };
+    delete legacyPayload.p_metrics_view_mode;
+    const legacyResult = await supabase.rpc('create_app_user', legacyPayload);
+    data = legacyResult.data;
+    error = legacyResult.error;
+  }
 
   if (error) throw error;
   if (Array.isArray(data)) return normalizeAppUserRecord(data[0] || null);
   return normalizeAppUserRecord(data || null);
 };
 
-export const updateAppUserProfile = async ({ actorId, targetId, displayName, role, avatar, nameColor, theme }) => {
-  const { data, error } = await supabase.rpc('update_app_user_profile', {
+export const updateAppUserProfile = async ({ actorId, targetId, displayName, role, avatar, nameColor, theme, metricsViewMode }) => {
+  const payload = {
     p_actor_id: actorId,
     p_target_id: targetId,
     p_display_name: displayName,
@@ -369,7 +389,18 @@ export const updateAppUserProfile = async ({ actorId, targetId, displayName, rol
     p_avatar: avatar,
     p_name_color: nameColor,
     p_theme: theme,
-  });
+    p_metrics_view_mode: normalizeMetricsViewMode(metricsViewMode),
+  };
+
+  let { data, error } = await supabase.rpc('update_app_user_profile', payload);
+
+  if (error && /p_metrics_view_mode|metrics_view_mode|function .*update_app_user_profile/i.test(String(error.message || ''))) {
+    const legacyPayload = { ...payload };
+    delete legacyPayload.p_metrics_view_mode;
+    const legacyResult = await supabase.rpc('update_app_user_profile', legacyPayload);
+    data = legacyResult.data;
+    error = legacyResult.error;
+  }
 
   if (error) throw error;
   if (Array.isArray(data)) return normalizeAppUserRecord(data[0] || null);

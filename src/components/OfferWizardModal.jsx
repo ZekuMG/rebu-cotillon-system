@@ -2,6 +2,7 @@ import React from 'react';
 import { MinusCircle, Package, PlusCircle, Save, Search, TicketPercent, X } from 'lucide-react';
 import { FancyPrice } from './FancyPrice';
 import { getCanonicalOfferSubtypeLabel, getCanonicalOfferTypeLabel, getComboProductLineDisplay } from '../utils/offerHelpers';
+import { getProductImageUrl } from '../utils/productImages';
 
 function ChipButton({ active, disabled = false, onClick, children }) {
   return (
@@ -40,8 +41,9 @@ function ProductRow({ product, subtitle, onAdd, onRemove, removable = true, onQu
   const isWeight = product.product_type === 'weight';
   const quantityValue = Number(product.quantity ?? product.qty ?? (isWeight ? 1000 : 1)) || (isWeight ? 1000 : 1);
   const lineDisplay = getComboProductLineDisplay(product);
-  const media = product.image ? (
-    <img src={product.image} alt={product.title} className="h-9 w-9 rounded-lg object-cover ring-1 ring-slate-200" />
+  const productImage = getProductImageUrl(product);
+  const media = productImage ? (
+    <img src={productImage} alt={product.title} loading="lazy" decoding="async" fetchpriority="low" className="h-9 w-9 rounded-lg object-cover ring-1 ring-slate-200" />
   ) : (
     <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-400 ring-1 ring-slate-200">
       <Package size={15} />

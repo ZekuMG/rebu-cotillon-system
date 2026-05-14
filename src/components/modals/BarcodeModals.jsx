@@ -8,6 +8,7 @@ import {
   Plus,
   PackageX,
 } from 'lucide-react';
+import { getProductImageUrl } from '../../utils/productImages';
 
 export const BarcodeNotFoundModal = ({ isOpen, scannedCode, onClose, onAddProduct }) => {
   if (!isOpen) return null;
@@ -70,8 +71,8 @@ export const BarcodeDuplicateModal = ({ isOpen, existingProduct, onClose: _onClo
           
           <div className="bg-slate-50 border rounded-lg p-4 mb-6">
             <div className="flex items-center gap-3">
-              {existingProduct.image ? (
-                <img src={existingProduct.image} alt="" className="w-12 h-12 rounded-lg object-cover border" />
+              {getProductImageUrl(existingProduct) ? (
+                <img src={getProductImageUrl(existingProduct)} alt="" loading="lazy" decoding="async" fetchpriority="low" className="w-12 h-12 rounded-lg object-cover border" />
               ) : (
                 <div className="w-12 h-12 rounded-lg bg-slate-200 flex items-center justify-center">
                   <ScanBarcode size={20} className="text-slate-400" />

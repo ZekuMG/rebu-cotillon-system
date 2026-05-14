@@ -2,9 +2,10 @@ import React from 'react';
 import { Package } from 'lucide-react';
 // ♻️ REFACTOR: Importar función desde helpers.js en lugar de definirla localmente
 import { getGradientForItem } from '../utils/helpers';
+import { getProductImageUrl } from '../utils/productImages';
 
 const ProductImage = ({ item, className = '', onClick }) => {
-  const resolvedImage = item.imageThumb || item.image_thumb || item.image || '';
+  const resolvedImage = getProductImageUrl(item);
   const hasImage = resolvedImage && resolvedImage.trim() !== '';
   const gradient = getGradientForItem(item.id, item.title);
 

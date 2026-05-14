@@ -9,12 +9,106 @@ import {
 } from '../utils/supabaseSchemaFallback';
 
 const EMPTY_ARRAY = [];
+const DETAILS_SEARCH_BATCH_SIZE = 100;
+const DETAILS_SEARCH_MAX_ROWS = 20000;
 
 const sanitizeSearchTerm = (value) =>
   String(value || '')
     .trim()
     .replace(/[,%()]/g, ' ')
     .replace(/\s+/g, ' ');
+
+const normalizeSearchAlias = (value) =>
+  sanitizeSearchTerm(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+const normalizeClientSearchText = (value) =>
+  String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
+const stringifySearchValue = (value) => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const logRowMatchesClientSearch = (row, rawTerm, scope = 'all') => {
+  const term = normalizeClientSearchText(rawTerm);
+  if (!term) return true;
+  if (String(row?.id ?? '') === term) return true;
+
+  const detailsText = stringifySearchValue(row?.details);
+  const indexesByScope = {
+    id: [detailsText],
+    product: [detailsText],
+    user: [row?.user, row?.user_name, row?.details?.userName, row?.details?.userRole],
+    action: [row?.action, row?.reason],
+    all: [row?.action, row?.reason, row?.user, row?.user_name, row?.created_at, detailsText],
+  };
+  const searchIndex = (indexesByScope[scope] || indexesByScope.all)
+    .filter((value) => value !== null && value !== undefined && value !== '')
+    .join(' ');
+
+  return normalizeClientSearchText(searchIndex).includes(term);
+};
+
+const logRowMatchesProductSearch = (row, rawTerms = []) => {
+  const terms = (Array.isArray(rawTerms) ? rawTerms : [rawTerms])
+    .map(normalizeClientSearchText)
+    .filter(Boolean);
+  if (terms.length === 0) return true;
+
+  const detailsText = normalizeClientSearchText(stringifySearchValue(row?.details));
+  return terms.some((term) => detailsText.includes(term));
+};
+
+const expandLegacyUserSearchTerms = (term) => {
+  const normalized = normalizeSearchAlias(term);
+  const terms = new Set([term]);
+
+  if (['dueno', 'duenio', 'dueño', 'owner'].includes(normalized)) {
+    ['Dueño', 'Dueno', 'DueÃ±o', 'DueÃƒÂ±o', 'owner'].forEach((value) => terms.add(value));
+  }
+
+  if (['caja', 'vendedor', 'seller'].includes(normalized)) {
+    ['Caja', 'Vendedor', 'seller'].forEach((value) => terms.add(value));
+  }
+
+  if (['sistema', 'system', 'admin'].includes(normalized)) {
+    ['Sistema', 'system', 'admin'].forEach((value) => terms.add(value));
+  }
+
+  return [...terms].map((value) => sanitizeSearchTerm(value)).filter(Boolean);
+};
+
+const expandLogSearchTerms = (term) => {
+  const normalized = normalizeSearchAlias(term);
+  const terms = new Set([term]);
+
+  if (['dueno', 'duenio', 'owner'].includes(normalized)) {
+    ['Due\u00f1o', 'Dueno', 'Duenio', 'owner'].forEach((value) => terms.add(value));
+  }
+
+  if (['caja', 'vendedor', 'seller'].includes(normalized)) {
+    ['Caja', 'Vendedor', 'seller'].forEach((value) => terms.add(value));
+  }
+
+  if (['sistema', 'system', 'admin'].includes(normalized)) {
+    ['Sistema', 'system', 'admin'].forEach((value) => terms.add(value));
+  }
+
+  return [...terms].map((value) => sanitizeSearchTerm(value)).filter(Boolean);
+};
 
 const buildDayStartIso = (value) => `${value}T00:00:00.000Z`;
 const buildDayEndIso = (value) => `${value}T23:59:59.999Z`;
@@ -34,16 +128,21 @@ const buildNotInFilterValue = (values = []) => {
   return safeValues.length > 0 ? `(${safeValues.join(',')})` : '';
 };
 
-const applyLogSearch = (query, rawTerm) => {
+const applyLogSearch = (query, rawTerm, scope = 'all') => {
   const term = sanitizeSearchTerm(rawTerm);
   if (!term) return query;
 
   const numericId = Number(term);
-  const searchFilters = [
-    `action.ilike.%${term}%`,
-    `reason.ilike.%${term}%`,
-    `user.ilike.%${term}%`,
-  ];
+  const expandedTerms = expandLogSearchTerms(term);
+  const searchFilters = expandedTerms.flatMap((searchTerm) => {
+    if (scope === 'user') return [`user.ilike.%${searchTerm}%`];
+    if (scope === 'action') return [`action.ilike.%${searchTerm}%`, `reason.ilike.%${searchTerm}%`];
+    return [
+      `action.ilike.%${searchTerm}%`,
+      `reason.ilike.%${searchTerm}%`,
+      `user.ilike.%${searchTerm}%`,
+    ];
+  });
 
   if (Number.isFinite(numericId) && String(numericId) === term) {
     searchFilters.unshift(`id.eq.${numericId}`);
@@ -105,6 +204,10 @@ export default function useLogsFeed({
   const excludeActionsSource = Array.isArray(excludeActions) ? excludeActions : EMPTY_ARRAY;
   const rawActions = Array.isArray(filters.actions) ? filters.actions.filter(Boolean) : [];
   const actionsKey = rawActions.join('|');
+  const rawProductSearchTerms = Array.isArray(filters.productSearchTerms)
+    ? filters.productSearchTerms.filter(Boolean)
+    : [];
+  const productSearchTermsKey = rawProductSearchTerms.join('|');
   const excludedActionsKey = excludeActionsSource
     .map((value) => String(value || '').trim())
     .filter(Boolean)
@@ -129,9 +232,22 @@ export default function useLogsFeed({
       user: String(filters.user || '').trim(),
       action: String(filters.action || '').trim(),
       search: String(filters.search || '').trim(),
+      searchScope: String(filters.searchScope || 'all').trim() || 'all',
+      productSearch: String(filters.productSearch || '').trim(),
+      productSearchTerms: rawProductSearchTerms,
       actions: rawActions,
     }),
-    [actionsKey, filters.action, filters.dateEnd, filters.dateStart, filters.search, filters.user]
+    [
+      actionsKey,
+      filters.action,
+      filters.dateEnd,
+      filters.dateStart,
+      filters.productSearch,
+      filters.search,
+      filters.searchScope,
+      filters.user,
+      productSearchTermsKey,
+    ]
   );
   const cacheKey = useMemo(
     () =>
@@ -187,41 +303,137 @@ export default function useLogsFeed({
         const orderColumn =
           sortColumn === 'user' ? 'user_name' : sortColumn === 'action' ? 'action' : 'created_at';
         const ascending = sortDirection === 'asc';
+        const requiresClientSearch = Boolean(
+          normalizedFilters.productSearch ||
+          (
+            normalizedFilters.search &&
+            !['user', 'action'].includes(normalizedFilters.searchScope)
+          )
+        );
 
         let safeSelect =
-          includeDetails || normalizedFilters.search
+          includeDetails || normalizedFilters.search || normalizedFilters.productSearch
             ? CLOUD_SELECTS.logs
             : CLOUD_SELECTS.logsSummary;
         let safeOrderColumn = orderColumn;
         let safeUserFilter = normalizedFilters.user;
         let data = null;
 
+        const applyBaseFilters = (baseQuery, userFilterValue) => {
+          let nextQuery = baseQuery;
+
+          if (normalizedFilters.actions.length > 0) {
+            nextQuery = nextQuery.in('action', normalizedFilters.actions);
+          }
+
+          if (excludedActionsFilterValue) {
+            nextQuery = nextQuery.not('action', 'in', excludedActionsFilterValue);
+          }
+
+          nextQuery = applyLogActionFilter(nextQuery, normalizedFilters.action);
+          nextQuery = applyLogUserFilter(nextQuery, userFilterValue);
+
+          if (normalizedFilters.dateStart) {
+            nextQuery = nextQuery.gte('created_at', buildDayStartIso(normalizedFilters.dateStart));
+          }
+
+          if (normalizedFilters.dateEnd) {
+            nextQuery = nextQuery.lte('created_at', buildDayEndIso(normalizedFilters.dateEnd));
+          }
+
+          return nextQuery;
+        };
+
+        const fetchClientSearchRows = async () => {
+          let scanSelect = CLOUD_SELECTS.logs;
+          let scanOrderColumn = orderColumn;
+          let scanUserFilter = normalizedFilters.user;
+          const matches = [];
+          const requiredMatches = offset + fetchLimit;
+          let scanOffset = 0;
+
+          while (scanSelect && scanOffset < DETAILS_SEARCH_MAX_ROWS && matches.length < requiredMatches) {
+            let query = supabase
+              .from('logs')
+              .select(scanSelect)
+              .abortSignal(abortController.signal);
+
+            query = applyBaseFilters(query, scanUserFilter);
+            query = query.order(scanOrderColumn, { ascending });
+            if (scanOrderColumn !== 'created_at') {
+              query = query.order('created_at', { ascending: false });
+            }
+            query = query
+              .order('id', { ascending: false })
+              .range(scanOffset, scanOffset + DETAILS_SEARCH_BATCH_SIZE - 1);
+
+            const { data: batchData, error: scanError } = await query;
+
+            if (scanError) {
+              if (scanUserFilter.startsWith('id:')) {
+                const fallbackName = scanUserFilter.split('|name:')[1]?.trim() || '';
+                if (fallbackName) {
+                  scanUserFilter = `name:${fallbackName}`;
+                  scanOffset = 0;
+                  matches.length = 0;
+                  continue;
+                }
+              }
+
+              const missingColumn = extractSchemaMissingColumn(scanError);
+              if (!missingColumn) throw scanError;
+
+              const normalizedMissingColumn = String(missingColumn).trim().toLowerCase();
+              if (normalizedMissingColumn === String(scanOrderColumn).trim().toLowerCase()) {
+                scanOrderColumn = 'created_at';
+                scanOffset = 0;
+                matches.length = 0;
+                continue;
+              }
+
+              const nextSelect = removeColumnFromSelect(scanSelect, missingColumn);
+              if (!nextSelect || nextSelect === scanSelect) throw scanError;
+              scanSelect = nextSelect;
+              scanOffset = 0;
+              matches.length = 0;
+              continue;
+            }
+
+            const batchRows = Array.isArray(batchData) ? batchData : [];
+            batchRows.forEach((row) => {
+              const matchesTextSearch = normalizedFilters.search
+                ? logRowMatchesClientSearch(row, normalizedFilters.search, normalizedFilters.searchScope)
+                : true;
+              const matchesProductSearch = normalizedFilters.productSearch
+                ? logRowMatchesProductSearch(row, normalizedFilters.productSearchTerms)
+                : true;
+
+              if (matchesTextSearch && matchesProductSearch) {
+                matches.push(row);
+              }
+            });
+
+            if (batchRows.length < DETAILS_SEARCH_BATCH_SIZE) {
+              break;
+            }
+
+            scanOffset += DETAILS_SEARCH_BATCH_SIZE;
+          }
+
+          return matches.slice(offset, offset + fetchLimit);
+        };
+
+        if (requiresClientSearch) {
+          data = await fetchClientSearchRows();
+        } else {
         while (safeSelect) {
           let query = supabase
             .from('logs')
             .select(safeSelect)
             .abortSignal(abortController.signal);
 
-          if (normalizedFilters.actions.length > 0) {
-            query = query.in('action', normalizedFilters.actions);
-          }
-
-          if (excludedActionsFilterValue) {
-            query = query.not('action', 'in', excludedActionsFilterValue);
-          }
-
-          query = applyLogActionFilter(query, normalizedFilters.action);
-          query = applyLogSearch(query, normalizedFilters.search);
-
-          query = applyLogUserFilter(query, safeUserFilter);
-
-          if (normalizedFilters.dateStart) {
-            query = query.gte('created_at', buildDayStartIso(normalizedFilters.dateStart));
-          }
-
-          if (normalizedFilters.dateEnd) {
-            query = query.lte('created_at', buildDayEndIso(normalizedFilters.dateEnd));
-          }
+          query = applyBaseFilters(query, safeUserFilter);
+          query = applyLogSearch(query, normalizedFilters.search, normalizedFilters.searchScope);
 
           query = query.order(safeOrderColumn, { ascending });
           if (safeOrderColumn !== 'created_at') {
@@ -255,6 +467,7 @@ export default function useLogsFeed({
           const nextSelect = removeColumnFromSelect(safeSelect, missingColumn);
           if (!nextSelect || nextSelect === safeSelect) throw queryError;
           safeSelect = nextSelect;
+        }
         }
 
         if (abortController.signal.aborted || requestIdRef.current !== requestId) return;
@@ -322,7 +535,9 @@ export default function useLogsFeed({
     normalizedFilters.action,
     normalizedFilters.dateEnd,
     normalizedFilters.dateStart,
+    normalizedFilters.productSearch,
     normalizedFilters.search,
+    normalizedFilters.searchScope,
     normalizedFilters.user,
     page,
     pageSize,

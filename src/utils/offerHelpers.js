@@ -1,3 +1,6 @@
+
+import { getProductImageUrl } from './productImages';
+
 const CANONICAL_OFFER_OPTIONS = [
   {
     value: 'free',
@@ -337,7 +340,9 @@ export function buildLegacyOfferPayload(offerForm, productsByCategory = {}, inve
     id: product.id,
     title: product.title,
     price: product.price,
-    image: product.image,
+    image: getProductImageUrl(product),
+    image_thumb: product.image_thumb || product.imageThumb || getProductImageUrl(product),
+    imageThumb: product.imageThumb || product.image_thumb || getProductImageUrl(product),
     stock: product.stock,
     product_type: product.product_type || 'quantity',
     quantity: Number(product.quantity ?? product.qty ?? (product.product_type === 'weight' ? 1000 : 1)) || (product.product_type === 'weight' ? 1000 : 1),

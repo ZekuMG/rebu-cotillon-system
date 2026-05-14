@@ -24,6 +24,7 @@ import { FancyPrice } from '../components/FancyPrice';
 import { OfferWizardModal } from '../components/OfferWizardModal';
 import { hasPermission } from '../utils/userPermissions';
 import { formatNumber, isTestRecord } from '../utils/helpers';
+import { getProductImageUrl } from '../utils/productImages';
 import {
   buildLegacyOfferPayload,
   defaultCanonicalOfferForm,
@@ -114,8 +115,11 @@ function ProductPreviewGrid({ items = [], fallbackIcon: FallbackIcon = Package, 
           {previewItems.map((item) => (
             <div key={item.id || item.title} className="overflow-hidden bg-white">
               <img
-                src={item.image}
+                src={getProductImageUrl(item)}
                 alt={item.title || 'Preview'}
+                loading="lazy"
+                decoding="async"
+                fetchpriority="low"
                 className="h-full w-full object-cover"
                 onError={(e) => {
                   e.target.style.display = 'none';
@@ -263,10 +267,13 @@ function CategoryEditorModal({
                           }`}
                         >
                           <div className="flex items-center gap-3 min-w-0">
-                            {product.image ? (
+                            {getProductImageUrl(product) ? (
                               <img
-                                src={product.image}
+                                src={getProductImageUrl(product)}
                                 alt={product.title}
+                                loading="lazy"
+                                decoding="async"
+                                fetchpriority="low"
                                 className="w-11 h-11 rounded-lg object-cover border border-slate-200 shadow-sm"
                                 onError={(e) => {
                                   e.target.style.display = 'none';
@@ -369,10 +376,13 @@ function CategoryEditorModal({
                             className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-all hover:border-orange-300 hover:bg-orange-50/40"
                           >
                             <div className="flex items-center gap-3 min-w-0">
-                              {product.image ? (
+                              {getProductImageUrl(product) ? (
                                 <img
-                                  src={product.image}
+                                  src={getProductImageUrl(product)}
                                   alt={product.title}
+                                  loading="lazy"
+                                  decoding="async"
+                                  fetchpriority="low"
                                   className="w-12 h-12 rounded-lg object-cover border border-slate-200"
                                   onError={(e) => {
                                     e.target.style.display = 'none';
@@ -579,10 +589,13 @@ function CategoryCreateModal({
                         className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3 transition-colors hover:border-orange-300 hover:bg-orange-50/40"
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          {product.image ? (
+                          {getProductImageUrl(product) ? (
                             <img
-                              src={product.image}
+                              src={getProductImageUrl(product)}
                               alt={product.title}
+                              loading="lazy"
+                              decoding="async"
+                              fetchpriority="low"
                               className="w-11 h-11 rounded-lg object-cover border border-slate-200 shadow-sm"
                               onError={(e) => {
                                 e.target.style.display = 'none';
@@ -692,10 +705,13 @@ function CategoryCreateModal({
                         className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-all hover:border-orange-300 hover:bg-orange-50/40"
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          {product.image ? (
+                          {getProductImageUrl(product) ? (
                             <img
-                              src={product.image}
+                              src={getProductImageUrl(product)}
                               alt={product.title}
+                              loading="lazy"
+                              decoding="async"
+                              fetchpriority="low"
                               className="w-12 h-12 rounded-lg object-cover border border-slate-200"
                               onError={(e) => {
                                 e.target.style.display = 'none';
@@ -1217,7 +1233,7 @@ export default function ExtrasView({
           id: product.id,
           title: product.title,
           price: product.price,
-          image: product.image,
+          image: getProductImageUrl(product),
           stock: product.stock,
           product_type: product.product_type || 'quantity',
           quantity: isWeight ? 1000 : 1,
@@ -1962,10 +1978,13 @@ export default function ExtrasView({
                               className="flex items-center justify-between gap-2 rounded-[16px] border border-orange-100 bg-white/85 px-2.5 py-2"
                             >
                               <div className="flex min-w-0 items-center gap-2.5">
-                                {product.image ? (
+                                {getProductImageUrl(product) ? (
                                   <img
-                                    src={product.image}
+                                    src={getProductImageUrl(product)}
                                     alt={product.title}
+                                    loading="lazy"
+                                    decoding="async"
+                                    fetchpriority="low"
                                     className="h-10 w-10 rounded-lg border border-slate-200 object-cover"
                                     onError={(e) => {
                                       e.target.style.display = 'none';
@@ -2280,10 +2299,13 @@ export default function ExtrasView({
                                 key={product.id}
                                 className="flex items-center gap-2.5 rounded-[16px] border border-emerald-200 bg-white/90 px-2.5 py-2"
                               >
-                                {product.image ? (
+                                {getProductImageUrl(product) ? (
                                   <img
-                                    src={product.image}
+                                    src={getProductImageUrl(product)}
                                     alt={product.title}
+                                    loading="lazy"
+                                    decoding="async"
+                                    fetchpriority="low"
                                     className="h-10 w-10 rounded-lg border border-slate-200 object-cover"
                                     onError={(e) => {
                                       e.target.style.display = 'none';
@@ -3149,10 +3171,13 @@ export default function ExtrasView({
                             }`}
                           >
                             <div className="flex items-center gap-3 min-w-0">
-                              {product.image ? (
+                              {getProductImageUrl(product) ? (
                                 <img
-                                  src={product.image}
+                                  src={getProductImageUrl(product)}
                                   alt={product.title}
+                                  loading="lazy"
+                                  decoding="async"
+                                  fetchpriority="low"
                                   className="w-9 h-9 rounded-md object-cover border border-slate-200 shadow-sm"
                                   onError={(e) => {
                                     e.target.style.display = 'none';
@@ -3609,10 +3634,13 @@ export default function ExtrasView({
                             className="flex w-full items-center justify-between gap-2 rounded-xl border border-transparent bg-white px-2.5 py-1.5 text-left transition-all hover:border-emerald-200 hover:bg-emerald-50"
                           >
                             <div className="flex min-w-0 items-center gap-3">
-                              {product.image ? (
+                              {getProductImageUrl(product) ? (
                                 <img
-                                  src={product.image}
+                                  src={getProductImageUrl(product)}
                                   alt={product.title}
+                                  loading="lazy"
+                                  decoding="async"
+                                  fetchpriority="low"
                                   className="h-9 w-9 rounded-lg object-cover ring-1 ring-slate-200"
                                 />
                               ) : (
@@ -3667,10 +3695,13 @@ export default function ExtrasView({
                               className="flex items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-white px-2.5 py-1.5 shadow-sm"
                             >
                               <div className="flex min-w-0 items-center gap-3">
-                                {product.image ? (
+                                {getProductImageUrl(product) ? (
                                   <img
-                                    src={product.image}
+                                    src={getProductImageUrl(product)}
                                     alt={product.title}
+                                    loading="lazy"
+                                    decoding="async"
+                                    fetchpriority="low"
                                     className="h-9 w-9 rounded-lg object-cover ring-1 ring-emerald-100"
                                   />
                                 ) : (

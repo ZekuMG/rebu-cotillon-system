@@ -62,6 +62,7 @@ import {
   fetchAppUsersPublic,
   getRoleLabel,
   hasOwnerAccess,
+  normalizeMetricsViewMode,
   setAppUserActive,
   updateAppUserPassword,
   updateAppUserPermissions,
@@ -76,7 +77,6 @@ import {
   getDefaultTabForUser,
   hasPermission,
 } from './utils/userPermissions';
-import { resolveUserPresentation } from './utils/userPresentation';
 import {
   createOrderPaymentEntry,
   createOrderPaymentLine,
@@ -153,6 +153,7 @@ const OFFLINE_LOGIN_CACHE_KEY = 'party_offline_login_verifiers_v1';
 const LEGACY_OFFLINE_CACHE_KEY = 'party_cloud_snapshot_v1';
 const USER_SETTINGS_KEY = 'party_user_settings_v1';
 const LOGIN_THEME_KEY = 'party_login_theme_v1';
+const METRICS_VIEW_MODE_STORAGE_KEY = 'rebu_metrics_view_mode_v1';
 const REMEMBERED_SESSION_KEY = 'party_remembered_session_v1';
 const APP_TEXT_ENCODING_VERSION = 'utf8-clean';
 const CLOUD_FETCH_BATCH_SIZE = 200;
@@ -479,6 +480,68 @@ const mergeLatestRecords = (existingRecords, incomingRecords) => {
 
   return [
     ...incoming,
+    ...existing.filter((record) => {
+      const key = String(record?.id ?? '');
+      return !key || !incomingIds.has(key);
+    }),
+  ];
+};
+
+const getTransactionCostSignal = (tx = {}) => {
+  const hasStockChanges = Array.isArray(tx.stockChanges) && tx.stockChanges.length > 0;
+  const hasItemCosts = (Array.isArray(tx.items) ? tx.items : []).some((item) => (
+    Number(
+      item?.cost ??
+        item?.unitCost ??
+        item?.unit_cost ??
+        item?.purchasePrice ??
+        item?.purchase_price ??
+        item?.costPrice ??
+        item?.cost_price ??
+        0
+    ) > 0
+  ));
+
+  return (hasStockChanges ? 2 : 0) + (hasItemCosts ? 1 : 0);
+};
+
+const preserveTransactionCostContext = (incomingTx = {}, existingTx = null) => {
+  if (!existingTx) return incomingTx;
+  if (getTransactionCostSignal(existingTx) <= getTransactionCostSignal(incomingTx)) return incomingTx;
+
+  return {
+    ...incomingTx,
+    items: Array.isArray(existingTx.items) && existingTx.items.length ? existingTx.items : incomingTx.items,
+    stockChanges: Array.isArray(existingTx.stockChanges) && existingTx.stockChanges.length
+      ? existingTx.stockChanges
+      : incomingTx.stockChanges,
+    pointsChange: incomingTx.pointsChange || existingTx.pointsChange || null,
+  };
+};
+
+const mergeTransactionsPreservingCostContext = (existingRecords, incomingRecords, { replace = false } = {}) => {
+  const existing = Array.isArray(existingRecords) ? existingRecords : [];
+  const incoming = Array.isArray(incomingRecords) ? incomingRecords : [];
+  if (incoming.length === 0) return replace ? [] : existing;
+
+  const existingById = new Map(
+    existing
+      .filter((record) => record?.id !== undefined && record?.id !== null)
+      .map((record) => [String(record.id), record])
+  );
+  const enrichedIncoming = incoming.map((record) => {
+    const key = record?.id !== undefined && record?.id !== null ? String(record.id) : '';
+    return preserveTransactionCostContext(record, key ? existingById.get(key) : null);
+  });
+
+  if (replace) return enrichedIncoming;
+
+  const incomingIds = new Set(
+    enrichedIncoming.map((record) => String(record?.id ?? '')).filter(Boolean)
+  );
+
+  return [
+    ...enrichedIncoming,
     ...existing.filter((record) => {
       const key = String(record?.id ?? '');
       return !key || !incomingIds.has(key);
@@ -1075,19 +1138,21 @@ const fetchReportsCloudPayloadSince = async (createdAfter) => {
   };
 };
 
-const fetchMetricsCloudPayload = async () => {
+const fetchMetricsCloudPayload = async ({ includeTransactions = true } = {}) => {
   const [salesResult, logsResult, expResult, closuresResult, budgetsResult, ordersResult] = await Promise.allSettled([
-    fetchAllCloudRowsWithSelectFallback(
-      (selectColumns) =>
-        supabase
-          .from('sales')
-          .select(selectColumns)
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false }),
-      CLOUD_SELECTS.sales,
-      CLOUD_FETCH_BATCH_SIZE
-    ),
-    Promise.resolve([]),
+    includeTransactions
+      ? fetchAllCloudRowsWithSelectFallback(
+          (selectColumns) =>
+            supabase
+              .from('sales')
+              .select(selectColumns)
+              .order('created_at', { ascending: false })
+              .order('id', { ascending: false }),
+          CLOUD_SELECTS.sales,
+          CLOUD_FETCH_BATCH_SIZE
+        )
+      : Promise.resolve({ data: null, error: null, skipped: true }),
+    includeTransactions ? fetchSaleHistoryLogsForTransactions() : Promise.resolve([]),
     fetchAllCloudRowsWithSelectFallback(
       (selectColumns) =>
         supabase
@@ -1124,14 +1189,19 @@ const fetchMetricsCloudPayload = async () => {
     }),
   ]);
 
-  const hasCloudConnection = [salesResult, expResult, closuresResult, budgetsResult, ordersResult].some(hasUsableCloudResult);
-  const salesData = safeCloudData(salesResult, 'ventas para métricas');
-  const logsData = safeCloudData(logsResult, 'logs para métricas');
+  const hasCloudConnection = [
+    includeTransactions ? salesResult : null,
+    expResult,
+    closuresResult,
+    budgetsResult,
+    ordersResult,
+  ].filter(Boolean).some(hasUsableCloudResult);
+  const salesData = includeTransactions ? safeCloudData(salesResult, 'ventas para metricas') : null;
   const expData = safeCloudData(expResult, 'gastos para métricas');
   const closuresData = safeCloudData(closuresResult, 'cierres para métricas');
   const budgetsData = safeCloudData(budgetsResult, 'presupuestos para métricas');
   const ordersData = safeCloudData(ordersResult, 'pedidos para métricas');
-  const parsedLogs = logsData && logsResult.status === 'fulfilled' && Array.isArray(logsResult.value) ? logsResult.value : [];
+  const parsedLogs = includeTransactions && logsResult.status === 'fulfilled' && Array.isArray(logsResult.value) ? logsResult.value : [];
 
   return {
     hasCloudConnection,
@@ -1565,6 +1635,22 @@ const saveLoginThemePreference = (theme) => {
     window.localStorage.setItem(LOGIN_THEME_KEY, theme === 'dark' ? 'dark' : 'light');
   } catch (error) {
     console.error('No se pudo guardar el tema del ingreso:', error);
+  }
+};
+
+const saveMetricsViewModePreference = (mode) => {
+  try {
+    window.localStorage.setItem(METRICS_VIEW_MODE_STORAGE_KEY, normalizeMetricsViewMode(mode));
+  } catch (error) {
+    console.error('No se pudo guardar la preferencia de métricas:', error);
+  }
+};
+
+const loadMetricsViewModePreference = () => {
+  try {
+    return normalizeMetricsViewMode(window.localStorage.getItem(METRICS_VIEW_MODE_STORAGE_KEY));
+  } catch {
+    return 'modern';
   }
 };
 
@@ -2129,7 +2215,7 @@ export default function PartySupplyApp() {
     if (payload.transactions !== null) {
       setTransactions((prev) =>
         applyLocalTransactionOverrides(
-          merge ? mergeLatestRecords(prev, payload.transactions) : payload.transactions,
+          mergeTransactionsPreservingCostContext(prev, payload.transactions, { replace: !merge }),
         ),
       );
     }
@@ -2307,9 +2393,9 @@ export default function PartySupplyApp() {
         const rawNextTransactions =
           payload.transactions === null
             ? dataStateRef.current.transactions ?? []
-            : useRecentSync
-              ? mergeLatestRecords(dataStateRef.current.transactions, payload.transactions)
-              : payload.transactions;
+            : mergeTransactionsPreservingCostContext(dataStateRef.current.transactions, payload.transactions, {
+                replace: !useRecentSync,
+              });
         const nextTransactions = applyLocalTransactionOverrides(rawNextTransactions);
 
         const nextSnapshot = {
@@ -2673,7 +2759,7 @@ export default function PartySupplyApp() {
     return promise;
   };
 
-  const loadMetricsCloudData = async ({ force = false } = {}) => {
+  const loadMetricsCloudData = async ({ force = false, includeTransactions = true } = {}) => {
     if (moduleLoadPromisesRef.current.metrics) {
       return moduleLoadPromisesRef.current.metrics;
     }
@@ -2687,7 +2773,7 @@ export default function PartySupplyApp() {
       setModuleState('metrics', { status: 'loading', dirty: false });
 
       try {
-        const payload = await fetchMetricsCloudPayload();
+        const payload = await fetchMetricsCloudPayload({ includeTransactions });
 
         if (!payload?.hasCloudConnection) {
           const cachedSnapshot =
@@ -2746,7 +2832,11 @@ export default function PartySupplyApp() {
       case 'transactions':
         return loadTransactionsCloudData({ force });
       case 'dashboard':
-        return loadDashboardCloudData({ force });
+        await loadCoreCloudData({ force: false });
+        return Promise.all([
+          loadTransactionsCloudData({ force }),
+          loadDashboardCloudData({ force }),
+        ]).then((results) => results.every(Boolean));
       case 'history':
         return loadHistoryCloudData({ force });
       case 'orders':
@@ -2754,7 +2844,9 @@ export default function PartySupplyApp() {
       case 'reports':
         return loadReportsCloudData({ force });
       case 'metrics':
-        return loadMetricsCloudData({ force });
+        await loadCoreCloudData({ force: false });
+        await loadTransactionsCloudData({ force });
+        return loadMetricsCloudData({ force, includeTransactions: false });
       default:
         return true;
     }
@@ -2780,6 +2872,7 @@ export default function PartySupplyApp() {
         if (moduleKey === 'transactions') {
           await loadTransactionsCloudData({ force });
         } else if (moduleKey === 'dashboard') {
+          await loadTransactionsCloudData({ force });
           await loadDashboardCloudData({ force });
         } else if (moduleKey === 'history') {
           await loadHistoryCloudData({ force });
@@ -2788,7 +2881,8 @@ export default function PartySupplyApp() {
         } else if (moduleKey === 'reports') {
           await loadReportsCloudData({ force });
         } else if (moduleKey === 'metrics') {
-          await loadMetricsCloudData({ force });
+          await loadTransactionsCloudData({ force });
+          await loadMetricsCloudData({ force, includeTransactions: false });
         }
       }
     } catch (error) {
@@ -3090,10 +3184,6 @@ export default function PartySupplyApp() {
   const selectedLoginUser = useMemo(
     () => userCatalog.byId[String(selectedUserIdForLogin || '')] || null,
     [selectedUserIdForLogin, userCatalog],
-  );
-  const currentUserPresentation = useMemo(
-    () => resolveUserPresentation(currentUser, userCatalog),
-    [currentUser, userCatalog],
   );
   const canUseAdminArea = hasOwnerAccess(currentUser);
   const canManageRegister = hasPermission(currentUser, 'register.manage');
@@ -6845,6 +6935,7 @@ export default function PartySupplyApp() {
         avatar: updates.avatar || currentUser.avatar,
         nameColor: updates.nameColor || currentUser.nameColor || '#0f172a',
         theme: updates.theme || currentUser.theme || 'light',
+        metricsViewMode: normalizeMetricsViewMode(updates.metricsViewMode || currentUser.metricsViewMode || loadMetricsViewModePreference()),
       };
 
       if (authMode === 'supabase' && currentUser.id) {
@@ -6856,6 +6947,7 @@ export default function PartySupplyApp() {
           avatar: nextUser.avatar,
           nameColor: nextUser.nameColor,
           theme: nextUser.theme,
+          metricsViewMode: nextUser.metricsViewMode,
         });
 
         if (updates.password?.trim()) {
@@ -6866,7 +6958,11 @@ export default function PartySupplyApp() {
           });
         }
 
-        nextUser = updatedProfile || nextUser;
+        nextUser = {
+          ...nextUser,
+          ...(updatedProfile || {}),
+          metricsViewMode: normalizeMetricsViewMode(updates.metricsViewMode || updatedProfile?.metricsViewMode || nextUser.metricsViewMode),
+        };
         if (skipReload) {
           setAppUsers((prev) =>
             prev.map((user) => (String(user.id) === String(currentUser.id) ? { ...user, ...nextUser } : user)),
@@ -6876,6 +6972,10 @@ export default function PartySupplyApp() {
           nextUser =
             refreshedUsers.find((user) => String(user.id) === String(currentUser.id)) ||
             nextUser;
+          nextUser = {
+            ...nextUser,
+            metricsViewMode: normalizeMetricsViewMode(updates.metricsViewMode || nextUser.metricsViewMode),
+          };
         }
       } else {
         const settingsKey = role === 'system' ? 'admin' : 'seller';
@@ -6890,6 +6990,8 @@ export default function PartySupplyApp() {
         setUserSettings(nextUserSettings);
         setAppUsers(buildLegacyUsers(USERS, nextUserSettings));
       }
+
+      saveMetricsViewModePreference(nextUser.metricsViewMode);
 
       if (!skipCurrentUserApply) {
         setCurrentUser(nextUser);
@@ -6917,6 +7019,7 @@ export default function PartySupplyApp() {
           avatar: nextUser.avatar,
           nameColor: nextUser.nameColor || '#0f172a',
           theme: nextUser.theme || 'light',
+          metricsViewMode: nextUser.metricsViewMode || 'modern',
         },
         reason: 'Actualización de perfil',
         userName: nextUser.displayName || nextUser.name,
@@ -6975,6 +7078,7 @@ export default function PartySupplyApp() {
       avatar: payload.avatar,
       nameColor: payload.nameColor,
       theme: payload.theme,
+      metricsViewMode: 'modern',
     });
 
     await loadAppUsers({ force: true, includeInactive: true });
@@ -7012,6 +7116,7 @@ export default function PartySupplyApp() {
       avatar: payload.avatar,
       nameColor: payload.nameColor,
       theme: payload.theme,
+      metricsViewMode: targetUser.metricsViewMode || 'modern',
     });
 
     if (payload.password?.trim()) {
@@ -9175,6 +9280,18 @@ export default function PartySupplyApp() {
   const isOrdersModuleLoading = moduleLoadState.orders.status === 'loading';
   const isReportsModuleLoading = moduleLoadState.reports.status === 'loading';
   const isMetricsModuleLoading = moduleLoadState.metrics.status === 'loading';
+  const isProfitBaseDataPending =
+    isAuthBootLoading ||
+    isCloudLoading ||
+    isReconnectAttempting ||
+    ['idle', 'loading'].includes(moduleLoadState.core.status) ||
+    ['idle', 'loading'].includes(moduleLoadState.transactions.status);
+  const isDashboardProfitSyncing =
+    isProfitBaseDataPending ||
+    moduleLoadState.dashboard.status === 'loading';
+  const isMetricsProfitSyncing =
+    isProfitBaseDataPending ||
+    moduleLoadState.metrics.status === 'loading';
   const dashboardOfflineEmptyMessage =
     isOfflineReadOnly &&
     moduleLoadState.dashboard.status !== 'loaded' &&
@@ -9225,10 +9342,10 @@ export default function PartySupplyApp() {
 
     if (isAuthBootLoading || isCloudLoading || isAnyModuleLoading || isReconnectAttempting) {
       return {
-        shellClass: 'border-amber-200 bg-amber-50/90 text-amber-800 shadow-[0_8px_18px_rgba(245,158,11,0.10)]',
-        iconClass: 'text-amber-600',
-        dotClass: 'bg-amber-500 shadow-[0_0_0_3px_rgba(245,158,11,0.16)] animate-pulse',
-        title: 'Cargando',
+        shellClass: 'is-loading',
+        iconClass: '',
+        dotClass: '',
+        title: 'Conectando',
         detail: isReconnectAttempting ? 'Reconectando...' : 'Sincronizando...',
         icon: 'loading',
       };
@@ -9236,9 +9353,9 @@ export default function PartySupplyApp() {
 
     if (isOfflineReadOnly) {
       return {
-        shellClass: 'border-rose-200 bg-rose-50/90 text-rose-800 shadow-[0_8px_18px_rgba(244,63,94,0.10)]',
-        iconClass: 'text-rose-600',
-        dotClass: 'bg-rose-500 shadow-[0_0_0_3px_rgba(244,63,94,0.14)]',
+        shellClass: 'is-offline',
+        iconClass: '',
+        dotClass: '',
         title: 'Sin conexión',
         detail: offlineSnapshotAt
           ? `Snapshot: ${formatDateAR(offlineSnapshotAt)}`
@@ -9248,9 +9365,9 @@ export default function PartySupplyApp() {
     }
 
     return {
-      shellClass: 'border-emerald-200 bg-emerald-50/90 text-emerald-800 shadow-[0_8px_18px_rgba(16,185,129,0.10)]',
-      iconClass: 'text-emerald-600',
-      dotClass: 'bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.16)]',
+      shellClass: 'is-online',
+      iconClass: '',
+      dotClass: '',
       title: 'Conectada',
       detail: 'Sincronizada',
       icon: 'online',
@@ -9275,23 +9392,15 @@ export default function PartySupplyApp() {
     'user-management': 'Gestión de usuarios',
   };
 
-  const currentRoleLabel = getRoleLabel(currentUser?.role);
-  const currentRoleTone =
-    currentUser?.role === 'system'
-      ? 'bg-fuchsia-100 text-fuchsia-700'
-      : currentUser?.role === 'owner'
-        ? 'bg-blue-100 text-blue-700'
-        : 'bg-green-100 text-green-700';
-
   if (!currentUser && (isAuthBootLoading || isCloudLoading)) return <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-100"><RefreshCw className="animate-spin text-fuchsia-600 mb-4" size={48} /><h2 className="text-xl font-bold">Cargando Nube...</h2></div>;
 
   if (!currentUser) {
     if (loginStep === 'password') {
       const user = selectedLoginUser;
       return (
-        <div className="relative flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-6 py-10">
+        <div className="relative flex h-screen max-h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-4 py-4 sm:px-6">
           <AppVersionBadge />
-          <div className="relative w-full max-w-md rounded-[34px] border border-slate-200/80 bg-white/95 p-6 shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur">
+          <div className="relative max-h-[calc(100vh-32px)] w-full max-w-md overflow-y-auto rounded-[28px] border border-slate-200/80 bg-white/95 p-5 shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur sm:p-6">
             {user?.role === 'system' && (
               <button
                 type="button"
@@ -9315,18 +9424,18 @@ export default function PartySupplyApp() {
             </div>
 
             <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.98)_0%,rgba(255,255,255,0.98)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.85)]">
-              <div className="flex flex-col items-center px-6 pb-5 pt-6 text-center">
+              <div className="flex flex-col items-center px-5 pb-4 pt-5 text-center sm:px-6 sm:pb-5 sm:pt-6">
                 <UserAvatar
                   avatar={user?.avatar}
                   name={user?.displayName || user?.name}
                   color={user?.nameColor || '#334155'}
-                  sizeClass="h-24 w-24 shadow-[0_12px_24px_rgba(15,23,42,0.14)]"
+                  sizeClass="h-20 w-20 shadow-[0_12px_24px_rgba(15,23,42,0.14)] sm:h-24 sm:w-24"
                   textClass="text-2xl"
                 />
-                <p className="mt-4 text-lg font-black text-slate-800">{user?.displayName || user?.name}</p>
+                <p className="mt-3 text-lg font-black text-slate-800 sm:mt-4">{user?.displayName || user?.name}</p>
               </div>
 
-              <form onSubmit={handleSubmitLogin} className="border-t border-slate-200 bg-white px-6 pb-6 pt-5">
+              <form onSubmit={handleSubmitLogin} className="border-t border-slate-200 bg-white px-5 pb-5 pt-4 sm:px-6 sm:pb-6 sm:pt-5">
                 <label className="block">
                   <span className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
                     Contraseña
@@ -9377,43 +9486,46 @@ export default function PartySupplyApp() {
     }
 
     return (
-      <div className="relative flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-6 py-10">
+      <div className="relative flex h-screen max-h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-4 py-4 sm:px-6">
         <AppVersionBadge />
-        <div className="relative w-full max-w-5xl rounded-[34px] border border-slate-200/80 bg-white/95 p-8 text-center shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur">
+        <div className="relative flex max-h-[calc(100vh-32px)] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-slate-200/80 bg-white/95 p-4 text-center shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur sm:p-6 lg:p-7">
           <LoginThemeToggle theme={loginTheme} onToggle={handleToggleLoginTheme} />
-          <div className="mb-5 flex justify-center">
+          <div className="shrink-0 -mb-4 sm:-mb-3 lg:mb-0">
+            <div className="mb-3 flex justify-center sm:mb-4">
             <button
               type="button"
               onClick={handleSystemLogoAccess}
-              className="rounded-[20px] bg-white p-2 shadow-[0_12px_28px_rgba(15,23,42,0.12)] ring-1 ring-slate-200 transition hover:scale-[1.01]"
+              className="rounded-[18px] bg-white p-2 shadow-[0_12px_28px_rgba(15,23,42,0.12)] ring-1 ring-slate-200 transition hover:scale-[1.01]"
               aria-label="Logo de Rebu"
             >
-              <img src={logoRebuImg} alt="Rebu" className="h-24 w-24 object-contain" />
+              <img src={logoRebuImg} alt="Rebu" className="h-16 w-16 object-contain sm:h-20 sm:w-20 xl:h-24 xl:w-24" />
             </button>
           </div>
           <h1 className="mb-1 text-2xl font-black text-slate-800">Rebu Cotillón</h1>
           <p className="mb-8 text-sm font-medium text-slate-500">Seleccioná tu usuario para continuar</p>
 
-          <div className="text-left">
+          </div>
+
+          <div className="min-h-0 text-left">
             {hasLoginUsers ? (
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid max-h-[calc(100vh-240px)] gap-3 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3 lg:gap-4">
                 {visibleLoginUsers.map((user) => (
                   <button
                     key={user.id}
                     onClick={() => handleSelectLoginUser(user.id)}
-                    className="group overflow-hidden rounded-[26px] border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.96)_0%,rgba(255,255,255,0.98)_100%)] text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition duration-200 hover:-translate-y-0.5 hover:border-fuchsia-200 hover:shadow-[0_18px_30px_rgba(15,23,42,0.1)]"
+                    className="group overflow-hidden rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.96)_0%,rgba(255,255,255,0.98)_100%)] text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition duration-200 hover:-translate-y-0.5 hover:border-fuchsia-200 hover:shadow-[0_18px_30px_rgba(15,23,42,0.1)]"
                   >
-                    <div className="flex flex-col items-center px-5 pb-5 pt-6">
+                    <div className="flex flex-col items-center px-4 pb-4 pt-5">
                       <UserAvatar
                         avatar={user.avatar}
                         name={user.displayName || user.name}
                         color={user.nameColor}
-                        sizeClass="h-24 w-24 shadow-[0_12px_24px_rgba(15,23,42,0.14)]"
-                        textClass="text-2xl"
+                        sizeClass="h-16 w-16 shadow-[0_12px_24px_rgba(15,23,42,0.14)] sm:h-20 sm:w-20 xl:h-24 xl:w-24"
+                        textClass="text-xl sm:text-2xl"
                       />
-                      <p className="mt-4 line-clamp-2 text-base font-black text-slate-800">{user.displayName}</p>
+                      <p className="mt-3 line-clamp-2 text-sm font-black text-slate-800 sm:text-base">{user.displayName}</p>
                     </div>
-                    <div className="flex items-center justify-center gap-2 border-t border-slate-200 bg-white px-4 py-3 text-[11px] font-black uppercase tracking-[0.16em] text-slate-500 transition group-hover:text-fuchsia-700">
+                    <div className="flex h-10 items-center justify-center gap-2 border-t border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500 transition group-hover:text-fuchsia-700 sm:h-11 sm:text-[11px]">
                       Ingresar
                       <ChevronRight size={15} />
                     </div>
@@ -9463,66 +9575,65 @@ export default function PartySupplyApp() {
             </div>
           )}
 
-          <header className="relative z-10 flex h-14 shrink-0 items-center justify-between gap-4 border-b bg-white px-5 shadow-sm">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="pl-1">
-                <h2 className="text-base font-bold text-slate-800 uppercase tracking-wide">
+          <header className="app-topbar relative z-10 flex h-14 shrink-0 items-center justify-between gap-4 border-b bg-white px-5 shadow-sm">
+            <div className="app-topbar-main flex min-w-0 items-center gap-3">
+              <div className="app-topbar-title">
+                <h2 className="app-topbar-heading text-base font-bold text-slate-800 uppercase tracking-wide">
                   {activeTabTitles[activeTab] || activeTab}
                 </h2>
-                <div className="mt-0.5 flex items-center gap-2 text-[12px] font-bold text-slate-500">
+                <div className="app-topbar-meta mt-0.5 flex items-center gap-2 text-[12px] font-bold text-slate-500">
                   <div
-                    className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] backdrop-blur ${cloudStatusMeta.shellClass}`}
+                    className={`app-cloud-status ${cloudStatusMeta.shellClass}`}
                     title={`${cloudStatusMeta.title} - ${cloudStatusMeta.detail}`}
                   >
-                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${cloudStatusMeta.dotClass}`} />
-                    {cloudStatusMeta.icon === 'offline' ? (
-                      <WifiOff size={12} className={cloudStatusMeta.iconClass} />
-                    ) : (
-                      <Database size={12} className={cloudStatusMeta.iconClass} />
-                    )}
+                    <span className="app-cloud-status-dot" />
+                    <span className="app-cloud-status-icon">
+                      {cloudStatusMeta.icon === 'offline' ? (
+                        <WifiOff size={12} />
+                      ) : (
+                        <Database size={12} />
+                      )}
+                    </span>
                     <span className="truncate">{cloudStatusMeta.title}</span>
                   </div>
-                  <span>{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>
+                  <span className="app-topbar-clock">{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>
                 </div>
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-3">
-              <div className="flex items-center gap-2">
+            <div className="app-topbar-tools flex shrink-0 items-center gap-3">
+              <div className="app-topbar-actions flex items-center gap-2">
                 <button
                   onClick={canManageRegister ? toggleRegisterStatus : undefined}
-                  className={`flex items-center gap-2 rounded border px-3 py-1.5 transition-colors ${isRegisterClosed ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'} ${canManageRegister ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
+                  className={`app-register-status ${isRegisterClosed ? 'is-closed' : 'is-open'} ${canManageRegister ? 'is-clickable' : 'is-readonly'}`}
                   title={canUseAdminArea ? '' : 'Solo Sistema o un Dueño pueden cambiar el estado de la caja'}
                 >
                   <Lock size={14} />
-                  <span className="text-xs font-bold">{isRegisterClosed ? 'CAJA CERRADA' : 'CAJA ABIERTA'}</span>
+                  <span>{isRegisterClosed ? 'Caja cerrada' : 'Caja abierta'}</span>
+                  {!isRegisterClosed && closingTime && (
+                    <span className="app-register-status-cutoff">
+                      <Clock size={12} />
+                      {closingTime}
+                    </span>
+                  )}
                 </button>
-                {!isRegisterClosed && closingTime && (<div className="flex items-center gap-1 px-2 py-1 bg-amber-50 border border-amber-200 rounded text-amber-700"><Clock size={12} /><span className="text-[10px] font-bold">Cierre: {closingTime}</span></div>)}
                 <button
                   type="button"
                   onClick={handleSoftReload}
-                  className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-black uppercase tracking-[0.08em] text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                  className="app-topbar-action"
                   title="Recarga datos vencidos y el modulo visible sin reiniciar"
                 >
                   <RefreshCw size={12} />
-                  Soft Reload
+                  Actualizar
                 </button>
                 <button
                   type="button"
                   onClick={handleForceReload}
-                  className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-black uppercase tracking-[0.08em] text-slate-600 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+                  className="app-topbar-action is-strong"
                   title="Recarga completa de la aplicacion"
                 >
                   <RefreshCw size={12} />
-                  Force Reload
+                  Recarga total
                 </button>
-              </div>
-              <div className="text-right hidden sm:block">
-                <p className="text-xs font-bold" style={currentUserPresentation?.textStyle}>
-                  {currentUserPresentation?.displayName || currentUser?.displayName || currentUser?.name}
-                </p>
-                <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${currentRoleTone}`}>
-                  {currentRoleLabel}
-                </span>
               </div>
             </div>
           </header>
@@ -9565,15 +9676,16 @@ export default function PartySupplyApp() {
                 <DashboardView 
                   openingBalance={openingBalance} 
                   totalSales={totalSales} 
-                  salesCount={salesCount} 
-                  currentUser={currentUser} 
-                  setTempOpeningBalance={setTempOpeningBalance} 
-                  setIsOpeningBalanceModalOpen={setIsOpeningBalanceModalOpen} 
-                  transactions={validTransactions} 
-                  dailyLogs={dailyLogs} 
+                  salesCount={salesCount}
+                  currentUser={currentUser}
+                  setTempOpeningBalance={setTempOpeningBalance}
+                  setIsOpeningBalanceModalOpen={setIsOpeningBalanceModalOpen}
+                  transactions={transactions}
+                  dailyLogs={dailyLogs}
                   inventory={inventory}
                   expenses={expenses}
                   isLoading={isDashboardModuleLoading && transactions.length === 0 && dailyLogs.length === 0}
+                  isProfitSyncing={isDashboardProfitSyncing}
                   emptyStateMessage={dashboardOfflineEmptyMessage}
                   onOpenExpenseModal={() => setIsExpenseModalOpen(true)}
                   onAlertClick={handleDashboardAlertClick} 
@@ -9610,8 +9722,8 @@ export default function PartySupplyApp() {
             <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} offers={offers} currentUser={currentUser} userCatalog={userCatalog} isLoading={isOrdersModuleLoading && budgets.length === 0 && orders.length === 0} emptyStateMessage={ordersOfflineEmptyMessage} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onUpdateOrder={handleUpdateOrder} onDeleteBudget={handleDeleteBudget} onDeleteOrder={handleDeleteOrder} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
             <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={historyLogs} inventory={inventory} currentUser={currentUser} userCatalog={userCatalog} members={members} isLoading={isHistoryModuleLoading && transactions.length === 0 && historyLogs.length === 0} emptyStateMessage={historyOfflineEmptyMessage} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setHistoryLogs} navigationRequest={historyNavigationRequest} onSoftReload={() => Promise.all([loadHistoryCloudData({ force: true }), loadTransactionsCloudData({ force: true })])} isActive={activeTab === 'history'} /></PersistentTabPanel>
             {canViewReports && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members} isLoading={isReportsModuleLoading && pastClosures.length === 0} emptyStateMessage={reportsOfflineEmptyMessage} onLoadReportDetail={fetchCashClosureDetailById} /></PersistentTabPanel>)}
-            {canViewMetrics && (<PersistentTabPanel tab="metrics" activeTab={activeTab} className="h-full min-h-0"><MetricsView transactions={transactions} expenses={expenses} pastClosures={pastClosures} inventory={inventory} members={members} budgets={budgets} orders={orders} dailyLogs={dailyLogs} currentUser={currentUser} userCatalog={userCatalog} isLoading={isMetricsModuleLoading && transactions.length === 0 && expenses.length === 0 && pastClosures.length === 0} emptyStateMessage={metricsOfflineEmptyMessage} onRefresh={() => loadMetricsCloudData({ force: true })} isActive={activeTab === 'metrics'} /></PersistentTabPanel>)}
-            {canViewLogs && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView initialLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} userCatalog={userCatalog} isActive={activeTab === 'logs'} /></PersistentTabPanel>)}
+            {canViewMetrics && (<PersistentTabPanel tab="metrics" activeTab={activeTab} className="h-full min-h-0"><MetricsView transactions={transactions} expenses={expenses} pastClosures={pastClosures} inventory={inventory} members={members} budgets={budgets} orders={orders} dailyLogs={dailyLogs} currentUser={currentUser} userCatalog={userCatalog} isLoading={isMetricsModuleLoading && transactions.length === 0 && expenses.length === 0 && pastClosures.length === 0} isProfitSyncing={isMetricsProfitSyncing} emptyStateMessage={metricsOfflineEmptyMessage} onRefresh={async () => { await loadCoreCloudData({ force: true }); await loadTransactionsCloudData({ force: true }); return loadMetricsCloudData({ force: true, includeTransactions: false }); }} isActive={activeTab === 'metrics'} /></PersistentTabPanel>)}
+            {canViewLogs && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView initialLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} userCatalog={userCatalog} inventory={inventory} isActive={activeTab === 'logs'} /></PersistentTabPanel>)}
             {canViewSessions && (<PersistentTabPanel tab="sessions" activeTab={activeTab} className="h-full min-h-0"><SessionsView initialLogs={dailyLogs} currentSessionMeta={currentSessionMeta} userCatalog={userCatalog} /></PersistentTabPanel>)}
             {canViewUserManagement && (
               <PersistentTabPanel tab="user-management" activeTab={activeTab} className="h-full min-h-0">

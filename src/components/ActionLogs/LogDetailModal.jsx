@@ -26,7 +26,7 @@ const getManagedUserRoleLabel = (role) => {
     .toLowerCase();
 
   if (['system', 'sistema', 'admin'].includes(normalized)) return 'Sistema';
-  if (['owner', 'dueno', 'duenio'].includes(normalized)) return 'Caja';
+  if (['owner', 'dueno', 'duenio'].includes(normalized)) return 'DueÃ±o';
   if (['seller', 'vendedor', 'caja'].includes(normalized)) return 'Caja';
   return role || 'Usuario';
 };
@@ -43,9 +43,23 @@ const getActionLogUserPresentation = (log, userCatalog) => {
     .trim()
     .toLowerCase();
 
+  if (!log?.userId && ['dueno', 'duenio', 'dueÃƒÂ±o', 'owner'].includes(normalizedName)) {
+    return {
+      badgeUser: { role: 'owner', name: log?.user || 'DueÃ±o' },
+      displayName: log?.user || 'DueÃ±o',
+    };
+  }
+
+  if (!log?.userId && ['vendedor', 'caja', 'seller'].includes(normalizedName)) {
+    return {
+      badgeUser: { role: 'seller', name: log?.user || 'Caja' },
+      displayName: log?.user || 'Caja',
+    };
+  }
+
   const isLegacyCajaLike =
     !log?.userId &&
-    (['owner', 'seller'].includes(normalizedRole) ||
+    ((!log?.user && ['owner', 'seller'].includes(normalizedRole)) ||
       ['dueno', 'duenio', 'dueño', 'vendedor', 'caja', 'seller'].includes(normalizedName));
 
   if (isLegacyCajaLike) {

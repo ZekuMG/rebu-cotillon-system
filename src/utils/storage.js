@@ -5,6 +5,7 @@ import { supabase } from '../supabase/client';
 
 const BUCKET = 'product-images';
 const THUMB_SIZE = 320;
+const PRODUCT_IMAGE_CACHE_CONTROL = '31536000';
 
 const readFileAsDataUrl = (file) =>
   new Promise((resolve, reject) => {
@@ -86,7 +87,7 @@ export const uploadProductThumbFromSource = async (source) => {
   const { data, error } = await supabase.storage
     .from(BUCKET)
     .upload(thumbFileName, thumbFile, {
-      cacheControl: '3600',
+      cacheControl: PRODUCT_IMAGE_CACHE_CONTROL,
       upsert: false,
     });
 
@@ -119,13 +120,13 @@ export const uploadProductImage = async (file) => {
     supabase.storage
       .from(BUCKET)
       .upload(fileName, file, {
-        cacheControl: '3600',
+        cacheControl: PRODUCT_IMAGE_CACHE_CONTROL,
         upsert: false,
       }),
     supabase.storage
       .from(BUCKET)
       .upload(thumbFileName, thumbFile, {
-        cacheControl: '3600',
+        cacheControl: PRODUCT_IMAGE_CACHE_CONTROL,
         upsert: false,
       }),
   ]);

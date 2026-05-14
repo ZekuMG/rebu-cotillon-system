@@ -52,6 +52,22 @@ const getSharedRecordId = (recordOrType, id, budgetId) => {
 const formatRecordCode = (recordOrType, id, budgetId) =>
   `ID-${String(getSharedRecordId(recordOrType, id, budgetId) || '').slice(0, 8).toUpperCase() || 'SINID'}`;
 
+const getOrderItemStockTone = (item, linkedProduct) => {
+  if (!linkedProduct || linkedProduct.stock === undefined || linkedProduct.stock === null) {
+    return 'slate';
+  }
+
+  const available = Number(linkedProduct.stock || 0);
+  const required = Math.max(Number(item.qty || 0), 0);
+  if (available <= 0 || (required > 0 && available < required)) return 'rose';
+
+  const lowThreshold = item.product_type === 'weight'
+    ? Math.max(required * 1.2, 500)
+    : Math.max(required + 2, 5);
+
+  return available <= lowThreshold ? 'amber' : 'emerald';
+};
+
 const createOrderPaymentDraft = (amount = 0, preferredMethod = 'Efectivo') => ({
   amountInput: amount > 0 ? String(roundOrderPaymentValue(amount)) : '',
   isSplitPayment: false,
@@ -836,13 +852,31 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                     {linkedOrderForBudget && <><p className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Pedido vinculado</p><p className="mt-0.5 font-mono text-[12px] font-semibold text-slate-600">{formatRecordCode(linkedOrderForBudget)}</p></>}
                   </div>
                 </div>
-                <div className="min-h-0 overflow-y-auto rounded-[18px] border border-slate-200 bg-white p-2 scrollbar-hide">
+                <div className="order-items-ledger min-h-0 overflow-y-auto rounded-[18px] border border-slate-200 bg-white p-2 scrollbar-hide">
                   <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Artículos del {selectedRecord.type === 'budget' ? 'presupuesto' : 'pedido'}</p>
-                  <div className="mt-1.5 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="order-items-ledger-head">
+                    <div className="min-w-0">
+                      <p className="order-items-ledger-kicker">Articulos del {selectedRecord.type === 'budget' ? 'presupuesto' : 'pedido'}</p>
+                      <p className="order-items-ledger-subtitle">{selectedRecord.items.length} articulo(s) en este registro</p>
+                    </div>
+                    <div className="order-items-ledger-total">
+                      <span>Total</span>
+                      <strong><FancyPrice amount={selectedRecord.totalAmount || 0} /></strong>
+                    </div>
+                  </div>
+
+                  <div className="order-items-ledger-table" role="table" aria-label="Articulos del presupuesto o pedido">
+                    <div className="order-items-ledger-columns" role="row">
+                      <span>Articulo</span>
+                      <span>Cant.</span>
+                      <span>Precio</span>
+                      <span>Stock</span>
+                      <span>Subtotal</span>
+                    </div>
+                    <div className="order-items-ledger-body">
                     {selectedRecord.items.map((item) => {
                       const subtotal = calculateBudgetLineSubtotal(item);
                       const linkedProduct = resolveRecordItemProduct(item);
-                      const itemImage = linkedProduct?.imageThumb || linkedProduct?.image_thumb || linkedProduct?.image;
                       const resolvedCategory = linkedProduct?.category || item.category || 'Sin categoría';
                       const stockLabel =
                         linkedProduct?.stock !== undefined
@@ -853,65 +887,46 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                             ? `Stock #${item.productId}`
                             : 'Item manual';
 
-                      return <div key={item.id} className="overflow-hidden rounded-[16px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(241,245,249,0.98)_100%)] shadow-[0_8px_20px_rgba(148,163,184,0.1)]">
-                        <div className="relative aspect-[16/10] overflow-hidden border-b border-slate-200 bg-slate-100">
-                          {itemImage ? (
-                            <img src={itemImage} alt={item.title} loading="lazy" decoding="async" fetchpriority="low" className="h-full w-full object-cover" />
-                          ) : (
-                            <div className="flex h-full w-full flex-col items-center justify-center bg-[radial-gradient(circle_at_top,rgba(224,231,255,0.95),rgba(226,232,240,0.98))] px-3 text-center text-slate-500">
-                              <Package size={22} className="mb-1.5 text-slate-400" />
-                              <span className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
-                                Sin foto
-                              </span>
+                      const stockTone = getOrderItemStockTone(item, linkedProduct);
+                      const originLabel = item.productId ? `Stock #${item.productId}` : 'Manual';
+
+                      return (
+                        <div key={item.id} className={`order-item-row order-item-row-${stockTone}`} role="row">
+                          <div className="order-item-product" role="cell">
+                            <div className="min-w-0">
+                              <p title={item.title}>{item.title}</p>
+                              <div>
+                                <span>{resolvedCategory}</span>
+                                <span>{originLabel}</span>
+                              </div>
                             </div>
-                          )}
-                          <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-1.5 p-1.5">
-                            <span className="rounded-full bg-white/92 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-slate-600 shadow-sm">
-                              {resolvedCategory}
-                            </span>
-                            <span className="rounded-full bg-slate-900/75 px-2 py-0.5 text-[8px] font-black text-white shadow-sm backdrop-blur-sm">
-                              {formatBudgetItemQuantity(item)}
-                            </span>
+                          </div>
+
+                          <div className="order-item-metric" role="cell">
+                            <span>Cant.</span>
+                            <strong>{formatBudgetItemQuantity(item)}</strong>
+                          </div>
+
+                          <div className="order-item-metric" role="cell">
+                            <span>{item.product_type === 'weight' ? 'Precio/Kg' : 'Precio/u'}</span>
+                            <strong>{formatCurrency(item.newPrice)}</strong>
+                          </div>
+
+                          <div className="order-item-stock" role="cell">
+                            <span className={`order-item-stock-pill order-item-stock-${stockTone}`}>{stockLabel}</span>
+                          </div>
+
+                          <div className="order-item-total" role="cell">
+                            <span>Subtotal</span>
+                            <strong>{formatCurrency(subtotal)}</strong>
                           </div>
                         </div>
-                        <div className="space-y-1.5 p-2">
-                          <div className="flex items-start justify-between gap-1.5">
-                            <div className="min-w-0 flex-1">
-                              <p className="max-h-[30px] overflow-hidden text-[12px] font-black leading-tight text-slate-800">{item.title}</p>
-                              <p className="mt-0.5 text-[9px] font-semibold text-slate-500">
-                                {item.product_type === 'weight' ? 'Precio por kilo' : 'Precio unitario'}
-                              </p>
-                            </div>
-                            <div className="shrink-0 rounded-[10px] border border-emerald-200 bg-emerald-50/90 px-1.5 py-1 text-right">
-                              <p className="text-[8px] font-black uppercase tracking-[0.08em] text-emerald-500">Subtotal</p>
-                              <p className="mt-0.5 text-[11px] font-black text-emerald-700">{formatCurrency(subtotal)}</p>
-                            </div>
-                          </div>
-                          <div className="grid grid-cols-2 gap-1 text-[9px] font-semibold text-slate-500">
-                            <span className="rounded-[10px] border border-slate-200 bg-white/90 px-1.5 py-1 leading-none">
-                              <span className="block text-[7px] font-black uppercase tracking-[0.08em] leading-none text-slate-400">
-                                {item.product_type === 'weight' ? 'Precio/Kg' : 'Precio/u'}
-                              </span>
-                              <span className="mt-0.5 block text-[10px] font-black leading-none text-slate-700">
-                                {formatCurrency(item.newPrice)}
-                              </span>
-                            </span>
-                            <span className="rounded-[10px] border border-slate-200 bg-white/90 px-1.5 py-1 leading-none">
-                              <span className="block text-[7px] font-black uppercase tracking-[0.08em] leading-none text-slate-400">Origen</span>
-                              <span className="mt-0.5 block truncate text-[10px] font-black leading-none text-slate-700">
-                                {item.productId ? `Stock #${item.productId}` : 'Item manual'}
-                              </span>
-                            </span>
-                          </div>
-                          <div className="rounded-[10px] border border-slate-200 bg-slate-50/90 px-1.5 py-1 leading-none">
-                            <p className="text-[7px] font-black uppercase tracking-[0.08em] leading-none text-slate-400">Referencia</p>
-                            <p className="mt-0.5 truncate text-[10px] font-black leading-none text-slate-700">{stockLabel}</p>
-                          </div>
-                        </div>
-                      </div>;
+                      );
+
                     })}
                   </div>
                 </div>
+              </div>
               </div>
             </div>
           ) : (

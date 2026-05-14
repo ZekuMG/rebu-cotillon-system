@@ -6,11 +6,88 @@ import {
   buildInventoryLookups,
   buildSalesDataset,
   getItemCategories,
+  getItemCost,
   getLiveProduct,
+  isTemporaryCustomItem,
   makeDashboardRange,
   normalizeText,
   parseMetricDate,
+  shouldSkipCostItem,
 } from '../utils/salesMetricsCore';
+
+const getDashboardStockChangeCost = (change = {}, lookups) => {
+  const productId = change.productId || change.product_id || change.id;
+  const product = productId ? lookups.byId.get(String(productId)) : null;
+  const qty = Math.abs(Number(
+    change.quantitySold ??
+      change.quantityReserved ??
+      change.quantityChanged ??
+      change.quantity ??
+      change.qty ??
+      0
+  ) || 0);
+  if (qty <= 0) return 0;
+
+  const unitCost = Number(
+    product?.purchasePrice ??
+      product?.purchase_price ??
+      change.purchasePrice ??
+      change.purchase_price ??
+      change.unitCost ??
+      change.unit_cost ??
+      change.cost ??
+      0
+  ) || 0;
+
+  return unitCost * qty;
+};
+
+const getDashboardTransactionCost = (tx = {}, lookups) => {
+  const items = Array.isArray(tx.items) ? tx.items : [];
+  const stockChanges = Array.isArray(tx.stockChanges) ? tx.stockChanges : [];
+  const itemCost = items.reduce((sum, item) => sum + getItemCost(item, lookups), 0);
+
+  if (!stockChanges.length) return itemCost;
+
+  const stockCost = stockChanges.reduce((sum, change) => sum + getDashboardStockChangeCost(change, lookups), 0);
+  const customItemCost = items.reduce((sum, item) => {
+    if (!isTemporaryCustomItem(item) || shouldSkipCostItem(item)) return sum;
+    return sum + getItemCost(item, lookups);
+  }, 0);
+
+  return Math.max(stockCost + customItemCost, itemCost);
+};
+
+const rebuildDashboardSalesDataset = (dataset, lookups) => {
+  const filteredTransactions = (dataset.filteredTransactions || []).map((tx) => {
+    const cost = getDashboardTransactionCost(tx, lookups);
+    const total = Number(tx.total || 0);
+    const profit = total - cost;
+    return {
+      ...tx,
+      cost,
+      profit,
+      net: profit,
+    };
+  });
+  const revenue = filteredTransactions.reduce((sum, tx) => sum + (Number(tx.total) || 0), 0);
+  const cost = filteredTransactions.reduce((sum, tx) => sum + (Number(tx.cost) || 0), 0);
+  const expenses = Number(dataset.stats?.expenses || 0);
+
+  return {
+    ...dataset,
+    filteredTransactions,
+    stats: {
+      ...dataset.stats,
+      revenue,
+      gross: revenue,
+      cost,
+      profit: revenue - cost - expenses,
+      net: revenue - cost - expenses,
+      averageTicket: filteredTransactions.length ? revenue / filteredTransactions.length : 0,
+    },
+  };
+};
 
 export default function useDashboardData({ 
   transactions, 
@@ -24,20 +101,23 @@ export default function useDashboardData({
   const currentHour = new Date().getHours();
   const lookups = useMemo(() => buildInventoryLookups(inventory || []), [inventory]);
   const dashboardRange = useMemo(() => makeDashboardRange(globalFilter), [globalFilter]);
-  const salesDataset = useMemo(() => buildSalesDataset({
-    transactions,
-    dailyLogs,
-    expenses,
-    inventory,
-    range: dashboardRange,
-    lookups,
-    filters: {
-      includeTest: false,
-      includeVoided: false,
-      status: 'all',
-      productType: 'all',
-    },
-  }), [transactions, dailyLogs, expenses, inventory, dashboardRange, lookups]);
+  const salesDataset = useMemo(() => {
+    const dataset = buildSalesDataset({
+      transactions,
+      dailyLogs,
+      expenses,
+      inventory,
+      range: dashboardRange,
+      lookups,
+      filters: {
+        includeTest: false,
+        includeVoided: false,
+        status: 'all',
+        productType: 'all',
+      },
+    });
+    return rebuildDashboardSalesDataset(dataset, lookups);
+  }, [transactions, dailyLogs, expenses, inventory, dashboardRange, lookups]);
 
   const safeParseDate = (dateStr) => {
     return parseMetricDate(dateStr);

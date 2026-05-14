@@ -1,12 +1,23 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Palette, Save, Shield, UserRound } from 'lucide-react';
+import { BarChart3, Palette, Save, Shield, UserRound } from 'lucide-react';
 import {
   getInitialsFromName,
   getRoleLabel,
+  normalizeMetricsViewMode,
 } from '../utils/appUsers';
 import UserAvatar from '../components/UserAvatar';
 import ColorSpectrumPicker from '../components/ColorSpectrumPicker';
 import AsyncActionButton from '../components/AsyncActionButton';
+
+const METRICS_VIEW_MODE_STORAGE_KEY = 'rebu_metrics_view_mode_v1';
+
+const getLocalMetricsViewMode = () => {
+  try {
+    return normalizeMetricsViewMode(window.localStorage.getItem(METRICS_VIEW_MODE_STORAGE_KEY));
+  } catch {
+    return 'modern';
+  }
+};
 
 export default function UserSettingsView({
   currentUser,
@@ -19,6 +30,7 @@ export default function UserSettingsView({
   const [confirmPassword, setConfirmPassword] = useState('');
   const [nameColor, setNameColor] = useState('#0f172a');
   const [theme, setTheme] = useState('light');
+  const [metricsViewMode, setMetricsViewMode] = useState('modern');
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -28,6 +40,7 @@ export default function UserSettingsView({
     setConfirmPassword('');
     setNameColor(currentUser?.nameColor || '#0f172a');
     setTheme(currentUser?.theme || 'light');
+    setMetricsViewMode(normalizeMetricsViewMode(currentUser?.metricsViewMode || getLocalMetricsViewMode()));
   }, [currentUser]);
 
   const previewRole = useMemo(
@@ -75,6 +88,7 @@ export default function UserSettingsView({
         password: password.trim(),
         nameColor,
         theme,
+        metricsViewMode,
       });
 
       setPassword('');
@@ -95,7 +109,7 @@ export default function UserSettingsView({
             Perfil de usuario
           </h3>
           <p className="mt-1.5 text-sm font-medium text-slate-500">
-            Modificá tu nombre, contraseña, avatar, color visible y preferencia de tema.
+            Modificá tu nombre, contraseña, avatar, color visible y preferencias de pantalla.
           </p>
         </div>
 
@@ -262,6 +276,43 @@ export default function UserSettingsView({
               >
                 <p className="text-[10px] font-black uppercase tracking-[0.12em]">Oscuro</p>
                 <p className="mt-1 text-sm font-semibold">Azulado nocturno para baja luz.</p>
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-[24px] border border-slate-200 bg-white/90 p-4 shadow-sm">
+            <div className="mb-4 flex items-center gap-2">
+              <BarChart3 size={16} className="text-slate-500" />
+              <h4 className="text-sm font-black uppercase tracking-[0.12em] text-slate-600">
+                Métricas
+              </h4>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setMetricsViewMode('modern')}
+                className={`rounded-[18px] border px-4 py-3 text-left transition ${
+                  metricsViewMode === 'modern'
+                    ? 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700'
+                    : 'border-slate-200 bg-slate-50 text-slate-600'
+                }`}
+              >
+                <p className="text-[10px] font-black uppercase tracking-[0.12em]">Nueva</p>
+                <p className="mt-1 text-sm font-semibold">Tablero operativo compacto.</p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMetricsViewMode('legacy')}
+                className={`rounded-[18px] border px-4 py-3 text-left transition ${
+                  metricsViewMode === 'legacy'
+                    ? 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700'
+                    : 'border-slate-200 bg-slate-50 text-slate-600'
+                }`}
+              >
+                <p className="text-[10px] font-black uppercase tracking-[0.12em]">Legacy</p>
+                <p className="mt-1 text-sm font-semibold">Vista completa anterior.</p>
               </button>
             </div>
           </div>

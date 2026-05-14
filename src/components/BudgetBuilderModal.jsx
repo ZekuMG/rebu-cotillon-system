@@ -19,6 +19,7 @@ import Swal from 'sweetalert2';
 import AsyncActionButton from './AsyncActionButton';
 import { FancyPrice } from './FancyPrice';
 import { HintIcon } from './HintIcon';
+import { getProductImageUrl } from '../utils/productImages';
 import {
   buildBudgetSnapshot,
   calculateBudgetLineSubtotal,
@@ -936,10 +937,13 @@ export default function BudgetBuilderModal({
                       className="group overflow-hidden rounded-[18px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(241,245,249,0.96)_100%)] text-left shadow-[0_10px_24px_rgba(148,163,184,0.12)] transition hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-[0_16px_30px_rgba(99,102,241,0.18)]"
                     >
                       <div className="relative aspect-[4/3] overflow-hidden border-b border-slate-200/80 bg-slate-100">
-                        {product.image ? (
+                        {getProductImageUrl(product) ? (
                           <img
-                            src={product.image}
+                            src={getProductImageUrl(product)}
                             alt={product.title}
+                            loading="lazy"
+                            decoding="async"
+                            fetchpriority="low"
                             className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
                           />
                         ) : (

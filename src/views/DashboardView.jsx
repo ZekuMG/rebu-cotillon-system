@@ -74,6 +74,7 @@ export default function DashboardView({
   inventory,
   expenses = [],
   isLoading = false,
+  isProfitSyncing = false,
   emptyStateMessage = '',
   onOpenExpenseModal,
   onAlertClick,
@@ -231,6 +232,12 @@ export default function DashboardView({
     cleanTransactions.length > 0 ||
     cleanDailyLogs.length > 0 ||
     cleanExpenses.length > 0;
+  const hasGrossWithoutCost =
+    Number(kpiStats.gross || 0) > 0 &&
+    Number(kpiStats.cost || 0) <= 0 &&
+    Number(kpiStats.count || 0) > 0;
+  const isNetProfitPending = hasGrossWithoutCost && (isProfitSyncing || isLoading);
+  const isNetProfitUnverified = hasGrossWithoutCost && !isNetProfitPending;
 
   const renderWidget = (widgetKey) => {
     switch (widgetKey) {
@@ -464,7 +471,7 @@ export default function DashboardView({
 
   if (isLoading && !hasDashboardSourceData) {
     return (
-      <div className="flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white/85 shadow-sm">
+      <div className="dashboard-view flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white/85 shadow-sm">
         <div className="text-center">
           <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Cargando panel</p>
           <p className="mt-2 text-sm font-medium text-slate-500">Estamos trayendo ventas, logs y cierres sin bloquear el resto de la app.</p>
@@ -475,7 +482,7 @@ export default function DashboardView({
 
   if (emptyStateMessage && !hasDashboardSourceData) {
     return (
-      <div className="flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white/85 shadow-sm">
+      <div className="dashboard-view flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white/85 shadow-sm">
         <div className="max-w-md text-center">
           <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Dashboard no disponible</p>
           <p className="mt-2 text-sm font-medium text-slate-500">{emptyStateMessage}</p>
@@ -553,6 +560,8 @@ export default function DashboardView({
                 setIsOpeningBalanceModalOpen={setIsOpeningBalanceModalOpen}
                 globalFilter={globalFilter}
                 expenses={filteredExpenses} 
+                isNetProfitPending={isNetProfitPending}
+                isNetProfitUnverified={isNetProfitUnverified}
                 onOpenExpenseModal={onOpenExpenseModal}
               />
             </div>

@@ -4,11 +4,11 @@ import AsyncActionButton from '../components/AsyncActionButton';
 import LogsControls from '../components/ActionLogs/LogsControls';
 import LogsTable from '../components/ActionLogs/LogsTable';
 import { ACTION_GROUPS, normalizeLogAction } from '../components/ActionLogs/logHelpers';
-import useDebouncedValue from '../hooks/useDebouncedValue';
 import useLogsFeed from '../hooks/useLogsFeed';
 import { LOGS_PAGE_SIZE, SESSION_LOG_ACTIONS } from '../utils/cloudSelects';
 import { CLOUD_SELECTS } from '../utils/cloudSelects';
 import {
+  buildFallbackFilterOptionFromKey,
   buildRemoteUserFilterValue,
   buildUnifiedUserFilterOptions,
   matchesUnifiedUserFilter,
@@ -24,6 +24,80 @@ const HIDDEN_ACTIONS_IN_GENERAL_LOGS = new Set(
   SESSION_LOG_ACTIONS.map((action) => normalizeLogAction(action))
 );
 const LOGS_SEARCH_SCAN_PAGES = 2;
+const DEFAULT_LOG_FILTERS = {
+  dateStart: '',
+  dateEnd: '',
+  user: '',
+  action: '',
+  search: '',
+  productSearch: '',
+  searchScope: 'all',
+};
+const normalizeSearchText = (value) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
+const stringifySearchValue = (value) => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const logMatchesScopedSearch = (log, rawTerm, scope = 'all') => {
+  const normalizedSearch = normalizeSearchText(rawTerm);
+  if (!normalizedSearch || normalizedSearch === 'test') return true;
+  if (String(log.id ?? '') === normalizedSearch) return true;
+
+  const detailsText = stringifySearchValue(log.details);
+  const indexesByScope = {
+    id: [detailsText],
+    product: [detailsText],
+    user: [log.user, log.userRole, log.details?.userName, log.details?.userRole],
+    action: [log.action, log.reason],
+    all: [log.action, log.user, log.reason, log.displayCreatedAt, log.created_at, detailsText],
+  };
+  const searchIndex = (indexesByScope[scope] || indexesByScope.all).filter(Boolean).join(' ');
+
+  return normalizeSearchText(searchIndex).includes(normalizedSearch);
+};
+
+const logMatchesProductSearch = (log, rawTerms = []) => {
+  const terms = (Array.isArray(rawTerms) ? rawTerms : [rawTerms])
+    .map(normalizeSearchText)
+    .filter(Boolean);
+  if (terms.length === 0) return true;
+
+  const detailsText = normalizeSearchText(stringifySearchValue(log.details));
+  return terms.some((term) => detailsText.includes(term));
+};
+
+const getLogSearchIds = (log = {}) => {
+  const details = log.details && typeof log.details === 'object' ? log.details : {};
+  return [
+    log.id,
+    details.id,
+    details.transactionId,
+    details.oldTransactionId,
+    details.productId,
+    details.product_id,
+    details.memberId,
+    details.memberNumber,
+    details.orderId,
+    details.budgetId,
+    details.sharedRecordId,
+  ]
+    .filter((value) => value !== null && value !== undefined && value !== '')
+    .map((value) => String(value));
+};
+
 const buildUserFilterLabel = (presentation, user, duplicateCount = 1) => {
   if (duplicateCount <= 1) return presentation.displayName;
 
@@ -186,6 +260,7 @@ export default function LogsView({
   onUpdateLogNote,
   onReprintPdf,
   userCatalog,
+  inventory = [],
   isActive = false,
   onSoftReload,
 }) {
@@ -194,25 +269,87 @@ export default function LogsView({
   const [filterUser, setFilterUser] = useState('');
   const [filterAction, setFilterAction] = useState('');
   const [filterSearch, setFilterSearch] = useState('');
+  const [searchGhostLabel, setSearchGhostLabel] = useState('');
+  const [filterProductSearch, setFilterProductSearch] = useState('');
+  const [searchScope, setSearchScope] = useState('all');
+  const [appliedFilters, setAppliedFilters] = useState(DEFAULT_LOG_FILTERS);
   const [sortColumn, setSortColumn] = useState('datetime');
   const [sortDirection, setSortDirection] = useState('desc');
   const [currentPage, setCurrentPage] = useState(1);
+  const [pageInput, setPageInput] = useState('1');
   const [selectedLog, setSelectedLog] = useState(null);
   const [isSelectedLogLoading, setIsSelectedLogLoading] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [isManualReloading, setIsManualReloading] = useState(false);
   const [noteOverrides, setNoteOverrides] = useState({});
 
-  const debouncedSearch = useDebouncedValue(filterSearch, 350);
-  const hasSearchTerm = debouncedSearch.trim().length > 0;
-  const hasUserFilter = Boolean(filterUser);
-  const shouldUseWideScan = hasSearchTerm || hasUserFilter;
+  const draftFilters = useMemo(
+    () => ({
+      dateStart: filterDateStart,
+      dateEnd: filterDateEnd,
+      user: filterUser,
+      action: filterAction,
+      search: filterSearch,
+      productSearch: filterProductSearch,
+      searchScope,
+    }),
+    [filterAction, filterDateEnd, filterDateStart, filterProductSearch, filterSearch, filterUser, searchScope],
+  );
+  const handleSearchChange = (value) => {
+    setFilterSearch(value);
+    setSearchGhostLabel('');
+  };
+  const hasPendingFilters = useMemo(
+    () => JSON.stringify(draftFilters) !== JSON.stringify(appliedFilters),
+    [appliedFilters, draftFilters],
+  );
+  const hasSearchTerm = appliedFilters.search.trim().length > 0;
+  const effectiveProductSearch =
+    appliedFilters.searchScope === 'product' && hasSearchTerm
+      ? appliedFilters.search
+      : appliedFilters.productSearch;
+  const isSearchingTestTerm = normalizeSearchText(appliedFilters.search) === 'test';
+  const remoteSearchTerm =
+    hasSearchTerm && !isSearchingTestTerm && appliedFilters.searchScope !== 'product'
+      ? appliedFilters.search
+      : '';
+  const shouldUseWideScan = isSearchingTestTerm;
   const hadRemoteDataRef = React.useRef(false);
   const wasActiveRef = React.useRef(isActive);
   const remoteUserFilterValue = useMemo(
-    () => (filterUser ? buildRemoteUserFilterValue(filterUser) : ''),
-    [filterUser],
+    () => (appliedFilters.user ? buildRemoteUserFilterValue(appliedFilters.user) : ''),
+    [appliedFilters.user],
   );
+  const productSearchTerms = useMemo(() => {
+    const rawTerm = String(effectiveProductSearch || '').trim();
+    if (!rawTerm) return [];
+
+    const normalizedTerm = normalizeSearchText(rawTerm);
+    const terms = new Set([rawTerm]);
+
+    (Array.isArray(inventory) ? inventory : []).forEach((product) => {
+      if (!product) return;
+
+      const candidates = [
+        product.id,
+        product.productId,
+        product.product_id,
+        product.title,
+        product.name,
+        product.barcode,
+        product.sku,
+      ].filter(Boolean);
+
+      const matchesProduct = candidates.some((value) =>
+        normalizeSearchText(value).includes(normalizedTerm)
+      );
+      if (!matchesProduct) return;
+
+      candidates.forEach((value) => terms.add(String(value)));
+    });
+
+    return [...terms].filter(Boolean).slice(0, 40);
+  }, [effectiveProductSearch, inventory]);
 
   const {
     logs: remoteLogs,
@@ -227,23 +364,48 @@ export default function LogsView({
     sortDirection,
     reloadKey,
     filters: {
-      dateStart: filterDateStart,
-      dateEnd: filterDateEnd,
+      dateStart: appliedFilters.dateStart,
+      dateEnd: appliedFilters.dateEnd,
       user: remoteUserFilterValue,
-      action: filterAction,
-      search: '',
+      action: appliedFilters.action,
+      search: remoteSearchTerm,
+      searchScope: appliedFilters.searchScope,
+      productSearch: effectiveProductSearch,
+      productSearchTerms,
     },
     includeDetails: false,
     excludeActions: SESSION_LOG_ACTIONS,
   });
 
   const hasActiveFilters = Boolean(
-    filterDateStart || filterDateEnd || filterUser || filterAction || filterSearch
+    appliedFilters.dateStart ||
+      appliedFilters.dateEnd ||
+      appliedFilters.user ||
+      appliedFilters.action ||
+      appliedFilters.search ||
+      appliedFilters.productSearch
+  );
+  const hasDraftFilters = Boolean(
+    filterDateStart || filterDateEnd || filterUser || filterAction || filterSearch || filterProductSearch
   );
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [filterDateStart, filterDateEnd, filterUser, filterAction, debouncedSearch, sortColumn, sortDirection]);
+  }, [
+    appliedFilters.dateStart,
+    appliedFilters.dateEnd,
+    appliedFilters.user,
+    appliedFilters.action,
+    appliedFilters.search,
+    appliedFilters.productSearch,
+    appliedFilters.searchScope,
+    sortColumn,
+    sortDirection,
+  ]);
+
+  useEffect(() => {
+    setPageInput(String(currentPage));
+  }, [currentPage]);
 
   const fallbackLogs = useMemo(
     () => (Array.isArray(initialLogs) ? initialLogs : []),
@@ -282,52 +444,43 @@ export default function LogsView({
   }, [noteOverrides, rawLogs]);
 
   const searchFilteredLogs = useMemo(() => {
-    const normalizedSearch = debouncedSearch.toLowerCase().trim();
-    if (!normalizedSearch || normalizedSearch === 'test') {
-      return processedLogs;
-    }
-
     return processedLogs.filter((log) => {
-      const detailsText =
-        typeof log.details === 'string'
-          ? log.details
-          : JSON.stringify(log.details || {});
-
-      const searchIndex = [
-        log.id,
-        log.action,
-        log.user,
-        log.reason,
-        log.displayCreatedAt,
-        log.created_at,
-        detailsText,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-
-      return searchIndex.includes(normalizedSearch);
+      const matchesSearch = logMatchesScopedSearch(log, appliedFilters.search, appliedFilters.searchScope);
+      const matchesProduct = effectiveProductSearch
+        ? logMatchesProductSearch(log, productSearchTerms)
+        : true;
+      return matchesSearch && matchesProduct;
     });
-  }, [debouncedSearch, processedLogs]);
+  }, [appliedFilters.search, appliedFilters.searchScope, effectiveProductSearch, processedLogs, productSearchTerms]);
 
   const userFilterOptions = useMemo(() => {
-    return buildUnifiedUserFilterOptions({
+    const options = buildUnifiedUserFilterOptions({
       catalogUsers: userCatalog?.all,
       records: processedLogs,
       userCatalog,
+      includeBaseBuckets: true,
     });
-  }, [processedLogs, userCatalog]);
 
-  const selectedUserFilter = useMemo(
-    () => userFilterOptions.find((option) => option.key === filterUser) || null,
-    [filterUser, userFilterOptions],
+    if (!filterUser || options.some((option) => option.key === filterUser)) {
+      return options;
+    }
+
+    const fallbackOption = buildFallbackFilterOptionFromKey(filterUser);
+    return fallbackOption ? [fallbackOption, ...options] : options;
+  }, [filterUser, processedLogs, userCatalog]);
+
+  const appliedUserFilter = useMemo(
+    () =>
+      userFilterOptions.find((option) => option.key === appliedFilters.user) ||
+      buildFallbackFilterOptionFromKey(appliedFilters.user),
+    [appliedFilters.user, userFilterOptions],
   );
 
   const visibleLogs = useMemo(() => {
-    const searchingTest = filterSearch.toLowerCase().trim() === 'test';
+    const searchingTest = appliedFilters.search.toLowerCase().trim() === 'test';
 
     return searchFilteredLogs.filter((log) => {
-      if (selectedUserFilter && !matchesUnifiedUserFilter(log, selectedUserFilter, userCatalog)) {
+      if (appliedUserFilter && !matchesUnifiedUserFilter(log, appliedUserFilter, userCatalog)) {
         return false;
       }
 
@@ -339,7 +492,7 @@ export default function LogsView({
       if (isTestLog) return searchingTest;
       return !searchingTest;
     });
-  }, [filterSearch, searchFilteredLogs, selectedUserFilter, userCatalog]);
+  }, [appliedFilters.search, appliedUserFilter, searchFilteredLogs, userCatalog]);
 
   const paginatedVisibleLogs = useMemo(() => {
     if (!shouldUseWideScan) return visibleLogs;
@@ -371,7 +524,8 @@ export default function LogsView({
     !isLoading &&
     !hasRemoteLoadError &&
     visibleLogs.length === 0 &&
-    !hasActiveFilters;
+    !hasActiveFilters &&
+    !hasDraftFilters;
   const canGoNextPage = shouldUseWideScan ? currentPage * LOGS_PAGE_SIZE < visibleLogs.length : hasNextPage;
   const totalKnownPages = shouldUseWideScan ? Math.max(1, Math.ceil(visibleLogs.length / LOGS_PAGE_SIZE)) : null;
   const visiblePageNumbers = useMemo(() => {
@@ -391,6 +545,83 @@ export default function LogsView({
     () => [...new Set([...ALL_LOG_ACTIONS, ...visibleLogs.map((log) => log.action).filter(Boolean)])],
     [visibleLogs]
   );
+  const searchSuggestions = useMemo(() => {
+    const term = normalizeSearchText(filterSearch);
+    if (!term) return [];
+
+    const suggestions = [];
+    const seen = new Set();
+    const pushSuggestion = (suggestion) => {
+      const key = `${suggestion.type}:${suggestion.value}:${suggestion.label}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      suggestions.push(suggestion);
+    };
+    const matches = (value) => normalizeSearchText(value).includes(term);
+    const scope = searchScope || 'all';
+
+    if (['all', 'id', 'product'].includes(scope)) {
+      (Array.isArray(inventory) ? inventory : []).forEach((product) => {
+        const productId = product?.id ?? product?.productId ?? product?.product_id;
+        const title = product?.title || product?.name || 'Producto';
+        const barcode = product?.barcode || product?.sku || '';
+        if (![productId, title, barcode].some(matches)) return;
+
+        pushSuggestion({
+          type: 'Producto',
+          value: String(productId || title),
+          label: productId ? `ID: ${productId}` : 'Producto',
+          detail: `Producto: ${title}`,
+        });
+      });
+    }
+
+    if (['all', 'id', 'user'].includes(scope)) {
+      (Array.isArray(userCatalog?.all) ? userCatalog.all : []).forEach((user) => {
+        const displayName = user?.displayName || user?.name || 'Usuario';
+        const userId = user?.id;
+        if (![userId, displayName, user?.role].some(matches)) return;
+
+        pushSuggestion({
+          type: 'Usuario',
+          value: scope === 'id' && userId ? String(userId) : displayName,
+          label: userId ? `ID: ${String(userId).slice(0, 8)}` : 'Usuario',
+          detail: `Usuario: ${displayName}`,
+        });
+      });
+    }
+
+    if (['all', 'action'].includes(scope)) {
+      uniqueActions.forEach((action) => {
+        if (!matches(action)) return;
+
+        pushSuggestion({
+          type: 'Accion',
+          value: action,
+          label: 'Accion',
+          detail: action,
+        });
+      });
+    }
+
+    if (['all', 'id'].includes(scope)) {
+      processedLogs.forEach((log) => {
+        const ids = getLogSearchIds(log);
+        const matchedId = ids.find(matches);
+        if (!matchedId) return;
+
+        const isSale = normalizeLogAction(log.action).includes('Venta');
+        pushSuggestion({
+          type: isSale ? 'Venta' : 'Registro',
+          value: matchedId,
+          label: `ID: ${matchedId}`,
+          detail: `${isSale ? 'Venta' : log.action || 'Registro'}${log.user ? `: ${log.user}` : ''}`,
+        });
+      });
+    }
+
+    return suggestions.slice(0, 9);
+  }, [filterSearch, inventory, processedLogs, searchScope, uniqueActions, userCatalog]);
 
   const handleSort = (column) => {
     if (sortColumn === column) {
@@ -408,6 +639,35 @@ export default function LogsView({
     setFilterUser('');
     setFilterAction('');
     setFilterSearch('');
+    setSearchGhostLabel('');
+    setFilterProductSearch('');
+    setSearchScope('all');
+    setAppliedFilters(DEFAULT_LOG_FILTERS);
+    setCurrentPage(1);
+  };
+
+  const applyFilters = () => {
+    setAppliedFilters(draftFilters);
+    setCurrentPage(1);
+  };
+
+  const handleSelectSearchSuggestion = (suggestion) => {
+    if (!suggestion?.value) return;
+    setFilterSearch(String(suggestion.value));
+    setSearchGhostLabel(suggestion.detail || suggestion.label || '');
+  };
+
+  const commitPageInput = () => {
+    const numericPage = Number.parseInt(String(pageInput || '').trim(), 10);
+    if (!Number.isFinite(numericPage) || numericPage < 1) {
+      setPageInput(String(currentPage));
+      return;
+    }
+
+    const nextPage = totalKnownPages
+      ? Math.min(totalKnownPages, numericPage)
+      : numericPage;
+    setCurrentPage(nextPage);
   };
 
   const handleSaveNote = async (logId, newNote) => {
@@ -512,10 +772,11 @@ export default function LogsView({
       <LogsControls
         totalLogs={visibleLogs.length}
         uniqueActions={uniqueActions}
-        hasActiveFilters={hasActiveFilters}
+        hasActiveFilters={hasActiveFilters || hasDraftFilters}
+        hasPendingFilters={hasPendingFilters}
+        onApplyFilters={applyFilters}
         onClearFilters={() => {
           clearAllFilters();
-          setCurrentPage(1);
         }}
         filterDateStart={filterDateStart}
         setFilterDateStart={setFilterDateStart}
@@ -527,7 +788,14 @@ export default function LogsView({
         filterAction={filterAction}
         setFilterAction={setFilterAction}
         filterSearch={filterSearch}
-        setFilterSearch={setFilterSearch}
+        setFilterSearch={handleSearchChange}
+        searchGhostLabel={searchGhostLabel}
+        searchScope={searchScope}
+        setSearchScope={setSearchScope}
+        searchSuggestions={searchSuggestions}
+        onSelectSearchSuggestion={handleSelectSearchSuggestion}
+        filterProductSearch={filterProductSearch}
+        setFilterProductSearch={setFilterProductSearch}
       />
 
       {hasRemoteLoadError && (
@@ -623,19 +891,39 @@ export default function LogsView({
           </button>
 
           {visiblePageNumbers.map((pageNumber) => (
-            <button
-              key={pageNumber}
-              type="button"
-              onClick={() => setCurrentPage(pageNumber)}
-              className={`min-w-[28px] h-6 rounded-lg border px-2 text-[10px] font-bold transition-colors ${
-                pageNumber === currentPage
-                  ? 'border-fuchsia-200 bg-fuchsia-600 text-white'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
-              }`}
-              title={`Ir a la página ${pageNumber}`}
-            >
-              {pageNumber}
-            </button>
+            pageNumber === currentPage ? (
+              <input
+                key={pageNumber}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={pageInput}
+                onChange={(event) => setPageInput(event.target.value.replace(/\D/g, ''))}
+                onBlur={commitPageInput}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    event.currentTarget.blur();
+                  }
+                  if (event.key === 'Escape') {
+                    setPageInput(String(currentPage));
+                    event.currentTarget.blur();
+                  }
+                }}
+                className="h-6 w-[42px] rounded-lg border border-fuchsia-200 bg-fuchsia-600 px-1 text-center text-[10px] font-black text-white outline-none transition focus:ring-2 focus:ring-fuchsia-300"
+                title="Escribí una página y presioná Enter"
+              />
+            ) : (
+              <button
+                key={pageNumber}
+                type="button"
+                onClick={() => setCurrentPage(pageNumber)}
+                className="min-w-[28px] h-6 rounded-lg border border-slate-200 bg-white px-2 text-[10px] font-bold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                title={`Ir a la página ${pageNumber}`}
+              >
+                {pageNumber}
+              </button>
+            )
           ))}
 
           <button

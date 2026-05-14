@@ -11,21 +11,22 @@ import { formatCurrency } from '../utils/helpers';
  */
 export const FancyPrice = ({ amount, className = "" }) => {
   const formatted = formatCurrency(amount);
+  const shellClassName = `fancy-price inline-flex items-baseline whitespace-nowrap tabular-nums ${className}`.trim();
   
   // Dividimos por la coma de los decimales (formato es-AR)
   const parts = formatted.split(',');
   
   // Si por alguna razón el formateador no devolvió coma, lo mostramos entero
   if (parts.length === 1) {
-    return <span className={className}>{formatted}</span>;
+    return <span className={shellClassName}>{formatted}</span>;
   }
   
   // parts[0] es la parte entera (ej: "$ 1.500")
   // parts[1] son los centavos (ej: "00")
   return (
-    <span className={className}>
-      {parts[0]}
-      <span className="text-[0.65em] font-semibold opacity-75">,{parts[1]}</span>
+    <span className={shellClassName}>
+      <span className="fancy-price-main">{parts[0]}</span>
+      <span className="fancy-price-cents text-[0.65em] font-semibold opacity-75">,{parts[1]}</span>
     </span>
   );
 };
