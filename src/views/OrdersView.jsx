@@ -841,11 +841,11 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                     <p className="mt-0.5 text-[13px] font-black text-slate-800">{selectedRecord.customerName}</p>
                     <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{selectedRecord.customerPhone}</p>
                     <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{selectedRecord.customerKind}</p>
-                    {selectedRecord.type === 'budget' && <><p className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Pago previsto</p><p className="mt-0.5 text-[12px] font-black text-slate-800">{selectedRecordPaymentSummary}</p>{selectedRecordPaymentItems.length > 1 && <div className="mt-1 flex flex-wrap gap-1">{selectedRecordPaymentItems.map((item) => (<span key={item.key} className="rounded-full border border-fuchsia-200 bg-fuchsia-50 px-2 py-0.5 text-[9px] font-black text-fuchsia-700">{item.title}</span>))}</div>}</>}
+                    {selectedRecord.type === 'budget' && <><p className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Pago previsto</p><p className="mt-0.5 text-[12px] font-black text-slate-800">{selectedRecordPaymentSummary}</p>{selectedRecordPaymentItems.length > 1 && <div className="mt-1 flex flex-wrap gap-1">{selectedRecordPaymentItems.map((item, itemIndex) => (<span key={`${item.key || 'payment'}_${itemIndex}`} className="rounded-full border border-fuchsia-200 bg-fuchsia-50 px-2 py-0.5 text-[9px] font-black text-fuchsia-700">{item.title}</span>))}</div>}</>}
                     {selectedRecord.type === 'order' && <>
                       <p className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Pagos registrados</p>
                       <p className="mt-0.5 text-[12px] font-black text-slate-800">{selectedRecordPaymentSummary}</p>
-                      {selectedRecordPaymentItems.length > 0 && <div className="mt-1 flex flex-wrap gap-1">{selectedRecordPaymentItems.map((item) => (<span key={item.key} className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] font-black text-sky-700">{item.title}</span>))}</div>}
+                      {selectedRecordPaymentItems.length > 0 && <div className="mt-1 flex flex-wrap gap-1">{selectedRecordPaymentItems.map((item, itemIndex) => (<span key={`${item.key || 'payment'}_${itemIndex}`} className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] font-black text-sky-700">{item.title}</span>))}</div>}
                       {selectedOrderPaymentHistory.length > 0 && <div className="mt-2 space-y-1.5">{selectedOrderPaymentHistory.map((entry) => (<div key={entry.id} className="rounded-xl border border-slate-200 bg-white px-2.5 py-2"><div className="flex items-center justify-between gap-2"><p className="text-[10px] font-black uppercase tracking-[0.08em] text-slate-500">{entry.entryType === 'deposit' ? 'Seña inicial' : entry.entryType === 'legacy' ? 'Pago previo' : 'Pago'}</p><p className="text-[10px] font-black text-slate-700">{entry.createdAt ? formatDateAR(entry.createdAt) : 'Sin fecha'}</p></div><p className="mt-1 text-[12px] font-black text-slate-800">{formatCurrency(entry.amount || 0)}</p><div className="mt-1 flex flex-wrap gap-1">{(entry.lines || []).map((line, lineIndex) => (<span key={line.id || `${entry.id}_${lineIndex}`} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-black text-slate-600">{getPaymentMethodLabel(line.method)}{line.method === 'Credito' && Number(line.installments) > 1 ? ` · ${line.installments} cuotas` : ''}{line.method === 'Efectivo' && Number(line.cashChange || 0) > 0 ? ` · cambio ${formatCurrency(line.cashChange || 0)}` : ''}</span>))}</div></div>))}</div>}
                     </>}
                     {selectedRecord.customerNote && <><p className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Nota</p><p className="mt-0.5 text-[12px] font-medium text-slate-600">{selectedRecord.customerNote}</p></>}
@@ -874,7 +874,7 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                       <span>Subtotal</span>
                     </div>
                     <div className="order-items-ledger-body">
-                    {selectedRecord.items.map((item) => {
+                    {selectedRecord.items.map((item, itemIndex) => {
                       const subtotal = calculateBudgetLineSubtotal(item);
                       const linkedProduct = resolveRecordItemProduct(item);
                       const resolvedCategory = linkedProduct?.category || item.category || 'Sin categoría';
@@ -891,7 +891,7 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                       const originLabel = item.productId ? `Stock #${item.productId}` : 'Manual';
 
                       return (
-                        <div key={item.id} className={`order-item-row order-item-row-${stockTone}`} role="row">
+                        <div key={`${item.id || 'item'}_${itemIndex}`} className={`order-item-row order-item-row-${stockTone}`} role="row">
                           <div className="order-item-product" role="cell">
                             <div className="min-w-0">
                               <p title={item.title}>{item.title}</p>
@@ -998,7 +998,7 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
             <AsyncActionButton type="button" onAction={handleConvertBudget} pending={isConverting} disabled={isConverting} loadingLabel="Convirtiendo..." className="rounded-[14px] border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-black text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60">Crear pedido</AsyncActionButton>
           </div>
         </div>
-        {false && <div className="hidden">
+        {import.meta.env.VITE_SHOW_LEGACY_ORDER_DEPOSIT === 'true' && <div className="hidden">
         <label className="block rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2"><span className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400"><CreditCard size={11} />Seña inicial</span><input type="number" min="0" step="0.01" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none" /></label>
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-semibold text-slate-600">Total del presupuesto: <span className="font-black text-slate-800">{formatCurrency(convertTarget.totalAmount)}</span></div>
         <OrderPaymentEditor compact draft={convertPaymentDraft} onChange={setConvertPaymentDraft} maxAmount={convertTarget.totalAmount || 0} title="Seña inicial" hint="Cada seña puede cobrarse con uno o dos métodos." />

@@ -2,7 +2,6 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 // import vue from '@vitejs/plugin-vue' // Esto no lo usas si usas React, mejor dejarlo comentado o borrarlo
 import path from 'path';
-import legacy from '@vitejs/plugin-legacy'; // Necesitas importar esto si vas a usar legacy, aunque ahora lo desactivaremos
 
 export default defineConfig({
   // CRÍTICO PARA ELECTRON: Rutas relativas
@@ -37,6 +36,20 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     chunkSizeWarningLimit: 2000, 
-    sourcemap: false
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('react') || id.includes('scheduler')) return 'vendor-react';
+          if (id.includes('recharts') || id.includes('d3-')) return 'vendor-charts';
+          if (id.includes('@supabase')) return 'vendor-supabase';
+          if (id.includes('sweetalert2')) return 'vendor-alerts';
+          if (id.includes('xlsx')) return 'vendor-xlsx';
+          if (id.includes('lucide-react')) return 'vendor-icons';
+          return undefined;
+        },
+      },
+    }
   }
 });

@@ -98,7 +98,7 @@ const getLogSearchIds = (log = {}) => {
     .map((value) => String(value));
 };
 
-const buildUserFilterLabel = (presentation, user, duplicateCount = 1) => {
+const _buildUserFilterLabel = (presentation, user, duplicateCount = 1) => {
   if (duplicateCount <= 1) return presentation.displayName;
 
   const suffixParts = [];

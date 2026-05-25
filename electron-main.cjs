@@ -1,12 +1,49 @@
-const { app, BrowserWindow, ipcMain, session, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow;
 
 const APP_NAME = 'Rebu Cotillon System';
 const isDev = !app.isPackaged;
+const sanitizePdfFileName = (value) => {
+  const fallback = 'rebu-documento.pdf';
+  const baseName = String(value || fallback)
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+    .trim()
+    .slice(0, 120);
+  return baseName.toLowerCase().endsWith('.pdf') ? baseName : `${baseName || 'rebu-documento'}.pdf`;
+};
+
+const isTrustedIpcSender = (event) => Boolean(mainWindow && event?.sender === mainWindow.webContents);
+
+const isAllowedAppNavigation = (targetUrl) => {
+  try {
+    const parsedUrl = new URL(targetUrl);
+    const currentUrl = mainWindow?.webContents?.getURL?.() || '';
+    const currentOrigin = currentUrl ? new URL(currentUrl).origin : '';
+    if (isDev && parsedUrl.origin === currentOrigin) return true;
+    return parsedUrl.protocol === 'file:';
+  } catch {
+    return false;
+  }
+};
+
+const getPrimaryLocalIp = () => {
+  try {
+    for (const interfaces of Object.values(os.networkInterfaces())) {
+      for (const net of interfaces || []) {
+        const isIPv4 = net?.family === 'IPv4' || net?.family === 4;
+        if (isIPv4 && !net.internal && net.address) return net.address;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+};
 
 app.setName(APP_NAME);
 
@@ -31,14 +68,21 @@ function createWindow() {
     title: APP_NAME,
     icon: path.join(__dirname, 'public/rebu-logo.png'),
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-      webSecurity: false,
+      preload: path.join(__dirname, 'preload.cjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      webSecurity: true,
     },
   });
 
   const startUrl = process.env.ELECTRON_START_URL || `file://${path.join(__dirname, './dist/index.html')}`;
   mainWindow.loadURL(startUrl);
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
+    if (isAllowedAppNavigation(targetUrl)) return;
+    event.preventDefault();
+  });
 
   mainWindow.once('ready-to-show', () => {
     if (app.isPackaged) {
@@ -48,20 +92,12 @@ function createWindow() {
 }
 
 app.on('ready', () => {
-  session.defaultSession.webRequest.onBeforeSendHeaders(
-    { urls: ['https://*.supabase.co/*'] },
-    (details, callback) => {
-      details.requestHeaders['Origin'] = 'http://localhost';
-      details.requestHeaders['Referer'] = 'http://localhost/';
-      callback({ requestHeaders: details.requestHeaders });
-    }
-  );
-
   ipcMain.handle('save-as-pdf', async (event, defaultName) => {
     try {
+      if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
       const isPackaged = app.isPackaged;
       const basePath = isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath();
-      const suggestedPath = path.join(basePath, defaultName);
+      const suggestedPath = path.join(basePath, sanitizePdfFileName(defaultName));
 
       const { filePath } = await dialog.showSaveDialog(mainWindow, {
         title: 'Guardar PDF',
@@ -84,6 +120,28 @@ app.on('ready', () => {
       console.error('Error generando PDF:', error);
       return { success: false, error: error.message };
     }
+  });
+
+  ipcMain.handle('print-silent', async (event) => {
+    try {
+      if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+      if (!mainWindow) return { success: false, error: 'Ventana no disponible' };
+      mainWindow.webContents.print({ silent: true, printBackground: true });
+      return { success: true };
+    } catch (error) {
+      console.error('Error imprimiendo:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('get-device-info', async (event) => {
+    if (!isTrustedIpcSender(event)) return null;
+    return {
+      deviceName: os.hostname?.() || 'Equipo desconocido',
+      ipAddress: getPrimaryLocalIp() || 'No disponible',
+      platform: `${os.platform?.() || 'desktop'} ${os.release?.() || ''}`.trim(),
+      runtime: 'Electron',
+    };
   });
 
   createWindow();

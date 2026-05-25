@@ -1,5 +1,5 @@
 // src/hooks/useDashboardData.js
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { PAYMENT_METHODS } from '../data';
 import { getPaymentMethodTotals } from '../utils/paymentBreakdown';
 import {
@@ -119,13 +119,13 @@ export default function useDashboardData({
     return rebuildDashboardSalesDataset(dataset, lookups);
   }, [transactions, dailyLogs, expenses, inventory, dashboardRange, lookups]);
 
-  const safeParseDate = (dateStr) => {
+  const safeParseDate = useCallback((dateStr) => {
     return parseMetricDate(dateStr);
-  };
+  }, []);
 
-  const getLiveProductForItem = (item) => getLiveProduct(item, lookups);
+  const getLiveProductForItem = useCallback((item) => getLiveProduct(item, lookups), [lookups]);
 
-  const getCategoryProductForItem = (item = {}) => {
+  const getCategoryProductForItem = useCallback((item = {}) => {
     const liveProduct = getLiveProductForItem(item);
     if (liveProduct) return liveProduct;
 
@@ -146,9 +146,9 @@ export default function useDashboardData({
 
     const normalizedTitle = normalizeText(rawTitle);
     return normalizedTitle ? lookups.byTitle.get(normalizedTitle) || null : null;
-  };
+  }, [getLiveProductForItem, lookups]);
 
-  const getRankingItemRevenue = (item, txTotal = 0) => {
+  const getRankingItemRevenue = useCallback((item, txTotal = 0) => {
     const qty = Number(item?.qty) || Number(item?.quantity) || 0;
     const price = Number(item?.price) || Number(item?.unit_price) || Number(item?.newPrice) || 0;
     if (qty <= 0 || price <= 0) return 0;
@@ -193,7 +193,7 @@ export default function useDashboardData({
     }
 
     return price >= 100 ? perKgRevenue : perGramRevenue;
-  };
+  }, [getLiveProductForItem]);
 
   const filteredData = salesDataset.filteredTransactions;
   const filteredExpenses = salesDataset.filteredExpenses;
@@ -221,7 +221,7 @@ export default function useDashboardData({
     };
   }, [filteredExpenses]);
 
-  const getExpenseHour = (expense = {}) => {
+  const getExpenseHour = useCallback((expense = {}) => {
     const rawTime = expense.time || expense.timestamp;
     if (typeof rawTime === 'string' && rawTime.includes(':')) {
       const hour = parseInt(rawTime.split(':')[0], 10);
@@ -230,7 +230,7 @@ export default function useDashboardData({
 
     const dateObj = safeParseDate(expense.createdAt || expense.created_at || expense.date);
     return dateObj ? dateObj.getHours() : 0;
-  };
+  }, [safeParseDate]);
 
   const buildDateKey = (dateObj) =>
     dateObj ? `${dateObj.getFullYear()}-${dateObj.getMonth()}-${dateObj.getDate()}` : '';
@@ -374,7 +374,7 @@ export default function useDashboardData({
     });
 
     return Array.from(daysMap.values());
-  }, [globalFilter, filteredData, filteredExpenses, currentHour, inventory]);
+  }, [globalFilter, filteredData, filteredExpenses, currentHour, getExpenseHour, safeParseDate]);
 
   const maxSales = useMemo(() => {
     const max = Math.max(...chartData.map(d => d.sales)); return max > 0 ? max : 1;
@@ -463,7 +463,7 @@ export default function useDashboardData({
         return bQtyScore - aQtyScore;
       })
       .slice(0, 10); 
-  }, [filteredData, rankingMode, rankingCriteria, inventory]);
+  }, [filteredData, rankingMode, rankingCriteria, getCategoryProductForItem, getLiveProductForItem, getRankingItemRevenue]);
 
   const lowStockProducts = useMemo(() => {
     if (!inventory) return [];

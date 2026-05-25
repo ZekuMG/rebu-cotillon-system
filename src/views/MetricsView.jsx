@@ -628,7 +628,7 @@ export default function MetricsView({
 
   useEffect(() => {
     setViewMode(getPreferredMetricsViewMode(currentUser));
-  }, [currentUser?.id, currentUser?.metricsViewMode]);
+  }, [currentUser]);
 
   const metrics = useMetricsData({
     transactions,
@@ -834,7 +834,7 @@ export default function MetricsView({
     });
   };
   const periodUnit = metrics.current.periodLabel || 'día';
-  const periodUnitPlural = metrics.current.periodLabelPlural || 'días';
+  const _periodUnitPlural = metrics.current.periodLabelPlural || 'días';
   const hourlyPulseSeries = useMemo(() => {
     const rowsByHour = new Map((metrics.current.hourStats || []).map((row) => [String(row.key).padStart(2, '0'), row]));
     return Array.from({ length: 14 }, (_, index) => {
@@ -848,7 +848,7 @@ export default function MetricsView({
         revenue: Number(row.revenue || 0),
       };
     });
-  }, [metrics.current.hourStats]);
+  }, [metrics]);
   const showHourlyPulse =
     hourlyPulseSeries.some((row) => Number(row.salesCount || 0) > 0);
 
@@ -885,7 +885,7 @@ export default function MetricsView({
     </div>
   );
 
-  const renderFiltersPanel = (modern = false) => (
+  const _renderFiltersPanel = (modern = false) => (
     modern ? renderModernFiltersPanel() :
     <div className={modern ? 'metrics-modern-filters rounded-lg border border-slate-200 bg-white p-2' : 'rounded-lg border border-slate-200 bg-slate-50 p-2'}>
       <div className={modern ? 'grid grid-cols-2 items-end gap-2 md:grid-cols-4 xl:grid-cols-[0.8fr_0.85fr_0.85fr_0.95fr_1.35fr_auto_auto]' : 'grid grid-cols-2 items-end gap-2 md:grid-cols-4 xl:grid-cols-[0.9fr_0.85fr_0.9fr_1fr_1.7fr_auto_auto]'}>

@@ -1,0 +1,39 @@
+-- NEXT STAGE ONLY - DO NOT RUN AS-IS.
+--
+-- Supabase advisor reports RLS disabled on business tables.
+-- Enabling RLS without matching policies will block app reads/writes.
+-- The current Rebu desktop app still uses the Supabase anon key plus an internal app_users login,
+-- so proper RLS needs either Supabase Auth, a trusted backend, or carefully designed SECURITY DEFINER RPCs.
+--
+-- Tables reported by advisor:
+-- public.agenda_contacts
+-- public.budgets
+-- public.cash_closures
+-- public.categories
+-- public.clients
+-- public.expenses
+-- public.logs
+-- public.offers
+-- public.orders
+-- public.products
+-- public.register_state
+-- public.rewards
+-- public.sale_items
+-- public.sales
+--
+-- Do not uncomment these until policies are designed and tested:
+--
+-- alter table public.agenda_contacts enable row level security;
+-- alter table public.budgets enable row level security;
+-- alter table public.cash_closures enable row level security;
+-- alter table public.categories enable row level security;
+-- alter table public.clients enable row level security;
+-- alter table public.expenses enable row level security;
+-- alter table public.logs enable row level security;
+-- alter table public.offers enable row level security;
+-- alter table public.orders enable row level security;
+-- alter table public.products enable row level security;
+-- alter table public.register_state enable row level security;
+-- alter table public.rewards enable row level security;
+-- alter table public.sale_items enable row level security;
+-- alter table public.sales enable row level security;

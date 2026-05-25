@@ -13,13 +13,13 @@ import {
 } from 'lucide-react';
 // ♻️ FIX: Importamos formatNumber y FancyPrice
 import { formatNumber } from '../../utils/helpers';
-import { hasOwnerAccess } from '../../utils/appUsers';
 import { hasPermission } from '../../utils/userPermissions';
 import { FancyPrice } from '../FancyPrice';
 import { HintIcon } from '../HintIcon';
 
 export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, currentUser, setTempOpeningBalance, setIsOpeningBalanceModalOpen, globalFilter, expenses = [], isNetProfitPending = false, isNetProfitUnverified = false, onOpenExpenseModal }) => {
   const canManageExpenses = hasPermission(currentUser, 'extras.expenses.manage');
+  const canManageRegister = hasPermission(currentUser, 'register.manage');
   const netProfitStatusLabel = isNetProfitPending
     ? 'Sincronizando...'
     : isNetProfitUnverified
@@ -99,7 +99,7 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
         <div className="bg-white p-3 rounded-lg shadow-sm border border-slate-200 relative overflow-hidden flex flex-col justify-between h-24">
           <div className="flex justify-between items-start mb-1 z-10">
             <span className="text-[11px] font-black text-slate-400 uppercase tracking-wide">Caja Inicial</span>
-            {hasOwnerAccess(currentUser) && (
+            {canManageRegister && (
               <button
                 onClick={() => {
                   setTempOpeningBalance(String(openingBalance));

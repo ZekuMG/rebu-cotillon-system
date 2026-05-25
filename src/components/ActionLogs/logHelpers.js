@@ -81,6 +81,9 @@ export const getDetailTitle = (rawAction) => {
     'Oferta Eliminada': 'Baja de Oferta',
   };
 
+  if (action === 'Importacion Excel Productos') return 'Importacion Excel de Productos';
+  if (action === 'Edicion Rapida Productos Avanzado') return 'Edicion Rapida de Productos';
+  if (action === 'Edicion Masiva Productos Avanzado') return 'Edicion Masiva de Productos';
   return titles[action] || 'Detalles del Registro';
 };
 
@@ -140,6 +143,9 @@ export const getDetailIcon = (rawAction) => {
     'Oferta Eliminada': '\u{1F3AB}',
   };
 
+  if (action === 'Importacion Excel Productos') return '\u{1F4E5}';
+  if (action === 'Edicion Rapida Productos Avanzado') return '\u270f\ufe0f';
+  if (action === 'Edicion Masiva Productos Avanzado') return '\u{1F4DA}';
   return icons[action] || '\u{1F4C4}';
 };
 
@@ -199,10 +205,14 @@ export const getDetailColor = (rawAction) => {
     'Exportación PDF': 'indigo',
   };
 
+  if (action === 'Importacion Excel Productos') return 'blue';
+  if (action === 'Edicion Rapida Productos Avanzado') return 'blue';
+  if (action === 'Edicion Masiva Productos Avanzado') return 'amber';
   return colors[action] || 'slate';
 };
 
 export const ACTION_GROUPS = [
+  { label: 'Productos Avanzado', actions: ['Importacion Excel Productos', 'Edicion Rapida Productos Avanzado', 'Edicion Masiva Productos Avanzado'] },
   { label: '\u{1F4B0} Caja', actions: ['Apertura de Caja', 'Cierre de Caja', 'Cierre de Caja (Silencioso)', 'Cierre Autom\u00e1tico'] },
   { label: '\u{1F6D2} Ventas', actions: ['Venta Realizada', 'Venta Anulada', 'Venta Restaurada', 'Venta Modificada', 'Venta Eliminada'] },
   { label: '\u{1F4E6} Pedidos', actions: ['Presupuesto Creado', 'Presupuesto Editado', 'Presupuesto Eliminado', 'Pedido Creado', 'Pedido Editado', 'Pago Pedido', 'Pedido Retirado', 'Pedido Cancelado', 'Pedido Eliminado'] },

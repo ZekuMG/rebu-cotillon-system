@@ -10,7 +10,7 @@ export default function useIncrementalFeed(items = [], options = {}) {
     resetKey,
   } = options;
 
-  const safeItems = Array.isArray(items) ? items : [];
+  const safeItems = useMemo(() => (Array.isArray(items) ? items : []), [items]);
   const [visibleCount, setVisibleCount] = useState(() => Math.min(batchSize, safeItems.length));
 
   useEffect(() => {

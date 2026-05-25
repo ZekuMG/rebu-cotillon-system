@@ -82,13 +82,20 @@ export const EditTransactionModal = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+  // transaction already refreshes the scanner closure with the latest item handler.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transaction, inventory]);
 
   if (!transaction) return null;
 
   // ── LÓGICA LOCAL DEL MODAL (Evita errores del padre) ──
   const clearDerivedLineTotals = (item = {}) => {
-    const { subtotal, lineSubtotal, line_subtotal, lineTotal, line_total, ...rest } = item;
+    const rest = { ...item };
+    delete rest.subtotal;
+    delete rest.lineSubtotal;
+    delete rest.line_subtotal;
+    delete rest.lineTotal;
+    delete rest.line_total;
     return rest;
   };
 
@@ -189,7 +196,7 @@ export const EditTransactionModal = ({
     });
   };
 
-  const handleAddLocalItem = (product) => {
+  function handleAddLocalItem(product) {
     const newItems = [...transaction.items];
     const existingIdx = newItems.findIndex(i => (i.id || i.productId) === product.id);
     
@@ -213,7 +220,7 @@ export const EditTransactionModal = ({
     }
     applyTransactionState(transaction, newItems);
     setTransactionSearch('');
-  };
+  }
 
   const handleUpdateItem = (index, field, value) => {
     const newItems = [...transaction.items];

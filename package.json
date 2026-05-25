@@ -1,7 +1,7 @@
 {
   "name": "cotillon-rebu-system",
   "productName": "Rebu Cotillón",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "private": true,
   "main": "electron-main.cjs",
   "type": "module",
@@ -22,7 +22,8 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "recharts": "^2.15.3",
-    "sweetalert2": "^11.14.4"
+    "sweetalert2": "^11.14.4",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",
@@ -50,6 +51,7 @@
     "files": [
       "dist/**/*",
       "electron-main.cjs",
+      "preload.cjs",
       "public/**/*"
     ],
     "directories": {

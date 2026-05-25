@@ -715,6 +715,26 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
         );
       }
 
+      case 'Importacion Excel Productos':
+      case 'Edicion Rapida Productos Avanzado':
+      case 'Edicion Masiva Productos Avanzado': {
+        const items = Array.isArray(d.items) ? d.items : d.title ? [d.title] : [];
+        const affectedCount = d.count || items.length || 1;
+        const previewItems = items
+          .map((item) => (typeof item === 'string' ? item : item?.title))
+          .filter(Boolean)
+          .slice(0, 2);
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.bb}`}>Productos Avanzado</span>
+            <div className={s.ss}></div>
+            <span className={s.se}>{affectedCount} producto(s)</span>
+            {previewItems.length > 0 && <><div className={s.ss}></div><span className={s.se}>{previewItems.join(', ')}{affectedCount > previewItems.length ? '...' : ''}</span></>}
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
       case 'Ajustes de Usuario': {
         const displayName = getManagedUserDisplayName(d);
         const roleLabel = getManagedUserRoleLabel(d.role);

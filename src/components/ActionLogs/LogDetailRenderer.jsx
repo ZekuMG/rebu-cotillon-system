@@ -53,7 +53,7 @@ const getManagedUserDisplayName = (details = {}) => details.displayName || detai
 const getManagedUserRoleLabel = (role) => {
   const normalized = String(role || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
   if (['system', 'sistema', 'admin'].includes(normalized)) return 'Sistema';
-  if (['owner', 'dueno', 'duenio'].includes(normalized)) return 'Caja';
+  if (['owner', 'dueno', 'duenio'].includes(normalized)) return 'Dueño';
   if (['seller', 'vendedor', 'caja'].includes(normalized)) return 'Caja';
   return role || 'Usuario';
 };
@@ -2004,6 +2004,77 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
               </div>
             </Card>
           )}
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+    }
+
+    case 'Importacion Excel Productos':
+    case 'Edicion Rapida Productos Avanzado':
+    case 'Edicion Masiva Productos Avanzado': {
+      const items = Array.isArray(details.items) && details.items.length > 0
+        ? details.items
+        : details.title
+          ? [details]
+          : [];
+      const isImport = action === 'Importacion Excel Productos';
+
+      return (
+        <div className="space-y-4">
+          <Card icon={isImport ? '\u{1F4E5}' : '\u{1F4DA}'} title="Productos Avanzado">
+            <Item label="Origen" value={details.source || (isImport ? 'Importar Excel' : 'Editor masivo')} />
+            <Item label="Productos modificados">
+              <Badge color={isImport ? 'blue' : 'amber'}>{details.count || items.length || 1}</Badge>
+            </Item>
+          </Card>
+
+          {items.length > 0 && (
+            <Card icon={'\u{1F4E6}'} title="Cambios por producto">
+              <div className="max-h-80 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                {items.map((item, idx) => {
+                  const changes = Array.isArray(item.changes) ? item.changes : [];
+                  return (
+                    <div key={`${item.id || item.title || 'producto'}-${idx}`} className="rounded-[10px] border border-[#eaecf1] bg-[#f8fafc] p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-[12px] font-black text-slate-800">{item.title || 'Producto'}</div>
+                          <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] font-bold text-slate-500">
+                            {item.id && <span>ID {item.id}</span>}
+                            {item.importedCode && <span>Codigo Excel: {item.importedCode}</span>}
+                            {item.importedDescription && <span className="truncate">Excel: {item.importedDescription}</span>}
+                          </div>
+                        </div>
+                        <Badge color={item.isAssociated ? 'fuchsia' : item.manualAssigned ? 'blue' : 'green'}>
+                          {item.isAssociated ? 'Asociado' : item.manualAssigned ? 'Asignado' : 'Actualizado'}
+                        </Badge>
+                      </div>
+
+                      {item.clearedBarcodeOwner && (
+                        <div className="mt-2 rounded-[8px] border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] font-bold text-amber-800">
+                          El codigo estaba en {item.clearedBarcodeOwner.title || `ID ${item.clearedBarcodeOwner.id}`} y fue reasignado.
+                        </div>
+                      )}
+
+                      {changes.length > 0 && (
+                        <div className="mt-2 space-y-1">
+                          {changes.map((change, changeIndex) => (
+                            <ChangeRow
+                              key={`${change.field || 'change'}-${changeIndex}`}
+                              field={change.field || 'Cambio'}
+                              oldVal={change.old}
+                              newVal={change.new}
+                              isPrice={Boolean(change.isPrice)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+
           <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
       );

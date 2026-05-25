@@ -6,8 +6,22 @@ import {
 } from 'lucide-react';
 import AsyncActionButton from '../components/AsyncActionButton';
 import { FancyPrice } from '../components/FancyPrice';
+import BulkExcelImportView from '../components/BulkExcelImportView';
 import Swal from 'sweetalert2';
 import usePendingAction from '../hooks/usePendingAction';
+
+const BULK_EDITOR_TOOL_MODE_STORAGE_KEY = 'rebu_bulk_editor_tool_mode_v1';
+
+const normalizeToolMode = (mode) => (mode === 'bulk' ? 'bulk' : 'excel');
+
+const getInitialToolMode = () => {
+  try {
+    if (typeof window === 'undefined') return 'excel';
+    return normalizeToolMode(window.localStorage.getItem(BULK_EDITOR_TOOL_MODE_STORAGE_KEY));
+  } catch {
+    return 'excel';
+  }
+};
 
 export default function BulkEditorView({ 
   inventory: realInventory, 
@@ -20,7 +34,8 @@ export default function BulkEditorView({
   setExportItems,
   exportConfig,
   setExportConfig,
-  onCreateFixedProduct
+  onCreateFixedProduct,
+  onApplyExcelImport
 }) {
   const buildEditStateFromInventory = (inventory) => {
     const nextEdits = {};
@@ -37,6 +52,7 @@ export default function BulkEditorView({
 
   // --- SANDBOX (Inventario Clonado) ---
   const [sandboxInventory, setSandboxInventory] = useState([]);
+  const [activeToolMode, setActiveToolMode] = useState(getInitialToolMode);
 
   // --- Filtros ---
   const [searchTerm, setSearchTerm] = useState('');
@@ -68,6 +84,14 @@ export default function BulkEditorView({
     setSandboxInventory(clonedData);
     setEdits(buildEditStateFromInventory(clonedData));
   }, [realInventory]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(BULK_EDITOR_TOOL_MODE_STORAGE_KEY, normalizeToolMode(activeToolMode));
+    } catch {
+      // La preferencia es solo comodidad local; si falla, la vista sigue funcionando.
+    }
+  }, [activeToolMode]);
 
   useEffect(() => {
     setMainLimit(ITEMS_PER_CHUNK);
@@ -450,8 +474,8 @@ export default function BulkEditorView({
     return diff > 0 ? `+${diff.toFixed(1)}%` : `${diff.toFixed(1)}%`;
   };
 
-  return (
-    <div className="bulk-editor-view flex flex-col h-full gap-3 overflow-hidden">
+  const renderEditorMasivo = () => (
+    <div className="flex flex-col flex-1 min-h-0 gap-3 overflow-hidden">
       
       <style>{`
         .no-spinners::-webkit-outer-spin-button,
@@ -1156,6 +1180,50 @@ export default function BulkEditorView({
           </div>
         </div>
       )}
+    </div>
+  );
+
+  const modeButtonClass = (mode) =>
+    `px-3 py-2 rounded-lg text-xs font-black border transition-colors flex items-center gap-2 ${
+      activeToolMode === mode
+        ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+    }`;
+
+  return (
+    <div className="bulk-editor-view flex flex-col h-full gap-3 overflow-hidden">
+      <div className="shrink-0 bg-white border border-slate-200 rounded-xl shadow-sm p-2 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <button
+            type="button"
+            onClick={() => setActiveToolMode('excel')}
+            className={modeButtonClass('excel')}
+          >
+            <FileText size={14} />
+            Importar Excel
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveToolMode('bulk')}
+            className={modeButtonClass('bulk')}
+          >
+            <Edit3 size={14} />
+            Editor masivo
+          </button>
+        </div>
+        <p className="hidden lg:block text-[11px] font-bold text-slate-400 truncate">
+          {activeToolMode === 'excel'
+            ? 'Revisa cada campo antes de aplicar cambios al inventario.'
+            : 'Herramientas clasicas de porcentaje, seleccion y PDF.'}
+        </p>
+      </div>
+
+      <div className={`${activeToolMode === 'excel' ? 'flex' : 'hidden'} min-h-0 flex-1`}>
+        <BulkExcelImportView inventory={sandboxInventory} onApplyImport={onApplyExcelImport} />
+      </div>
+      <div className={`${activeToolMode === 'bulk' ? 'flex' : 'hidden'} min-h-0 flex-1`}>
+        {renderEditorMasivo()}
+      </div>
     </div>
   );
 }

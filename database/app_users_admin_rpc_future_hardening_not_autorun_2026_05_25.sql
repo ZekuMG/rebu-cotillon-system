@@ -1,0 +1,25 @@
+-- FUTURE HARDENING ONLY - DO NOT RUN UNTIL AUTH MODEL CHANGES.
+--
+-- Current app_users admin RPCs still have EXECUTE for PUBLIC so the desktop app can manage users
+-- while it only has the Supabase anon key and an internal app_users login.
+--
+-- Running the statements below now may break:
+-- - create user
+-- - edit user profile
+-- - change password
+-- - activate/deactivate users
+-- - edit permissions
+--
+-- Safer target after migrating to Supabase Auth or a trusted backend:
+--
+-- revoke all on function public.create_app_user(uuid, text, text, text, text, text, text, text) from public;
+-- revoke all on function public.update_app_user_profile(uuid, uuid, text, text, text, text, text, text) from public;
+-- revoke all on function public.update_app_user_password(uuid, uuid, text) from public;
+-- revoke all on function public.set_app_user_active(uuid, uuid, boolean) from public;
+-- revoke all on function public.update_app_user_permissions(uuid, uuid, jsonb, boolean) from public;
+--
+-- grant execute on function public.create_app_user(uuid, text, text, text, text, text, text, text) to authenticated;
+-- grant execute on function public.update_app_user_profile(uuid, uuid, text, text, text, text, text, text) to authenticated;
+-- grant execute on function public.update_app_user_password(uuid, uuid, text) to authenticated;
+-- grant execute on function public.set_app_user_active(uuid, uuid, boolean) to authenticated;
+-- grant execute on function public.update_app_user_permissions(uuid, uuid, jsonb, boolean) to authenticated;

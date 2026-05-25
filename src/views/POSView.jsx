@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Search,
   ShoppingCart,
@@ -38,11 +38,6 @@ import { normalizeLegacyOffer } from '../utils/offerHelpers';
 import {
   createPaymentLine,
   getPaymentBreakdownTotals,
-  getPaymentLineCashChange,
-  getPaymentLineCashMissing,
-  getPaymentLineCashReceived,
-  getPaymentLineChargedTotal,
-  getPaymentLineSurcharge,
   getPaymentMethodLabel,
   getPaymentSummary,
   normalizePaymentBreakdown,
@@ -419,7 +414,7 @@ No lo ve el cliente; sirve para calcular margen y costo estimado."
 export default function POSView({
   inventory, categories, addToCart, cart, removeFromCart, updateCartItemQty,
   selectedPayment, setSelectedPayment, installments, setInstallments,
-  calculateTotal, handleCheckout, posSearch, setPosSearch,
+  handleCheckout, posSearch, setPosSearch,
   selectedCategory, setSelectedCategory, posViewMode, setPosViewMode,
   gridColumns, setGridColumns, selectedClient, setSelectedClient,
   onOpenMemberPanel,
@@ -959,7 +954,57 @@ export default function POSView({
   const roundPaymentValue = (value) => Math.round((Number(value) || 0) * 100) / 100;
   const getDefaultSplitSecondaryMethod = (primaryMethod) => (primaryMethod === 'Efectivo' ? 'MercadoPago' : 'Efectivo');
 
-  const buildTwoPaymentLines = (primaryInput = {}, secondaryInput = {}) => {
+  const subtotal = cart.reduce((t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
+  const cartDiscountTotal = cart.reduce(
+    (sum, item) => sum + ((item.isReward || item.isDiscount) ? Math.abs((Number(item.price) || 0) * (Number(item.quantity) || 0)) : 0),
+    0,
+  );
+  const displaySubtotal = subtotal + cartDiscountTotal;
+  const normalizedPaymentLines = normalizePaymentBreakdown(paymentLines);
+  const visiblePaymentLines = normalizedPaymentLines.filter((line) => Number(line.amount || 0) > 0.009);
+  const paymentLinesForDisplay = visiblePaymentLines.length > 0 ? visiblePaymentLines : normalizedPaymentLines.slice(0, 1);
+  const rawCurrentPaymentLine = paymentLines[0] || createPaymentLine({ method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
+  const rawSplitPrimaryLine = paymentLines[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
+  const rawSplitSecondaryLine = paymentLines[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(rawSplitPrimaryLine.method), amount: 0, cashReceived: '' });
+  const currentPaymentLine = normalizedPaymentLines[0] || createPaymentLine({ method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1 });
+  const splitPrimaryLine = normalizedPaymentLines[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1 });
+  const splitSecondaryLine = normalizedPaymentLines[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(splitPrimaryLine.method), amount: 0 });
+  const currentPaymentMethod = rawCurrentPaymentLine.method || currentPaymentLine.method || selectedPayment || 'Efectivo';
+  const currentInstallments = currentPaymentMethod === 'Credito' ? Number(currentPaymentLine.installments || installments || 1) : 1;
+  const currentCashInputValue = getEditableCashInputValue(rawCurrentPaymentLine);
+  const paymentTotals = getPaymentBreakdownTotals(paymentLinesForDisplay);
+  const assignedBaseTotal = paymentLinesForDisplay.reduce((sum, line) => sum + (Number(line.amount) || 0), 0);
+  const remainingBaseAmount = Math.round((subtotal - assignedBaseTotal) * 100) / 100;
+  const hasOverassignedPayments = remainingBaseAmount < 0;
+  const total = paymentTotals.chargedTotal;
+  const cashReceivedAmount = paymentTotals.cashReceivedTotal;
+  const cashChangeAmount = paymentTotals.cashChangeTotal;
+  const cashMissingAmount = paymentTotals.cashMissingTotal;
+  const paymentSummary = getPaymentSummary(paymentLinesForDisplay);
+  const hasTypedCashAmount = currentPaymentMethod === 'Efectivo' && currentCashInputValue !== '';
+  const splitSecondaryDisabled = Number(splitSecondaryLine.amount || 0) <= 0.009;
+  const pointsToEarn = Math.floor(Math.max(0, total) / 500);
+  const pointsToSpend = cart.reduce((acc, item) => acc + (item.isReward ? Number(item.pointsCost || 0) : 0), 0);
+  const netPointsDelta = pointsToEarn - pointsToSpend;
+  const discountBaseTotal = getDiscountBaseTotal();
+  const isGuestSelectedClient = Boolean(selectedClient && (selectedClient.id === 'guest' || selectedClient.id === 0));
+  const hasVisibleSelectedClient = Boolean(selectedClient);
+  const pointsHeaderTone = !hasVisibleSelectedClient
+    ? ''
+    : isGuestSelectedClient
+      ? 'border-amber-200 bg-amber-50 text-amber-700'
+      : netPointsDelta >= 0
+        ? 'border-green-200 bg-green-50 text-green-700'
+        : 'border-rose-200 bg-rose-50 text-rose-700';
+  const pointsHeaderText = !hasVisibleSelectedClient
+    ? ''
+    : isGuestSelectedClient
+      ? `Se pierden ${pointsToEarn} Puntos`
+      : netPointsDelta >= 0
+        ? `Puntos ganados: ${netPointsDelta}`
+        : `Puntos canjeados: ${Math.abs(netPointsDelta)}`;
+
+  const buildTwoPaymentLines = useCallback((primaryInput = {}, secondaryInput = {}) => {
     const safeSubtotal = Math.max(0, roundPaymentValue(subtotal));
     const primaryMethod = primaryInput.method || selectedPayment || 'Efectivo';
     const secondaryMethod = secondaryInput.method || getDefaultSplitSecondaryMethod(primaryMethod);
@@ -982,7 +1027,7 @@ export default function POSView({
         cashReceived: '',
       }),
     ];
-  };
+  }, [selectedPayment, subtotal]);
 
   const handleToggleSplitPaymentMode = () => {
     if (cart.length === 0 || subtotal <= 0) return;
@@ -1091,17 +1136,6 @@ export default function POSView({
       if (lineIndex === 0) {
         setInstallments?.(nextPrimary.method === 'Credito' ? nextInstallments : 1);
       }
-      return buildTwoPaymentLines(nextPrimary, nextSecondary);
-    });
-  };
-
-  const handleSplitCashReceivedChange = (lineIndex, value) => {
-    const nextValue = normalizePaymentInputValue(value);
-    setPaymentLines((prev) => {
-      const currentPrimary = prev[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
-      const currentSecondary = prev[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(currentPrimary.method), amount: 0, cashReceived: '' });
-      const nextPrimary = lineIndex === 0 ? { ...currentPrimary, cashReceived: nextValue } : currentPrimary;
-      const nextSecondary = lineIndex === 1 ? { ...currentSecondary, cashReceived: nextValue } : currentSecondary;
       return buildTwoPaymentLines(nextPrimary, nextSecondary);
     });
   };
@@ -1242,56 +1276,6 @@ export default function POSView({
     handleApplySearchOffer(exactMatch);
   };
 
-  const subtotal = cart.reduce((t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
-  const cartDiscountTotal = cart.reduce(
-    (sum, item) => sum + ((item.isReward || item.isDiscount) ? Math.abs((Number(item.price) || 0) * (Number(item.quantity) || 0)) : 0),
-    0,
-  );
-  const displaySubtotal = subtotal + cartDiscountTotal;
-  const normalizedPaymentLines = normalizePaymentBreakdown(paymentLines);
-  const visiblePaymentLines = normalizedPaymentLines.filter((line) => Number(line.amount || 0) > 0.009);
-  const paymentLinesForDisplay = visiblePaymentLines.length > 0 ? visiblePaymentLines : normalizedPaymentLines.slice(0, 1);
-  const rawCurrentPaymentLine = paymentLines[0] || createPaymentLine({ method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
-  const rawSplitPrimaryLine = paymentLines[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
-  const rawSplitSecondaryLine = paymentLines[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(rawSplitPrimaryLine.method), amount: 0, cashReceived: '' });
-  const currentPaymentLine = normalizedPaymentLines[0] || createPaymentLine({ method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1 });
-  const splitPrimaryLine = normalizedPaymentLines[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1 });
-  const splitSecondaryLine = normalizedPaymentLines[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(splitPrimaryLine.method), amount: 0 });
-  const currentPaymentMethod = rawCurrentPaymentLine.method || currentPaymentLine.method || selectedPayment || 'Efectivo';
-  const currentInstallments = currentPaymentMethod === 'Credito' ? Number(currentPaymentLine.installments || installments || 1) : 1;
-  const currentCashInputValue = getEditableCashInputValue(rawCurrentPaymentLine);
-  const paymentTotals = getPaymentBreakdownTotals(paymentLinesForDisplay);
-  const assignedBaseTotal = paymentLinesForDisplay.reduce((sum, line) => sum + (Number(line.amount) || 0), 0);
-  const remainingBaseAmount = Math.round((subtotal - assignedBaseTotal) * 100) / 100;
-  const hasOverassignedPayments = remainingBaseAmount < 0;
-  const total = paymentTotals.chargedTotal;
-  const cashReceivedAmount = paymentTotals.cashReceivedTotal;
-  const cashChangeAmount = paymentTotals.cashChangeTotal;
-  const cashMissingAmount = paymentTotals.cashMissingTotal;
-  const paymentSummary = getPaymentSummary(paymentLinesForDisplay);
-  const hasTypedCashAmount = currentPaymentMethod === 'Efectivo' && currentCashInputValue !== '';
-  const splitSecondaryDisabled = Number(splitSecondaryLine.amount || 0) <= 0.009;
-  const pointsToEarn = Math.floor(Math.max(0, total) / 500);
-  const pointsToSpend = cart.reduce((acc, item) => acc + (item.isReward ? Number(item.pointsCost || 0) : 0), 0);
-  const netPointsDelta = pointsToEarn - pointsToSpend;
-  const discountBaseTotal = getDiscountBaseTotal();
-  const isGuestSelectedClient = Boolean(selectedClient && (selectedClient.id === 'guest' || selectedClient.id === 0));
-  const hasVisibleSelectedClient = Boolean(selectedClient);
-  const pointsHeaderTone = !hasVisibleSelectedClient
-    ? ''
-    : isGuestSelectedClient
-      ? 'border-amber-200 bg-amber-50 text-amber-700'
-      : netPointsDelta >= 0
-        ? 'border-green-200 bg-green-50 text-green-700'
-        : 'border-rose-200 bg-rose-50 text-rose-700';
-  const pointsHeaderText = !hasVisibleSelectedClient
-    ? ''
-    : isGuestSelectedClient
-      ? `Se pierden ${pointsToEarn} Puntos`
-      : netPointsDelta >= 0
-        ? `Puntos ganados: ${netPointsDelta}`
-        : `Puntos canjeados: ${Math.abs(netPointsDelta)}`;
-
   useEffect(() => {
     setPaymentLines((prev) => {
       if (cart.length === 0) return prev;
@@ -1325,7 +1309,7 @@ export default function POSView({
 
       return serializeLines([currentLine]) === serializeLines([nextLine]) ? prev : [nextLine];
     });
-  }, [cart.length, isSplitPaymentMode, subtotal, selectedPayment, installments]);
+  }, [buildTwoPaymentLines, cart.length, isSplitPaymentMode, subtotal, selectedPayment, installments]);
 
   return (
     <div className="pos-view flex h-full overflow-hidden bg-slate-100 relative">

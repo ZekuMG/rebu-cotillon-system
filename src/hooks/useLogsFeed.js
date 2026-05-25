@@ -10,7 +10,8 @@ import {
 
 const EMPTY_ARRAY = [];
 const DETAILS_SEARCH_BATCH_SIZE = 100;
-const DETAILS_SEARCH_MAX_ROWS = 20000;
+const DETAILS_SEARCH_MAX_ROWS_WITH_DATE = 20000;
+const DETAILS_SEARCH_MAX_ROWS_UNBOUNDED = 3000;
 
 const sanitizeSearchTerm = (value) =>
   String(value || '')
@@ -72,7 +73,7 @@ const logRowMatchesProductSearch = (row, rawTerms = []) => {
   return terms.some((term) => detailsText.includes(term));
 };
 
-const expandLegacyUserSearchTerms = (term) => {
+const _expandLegacyUserSearchTerms = (term) => {
   const normalized = normalizeSearchAlias(term);
   const terms = new Set([term]);
 
@@ -184,6 +185,17 @@ const applyLogUserFilter = (query, rawUserFilter) => {
   return query.or(normalizedNames.map((term) => `user.ilike.%${term}%`).join(','));
 };
 
+const isSearchLogsRpcUnavailable = (error) => {
+  const errorText = [
+    error?.message,
+    error?.details,
+    error?.hint,
+    error?.code,
+  ].filter(Boolean).join(' ');
+
+  return /search_logs|function .* does not exist|schema cache|PGRST202|permission denied|42501/i.test(errorText);
+};
+
 export default function useLogsFeed({
   page = 1,
   pageSize = LOGS_PAGE_SIZE,
@@ -201,24 +213,25 @@ export default function useLogsFeed({
   const [hasNextPage, setHasNextPage] = useState(false);
   const requestIdRef = useRef(0);
   const pageCacheRef = useRef(new Map());
-  const excludeActionsSource = Array.isArray(excludeActions) ? excludeActions : EMPTY_ARRAY;
-  const rawActions = Array.isArray(filters.actions) ? filters.actions.filter(Boolean) : [];
-  const actionsKey = rawActions.join('|');
-  const rawProductSearchTerms = Array.isArray(filters.productSearchTerms)
-    ? filters.productSearchTerms.filter(Boolean)
-    : [];
-  const productSearchTermsKey = rawProductSearchTerms.join('|');
-  const excludedActionsKey = excludeActionsSource
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-    .join('|');
+  const excludeActionsSource = useMemo(
+    () => (Array.isArray(excludeActions) ? excludeActions : EMPTY_ARRAY),
+    [excludeActions],
+  );
+  const rawActions = useMemo(
+    () => (Array.isArray(filters.actions) ? filters.actions.filter(Boolean) : []),
+    [filters.actions],
+  );
+  const rawProductSearchTerms = useMemo(
+    () => (Array.isArray(filters.productSearchTerms) ? filters.productSearchTerms.filter(Boolean) : []),
+    [filters.productSearchTerms],
+  );
   const normalizedExcludedActions = useMemo(
     () => new Set(excludeActionsSource.map(normalizeActionName)),
-    [excludedActionsKey],
+    [excludeActionsSource],
   );
   const rawExcludedActions = useMemo(
     () => excludeActionsSource.filter(Boolean),
-    [excludedActionsKey],
+    [excludeActionsSource],
   );
   const excludedActionsFilterValue = useMemo(
     () => buildNotInFilterValue(rawExcludedActions),
@@ -238,7 +251,6 @@ export default function useLogsFeed({
       actions: rawActions,
     }),
     [
-      actionsKey,
       filters.action,
       filters.dateEnd,
       filters.dateStart,
@@ -246,7 +258,8 @@ export default function useLogsFeed({
       filters.search,
       filters.searchScope,
       filters.user,
-      productSearchTermsKey,
+      rawActions,
+      rawProductSearchTerms,
     ]
   );
   const cacheKey = useMemo(
@@ -344,6 +357,33 @@ export default function useLogsFeed({
           return nextQuery;
         };
 
+        const fetchServerSearchRows = async () => {
+          const rpcSortColumn =
+            orderColumn === 'user_name' ? 'user' : orderColumn === 'action' ? 'action' : 'created_at';
+          const { data: rpcData, error: rpcError } = await supabase.rpc('search_logs', {
+            p_search: normalizedFilters.search || '',
+            p_search_scope: normalizedFilters.searchScope || 'all',
+            p_product_terms: normalizedFilters.productSearch ? normalizedFilters.productSearchTerms : [],
+            p_actions: normalizedFilters.actions,
+            p_excluded_actions: rawExcludedActions,
+            p_action: normalizedFilters.action || '',
+            p_user_filter: normalizedFilters.user || '',
+            p_date_start: normalizedFilters.dateStart ? buildDayStartIso(normalizedFilters.dateStart) : null,
+            p_date_end: normalizedFilters.dateEnd ? buildDayEndIso(normalizedFilters.dateEnd) : null,
+            p_sort_column: rpcSortColumn,
+            p_ascending: ascending,
+            p_offset: offset,
+            p_limit: fetchLimit,
+          });
+
+          if (rpcError) {
+            if (isSearchLogsRpcUnavailable(rpcError)) return null;
+            throw rpcError;
+          }
+
+          return Array.isArray(rpcData) ? rpcData : [];
+        };
+
         const fetchClientSearchRows = async () => {
           let scanSelect = CLOUD_SELECTS.logs;
           let scanOrderColumn = orderColumn;
@@ -351,8 +391,12 @@ export default function useLogsFeed({
           const matches = [];
           const requiredMatches = offset + fetchLimit;
           let scanOffset = 0;
+          const scanMaxRows =
+            normalizedFilters.dateStart || normalizedFilters.dateEnd
+              ? DETAILS_SEARCH_MAX_ROWS_WITH_DATE
+              : DETAILS_SEARCH_MAX_ROWS_UNBOUNDED;
 
-          while (scanSelect && scanOffset < DETAILS_SEARCH_MAX_ROWS && matches.length < requiredMatches) {
+          while (scanSelect && scanOffset < scanMaxRows && matches.length < requiredMatches) {
             let query = supabase
               .from('logs')
               .select(scanSelect)
@@ -424,7 +468,10 @@ export default function useLogsFeed({
         };
 
         if (requiresClientSearch) {
-          data = await fetchClientSearchRows();
+          data = await fetchServerSearchRows();
+          if (!data) {
+            data = await fetchClientSearchRows();
+          }
         } else {
         while (safeSelect) {
           let query = supabase
@@ -530,15 +577,8 @@ export default function useLogsFeed({
       abortController.abort();
     };
   }, [
-    actionsKey,
     enabled,
-    normalizedFilters.action,
-    normalizedFilters.dateEnd,
-    normalizedFilters.dateStart,
-    normalizedFilters.productSearch,
-    normalizedFilters.search,
-    normalizedFilters.searchScope,
-    normalizedFilters.user,
+    normalizedFilters,
     page,
     pageSize,
     reloadKey,
@@ -547,6 +587,7 @@ export default function useLogsFeed({
     includeDetails,
     excludedActionsFilterValue,
     normalizedExcludedActions,
+    rawExcludedActions,
     cacheKey,
   ]);
 

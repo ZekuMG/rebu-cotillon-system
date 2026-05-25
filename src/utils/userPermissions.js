@@ -278,6 +278,19 @@ export const sanitizePermissionSet = (permissions = {}) => {
     APP_PERMISSION_KEYS.map((key) => [key, Boolean(permissions[key])]),
   );
 
+  APP_PERMISSION_GROUPS.forEach((group) => {
+    const hasEnabledAction = group.actions.some((action) => next[action.key]);
+    if (hasEnabledAction) {
+      next[group.viewKey] = true;
+    }
+
+    if (!next[group.viewKey]) {
+      group.actions.forEach((action) => {
+        next[action.key] = false;
+      });
+    }
+  });
+
   if (!next['dashboard.view']) {
     DASHBOARD_FILTER_PERMISSION_KEYS.forEach((key) => {
       next[key] = false;

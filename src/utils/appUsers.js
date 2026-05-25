@@ -204,10 +204,8 @@ const APP_USERS_PUBLIC_MINIMAL_SELECT = [
   'avatar',
   'name_color',
   'theme',
+  'metrics_view_mode',
   'is_active',
-  'created_at',
-  'updated_at',
-  'created_by',
 ].join(',');
 
 const APP_USERS_TABLE_MINIMAL_SELECT = [
@@ -225,6 +223,11 @@ const APP_USERS_TABLE_MINIMAL_SELECT = [
   'updated_at',
   'created_by',
 ].join(',');
+
+const isMissingPrivateUsersRpc = (error) =>
+  /list_app_users_private|verify_app_user_login_private|function .* does not exist|schema cache|PGRST202|permission denied|42501/i.test(
+    [error?.message, error?.details, error?.hint, error?.code].filter(Boolean).join(' '),
+  );
 
 const readAppUsersFromSource = async ({
   sourceName,
@@ -277,6 +280,29 @@ const readAppUsersFromSource = async ({
 
     throw lastError;
   }
+};
+
+export const fetchAppUsersPrivate = async ({
+  actorId,
+  includeInactive = false,
+} = {}) => {
+  if (!actorId) {
+    return fetchAppUsersPublic({ includeInactive, includeAuditFields: includeInactive });
+  }
+
+  const { data, error } = await supabase.rpc('list_app_users_private', {
+    p_actor_id: actorId,
+    p_include_inactive: Boolean(includeInactive),
+  });
+
+  if (error) {
+    if (isMissingPrivateUsersRpc(error)) {
+      return fetchAppUsersPublic({ includeInactive, includeAuditFields: includeInactive });
+    }
+    throw error;
+  }
+
+  return (Array.isArray(data) ? data : []).map(normalizeAppUserRecord).filter(Boolean);
 };
 
 export const fetchAppUsersPublic = async ({
@@ -343,10 +369,19 @@ export const bootstrapAppUsers = async ({ systemUser, sellerUser }) => {
 };
 
 export const verifyAppUserLogin = async ({ userId, password }) => {
-  const { data, error } = await supabase.rpc('verify_app_user_login', {
+  let { data, error } = await supabase.rpc('verify_app_user_login_private', {
     p_user_id: userId,
     p_password: password,
   });
+
+  if (error && isMissingPrivateUsersRpc(error)) {
+    const legacyResult = await supabase.rpc('verify_app_user_login', {
+      p_user_id: userId,
+      p_password: password,
+    });
+    data = legacyResult.data;
+    error = legacyResult.error;
+  }
 
   if (error) throw error;
   if (Array.isArray(data)) return normalizeAppUserRecord(data[0] || null);
@@ -440,6 +475,17 @@ export const updateAppUserPermissions = async ({ actorId, targetId, permissionsO
   });
 
   if (error) throw error;
-  if (Array.isArray(data)) return normalizeAppUserRecord(data[0] || null);
-  return normalizeAppUserRecord(data || null);
+  const normalized = Array.isArray(data)
+    ? normalizeAppUserRecord(data[0] || null)
+    : normalizeAppUserRecord(data || null);
+
+  if (!normalized) return null;
+
+  return normalizeAppUserRecord({
+    ...normalized,
+    permissionsOverride: normalized.permissionsOverride && Object.keys(normalized.permissionsOverride).length > 0
+      ? normalized.permissionsOverride
+      : permissionsOverride || {},
+    permissionsVersion: Number(normalized.permissionsVersion || 1),
+  });
 };

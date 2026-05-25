@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Search, 
   History, 
@@ -101,7 +101,7 @@ export default function ClientsView({
     }
   };
 
-  const getLastPurchaseDate = (member) => {
+  const getLastPurchaseDate = useCallback((member) => {
     if (!member || !transactions || transactions.length === 0) return null;
     
     const memberTx = transactions.filter(tx => 
@@ -125,7 +125,7 @@ export default function ClientsView({
     });
 
     return memberTx[0].date;
-  };
+  }, [transactions]);
 
   const extractCouponCodeFromItem = (item) => {
     const title = String(item?.title || '');
@@ -296,7 +296,7 @@ export default function ClientsView({
     });
 
     return result;
-  }, [members, searchTerm, sortBy, transactions]);
+  }, [getLastPurchaseDate, members, searchTerm, sortBy]);
 
   const visibleMembersCount = useMemo(() => {
     const isSearchTest = searchTerm.toLowerCase().includes('test');

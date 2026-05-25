@@ -219,7 +219,7 @@ const getItemCost = (item = {}, lookups) => {
   return toNumber(product?.purchasePrice ?? item.purchasePrice ?? item.cost) * getItemQty(item);
 };
 
-const getTransactionCost = (tx = {}, lookups) => {
+const _getTransactionCost = (tx = {}, lookups) => {
   const stockChanges = Array.isArray(tx.stockChanges) ? tx.stockChanges : [];
   const customItemsCost = (tx.items || []).reduce((sum, item) => {
     if (!isTemporaryCustomItem(item) || shouldSkipCostItem(item)) return sum;
@@ -356,7 +356,7 @@ const makeFilterOptions = ({ transactions, inventory, members, orders, budgets }
   };
 };
 
-const filterTransactions = ({ transactions, range, filters, lookups }) =>
+const _filterTransactions = ({ transactions, range, filters, lookups }) =>
   transactions
     .map((tx) => ({ ...tx, metricDate: getTransactionDate(tx) }))
     .filter((tx) => {
@@ -389,7 +389,7 @@ const filterTransactions = ({ transactions, range, filters, lookups }) =>
       return true;
     });
 
-const filterExpenses = ({ expenses, range, filters }) =>
+const _filterExpenses = ({ expenses, range, filters }) =>
   expenses
     .map((expense) => ({ ...expense, metricDate: getRecordDate(expense) }))
     .filter((expense) => {

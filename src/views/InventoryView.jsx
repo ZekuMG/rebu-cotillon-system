@@ -1,5 +1,5 @@
 // src/views/InventoryView.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Search,
   Plus,
@@ -81,8 +81,10 @@ export default function InventoryView({
   currentUser,
   closeDetailsToken,
   navigationRequest,
+  onProductDetailRequest,
 }) {
   const [selectedProduct, setSelectedProduct] = useState(null); 
+  const lastNavigationTokenRef = useRef(null);
   const [showGridMenu, setShowGridMenu] = useState(false);
   const [showCategoryMenu, setShowCategoryMenu] = useState(false);
   const [categoryFilterSearch, setCategoryFilterSearch] = useState('');
@@ -119,6 +121,7 @@ export default function InventoryView({
 
   useEffect(() => {
     if (!navigationRequest?.token) return;
+    if (lastNavigationTokenRef.current === navigationRequest.token) return;
 
     if (navigationRequest.mode === 'out_of_stock') {
       setStockFilterMode(FILTER_MODE.only);
@@ -133,16 +136,19 @@ export default function InventoryView({
 
     if (navigationRequest.productId !== undefined && navigationRequest.productId !== null) {
       const matchedProduct = (inventory || []).find((product) => String(product.id) === String(navigationRequest.productId));
+      if (!matchedProduct && (inventory || []).length === 0) return;
       setSelectedProduct(matchedProduct || null);
     } else if (navigationRequest.searchQuery) {
       const normalizedQuery = String(navigationRequest.searchQuery).trim().toLowerCase();
       const matchedProduct = (inventory || []).find((product) => String(product.title || '').trim().toLowerCase() === normalizedQuery);
+      if (!matchedProduct && (inventory || []).length === 0) return;
       setSelectedProduct(matchedProduct || null);
     } else {
       setSelectedProduct(null);
     }
 
     setVisibleCount(INVENTORY_BATCH_SIZE);
+    lastNavigationTokenRef.current = navigationRequest.token;
   }, [navigationRequest, inventory]);
 
   const filteredInventory = (inventory || []).filter((item) => {
@@ -275,6 +281,16 @@ export default function InventoryView({
         setSelectedProduct(null);
     } else {
         setSelectedProduct(product);
+        if (onProductDetailRequest) {
+          void onProductDetailRequest(product).then((hydratedProduct) => {
+            if (!hydratedProduct) return;
+            setSelectedProduct((currentProduct) =>
+              currentProduct && String(currentProduct.id) === String(product.id)
+                ? { ...currentProduct, ...hydratedProduct }
+                : currentProduct
+            );
+          });
+        }
     }
   };
 
@@ -687,6 +703,8 @@ export default function InventoryView({
         const expirationInfo = getExpirationInfo(selectedProduct.expiration_date);
         const hasExpirationAlert = Boolean(expirationInfo?.isAlert);
         const isExpired = Boolean(expirationInfo?.isExpired);
+        const selectedProductPreviewImage =
+          selectedProduct.image || selectedProduct.imageThumb || selectedProduct.image_thumb;
 
         return (
         <div className="w-[320px] bg-white border-l shadow-2xl flex flex-col shrink-0 animate-in slide-in-from-right duration-300 relative z-20">
@@ -703,8 +721,8 @@ export default function InventoryView({
             {/* Preview */}
             <div className="text-center">
               <div className={`w-48 h-48 bg-slate-100 rounded-xl mx-auto overflow-hidden border shadow-sm relative group ${hasExpirationAlert ? (isExpired ? 'ring-2 ring-red-400' : 'ring-2 ring-amber-300') : ''}`}>
-                {selectedProduct.image ? (
-                  <img src={selectedProduct.image} alt="" decoding="async" className="w-full h-full object-cover" />
+                {selectedProductPreviewImage ? (
+                  <img src={selectedProductPreviewImage} alt="" decoding="async" className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center bg-slate-200 text-slate-500 font-bold p-2 text-sm">{selectedProduct.title}</div>
                 )}

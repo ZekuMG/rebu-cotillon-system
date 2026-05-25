@@ -77,9 +77,10 @@ export default function UserPermissionsEditor({
     onChange?.(sanitizePermissionSet(nextPermissions));
   };
 
-  const handlePermissionToggle = (permissionKey, nextValue) => {
+  const handlePermissionToggle = (group, permissionKey, nextValue) => {
     onChange?.(sanitizePermissionSet({
       ...permissions,
+      ...(nextValue ? { [group.viewKey]: true } : {}),
       [permissionKey]: nextValue,
     }));
   };
@@ -190,7 +191,7 @@ export default function UserPermissionsEditor({
                     <PermissionToggle
                       key={action.key}
                       checked={Boolean(permissions[action.key])}
-                      onChange={(nextValue) => handlePermissionToggle(action.key, nextValue)}
+                      onChange={(nextValue) => handlePermissionToggle(group, action.key, nextValue)}
                       label={action.label}
                     />
                   ))}

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+﻿import React, { useEffect, useRef, useState } from 'react';
 import {
   BarChart3,
   Building2,
@@ -27,12 +27,32 @@ import { hexToRgba, resolveUserPresentation } from '../utils/userPresentation';
 import UserAvatar from './UserAvatar';
 import logoRebuImg from '../assets/logo-rebu.jpg';
 
+const getReadableTextColor = (hexColor) => {
+  const hex = String(hexColor || '').replace('#', '').trim();
+  const normalized = hex.length === 3
+    ? hex.split('').map((part) => `${part}${part}`).join('')
+    : hex;
+
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) return '#ffffff';
+
+  const r = parseInt(normalized.slice(0, 2), 16) / 255;
+  const g = parseInt(normalized.slice(2, 4), 16) / 255;
+  const b = parseInt(normalized.slice(4, 6), 16) / 255;
+  const luminance = [r, g, b]
+    .map((channel) => (channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4))
+    .reduce((total, channel, index) => total + channel * [0.2126, 0.7152, 0.0722][index], 0);
+
+  return luminance > 0.52 ? '#102033' : '#ffffff';
+};
+
 const SidebarButton = ({ onClick, isActive, icon: Icon, label, accentColor = '#c026d3' }) => {
   const [showTooltip, setShowTooltip] = useState(false);
+  const activeTextColor = getReadableTextColor(accentColor);
   const activeStyle = isActive
     ? {
         backgroundColor: accentColor,
-        color: '#ffffff',
+        color: activeTextColor,
+        borderColor: hexToRgba(accentColor, 0.56) || 'rgba(217,70,239,0.42)',
         boxShadow: `0 10px 20px ${hexToRgba(accentColor, 0.28) || 'rgba(0,0,0,0.18)'}`,
       }
     : undefined;
@@ -45,7 +65,7 @@ const SidebarButton = ({ onClick, isActive, icon: Icon, label, accentColor = '#c
         onMouseLeave={() => setShowTooltip(false)}
         title={label}
         className={`flex h-9 w-9 min-[1920px]:h-10 min-[1920px]:w-10 shrink-0 items-center justify-center rounded-lg transition-all ${
-          isActive ? '' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+          isActive ? 'border' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
         }`}
         style={activeStyle}
       >
@@ -53,7 +73,7 @@ const SidebarButton = ({ onClick, isActive, icon: Icon, label, accentColor = '#c
       </button>
 
       {showTooltip && (
-        <div className="pointer-events-none absolute left-12 min-[1920px]:left-14 top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-xs text-white shadow-lg">
+        <div className="app-sidebar-tooltip pointer-events-none absolute left-12 min-[1920px]:left-14 top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-xs text-white shadow-lg">
           {label}
           <div className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-slate-800" />
         </div>
@@ -103,7 +123,7 @@ export default function Sidebar({
   }, []);
 
   return (
-    <div className="relative z-40 flex h-full min-h-0 w-14 min-w-[3.5rem] min-[1920px]:w-16 min-[1920px]:min-w-[4rem] shrink-0 flex-col items-center gap-2.5 min-[1920px]:gap-3 overflow-visible bg-slate-900 py-3 min-[1920px]:py-4 shadow-xl">
+    <div className="app-sidebar relative z-40 flex h-full min-h-0 w-14 min-w-[3.5rem] min-[1920px]:w-16 min-[1920px]:min-w-[4rem] shrink-0 flex-col items-center gap-2.5 min-[1920px]:gap-3 overflow-visible bg-slate-900 py-3 min-[1920px]:py-4 shadow-xl">
       <div className="mb-1 shrink-0">
         <img
           src={logoRebuImg}
@@ -115,11 +135,11 @@ export default function Sidebar({
       <nav className="flex min-h-0 w-full flex-1 flex-col items-center space-y-1.5 min-[1920px]:space-y-2 overflow-y-auto overflow-x-visible py-1 overscroll-contain scrollbar-hide">
         {canViewDashboard && <SidebarButton onClick={() => setActiveTab('dashboard')} isActive={activeTab === 'dashboard'} icon={LayoutDashboard} label="Control de Caja" accentColor={navAccentColor} />}
         {canViewInventory && <SidebarButton onClick={() => setActiveTab('inventory')} isActive={activeTab === 'inventory'} icon={Package} label="Inventario" accentColor={navAccentColor} />}
+        {canViewBulkEditor && <SidebarButton onClick={() => setActiveTab('bulk-editor')} isActive={activeTab === 'bulk-editor'} icon={Percent} label="Productos (Avanzado)" accentColor={navAccentColor} />}
         {canViewPos && <SidebarButton onClick={() => setActiveTab('pos')} isActive={activeTab === 'pos'} icon={ShoppingCart} label="Punto de Venta" accentColor={navAccentColor} />}
         {canViewClients && <SidebarButton onClick={() => setActiveTab('clients')} isActive={activeTab === 'clients'} icon={Users} label="Socios" accentColor={navAccentColor} />}
         {canViewAgenda && <SidebarButton onClick={() => setActiveTab('agenda')} isActive={activeTab === 'agenda'} icon={Building2} label="Agenda" accentColor={navAccentColor} />}
         {canViewOrders && <SidebarButton onClick={() => setActiveTab('orders')} isActive={activeTab === 'orders'} icon={ClipboardList} label="Pedidos" accentColor={navAccentColor} />}
-        {canViewExtras && <SidebarButton onClick={() => setActiveTab('extras')} isActive={activeTab === 'extras'} icon={Settings2} label="Extras" accentColor={navAccentColor} />}
         {canViewMetrics && <SidebarButton onClick={() => setActiveTab('metrics')} isActive={activeTab === 'metrics'} icon={BarChart3} label="Métricas" accentColor={navAccentColor} />}
       </nav>
 
@@ -166,7 +186,7 @@ export default function Sidebar({
         </button>
 
         {showUserMenu && (
-          <div className="absolute bottom-0 left-12 min-[1920px]:left-14 z-50 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
+          <div className="app-user-menu absolute bottom-0 left-12 min-[1920px]:left-14 z-50 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
             <div className="relative border-b border-slate-100 bg-slate-50 px-3 py-2 pr-16">
               <button
                 type="button"
@@ -233,6 +253,18 @@ export default function Sidebar({
               </button>
             )}
 
+            {canViewExtras && (
+              <button
+                onClick={() => {
+                  setActiveTab('extras');
+                  setShowUserMenu(false);
+                }}
+                className="flex w-full items-center gap-2 border-b border-slate-50 px-4 py-2.5 text-left text-xs text-slate-600 transition-colors hover:bg-fuchsia-50 hover:text-fuchsia-700"
+              >
+                <Settings2 size={14} /> Gestion de Extras
+              </button>
+            )}
+
             {canViewLogs && (
               <>
                 <button
@@ -259,19 +291,6 @@ export default function Sidebar({
                 </button>
               </>
             )}
-            {canViewBulkEditor && (
-              <>
-                <button
-                  onClick={() => {
-                    setActiveTab('bulk-editor');
-                    setShowUserMenu(false);
-                  }}
-                  className="flex w-full items-center gap-2 border-t border-slate-50 px-4 py-2.5 text-left text-xs text-slate-600 transition-colors hover:bg-fuchsia-50 hover:text-fuchsia-700"
-                >
-                  <Percent size={14} /> Productos (Avanzado)
-                </button>
-              </>
-            )}
           </div>
         )}
 
@@ -282,3 +301,4 @@ export default function Sidebar({
     </div>
   );
 }
+

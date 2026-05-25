@@ -57,7 +57,7 @@ export const safeCloudData = (result, tableName) => {
 export const mapInventoryRecords = (products = []) =>
   products.map((product) => ({
     ...product,
-    imageThumb: product.image_thumb || product.imageThumb || product.image || '',
+    imageThumb: product.image_thumb || product.imageThumb || '',
     categories: product.category
       ? product.category.split(',').map((category) => category.trim()).filter(Boolean)
       : [],
@@ -334,6 +334,7 @@ export const mapSaleRecords = (sales = [], parsedLogs = []) =>
         ? snapshotLog.details.stockChanges
         : [],
       status: sale.status || 'completed',
+      voidedAt: sale.voided_at || null,
       isRestored: Boolean(restoreLog),
       restoredAt: restoreLog ? `${restoreLog.date} ${restoreLog.timestamp}` : null,
     };
@@ -414,6 +415,7 @@ export const mapRewardRecords = (rewards = []) =>
     type: reward.type,
     discountAmount: reward.discount_amount,
     stock: reward.stock,
+    isActive: reward.is_active !== false,
   }));
 
 export const mapOfferRecords = (offers = []) =>

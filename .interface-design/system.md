@@ -39,3 +39,12 @@ Rebu is a point-of-sale and cash-control tool. The interface should feel like an
 - Dense tool spacing: 4px micro gaps, 8px control gaps, 10px horizontal control padding.
 - Prefer borders and surface shifts over heavy shadows.
 - Dark mode uses borders and lighter elevated surfaces; light mode uses cold paper gradients and subtle borders.
+
+## Token Architecture
+
+- Use `--rebu-canvas`, `--rebu-surface-1`, `--rebu-surface-2`, and `--rebu-surface-3` for page, panel, raised, and toolbar/dropdown surfaces.
+- Use `--rebu-control` and `--rebu-control-inset` for inputs, selects, range controls, and editable numeric fields.
+- Use `--rebu-text-primary`, `--rebu-text-secondary`, `--rebu-text-tertiary`, and `--rebu-text-muted` for readable hierarchy instead of ad hoc slate grays.
+- Use `--rebu-border-soft`, `--rebu-border`, and `--rebu-border-strong` for separation, controls, and focus/elevated edges.
+- Use `--rebu-brand`, `--rebu-success`, `--rebu-warning`, `--rebu-danger`, and `--rebu-info` with their matching `*-bg` and `*-border` tokens for semantic UI.
+- Tickets and print previews remain paper-light in dark mode because they represent printed output, not app chrome.

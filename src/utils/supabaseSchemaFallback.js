@@ -84,6 +84,7 @@ export const SCHEMA_OPTIONAL_COLUMNS = {
     'is_active',
   ]),
   clients: new Set(['dni', 'phone', 'email', 'extrainfo', 'extra_info', 'updated_at', 'is_active']),
+  rewards: new Set(['is_active']),
   logs: new Set(['details', 'reason', 'user', 'user_id', 'user_role', 'user_name']),
   expenses: new Set(['payment_method', 'user_id', 'user_role', 'user_name']),
   cash_closures: new Set([
@@ -105,6 +106,7 @@ export const SCHEMA_OPTIONAL_COLUMNS = {
     'points_earned',
     'points_spent',
     'status',
+    'voided_at',
     'user_id',
     'user_role',
     'user_name',
