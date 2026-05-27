@@ -90,6 +90,30 @@ const getInitialMetricsViewMode = () => {
 
 const normalizeMetricsViewMode = (value) => (value === 'legacy' ? 'legacy' : 'modern');
 
+const calculatePercentageChange = (current, previous) => {
+  const currentValue = Number(current || 0);
+  const previousValue = Number(previous || 0);
+  if (!previousValue) return currentValue ? null : 0;
+  return ((currentValue - previousValue) / Math.abs(previousValue)) * 100;
+};
+
+const formatComparisonDate = (date) =>
+  date instanceof Date && !Number.isNaN(date.getTime())
+    ? date.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+    : '';
+
+const formatComparisonRange = (range) => {
+  if (!range?.start || !range?.end) return range?.label || 'Sin rango';
+  const startLabel = formatComparisonDate(range.start);
+  const endLabel = formatComparisonDate(range.end);
+  return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
+};
+
+const getComparisonLabel = (metrics) =>
+  metrics?.canComparePreviousRange
+    ? `${formatComparisonRange(metrics.range)} vs ${formatComparisonRange(metrics.previousRange)}`
+    : 'Sin comparacion anterior';
+
 const getPreferredMetricsViewMode = (user) => {
   if (user?.metricsViewMode) return normalizeMetricsViewMode(user.metricsViewMode);
   return getInitialMetricsViewMode();
@@ -641,6 +665,22 @@ export default function MetricsView({
     dailyLogs,
     filters,
   });
+  const visibleProductOptions = useMemo(() => (
+    metrics.filterOptions.products.filter((option) => {
+      const categories = Array.isArray(option.categories) ? option.categories : [];
+      const types = Array.isArray(option.types) ? option.types : [];
+      const matchesCategory = !filters.category || categories.includes(filters.category);
+      const matchesType = filters.productType === 'all' || types.includes(filters.productType);
+      return matchesCategory && matchesType;
+    })
+  ), [metrics.filterOptions.products, filters.category, filters.productType]);
+
+  useEffect(() => {
+    if (!filters.product) return;
+    if (visibleProductOptions.some((option) => option.value === filters.product)) return;
+    setFilters((prev) => ({ ...prev, product: '' }));
+  }, [filters.product, visibleProductOptions]);
+
   const hasGrossWithoutCost =
     Number(metrics.current.stats.revenue || 0) > 0 &&
     Number(metrics.current.stats.cost || 0) <= 0 &&
@@ -776,7 +816,7 @@ export default function MetricsView({
             </ModernSelectControl>
             <ModernSelectControl label="Producto" value={filters.product} onChange={(value) => updateFilter('product', value)} icon={ShoppingBag} className="metrics-modern-product-select">
               <option value="">Todos los productos</option>
-              {metrics.filterOptions.products.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              {visibleProductOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </ModernSelectControl>
             <button
               type="button"
@@ -924,7 +964,7 @@ export default function MetricsView({
         </SelectField>
         <SelectField label="Producto" value={filters.product} onChange={(value) => updateFilter('product', value)} className="min-w-[220px]">
           <option value="">Todos</option>
-          {metrics.filterOptions.products.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          {visibleProductOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </SelectField>
         <button
           type="button"
@@ -1038,6 +1078,7 @@ export default function MetricsView({
                 <h2 className="text-lg font-black text-slate-900">Metricas</h2>
                 <span className="metrics-modern-range-pill">{metrics.range.label}</span>
                 <span className="metrics-modern-test-pill">Vista nueva</span>
+                <span className="metrics-modern-comparison-pill">{getComparisonLabel(metrics)}</span>
               </div>
               <p className="mt-0.5 text-[11px] font-semibold text-slate-500">Resumen operativo del rango activo.</p>
             </div>
@@ -1764,19 +1805,32 @@ export default function MetricsView({
 
   const renderClients = () => {
     const clients = metrics.current.clientStats;
+    const previousClients = metrics.previous.clientStats || [];
+    const newClients = metrics.current.memberStats?.newCount || 0;
+    const previousNewClients = metrics.previous.memberStats?.newCount || 0;
+    const finalConsumer = metrics.current.finalConsumerStats || { revenue: 0, salesCount: 0, averageTicket: 0 };
+    const previousFinalConsumer = metrics.previous.finalConsumerStats || { revenue: 0, salesCount: 0, averageTicket: 0 };
     const topClient = clients[0] || null;
     const recurringClients = clients.filter((client) => Number(client.salesCount || 0) > 1).length;
+    const previousRecurringClients = previousClients.filter((client) => Number(client.salesCount || 0) > 1).length;
     const clientRevenue = clients.reduce((sum, client) => sum + Number(client.revenue || 0), 0);
+    const previousClientRevenue = previousClients.reduce((sum, client) => sum + Number(client.revenue || 0), 0);
     const clientSales = clients.reduce((sum, client) => sum + Number(client.salesCount || 0), 0);
+    const previousClientSales = previousClients.reduce((sum, client) => sum + Number(client.salesCount || 0), 0);
     const clientAverageTicket = clientSales ? clientRevenue / clientSales : 0;
+    const previousClientAverageTicket = previousClientSales ? previousClientRevenue / previousClientSales : 0;
+    const getClientChange = (currentValue, previousValue) =>
+      metrics.canComparePreviousRange ? calculatePercentageChange(currentValue, previousValue) : null;
 
     return (
       <div className="space-y-4">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-          <MetricCard label="Socios con compras" value={formatNumber(clients.length)} sublabel="En el rango" tone="sky" />
-          <MetricCard label="Recurrentes" value={formatNumber(recurringClients)} sublabel="Mas de una compra" tone="emerald" />
-          <MetricCard label="Ingreso socios" value={<FancyPrice amount={clientRevenue} />} sublabel="Total asociado" tone="violet" />
-          <MetricCard label="Ticket socio" value={<FancyPrice amount={clientAverageTicket} />} sublabel="Promedio" tone="amber" />
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <MetricCard label="Socios nuevos" value={formatNumber(newClients)} sublabel="Altas en el rango" change={getClientChange(newClients, previousNewClients)} tone="emerald" />
+          <MetricCard label="Socios con compras" value={formatNumber(clients.length)} sublabel="En el rango" change={getClientChange(clients.length, previousClients.length)} tone="sky" />
+          <MetricCard label="Recurrentes" value={formatNumber(recurringClients)} sublabel="Mas de una compra" change={getClientChange(recurringClients, previousRecurringClients)} tone="emerald" />
+          <MetricCard label="Ingreso socios" value={<FancyPrice amount={clientRevenue} />} sublabel="Total asociado" change={getClientChange(clientRevenue, previousClientRevenue)} tone="violet" />
+          <MetricCard label="Ticket socio" value={<FancyPrice amount={clientAverageTicket} />} sublabel="Promedio" change={getClientChange(clientAverageTicket, previousClientAverageTicket)} tone="amber" />
+          <MetricCard label="CONSUMIDOR FINAL" value={<FancyPrice amount={finalConsumer.revenue} />} sublabel={`${formatNumber(finalConsumer.salesCount)} ventas sin socio`} change={getClientChange(finalConsumer.revenue, previousFinalConsumer.revenue)} tone="rose" />
         </div>
 
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.15fr_0.85fr]">
@@ -2009,7 +2063,7 @@ export default function MetricsView({
         <div className="metrics-modern-shell">
           {renderModernSidebar()}
           <main className="metrics-modern-content custom-scrollbar">
-            <div className="mx-auto max-w-7xl space-y-3 pb-8">
+            <div className="rebu-content-frame pb-8">
               {metrics.current.filteredTransactions.length === 0 && metrics.current.filteredExpenses.length === 0 && activeSection !== 'stock' ? (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
                   <div className="flex items-center gap-2">
@@ -2101,7 +2155,7 @@ export default function MetricsView({
             </SelectField>
             <SelectField label="Producto" value={filters.product} onChange={(value) => updateFilter('product', value)} className="min-w-[220px]">
               <option value="">Todos</option>
-              {metrics.filterOptions.products.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              {visibleProductOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </SelectField>
             <button
               type="button"
@@ -2170,7 +2224,7 @@ export default function MetricsView({
       </div>
 
       <div className="custom-scrollbar flex-1 overflow-y-auto p-3">
-        <div className="mx-auto max-w-7xl space-y-3 pb-8">
+        <div className="rebu-content-frame pb-8">
           {metrics.current.filteredTransactions.length === 0 && metrics.current.filteredExpenses.length === 0 && activeSection !== 'stock' ? (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
               <div className="flex items-center gap-2">

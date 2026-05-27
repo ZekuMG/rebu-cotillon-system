@@ -100,12 +100,13 @@ export const makeDashboardRange = (globalFilter = 'day') => {
 };
 
 export const makePreviousRange = (range) => {
-  if (!range.start || !range.end) return { start: null, end: null, label: 'Sin comparacion' };
+  if (!range.start || !range.end) return { start: null, end: null, label: 'Sin comparacion', isComparable: false };
   const duration = Math.max(DAY_MS, range.end.getTime() - range.start.getTime() + 1);
   return {
     start: new Date(range.start.getTime() - duration),
     end: new Date(range.start.getTime() - 1),
     label: 'Periodo anterior',
+    isComparable: true,
   };
 };
 
@@ -183,10 +184,27 @@ export const getExplicitItemUnitCost = (item = {}) =>
       item.cost_price
   );
 
+export const isDiscountItem = (item = {}) =>
+  Boolean(item.isDiscount || item.is_discount || item.type === 'discount');
+
+export const getItemDiscountAmount = (item = {}) => {
+  if (!isDiscountItem(item)) return 0;
+  const explicitTotal = toNumber(item.subtotal ?? item.lineSubtotal ?? item.line_total ?? item.lineTotal ?? item.total);
+  if (explicitTotal) return Math.abs(explicitTotal);
+  return Math.abs(toNumber(item.price ?? item.unit_price ?? item.newPrice) * getItemQty(item));
+};
+
 export const shouldSkipCostItem = (item = {}) =>
-  item.isReward || item.is_reward || item.isDiscount || item.is_discount || item.type === 'discount';
+  item.isReward || item.is_reward || isDiscountItem(item);
 
 export const getProductId = (item = {}) => item.productId || item.product_id || item.id || null;
+
+export const getMetricProductKey = (item = {}, product = null) => {
+  const itemProductId = getProductId(item);
+  if (itemProductId !== null && itemProductId !== undefined) return String(itemProductId);
+  if (product?.id !== null && product?.id !== undefined) return String(product.id);
+  return normalizeText(item.title || item.product_title || item.name);
+};
 
 export const getItemQty = (item = {}) => toNumber(item.qty ?? item.quantity ?? 0);
 
@@ -339,15 +357,8 @@ export const filterTransactionsForSales = ({ transactions, range, filters = {}, 
 
       if (filters.client && getClientKey(tx) !== filters.client) return false;
 
-      if (filters.product || filters.category || (filters.productType && filters.productType !== 'all')) {
-        const hasItem = (tx.items || []).some((item) => {
-          const product = getLiveProduct(item, lookups);
-          const productKey = getProductId(item) ? String(getProductId(item)) : normalizeText(item.title || item.product_title);
-          const matchesProduct = !filters.product || productKey === filters.product;
-          const matchesCategory = !filters.category || getItemCategories(item, product).includes(filters.category);
-          const matchesType = !filters.productType || filters.productType === 'all' || getItemProductType(item, product) === filters.productType;
-          return matchesProduct && matchesCategory && matchesType;
-        });
+      if (hasScopedItemFilters(filters)) {
+        const hasItem = getTransactionMetricItems(tx, filters, lookups).length > 0;
         if (!hasItem) return false;
       }
 
@@ -388,13 +399,34 @@ export const getItemCategories = (item = {}, product = null) => {
 export const getItemProductType = (item = {}, product = null) =>
   product?.product_type || item.product_type || (item.isWeight ? 'weight' : 'quantity');
 
+export const hasScopedItemFilters = (filters = {}) =>
+  Boolean(filters.product || filters.category || (filters.productType && filters.productType !== 'all'));
+
+export const itemMatchesMetricFilters = (item = {}, filters = {}, lookups = { byId: new Map(), byTitle: new Map() }) => {
+  if (isDiscountItem(item)) return false;
+
+  const product = getLiveProduct(item, lookups);
+  const productKey = getMetricProductKey(item, product);
+  const matchesProduct = !filters.product || productKey === filters.product;
+  const matchesCategory = !filters.category || getItemCategories(item, product).includes(filters.category);
+  const matchesType = !filters.productType || filters.productType === 'all' || getItemProductType(item, product) === filters.productType;
+
+  return matchesProduct && matchesCategory && matchesType;
+};
+
+export const getTransactionMetricItems = (tx = {}, filters = {}, lookups = { byId: new Map(), byTitle: new Map() }) => {
+  const items = Array.isArray(tx.items) ? tx.items : [];
+  if (!hasScopedItemFilters(filters)) return items;
+  return items.filter((item) => itemMatchesMetricFilters(item, filters, lookups));
+};
+
 export const addToMap = (map, key, seed, patch) => {
   const current = map.get(key) || { key, ...seed };
   map.set(key, { ...current, ...patch(current) });
 };
 
 export const calculateChange = (current, previous) => {
-  if (!previous) return current ? 100 : 0;
+  if (!previous) return current ? null : 0;
   return ((current - previous) / Math.abs(previous)) * 100;
 };
 
@@ -420,20 +452,39 @@ export const buildSalesDataset = ({
     ...filters,
   };
 
+  const scopedItemFilters = hasScopedItemFilters(filterDefaults);
   const filteredTransactions = filterTransactionsForSales({
     transactions: mergedTransactions,
     range,
     filters: filterDefaults,
     lookups,
   }).map((tx) => {
-    const revenue = toNumber(tx.total);
-    const cost = getTransactionCost(tx, lookups);
-    const profit = revenue - cost;
+    const items = Array.isArray(tx.items) ? tx.items : [];
+    const metricItems = getTransactionMetricItems(tx, filterDefaults, lookups);
+    const originalTotal = toNumber(tx.total);
+    const grossItemsRevenue = items.reduce((sum, item) => (
+      isDiscountItem(item) ? sum : sum + Math.max(0, getItemRevenue(item))
+    ), 0);
+    const totalDiscount = items.reduce((sum, item) => sum + getItemDiscountAmount(item), 0);
+    const revenue = scopedItemFilters
+      ? metricItems.reduce((sum, item) => sum + getItemRevenue(item), 0)
+      : originalTotal;
+    const cost = scopedItemFilters
+      ? metricItems.reduce((sum, item) => sum + getItemCost(item, lookups), 0)
+      : getTransactionCost(tx, lookups);
+    const discountImpact = scopedItemFilters && grossItemsRevenue > 0
+      ? totalDiscount * Math.min(1, Math.max(0, revenue / grossItemsRevenue))
+      : 0;
+    const profit = revenue - cost - discountImpact;
     return {
       ...tx,
       date: tx.metricDate,
       total: revenue,
-      items: Array.isArray(tx.items) ? tx.items : [],
+      originalTotal,
+      items,
+      metricItems,
+      metricScopeRatio: scopedItemFilters && grossItemsRevenue > 0 ? Math.min(1, Math.max(0, revenue / grossItemsRevenue)) : 1,
+      discountImpact,
       stockChanges: Array.isArray(tx.stockChanges) ? tx.stockChanges : [],
       cost,
       profit,
@@ -445,10 +496,11 @@ export const buildSalesDataset = ({
 
   const revenue = filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.total), 0);
   const cost = filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.cost), 0);
+  const discountImpact = filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.discountImpact), 0);
   const totalExpenses = filteredExpenses.reduce((sum, expense) => sum + toNumber(expense.amount), 0);
   const itemsSold = filteredTransactions.reduce((sum, tx) => (
-    sum + (tx.items || []).reduce((itemSum, item) => (
-      item?.isDiscount ? itemSum : itemSum + getItemQty(item)
+    sum + (tx.metricItems || tx.items || []).reduce((itemSum, item) => (
+      item?.isDiscount || item?.is_discount ? itemSum : itemSum + getItemQty(item)
     ), 0)
   ), 0);
 
@@ -461,9 +513,11 @@ export const buildSalesDataset = ({
       revenue,
       gross: revenue,
       cost,
+      discounts: discountImpact,
+      discountImpact,
       expenses: totalExpenses,
-      profit: revenue - cost - totalExpenses,
-      net: revenue - cost - totalExpenses,
+      profit: revenue - cost - discountImpact - totalExpenses,
+      net: revenue - cost - discountImpact - totalExpenses,
       salesCount: filteredTransactions.length,
       count: filteredTransactions.length,
       averageTicket: filteredTransactions.length ? revenue / filteredTransactions.length : 0,

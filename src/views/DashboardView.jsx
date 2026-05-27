@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   ShoppingCart, 
   TrendingDown, 
   FileText,
   Clock,
-  ChevronRight
+  ChevronRight,
+  ChevronDown,
+  CalendarDays
 } from 'lucide-react';
 
 import useDashboardData from '../hooks/useDashboardData';
@@ -19,13 +21,55 @@ import {
   LayoutManagerControls,
 } from '../components/dashboard';
 import { FancyPrice } from '../components/FancyPrice';
-import { isTestRecord } from '../utils/helpers'; // ✨ Importado el escudo anti-test
+import { formatTimeAR, isTestRecord } from '../utils/helpers'; // ✨ Importado el escudo anti-test
+import { parseMetricDate } from '../utils/salesMetricsCore';
 
 const DEFAULT_BOTTOM_ORDER = ['payments', 'topProducts', 'lowStock', 'financialActivity'];
 const DEFAULT_TOP_ORDER = ['sales', 'revenue', 'net', 'opening', 'average', 'expenses'];
 const DASHBOARD_FEED_BATCH = 50;
 const RETIRED_BOTTOM_WIDGETS = new Set(['chart', 'expirations', 'systemLogs']);
 const BOTTOM_WIDGETS = new Set(DEFAULT_BOTTOM_ORDER);
+
+const resolveActivityDate = (record = {}) => {
+  const directDate = record.metricDate || record.activityDate || record.createdAt || record.created_at || record.date;
+  const parsedDirect = parseMetricDate(directDate);
+  const parsedDate = parsedDirect ? new Date(parsedDirect.getTime()) : null;
+
+  if (!parsedDate) return null;
+
+  const rawTime = String(record.time || record.timestamp || '').trim();
+  const timeMatch = rawTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (timeMatch && !record.metricDate && !record.createdAt && !record.created_at) {
+    parsedDate.setHours(
+      Number(timeMatch[1]) || 0,
+      Number(timeMatch[2]) || 0,
+      Number(timeMatch[3]) || 0,
+      0
+    );
+  }
+
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+};
+
+const getActivityDateKey = (date) => {
+  if (!date || Number.isNaN(date.getTime())) return 'sin-fecha';
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+};
+
+const formatActivityDateLabel = (date) =>
+  date && !Number.isNaN(date.getTime())
+    ? date.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    : 'Sin fecha';
+
+const formatActivityTimeLabel = (date, fallback) => {
+  const cleanFallback = String(fallback || '').trim();
+  if (cleanFallback && !cleanFallback.startsWith('--')) return cleanFallback.slice(0, 5);
+  return date ? formatTimeAR(date) : '--:--';
+};
 
 const safeParseDashboardOrder = (value) => {
   if (!value) return null;
@@ -79,7 +123,9 @@ export default function DashboardView({
   onOpenExpenseModal,
   onAlertClick,
   onNavigate,
-  onViewTransaction
+  onViewTransaction,
+  onViewExpense,
+  onRequireFullTransactions,
 }) {
   const isAdmin = hasOwnerAccess(currentUser);
   const canViewHistory = canAccessTab(currentUser, 'history');
@@ -97,6 +143,12 @@ export default function DashboardView({
   const [rankingCriteria, setRankingCriteria] = useState('revenue');
   const [visibleActivityCount, setVisibleActivityCount] = useState(DASHBOARD_FEED_BATCH);
   const [visibleLogsCount, setVisibleLogsCount] = useState(DASHBOARD_FEED_BATCH);
+  const [showOnlyActivityExpenses, setShowOnlyActivityExpenses] = useState(false);
+  const [isActivityDateMenuOpen, setIsActivityDateMenuOpen] = useState(false);
+  const activityScrollRef = useRef(null);
+  const activityDateRefs = useRef({});
+  const pendingActivityDateKeyRef = useRef(null);
+  const requestedAnnualFullLoadRef = useRef(false);
 
   useEffect(() => {
     if (!availableDashboardFilters.length) return;
@@ -104,6 +156,17 @@ export default function DashboardView({
       setGlobalFilter(availableDashboardFilters[0]);
     }
   }, [availableDashboardFilters, globalFilter]);
+
+  useEffect(() => {
+    if (globalFilter !== 'year') {
+      requestedAnnualFullLoadRef.current = false;
+      return;
+    }
+
+    if (requestedAnnualFullLoadRef.current || !onRequireFullTransactions) return;
+    requestedAnnualFullLoadRef.current = true;
+    void onRequireFullTransactions();
+  }, [globalFilter, onRequireFullTransactions]);
 
   const [widgetOrder, setWidgetOrder] = useState(() => {
     const saved = safeParseDashboardOrder(localStorage.getItem('party_dashboard_order_bottom'));
@@ -189,30 +252,94 @@ export default function DashboardView({
   });
 
   const combinedActivity = useMemo(() => {
-    const sales = (filteredData || []).map(t => ({
-      ...t,
-      type: 'sale',
-      sortTime: t.date ? t.date.getTime() : 0
-    }));
-    const exps = (filteredExpenses || []).map(e => ({
-      ...e,
-      type: 'expense',
-      sortTime: (() => {
-        try {
-          if (e.date && e.time) {
-            const [day, month, year] = e.date.split('/');
-            return new Date(`${year}-${month}-${day}T${e.time}`).getTime();
-          }
-          return 0;
-        } catch { return 0; }
-      })()
-    }));
-    return [...sales, ...exps].sort((a, b) => b.sortTime - a.sortTime);
-  }, [filteredData, filteredExpenses]);
+    const sales = (filteredData || []).map((t) => {
+      const activityDate = resolveActivityDate(t);
+      return {
+        ...t,
+        type: 'sale',
+        activityDate,
+        activityDateKey: getActivityDateKey(activityDate),
+        activityDateLabel: formatActivityDateLabel(activityDate),
+        activityTimeLabel: formatActivityTimeLabel(activityDate, t.time),
+        sortTime: activityDate ? activityDate.getTime() : 0,
+      };
+    });
+    const exps = (filteredExpenses || []).map((e) => {
+      const activityDate = resolveActivityDate(e);
+      return {
+        ...e,
+        type: 'expense',
+        activityDate,
+        activityDateKey: getActivityDateKey(activityDate),
+        activityDateLabel: formatActivityDateLabel(activityDate),
+        activityTimeLabel: formatActivityTimeLabel(activityDate, e.time),
+        sortTime: activityDate ? activityDate.getTime() : 0,
+      };
+    });
+    return (showOnlyActivityExpenses ? exps : [...sales, ...exps]).sort((a, b) => b.sortTime - a.sortTime);
+  }, [filteredData, filteredExpenses, showOnlyActivityExpenses]);
+
+  const activityDateOptions = useMemo(() => {
+    const dates = new Map();
+    const todayLabel = formatActivityDateLabel(new Date());
+
+    combinedActivity.forEach((item) => {
+      if (!item.activityDateKey || item.activityDateKey === 'sin-fecha' || dates.has(item.activityDateKey)) return;
+      dates.set(item.activityDateKey, {
+        key: item.activityDateKey,
+        label: item.activityDateLabel,
+        isToday: item.activityDateLabel === todayLabel,
+      });
+    });
+
+    return Array.from(dates.values());
+  }, [combinedActivity]);
+
+  const scrollActivityToDate = useCallback((dateKey) => {
+    const container = activityScrollRef.current;
+    const target = activityDateRefs.current[dateKey];
+    if (!container || !target) return false;
+
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const targetTop = targetRect.top - containerRect.top + container.scrollTop - 6;
+    container.scrollTo({ top: Math.max(targetTop, 0), behavior: 'auto' });
+    return true;
+  }, []);
+
+  const handleActivityDateSelect = useCallback((dateKey) => {
+    setIsActivityDateMenuOpen(false);
+
+    const targetIndex = combinedActivity.findIndex((item) => item.activityDateKey === dateKey);
+    if (targetIndex === -1) return;
+
+    if (targetIndex >= visibleActivityCount) {
+      pendingActivityDateKeyRef.current = dateKey;
+      setVisibleActivityCount(Math.min(combinedActivity.length, targetIndex + DASHBOARD_FEED_BATCH));
+      return;
+    }
+
+    window.requestAnimationFrame(() => scrollActivityToDate(dateKey));
+  }, [combinedActivity, scrollActivityToDate, visibleActivityCount]);
+
+  useEffect(() => {
+    if (!pendingActivityDateKeyRef.current) return;
+    const dateKey = pendingActivityDateKeyRef.current;
+    window.requestAnimationFrame(() => {
+      if (scrollActivityToDate(dateKey)) {
+        pendingActivityDateKeyRef.current = null;
+      }
+    });
+  }, [visibleActivityCount, combinedActivity, scrollActivityToDate]);
 
   useEffect(() => {
     setVisibleActivityCount(DASHBOARD_FEED_BATCH);
+    pendingActivityDateKeyRef.current = null;
   }, [combinedActivity, globalFilter]);
+
+  useEffect(() => {
+    setIsActivityDateMenuOpen(false);
+  }, [globalFilter]);
 
   useEffect(() => {
     setVisibleLogsCount(DASHBOARD_FEED_BATCH);
@@ -293,9 +420,55 @@ export default function DashboardView({
                   </h3>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="text-[9px] font-bold text-blue-600 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded uppercase tracking-wider">
-                    {{ day: 'Hoy', week: 'Semana', month: 'Mes', year: 'Año' }[globalFilter]}
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowOnlyActivityExpenses((value) => !value)}
+                    aria-pressed={showOnlyActivityExpenses}
+                    title={showOnlyActivityExpenses ? 'Mostrando solo gastos' : 'Filtrar solo gastos'}
+                    className={`flex h-6 items-center gap-1 rounded border px-1.5 text-[8px] font-black uppercase tracking-wider transition-colors ${
+                      showOnlyActivityExpenses
+                        ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100'
+                        : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50 hover:text-slate-600'
+                    }`}
+                  >
+                    <TrendingDown size={10} />
+                    Gastos
+                  </button>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (globalFilter !== 'day' && activityDateOptions.length > 0) {
+                          setIsActivityDateMenuOpen((value) => !value);
+                        }
+                      }}
+                      disabled={globalFilter === 'day' || activityDateOptions.length === 0}
+                      className={`flex h-6 items-center gap-1 rounded border px-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
+                        globalFilter !== 'day' && activityDateOptions.length > 0
+                          ? 'cursor-pointer border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100'
+                          : 'cursor-default border-blue-200 bg-blue-50 text-blue-600'
+                      }`}
+                      title={globalFilter === 'day' ? 'Actividad de hoy' : 'Saltar a una fecha'}
+                    >
+                      <CalendarDays size={10} />
+                      {{ day: 'Hoy', week: 'Semana', month: 'Mes', year: 'Año' }[globalFilter]}
+                      {globalFilter !== 'day' && activityDateOptions.length > 0 && <ChevronDown size={10} />}
+                    </button>
+                    {isActivityDateMenuOpen && globalFilter !== 'day' && (
+                      <div className="dashboard-activity-date-menu absolute right-0 top-full z-30 mt-1 max-h-48 w-40 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-[0_8px_18px_rgba(15,23,42,0.12)]">
+                        {activityDateOptions.map((option) => (
+                          <button
+                            key={option.key}
+                            type="button"
+                            onClick={() => handleActivityDateSelect(option.key)}
+                            className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[10px] font-bold text-slate-600 hover:bg-blue-50 hover:text-blue-700"
+                          >
+                            <span>{option.isToday ? 'HOY - ' : ''}{option.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <button 
                     onClick={() => onNavigate && onNavigate('history')}
                     className="text-[8px] font-bold text-slate-500 bg-white border border-slate-200 px-1.5 py-0.5 rounded uppercase tracking-wider hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-0.5"
@@ -306,6 +479,7 @@ export default function DashboardView({
               </div>
 
               <div
+                ref={activityScrollRef}
                 className="custom-scrollbar flex-1 min-h-0 overflow-y-auto pr-1"
                 onScroll={(event) => handleInfiniteFeedScroll(event, combinedActivity.length, setVisibleActivityCount)}
               >
@@ -316,12 +490,19 @@ export default function DashboardView({
                         const elements = [];
 
                         combinedActivity.slice(0, visibleActivityCount).forEach((item, idx) => {
-                          const itemDate = new Date(item.sortTime);
-                          const dateStr = itemDate.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                          const dateStr = item.activityDateLabel;
+                          const dateKey = item.activityDateKey;
 
                           if (globalFilter !== 'day' && dateStr !== lastDateStr) {
                             elements.push(
-                              <div key={`sep-${dateStr}`} className="sticky top-0 z-10 bg-slate-100/95 backdrop-blur-sm px-2 py-1 rounded text-[9px] font-bold text-slate-500 uppercase tracking-widest flex items-center border border-slate-200 shadow-[0_2px_4px_rgba(0,0,0,0.02)]">
+                              <div
+                                key={`sep-${dateKey}`}
+                                ref={(node) => {
+                                  if (node) activityDateRefs.current[dateKey] = node;
+                                  else delete activityDateRefs.current[dateKey];
+                                }}
+                                className="sticky top-0 z-10 bg-slate-100/95 backdrop-blur-sm px-2 py-1 rounded text-[9px] font-bold text-slate-500 uppercase tracking-widest flex items-center border border-slate-200 shadow-[0_2px_4px_rgba(0,0,0,0.02)]"
+                              >
                                 {dateStr === new Date().toLocaleDateString('es-AR') ? 'HOY - ' : ''}{dateStr}
                               </div>
                             );
@@ -350,14 +531,20 @@ export default function DashboardView({
                                 onViewTransaction(originalTx);
                               }
                             }
+                            if (!isSale && onViewExpense) {
+                              const originalExpense = cleanExpenses.find(e => String(e.id) === String(item.id));
+                              onViewExpense(originalExpense || item);
+                            }
                           };
 
                           elements.push(
                             <div 
-                              key={idx} 
+                              key={`${item.type}-${item.id || idx}`}
                               onClick={handleItemClick}
                               className={`flex justify-between items-center px-2 py-1.5 rounded-md border bg-slate-50 transition-colors ${
-                                isSale ? 'hover:border-blue-300 hover:bg-white cursor-pointer border-slate-200' : 'border-slate-200'
+                                isSale
+                                  ? 'hover:border-blue-300 hover:bg-white cursor-pointer border-slate-200'
+                                  : 'hover:border-red-300 hover:bg-white cursor-pointer border-slate-200'
                               }`}
                             >
                               <div className="flex-1 min-w-0 pr-2 flex items-center gap-1.5">
@@ -383,7 +570,7 @@ export default function DashboardView({
                                   <FancyPrice amount={isSale ? item.total : item.amount} />
                                 </p>
                                 <p className="text-[8px] font-bold text-slate-400 mt-0.5 leading-tight">
-                                  {item.time || new Date(item.sortTime).toLocaleTimeString('es-AR', {hour: '2-digit', minute:'2-digit'})}
+                                  {item.activityTimeLabel}
                                 </p>
                               </div>
                             </div>
@@ -494,7 +681,7 @@ export default function DashboardView({
   return (
     <div className="dashboard-view flex h-full min-h-0 flex-col">
       <div className="custom-scrollbar flex-1 min-h-0 overflow-y-auto pr-1">
-        <div className="mx-auto max-w-7xl space-y-4 pb-6">
+        <div className="rebu-content-frame pb-6">
       <div className="flex flex-col lg:flex-row justify-between items-center gap-3">
         <div>
           <h2 className="text-2xl font-bold text-slate-800 leading-tight">Panel de Control</h2>
@@ -575,10 +762,10 @@ export default function DashboardView({
             const isPaymentsWidget = widgetKey === 'payments';
             const isTopProductsWidget = widgetKey === 'topProducts';
             const widgetDesktopHeight = isPaymentsWidget
-                  ? 'lg:h-[17rem]'
+                  ? 'lg:h-[var(--rebu-dashboard-widget-short)]'
                 : isTopProductsWidget
-                  ? 'lg:h-[17rem]'
-                : 'lg:h-[19rem]';
+                  ? 'lg:h-[var(--rebu-dashboard-widget-short)]'
+                : 'lg:h-[var(--rebu-dashboard-widget-tall)]';
             return (
               <div
                 key={widgetKey}

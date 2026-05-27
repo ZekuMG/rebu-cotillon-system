@@ -11,6 +11,7 @@ import {
   CreditCard, 
   Phone, 
   Mail,
+  Instagram,
   FileText,
   AlertTriangle,
   Trophy,
@@ -29,6 +30,17 @@ import { hasPermission } from '../utils/userPermissions';
 import useIncrementalFeed from '../hooks/useIncrementalFeed';
 import usePendingAction from '../hooks/usePendingAction';
 import { buildPointExpirationReport, normalizeMemberName } from '../utils/memberPointsExpiration';
+import {
+  buildSocialConnectionsWithCouponUsageOverrides,
+  buildSocialConnectionsWithInstagram,
+  formatInstagramHandle,
+  getCouponUsageOverrides,
+  getInstagramConnection,
+  getInstagramFormValues,
+  getSocialConnections,
+  hasInstagramConnection,
+  normalizeInstagramHandle,
+} from '../utils/socialConnections';
 
 const sanitizeOptionalMemberField = (value) => {
   if (value === undefined || value === null) return '';
@@ -42,7 +54,58 @@ const sanitizeMemberFormData = (data = {}) => ({
   phone: sanitizeOptionalMemberField(data.phone),
   email: sanitizeOptionalMemberField(data.email),
   extraInfo: sanitizeOptionalMemberField(data.extraInfo),
+  instagramHandle: normalizeInstagramHandle(data.instagramHandle),
+  instagramConnected: Boolean(data.instagramConnected),
+  instagramNotes: sanitizeOptionalMemberField(data.instagramNotes),
   points: Number(data.points) || 0,
+});
+
+const createEmptyMemberFormData = () => ({
+  id: null,
+  name: '',
+  dni: '',
+  phone: '',
+  email: '',
+  extraInfo: '',
+  points: 0,
+  instagramHandle: '',
+  instagramConnected: false,
+  instagramNotes: '',
+});
+
+const buildMemberFormData = (member = {}) => ({
+  ...createEmptyMemberFormData(),
+  id: member.id ?? null,
+  name: member.name || '',
+  dni: member.dni || '',
+  phone: member.phone || '',
+  email: member.email || '',
+  extraInfo: member.extraInfo || '',
+  points: member.points || 0,
+  ...getInstagramFormValues(member),
+});
+
+const mergeMemberFormData = (member = {}, cleanData = {}) => ({
+  ...member,
+  ...cleanData,
+  socialConnections: buildSocialConnectionsWithInstagram(
+    getSocialConnections(member),
+    {
+      handle: cleanData.instagramHandle,
+      isConnected: cleanData.instagramConnected,
+      notes: cleanData.instagramNotes,
+      source: 'manual',
+    },
+  ),
+});
+
+const mergeMemberCouponUsageOverrides = (member = {}, reenabledCodes = []) => ({
+  ...member,
+  socialConnections: buildSocialConnectionsWithCouponUsageOverrides(
+    getSocialConnections(member),
+    { reenabledCodes },
+  ),
+  couponUsageReenabledCodes: reenabledCodes,
 });
 
 const AUDIT_RANGE_OPTIONS = [
@@ -78,7 +141,7 @@ export default function ClientsView({
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState('create');
-  const [formData, setFormData] = useState({ id: null, name: '', dni: '', phone: '', email: '', extraInfo: '', points: 0 });
+  const [formData, setFormData] = useState(createEmptyMemberFormData);
 
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [memberToDelete, setMemberToDelete] = useState(null);
@@ -128,6 +191,9 @@ export default function ClientsView({
   }, [transactions]);
 
   const extractCouponCodeFromItem = (item) => {
+    const explicitCode = String(item?.couponCode || item?.coupon_code || '').trim();
+    if (explicitCode) return explicitCode.toUpperCase();
+
     const title = String(item?.title || '');
     const description = String(item?.description || '');
     const couponMatch =
@@ -266,8 +332,9 @@ export default function ClientsView({
       const dni = m.dni ? String(m.dni) : '';
       const phone = m.phone ? String(m.phone) : '';
       const email = m.email ? String(m.email).toLowerCase() : '';
+      const instagram = getInstagramConnection(m).handle;
 
-      return name.includes(term) || number.includes(term) || dni.includes(term) || phone.includes(term) || email.includes(term);
+      return name.includes(term) || number.includes(term) || dni.includes(term) || phone.includes(term) || email.includes(term) || instagram.includes(term);
     });
 
     const getMs = (dateStr) => {
@@ -368,21 +435,13 @@ export default function ClientsView({
 
   const openCreateModal = () => {
     setModalMode('create');
-    setFormData({ id: null, name: '', dni: '', phone: '', email: '', extraInfo: '', points: 0 });
+    setFormData(createEmptyMemberFormData());
     setIsModalOpen(true);
   };
 
   const openEditModal = (member) => {
     setModalMode('edit');
-    setFormData({
-      id: member.id,
-      name: member.name || '',
-      dni: member.dni || '',
-      phone: member.phone || '',
-      email: member.email || '',
-      extraInfo: member.extraInfo || '',
-      points: member.points || 0
-    });
+    setFormData(buildMemberFormData(member));
     setIsModalOpen(true);
   };
 
@@ -398,7 +457,7 @@ export default function ClientsView({
       } else {
         await updateMember(formData.id, cleanData);
         if (selectedMember && selectedMember.id === formData.id) {
-           setSelectedMember({ ...selectedMember, ...cleanData });
+           setSelectedMember(mergeMemberFormData(selectedMember, cleanData));
         }
       }
       setIsModalOpen(false);
@@ -412,20 +471,38 @@ export default function ClientsView({
       const cleanData = sanitizeMemberFormData(drawerFormData);
       if (duplicateDrawerMember && !cleanData.dni) return;
       await updateMember(selectedMember.id, cleanData);
-      setSelectedMember({ ...selectedMember, ...cleanData });
+      setSelectedMember(mergeMemberFormData(selectedMember, cleanData));
       setIsDrawerEditMode(false);
     });
   };
 
-  const startDrawerEdit = () => {
-    setDrawerFormData({
-      name: selectedMember.name || '',
-      dni: selectedMember.dni || '',
-      phone: selectedMember.phone || '',
-      email: selectedMember.email || '',
-      extraInfo: selectedMember.extraInfo || '',
-      points: selectedMember.points || 0 
+  const handleToggleCouponAvailability = async (couponCode, shouldEnableAgain) => {
+    if (!selectedMember || !couponCode) return;
+
+    await runAction(`member-coupon:${selectedMember.id}:${couponCode}`, async () => {
+      const currentCodes = getCouponUsageOverrides(selectedMember).reenabledCodes;
+      const normalizedCode = String(couponCode || '').trim().toUpperCase();
+      const nextCodes = shouldEnableAgain
+        ? Array.from(new Set([...currentCodes, normalizedCode]))
+        : currentCodes.filter((code) => code !== normalizedCode);
+
+      const updatedMember = await updateMember(selectedMember.id, {
+        couponUsageReenabledCodes: nextCodes,
+        extraInfo: shouldEnableAgain
+          ? `Cupón ${normalizedCode} habilitado manualmente para nuevo uso`
+          : `Cupón ${normalizedCode} volvió a quedar bloqueado por uso histórico`,
+      });
+
+      setSelectedMember(
+        updatedMember?.id
+          ? updatedMember
+          : mergeMemberCouponUsageOverrides(selectedMember, nextCodes),
+      );
     });
+  };
+
+  const startDrawerEdit = () => {
+    setDrawerFormData(buildMemberFormData(selectedMember));
     setIsDrawerEditMode(true);
   };
 
@@ -498,7 +575,7 @@ export default function ClientsView({
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
             <input
               type="text"
-              placeholder="Buscar por Nombre, N° Socio, DNI, Email..."
+              placeholder="Buscar por Nombre, N° Socio, DNI, Email o Instagram..."
               className="w-full rounded-md border border-slate-200 pl-9 pr-3 py-1.5 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm font-bold transition-all"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -628,6 +705,9 @@ export default function ClientsView({
             {sortedMembers.length > 0 ? (
               visibleMembersFeed.visibleItems.map((member) => {
                 const lastPurchase = getLastPurchaseDate(member);
+                const instagram = getInstagramConnection(member);
+                const instagramLabel = formatInstagramHandle(instagram.handle);
+                const hasContactData = Boolean(member.dni || member.phone || member.email || instagramLabel);
 
                 return (
                   <tr key={member.id} className="hover:bg-blue-50/30 transition-colors group">
@@ -667,7 +747,21 @@ export default function ClientsView({
                             <span className="truncate max-w-[150px]">{member.email}</span>
                           </div>
                         )}
-                        {!member.dni && !member.phone && !member.email && (
+                        {instagramLabel && (
+                          <div
+                            className={`flex items-center gap-1.5 text-xs ${instagram.isConnected ? 'text-fuchsia-700' : 'text-gray-500'}`}
+                            title={instagram.isConnected ? 'Instagram confirmado' : 'Instagram sin confirmar'}
+                          >
+                            <Instagram size={12} className={instagram.isConnected ? 'text-fuchsia-500' : 'text-gray-400'} />
+                            <span className="truncate max-w-[150px]">{instagramLabel}</span>
+                            {instagram.isConnected && (
+                              <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-black uppercase text-emerald-700">
+                                OK
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {!hasContactData && (
                           <span className="text-xs text-gray-300 italic">Sin datos</span>
                         )}
                           </div>
@@ -747,6 +841,13 @@ export default function ClientsView({
                       {selectedMember.dni && <p>DNI: {selectedMember.dni}</p>}
                       {selectedMember.phone && <p>Tel: {selectedMember.phone}</p>}
                       {selectedMember.email && <p>{selectedMember.email}</p>}
+                      {formatInstagramHandle(getInstagramConnection(selectedMember).handle) && (
+                        <p className="inline-flex items-center gap-1.5 text-fuchsia-700">
+                          <Instagram size={13} />
+                          {formatInstagramHandle(getInstagramConnection(selectedMember).handle)}
+                          {hasInstagramConnection(selectedMember) ? ' confirmado' : ' sin confirmar'}
+                        </p>
+                      )}
                       {(selectedMember.created_at || selectedMember.createdAt) && <p className="text-xs mt-1 text-slate-400">Socio desde: {formatShortDate(selectedMember.created_at || selectedMember.createdAt)}</p>}
                     </div>
                   </>
@@ -793,6 +894,39 @@ export default function ClientsView({
                   </div>
                   <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Puntos (Ajuste Manual)</label><input type="number" className="w-full rounded-lg border p-2.5 outline-none focus:ring-2 focus:ring-blue-100 font-bold text-blue-600" value={drawerFormData.points} onChange={e => setDrawerFormData({...drawerFormData, points: Number(e.target.value) || 0})} /></div>
                   <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Email</label><input className="w-full rounded-lg border p-2.5 outline-none focus:ring-2 focus:ring-blue-100" value={drawerFormData.email} onChange={e => setDrawerFormData({...drawerFormData, email: e.target.value})} /></div>
+                  <div className="rounded-xl border border-fuchsia-100 bg-fuchsia-50/60 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <label className="flex items-center gap-1.5 text-xs font-bold uppercase text-fuchsia-700">
+                        <Instagram size={14} />
+                        Instagram
+                      </label>
+                      <label className="inline-flex cursor-pointer items-center gap-2 text-[11px] font-black text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(drawerFormData.instagramConnected)}
+                          onChange={e => setDrawerFormData({...drawerFormData, instagramConnected: e.target.checked})}
+                          className="h-4 w-4 rounded border-fuchsia-200 text-fuchsia-600 focus:ring-fuchsia-200"
+                        />
+                        Confirmado
+                      </label>
+                    </div>
+                    <input
+                      className="w-full rounded-lg border border-fuchsia-100 bg-white p-2.5 text-sm outline-none focus:ring-2 focus:ring-fuchsia-100"
+                      placeholder="@usuario"
+                      value={drawerFormData.instagramHandle || ''}
+                      onChange={e => setDrawerFormData({...drawerFormData, instagramHandle: e.target.value})}
+                    />
+                    <textarea
+                      rows="2"
+                      className="mt-2 w-full resize-none rounded-lg border border-fuchsia-100 bg-white p-2.5 text-xs outline-none focus:ring-2 focus:ring-fuchsia-100"
+                      placeholder="Nota interna opcional"
+                      value={drawerFormData.instagramNotes || ''}
+                      onChange={e => setDrawerFormData({...drawerFormData, instagramNotes: e.target.value})}
+                    />
+                    <p className="mt-2 text-[11px] font-semibold text-fuchsia-700">
+                      REBUINSTA solo se habilita si el socio tiene Instagram confirmado.
+                    </p>
+                  </div>
                   <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Notas</label><textarea rows="3" className="w-full rounded-lg border p-2.5 outline-none focus:ring-2 focus:ring-blue-100 resize-none" value={drawerFormData.extraInfo} onChange={e => setDrawerFormData({...drawerFormData, extraInfo: e.target.value})} /></div>
                   <div className="flex gap-3 pt-2">
                     <button type="button" onClick={() => setIsDrawerEditMode(false)} className="flex-1 py-2.5 border rounded-lg font-bold text-gray-600 hover:bg-white">Cancelar</button>
@@ -826,11 +960,23 @@ export default function ClientsView({
 
                   <div className="space-y-3 mb-6">
                     {getMemberCoupons(selectedMember).length > 0 ? (
-                      getMemberCoupons(selectedMember).map((coupon) => (
-                        <div key={coupon.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all">
+                      getMemberCoupons(selectedMember).map((coupon) => {
+                        const reenabledCodes = getCouponUsageOverrides(selectedMember).reenabledCodes;
+                        const isReenabled = reenabledCodes.includes(coupon.code);
+                        const actionKey = `member-coupon:${selectedMember.id}:${coupon.code}`;
+
+                        return (
+                        <div key={coupon.id} className={`bg-white p-4 rounded-xl border shadow-sm hover:shadow-md transition-all ${isReenabled ? 'border-amber-200 ring-1 ring-amber-100' : 'border-gray-200'}`}>
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="text-sm font-bold text-emerald-700 truncate">{coupon.code}</p>
+                              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                <p className="text-sm font-bold text-emerald-700 truncate">{coupon.code}</p>
+                                {isReenabled && (
+                                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-amber-700">
+                                    Disponible otra vez
+                                  </span>
+                                )}
+                              </div>
                               <p className="mt-1 text-xs font-medium text-slate-500 truncate">{coupon.title}</p>
                               <p className="mt-1 text-xs text-gray-400">
                                 {coupon.date} • {String(coupon.time).replace(/hs/ig, '').trim().slice(0, 5)} hs
@@ -847,8 +993,21 @@ export default function ClientsView({
                           >
                             <FileText size={12} /> Ver venta donde se usó
                           </button>
+                          <AsyncActionButton
+                            onAction={() => handleToggleCouponAvailability(coupon.code, !isReenabled)}
+                            pending={isPending(actionKey)}
+                            loadingLabel="Guardando..."
+                            className={`mt-2 w-full py-1.5 text-xs font-bold rounded flex items-center justify-center gap-2 transition-colors ${
+                              isReenabled
+                                ? 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                            }`}
+                          >
+                            {isReenabled ? 'Volver a bloquear' : 'Habilitar nuevo uso'}
+                          </AsyncActionButton>
                         </div>
-                      ))
+                        );
+                      })
                     ) : (
                       <div className="text-center py-8 text-gray-400 bg-white rounded-xl border border-dashed border-gray-200">
                         <p className="text-sm">No registra códigos o cupones utilizados</p>
@@ -1037,12 +1196,12 @@ export default function ClientsView({
       {/* --- MODAL CREAR / EDITAR SOCIO --- */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
+          <div className="max-h-[90vh] bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
               <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
               <h3 className="font-bold text-lg text-gray-800">{modalMode === 'create' ? 'Nuevo Socio' : 'Editar Socio'}</h3>
               <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600 transition-colors"><X size={20} /></button>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <form onSubmit={handleSubmit} className="max-h-[calc(90vh-76px)] overflow-y-auto p-6 space-y-4">
               <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre Completo *</label><input type="text" required className="w-full rounded-lg border border-gray-300 p-2.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 font-medium" placeholder="Ej: Juan Pérez" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} autoFocus /></div>
               {duplicateFormMember && (
                 <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
@@ -1063,6 +1222,39 @@ export default function ClientsView({
               <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Puntos (Ajuste Manual)</label><input type="number" className="w-full rounded-lg border border-gray-300 p-2.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 font-bold text-blue-600" placeholder="0" value={formData.points} onChange={(e) => setFormData({...formData, points: e.target.value})} /></div>
 
               <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Correo Electrónico</label><input type="email" className="w-full rounded-lg border border-gray-300 p-2.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-sm" placeholder="ejemplo@email.com" value={formData.email} onChange={(e) => setFormData({...formData, email: e.target.value})} /></div>
+              <div className="rounded-xl border border-fuchsia-100 bg-fuchsia-50/60 p-3">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <label className="flex items-center gap-1.5 text-xs font-bold uppercase text-fuchsia-700">
+                    <Instagram size={14} />
+                    Instagram
+                  </label>
+                  <label className="inline-flex cursor-pointer items-center gap-2 text-[11px] font-black text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(formData.instagramConnected)}
+                      onChange={(e) => setFormData({...formData, instagramConnected: e.target.checked})}
+                      className="h-4 w-4 rounded border-fuchsia-200 text-fuchsia-600 focus:ring-fuchsia-200"
+                    />
+                    Confirmado
+                  </label>
+                </div>
+                <input
+                  className="w-full rounded-lg border border-fuchsia-100 bg-white p-2.5 text-sm outline-none focus:border-fuchsia-400 focus:ring-2 focus:ring-fuchsia-100"
+                  placeholder="@usuario"
+                  value={formData.instagramHandle || ''}
+                  onChange={(e) => setFormData({...formData, instagramHandle: e.target.value})}
+                />
+                <textarea
+                  rows="2"
+                  className="mt-2 w-full resize-none rounded-lg border border-fuchsia-100 bg-white p-2.5 text-xs outline-none focus:border-fuchsia-400 focus:ring-2 focus:ring-fuchsia-100"
+                  placeholder="Nota interna opcional"
+                  value={formData.instagramNotes || ''}
+                  onChange={(e) => setFormData({...formData, instagramNotes: e.target.value})}
+                />
+                <p className="mt-2 text-[11px] font-semibold text-fuchsia-700">
+                  Para usar REBUINSTA, el Instagram debe estar confirmado.
+                </p>
+              </div>
               <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Notas / Extra</label><textarea rows="2" className="w-full rounded-lg border border-gray-300 p-2.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-sm resize-none" placeholder="Información adicional..." value={formData.extraInfo} onChange={(e) => setFormData({...formData, extraInfo: e.target.value})}></textarea></div>
               <div className="pt-2 flex gap-3">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-bold transition-colors">Cancelar</button>

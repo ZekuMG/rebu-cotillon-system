@@ -506,6 +506,34 @@ export default function LogsTable({ sortedLogs, sortColumn, sortDirection, onSor
           </div>
         );
 
+      case 'Gasto Editado': {
+        const previous = d.previous || {};
+        const next = d.next || {};
+        const previousAmount = Number(previous.amount || 0);
+        const nextAmount = Number(next.amount || 0);
+        const category = next.category || previous.category || 'Varios';
+        const paymentMethod = next.paymentMethod || previous.paymentMethod || 'Efectivo';
+
+        return (
+          <div className={s.sr}>
+            <span className={`${s.b} ${c.ba}`}>Editado #{d.id || 'S/N'}</span>
+            <div className={s.ss}></div>
+            <span className={`${s.b} ${c.br}`}>-<FancyPrice amount={nextAmount} /></span>
+            {previousAmount !== nextAmount && (
+              <>
+                <div className={s.ss}></div>
+                <span className={s.se}><FancyPrice amount={previousAmount} /> {'->'} <FancyPrice amount={nextAmount} /></span>
+              </>
+            )}
+            <div className={s.ss}></div>
+            <span className={`${s.b} ${c.bs}`}>{category}</span>
+            <div className={s.ss}></div>
+            <span className={s.se}>{paymentMethod}</span>
+            {getLogReasonUI(log)}
+          </div>
+        );
+      }
+
       case 'Baja de Socio':
         return (
           <div className={s.sr}>

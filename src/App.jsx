@@ -54,6 +54,15 @@ import { buildBudgetExportConfig, buildExportItemsFromSnapshot, deriveOrderStatu
 import { buildLegacyOfferPayload } from './utils/offerHelpers';
 import { buildPointExpirationReport, normalizeMemberName } from './utils/memberPointsExpiration';
 import {
+  buildSocialConnectionsWithCouponUsageOverrides,
+  buildSocialConnectionsWithInstagram,
+  formatInstagramHandle,
+  getCouponUsageOverrides,
+  getInstagramConnection,
+  getSocialConnections,
+  normalizeInstagramHandle,
+} from './utils/socialConnections';
+import {
   bootstrapAppUsers,
   buildLegacyBootstrapSeed,
   buildLegacyUsers,
@@ -64,6 +73,7 @@ import {
   hasOwnerAccess,
   normalizeMetricsViewMode,
   setAppUserActive,
+  signInSupabaseAuthForAppUser,
   updateAppUserPassword,
   updateAppUserPermissions,
   updateAppUserProfile,
@@ -166,6 +176,16 @@ const CLOUD_FETCH_BATCH_SIZE = 200;
 const CLOUD_RECENT_SYNC_LIMIT = 250;
 const ENABLE_AUTHENTICATED_TRANSACTION_RPCS =
   import.meta.env.VITE_REBU_ENABLE_AUTH_RPC === '1';
+const canUseAuthenticatedTransactionRpcs = async () => {
+  if (!ENABLE_AUTHENTICATED_TRANSACTION_RPCS) return false;
+
+  try {
+    const { data } = await supabase.auth.getSession();
+    return Boolean(data?.session?.access_token);
+  } catch {
+    return false;
+  }
+};
 const SNAPSHOT_STORAGE_SOFT_LIMIT = 1_500_000;
 const SNAPSHOT_COMPACT_LIMITS = {
   transactions: 650,
@@ -191,6 +211,7 @@ const SESSION_ACTIVITY_UPDATE_THROTTLE_MS = 5000;
 const LOCAL_TRANSACTION_OVERRIDE_TTL_MS = 45 * 1000;
 const APP_USERS_FRESHNESS_MS = 15 * 1000;
 const OFFLINE_BOOT_TIMEOUT_MS = 5500;
+const APP_USERS_BOOT_TIMEOUT_MS = 20000;
 const OFFLINE_LOGIN_TIMEOUT_MS = 6500;
 const REPORT_LOG_ACTIONS = ['Cierre de Caja', 'Cierre Automático'];
 
@@ -245,6 +266,7 @@ const buildLocalDemoStore = () => ({
     dni: member.dni || '',
     phone: member.phone || '',
     email: member.email || '',
+    social_connections: member.socialConnections || {},
     points: Number(member.points || 0),
     is_active: true,
     created_at: new Date().toISOString(),
@@ -402,6 +424,8 @@ const sharedUsersCache = {
   scope: 'active',
   authMode: 'legacy',
   loadedAt: 0,
+  retryTimer: null,
+  recoverableRetryCount: 0,
 };
 
 let initialBootstrapPromise = null;
@@ -1295,8 +1319,34 @@ const fetchReportsCloudPayloadSince = async (createdAfter) => {
   };
 };
 
+const recordHasOwnColumn = (record, columnName) =>
+  Object.prototype.hasOwnProperty.call(record || {}, columnName);
+
+const shouldFetchSaleLogsForMetrics = (sales = []) =>
+  (Array.isArray(sales) ? sales : []).some((sale) => {
+    const requiredSaleColumns = [
+      'payment_breakdown',
+      'cash_received',
+      'cash_change',
+      'user_id',
+      'user_role',
+      'status',
+      'voided_at',
+    ];
+
+    if (requiredSaleColumns.some((columnName) => !recordHasOwnColumn(sale, columnName))) return true;
+
+    const items = Array.isArray(sale.sale_items) ? sale.sale_items : [];
+    if (Number(sale.total || 0) > 0 && items.length === 0) return true;
+
+    const requiredItemColumns = ['subtotal', 'cost', 'is_custom', 'is_discount', 'is_combo', 'product_type'];
+    return items.some((item) =>
+      requiredItemColumns.some((columnName) => !recordHasOwnColumn(item, columnName))
+    );
+  });
+
 const fetchMetricsCloudPayload = async ({ includeTransactions = true } = {}) => {
-  const [salesResult, logsResult, expResult, closuresResult, budgetsResult, ordersResult] = await Promise.allSettled([
+  const [salesResult, expResult, closuresResult, budgetsResult, ordersResult] = await Promise.allSettled([
     includeTransactions
       ? fetchAllCloudRowsWithSelectFallback(
           (selectColumns) =>
@@ -1309,7 +1359,6 @@ const fetchMetricsCloudPayload = async ({ includeTransactions = true } = {}) => 
           CLOUD_FETCH_BATCH_SIZE
         )
       : Promise.resolve({ data: null, error: null, skipped: true }),
-    includeTransactions ? fetchSaleHistoryLogsForTransactions() : Promise.resolve([]),
     fetchAllCloudRowsWithSelectFallback(
       (selectColumns) =>
         supabase
@@ -1358,7 +1407,9 @@ const fetchMetricsCloudPayload = async ({ includeTransactions = true } = {}) => 
   const closuresData = safeCloudData(closuresResult, 'cierres para métricas');
   const budgetsData = safeCloudData(budgetsResult, 'presupuestos para métricas');
   const ordersData = safeCloudData(ordersResult, 'pedidos para métricas');
-  const parsedLogs = includeTransactions && logsResult.status === 'fulfilled' && Array.isArray(logsResult.value) ? logsResult.value : [];
+  const parsedLogs = includeTransactions && salesData && shouldFetchSaleLogsForMetrics(salesData)
+    ? await fetchSaleHistoryLogsForTransactions()
+    : [];
 
   return {
     hasCloudConnection,
@@ -2012,6 +2063,10 @@ const updateWithSchemaFallback = async (table, id, payload, selectColumns = '*')
   let safeSelect = removeDisabledSchemaColumnsFromSelect(table, selectColumns);
 
   while (true) {
+    if (!safePayload || Object.keys(safePayload).length === 0) {
+      return { data: null, payload: safePayload, skipped: true };
+    }
+
     const { data, error } = await supabase.from(table).update(safePayload).eq('id', id).select(safeSelect).single();
     if (!error) return { data, payload: safePayload };
 
@@ -2333,21 +2388,26 @@ export default function PartySupplyApp() {
 
         let users = await withTimeout(
           readUsers(),
-          OFFLINE_BOOT_TIMEOUT_MS,
+          APP_USERS_BOOT_TIMEOUT_MS,
           'Carga de usuarios',
         );
 
         if (users.length === 0) {
           const seed = buildLegacyBootstrapSeed(USERS, userSettings);
-          await withTimeout(bootstrapAppUsers(seed), OFFLINE_BOOT_TIMEOUT_MS, 'Inicializacion de usuarios');
+          await withTimeout(bootstrapAppUsers(seed), APP_USERS_BOOT_TIMEOUT_MS, 'Inicializacion de usuarios');
           users = await withTimeout(
             readUsers(),
-            OFFLINE_BOOT_TIMEOUT_MS,
+            APP_USERS_BOOT_TIMEOUT_MS,
             'Recarga de usuarios',
           );
         }
 
         if (users.length > 0) {
+          sharedUsersCache.recoverableRetryCount = 0;
+          if (sharedUsersCache.retryTimer) {
+            window.clearTimeout(sharedUsersCache.retryTimer);
+            sharedUsersCache.retryTimer = null;
+          }
           return { users, authMode: 'supabase', scope: requestedScope };
         }
 
@@ -2405,6 +2465,7 @@ export default function PartySupplyApp() {
           users: buildLegacyUsers(USERS, userSettings),
           authMode: 'legacy',
           scope: 'active',
+          recoverableFallback: isRecoverableCloudError(error) && !isMissingSharedUsersSchema,
         };
       }
     })();
@@ -2427,6 +2488,20 @@ export default function PartySupplyApp() {
 
       setAuthMode(result.authMode);
       setAppUsers(result.users);
+
+      if (
+        result.recoverableFallback &&
+        !isBrowserOffline() &&
+        sharedUsersCache.recoverableRetryCount < 3 &&
+        !sharedUsersCache.retryTimer
+      ) {
+        sharedUsersCache.recoverableRetryCount += 1;
+        sharedUsersCache.retryTimer = window.setTimeout(() => {
+          sharedUsersCache.retryTimer = null;
+          void loadAppUsers({ force: true, includeInactive });
+        }, 2500);
+      }
+
       return result.users;
     } finally {
       sharedUsersCache.promise = null;
@@ -2477,6 +2552,27 @@ export default function PartySupplyApp() {
         return next;
       });
     }
+  };
+
+  const upsertLocalTransaction = (transaction) => {
+    if (!transaction?.id) return;
+    localDataMutationRef.current.transactions = Date.now();
+    setModuleState('transactions', (prev) => ({ ...prev, dirty: true }));
+    setTransactions((prev) => {
+      const next = [transaction, ...(prev || []).filter((item) => String(item.id) !== String(transaction.id))];
+      dataStateRef.current = { ...dataStateRef.current, transactions: next };
+      return next;
+    });
+  };
+
+  const upsertLocalHistoryLog = (log) => {
+    if (!log?.id) return;
+    setModuleState('history', (prev) => ({ ...prev, dirty: true }));
+    setHistoryLogs((prev) => {
+      const next = [log, ...(prev || []).filter((item) => String(item.id) !== String(log.id))];
+      dataStateRef.current = { ...dataStateRef.current, historyLogs: next };
+      return next;
+    });
   };
 
   const applyHistoryPayload = (payload, { merge = false } = {}) => {
@@ -3117,8 +3213,14 @@ export default function PartySupplyApp() {
         return loadReportsCloudData({ force });
       case 'metrics':
         await loadCoreCloudData({ force: false });
-        await loadTransactionsCloudData({ force });
-        return loadMetricsCloudData({ force, includeTransactions: false });
+        return loadMetricsCloudData({
+          force,
+          includeTransactions:
+            force ||
+            !isModuleStateFresh(moduleLoadStateRef.current.transactions, MODULE_FRESHNESS_MS.transactions) ||
+            !Array.isArray(dataStateRef.current.transactions) ||
+            dataStateRef.current.transactions.length === 0,
+        });
       default:
         return true;
     }
@@ -3160,8 +3262,14 @@ export default function PartySupplyApp() {
         } else if (moduleKey === 'reports') {
           await loadReportsCloudData({ force });
         } else if (moduleKey === 'metrics') {
-          await loadTransactionsCloudData({ force });
-          await loadMetricsCloudData({ force, includeTransactions: false });
+          await loadMetricsCloudData({
+            force,
+            includeTransactions:
+              force ||
+              !isModuleStateFresh(moduleLoadStateRef.current.transactions, MODULE_FRESHNESS_MS.transactions) ||
+              !Array.isArray(dataStateRef.current.transactions) ||
+              dataStateRef.current.transactions.length === 0,
+          });
         }
       }
     } catch (error) {
@@ -3245,7 +3353,7 @@ export default function PartySupplyApp() {
       setIsAuthBootLoading(false);
     } else {
       void loadCoreCloudData({ showSpinner: false });
-      void withTimeout(loadAppUsers(), OFFLINE_BOOT_TIMEOUT_MS, 'Carga inicial de usuarios')
+      void loadAppUsers()
         .catch((error) => {
           if (!isRecoverableCloudError(error)) {
             console.error('No se pudieron cargar los usuarios compartidos:', error);
@@ -3332,6 +3440,10 @@ export default function PartySupplyApp() {
 
     return () => {
       disposed = true;
+      if (sharedUsersCache.retryTimer) {
+        window.clearTimeout(sharedUsersCache.retryTimer);
+        sharedUsersCache.retryTimer = null;
+      }
       supabase.removeChannel(channel);
       window.removeEventListener('visibilitychange', handleReSync);
       window.removeEventListener('offline', handleBrowserOffline);
@@ -3747,8 +3859,28 @@ export default function PartySupplyApp() {
     initialFocus: 'select',
   });
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+  const [expenseToEdit, setExpenseToEdit] = useState(null);
 
   const [detailsModalTx, setDetailsModalTx] = useState(null);
+
+  useEffect(() => {
+    if (!posSelectedClient || posSelectedClient.id === 'guest' || posSelectedClient.id === 0) return;
+
+    const latestMember = members.find((member) => String(member.id) === String(posSelectedClient.id));
+    if (!latestMember) return;
+
+    setPosSelectedClient((current) => {
+      if (!current || current.id === 'guest' || current.id === 0) return current;
+      if (String(current.id) !== String(latestMember.id)) return current;
+      return enrichClientWithCouponUsage({
+        ...current,
+        ...latestMember,
+        memberNumber: latestMember.memberNumber || latestMember.member_number || current.memberNumber,
+        created_at: latestMember.created_at || latestMember.createdAt || current.created_at || null,
+        createdAt: latestMember.createdAt || latestMember.created_at || current.createdAt || null,
+      });
+    });
+  }, [members]);
 
   const [newItem, setNewItem] = useState({
     title: '', brand: '', price: '', purchasePrice: '', stock: '',
@@ -4011,14 +4143,14 @@ export default function PartySupplyApp() {
       : isTestRecord({ action, details: compactedDetails, reason });
     setDailyLogs((prev) => [newLog, ...prev].slice(0, DASHBOARD_LOG_LIMIT));
     if (HISTORY_LOG_ACTIONS.includes(action)) {
-      setHistoryLogs((prev) => [newLog, ...prev]);
+      upsertLocalHistoryLog(newLog);
     }
 
     if (skipCloud || isLocalDemoMode() || isBrowserOffline()) {
       if (!isLocalDemoMode()) {
         setIsOfflineReadOnly(true);
       }
-      return;
+      return newLog;
     }
 
     try {
@@ -4036,6 +4168,8 @@ export default function PartySupplyApp() {
     } catch (e) {
       console.error("Error guardando log en nube", e);
     }
+
+    return newLog;
   };
 
   writeLogEntryRef.current = writeLogEntry;
@@ -4084,6 +4218,7 @@ export default function PartySupplyApp() {
   };
 
   const clearAuthenticatedState = () => {
+    supabase.auth.signOut().catch(() => {});
     clearRememberedSession();
     currentSessionMetaRef.current = null;
     currentUserRef.current = null;
@@ -4599,7 +4734,7 @@ export default function PartySupplyApp() {
         });
       }
 
-      addLog(
+      const orderLog = await addLog(
         'Pedido Editado',
         {
           id,
@@ -4626,6 +4761,25 @@ export default function PartySupplyApp() {
         },
         orderData.eventLabel || 'Gestion de pedidos'
       );
+      setTransactions((prev) => {
+        const next = (prev || []).map((tx) =>
+          String(tx.orderId || '') === String(id)
+            ? {
+                ...tx,
+                orderId: id,
+                budgetId: updatedOrder.budgetId || tx.budgetId || null,
+                total: Number(updatedOrder.totalAmount || tx.total || 0),
+                items: buildOrderLogItems(updatedOrder.itemsSnapshot || []),
+                stockChanges: finalizedSale?.stockChanges || reservationChanges || tx.stockChanges || [],
+              }
+            : tx
+        );
+        dataStateRef.current = { ...dataStateRef.current, transactions: next };
+        return next;
+      });
+      localDataMutationRef.current.transactions = Date.now();
+      setModuleState('transactions', (prev) => ({ ...prev, dirty: true }));
+      if (orderLog) upsertLocalHistoryLog(orderLog);
       showNotification('success', 'Pedido Actualizado', 'Los cambios del pedido se guardaron.');
     } catch (error) {
       console.error('Error actualizando pedido:', error);
@@ -4755,7 +4909,7 @@ export default function PartySupplyApp() {
     const numericDelta = Number(delta || 0);
     if (!product || !numericDelta) return Number(product?.stock || 0);
 
-    if (ENABLE_AUTHENTICATED_TRANSACTION_RPCS) {
+    if (await canUseAuthenticatedTransactionRpcs()) {
       const rpcResult = await supabase.rpc('apply_product_stock_delta', {
         p_product_id: product.id,
         p_delta: numericDelta,
@@ -4804,7 +4958,7 @@ export default function PartySupplyApp() {
     clientPointUpdates = [],
   }) => {
     if (isLocalDemoMode()) return null;
-    if (!ENABLE_AUTHENTICATED_TRANSACTION_RPCS) return null;
+    if (!(await canUseAuthenticatedTransactionRpcs())) return null;
 
     const { data, error } = await supabase.rpc('register_sale_transaction', {
       p_sale: { ...salePayload, status: salePayload.status || 'completed' },
@@ -4831,7 +4985,7 @@ export default function PartySupplyApp() {
     clientPointUpdates = [],
   }) => {
     if (isLocalDemoMode()) return null;
-    if (!ENABLE_AUTHENTICATED_TRANSACTION_RPCS) return null;
+    if (!(await canUseAuthenticatedTransactionRpcs())) return null;
 
     const { data, error } = await supabase.rpc('edit_sale_transaction', {
       p_sale_id: String(saleId),
@@ -4858,7 +5012,7 @@ export default function PartySupplyApp() {
     clientPointUpdates = [],
   }) => {
     if (isLocalDemoMode()) return null;
-    if (!ENABLE_AUTHENTICATED_TRANSACTION_RPCS) return null;
+    if (!(await canUseAuthenticatedTransactionRpcs())) return null;
 
     const { data, error } = await supabase.rpc('void_sale_transaction', {
       p_sale_id: String(saleId),
@@ -5019,10 +5173,9 @@ export default function PartySupplyApp() {
   const isSaleStockIgnoredItem = (item) =>
     Boolean(
       item?.isReward ||
-      item?.isCustom ||
-      item?.isTemporary ||
       item?.isDiscount ||
-      item?.type === 'discount'
+      item?.type === 'discount' ||
+      (!item?.isCombo && (item?.isCustom || item?.isTemporary))
     );
 
   const getSaleStockQuantity = (item, fallback = 0) => {
@@ -5033,8 +5186,6 @@ export default function PartySupplyApp() {
 
   const buildSaleRequiredStock = (items = []) =>
     (items || []).reduce((acc, item) => {
-      if (isSaleStockIgnoredItem(item)) return acc;
-
       if (item?.isCombo) {
         const comboQuantity = getSaleStockQuantity(item, 1) || 1;
         const includedItems = Array.isArray(item.productsIncluded) ? item.productsIncluded : [];
@@ -5047,6 +5198,8 @@ export default function PartySupplyApp() {
         });
         return acc;
       }
+
+      if (isSaleStockIgnoredItem(item)) return acc;
 
       const productId = getSaleStockProductId(item);
       if (shouldSkipSaleStockProductId(productId)) return acc;
@@ -5413,7 +5566,7 @@ export default function PartySupplyApp() {
     tx.stockChanges = stockChanges;
 
     tx.isTest = isTestRecord(tx);
-    setTransactions((prev) => [tx, ...prev]);
+    upsertLocalTransaction(tx);
 
       const logItems = historyItems.map((item) => ({
         id: item.id,
@@ -5985,6 +6138,14 @@ export default function PartySupplyApp() {
       discountValue: Number(offerLike.discountValue) || 0,
       offerPrice: Number(offerLike.offerPrice) || 0,
       profitMargin: normalizeOfferProfitMargin(offerLike.profitMargin),
+      maxUsesPerClient: offerLike.maxUsesPerClient || '',
+      receivedCodeExpiresAfter:
+        offerLike.receivedCodeExpiresAfter && typeof offerLike.receivedCodeExpiresAfter === 'object'
+          ? offerLike.receivedCodeExpiresAfter
+          : { value: '', unit: 'days' },
+      requiresClient: Boolean(offerLike.requiresClient || Number(offerLike.maxUsesPerClient || 0) > 0),
+      stackable: offerLike.stackable !== false,
+      globalUsageLimit: offerLike.globalUsageLimit || '',
     };
   };
 
@@ -6020,7 +6181,15 @@ export default function PartySupplyApp() {
         discountValue: data.discount_value,
         offerPrice: data.offer_price,
         profitMargin: data.profit_margin,
-        createdBy: data.created_by
+        createdBy: data.created_by,
+        maxUsesPerClient: offerData.maxUsesPerClient || '',
+        receivedCodeExpiresAfter:
+          offerData.receivedCodeExpiresAfter && typeof offerData.receivedCodeExpiresAfter === 'object'
+            ? offerData.receivedCodeExpiresAfter
+            : { value: '', unit: 'days' },
+        requiresClient: Boolean(offerData.requiresClient || Number(offerData.maxUsesPerClient || 0) > 0),
+        stackable: offerData.stackable !== false,
+        globalUsageLimit: offerData.globalUsageLimit || '',
       };
 
       setOffers([newOffer, ...offers]);
@@ -6185,7 +6354,11 @@ export default function PartySupplyApp() {
       };
 
       newExpense.isTest = isTestRecord(newExpense);
-      setExpenses((prev) => [newExpense, ...prev]);
+      setExpenses((prev) => {
+        const next = [newExpense, ...(prev || [])];
+        dataStateRef.current = { ...dataStateRef.current, expenses: next };
+        return next;
+      });
       
       await addLog(
         'Nuevo Gasto', 
@@ -6202,6 +6375,83 @@ export default function PartySupplyApp() {
     }
   };
 
+  const handleUpdateExpense = async (expenseId, expenseData) => {
+    if (!hasPermission(currentUser, 'extras.expenses.manage')) {
+      showNotification('error', 'Sin permiso', 'No tenes permiso para editar gastos.');
+      return null;
+    }
+    if (blockIfOfflineReadonly('editar gastos')) return null;
+
+    try {
+      const currentExpense = expenses.find((expense) => String(expense.id) === String(expenseId)) || expenseToEdit || {};
+      const userTypedNote = expenseData.note || '';
+      const safeDescription = userTypedNote || expenseData.description || currentExpense.description || 'Gasto General';
+      const safeAmount = Number(expenseData.amount) || 0;
+
+      if (!expenseId || safeAmount <= 0) return null;
+
+      const payload = {
+        description: safeDescription,
+        amount: safeAmount,
+        category: expenseData.category || currentExpense.category || 'Varios',
+        payment_method: expenseData.paymentMethod || currentExpense.paymentMethod || 'Efectivo',
+      };
+
+      const { data } = await updateWithSchemaFallback('expenses', expenseId, payload, CLOUD_SELECTS.expenses);
+      if (!data?.id) throw new Error('Supabase no devolvio el gasto editado.');
+
+      const [updatedExpense] = mapExpenseRecords([{
+        ...currentExpense,
+        ...data,
+        description: data.description || payload.description,
+        amount: data.amount ?? payload.amount,
+        category: data.category || payload.category,
+        payment_method: data.payment_method || payload.payment_method,
+        created_at: data.created_at || currentExpense.created_at || currentExpense.createdAt || new Date().toISOString(),
+        user_name: data.user_name || currentExpense.user,
+        user_id: data.user_id || currentExpense.userId || null,
+        user_role: data.user_role || currentExpense.userRole || null,
+      }]);
+
+      setExpenses((prev) => {
+        const next = (prev || []).map((expense) => (
+          String(expense.id) === String(expenseId)
+            ? { ...expense, ...updatedExpense }
+            : expense
+        ));
+        dataStateRef.current = { ...dataStateRef.current, expenses: next };
+        return next;
+      });
+
+      await addLog(
+        'Gasto Editado',
+        {
+          id: updatedExpense.id,
+          previous: {
+            description: currentExpense.description,
+            amount: currentExpense.amount,
+            category: currentExpense.category,
+            paymentMethod: currentExpense.paymentMethod,
+          },
+          next: {
+            description: updatedExpense.description,
+            amount: updatedExpense.amount,
+            category: updatedExpense.category,
+            paymentMethod: updatedExpense.paymentMethod,
+          },
+        },
+        'Edicion de gasto'
+      );
+
+      showNotification('success', 'Gasto Actualizado', 'Los cambios se guardaron correctamente.');
+      return updatedExpense;
+    } catch (e) {
+      console.error(e);
+      showNotification('error', 'Error', getCloudErrorMessage(e, 'No se pudo actualizar el gasto.'));
+      return null;
+    }
+  };
+
   const handleAddMemberWithLog = async (data) => {
     if (blockIfOfflineReadonly('crear socios')) return;
     try {
@@ -6214,6 +6464,9 @@ export default function PartySupplyApp() {
          email: data?.email?.trim() || null,
          extraInfo: data?.extraInfo?.trim() || '',
          points: Number(data?.points) || 0,
+         instagramHandle: normalizeInstagramHandle(data?.instagramHandle || data?.instagram_handle || ''),
+         instagramConnected: Boolean(data?.instagramConnected || data?.instagram_connected),
+         instagramNotes: String(data?.instagramNotes || data?.instagram_notes || '').trim(),
        };
 
        if (!normalizedData.name) {
@@ -6230,11 +6483,22 @@ export default function PartySupplyApp() {
          return null;
        }
 
+       const socialConnections = buildSocialConnectionsWithInstagram(
+         getSocialConnections(data),
+         {
+           handle: normalizedData.instagramHandle,
+           isConnected: normalizedData.instagramConnected,
+           notes: normalizedData.instagramNotes,
+           source: 'manual',
+         },
+       );
+
        const payload = { 
          name: normalizedData.name, 
          dni: normalizedData.dni, 
          phone: normalizedData.phone, 
          email: normalizedData.email, 
+         social_connections: socialConnections,
          points: normalizedData.points, 
          member_number: memberNum 
        };
@@ -6244,6 +6508,7 @@ export default function PartySupplyApp() {
        const clientFormatted = {
          ...newClient,
          memberNumber: newClient.member_number,
+         socialConnections: newClient.social_connections || socialConnections,
          createdAt: newClient.created_at || newClient.createdAt || null,
        };
        setMembers((prev) => {
@@ -6266,7 +6531,12 @@ export default function PartySupplyApp() {
          ));
        });
        
-       addLog('Nuevo Socio', { name: clientFormatted.name, number: clientFormatted.memberNumber }, normalizedData.extraInfo || 'Registro manual');
+       addLog('Nuevo Socio', {
+         name: clientFormatted.name,
+         number: clientFormatted.memberNumber,
+         instagram: formatInstagramHandle(normalizedData.instagramHandle) || undefined,
+         instagramConnected: normalizedData.instagramConnected || undefined,
+       }, normalizedData.extraInfo || 'Registro manual');
        
        showNotification('success', 'Socio Creado', `#${memberNum}`);
        return clientFormatted;
@@ -6298,6 +6568,18 @@ export default function PartySupplyApp() {
         email: updates.email !== undefined ? updates.email?.trim() || null : updates.email,
         extraInfo: updates.extraInfo !== undefined ? updates.extraInfo?.trim() || '' : updates.extraInfo,
         points: updates.points !== undefined ? Number(updates.points) || 0 : updates.points,
+        instagramHandle:
+          updates.instagramHandle !== undefined
+            ? normalizeInstagramHandle(updates.instagramHandle)
+            : updates.instagramHandle,
+        instagramConnected:
+          updates.instagramConnected !== undefined
+            ? Boolean(updates.instagramConnected)
+            : updates.instagramConnected,
+        instagramNotes:
+          updates.instagramNotes !== undefined
+            ? String(updates.instagramNotes || '').trim()
+            : updates.instagramNotes,
       };
 
       if (normalizedInput.name !== undefined && !normalizedInput.name) {
@@ -6327,16 +6609,55 @@ export default function PartySupplyApp() {
       
       if (normalizedInput.points !== undefined) dbUpdates.points = normalizedInput.points;
       if (normalizedInput.memberNumber !== undefined) dbUpdates.member_number = normalizedInput.memberNumber;
+
+      const hasInstagramUpdate =
+        normalizedInput.instagramHandle !== undefined ||
+        normalizedInput.instagramConnected !== undefined ||
+        normalizedInput.instagramNotes !== undefined;
+      const hasCouponUsageOverrideUpdate = Array.isArray(updates.couponUsageReenabledCodes);
+      const oldInstagram = getInstagramConnection(oldMember);
+      let nextSocialConnections = getSocialConnections(oldMember);
+
+      if (hasInstagramUpdate) {
+        nextSocialConnections = buildSocialConnectionsWithInstagram(
+          nextSocialConnections,
+          {
+            handle:
+              normalizedInput.instagramHandle !== undefined
+                ? normalizedInput.instagramHandle
+                : oldInstagram.handle,
+            isConnected:
+              normalizedInput.instagramConnected !== undefined
+                ? normalizedInput.instagramConnected
+                : oldInstagram.isConnected,
+            notes:
+              normalizedInput.instagramNotes !== undefined
+                ? normalizedInput.instagramNotes
+                : oldInstagram.notes,
+            source: 'manual',
+          },
+        );
+      }
+
+      if (hasCouponUsageOverrideUpdate) {
+        nextSocialConnections = buildSocialConnectionsWithCouponUsageOverrides(
+          nextSocialConnections,
+          { reenabledCodes: updates.couponUsageReenabledCodes },
+        );
+      }
+
+      if (hasInstagramUpdate || hasCouponUsageOverrideUpdate) dbUpdates.social_connections = nextSocialConnections;
       
       await updateWithSchemaFallback('clients', id, dbUpdates, CLOUD_SELECTS.clients);
       
       // ?? Normalizar updates: convertir points a número antes de actualizar estado
       const normalizedUpdates = normalizedInput;
+      let updatedMemberForReturn = null;
       setMembers((prev) =>
         prev.map((member) => {
           if (member.id !== id) return member;
 
-          return {
+          const updatedMember = {
             ...member,
             ...normalizedUpdates,
             memberNumber:
@@ -6345,7 +6666,11 @@ export default function PartySupplyApp() {
                 : member.memberNumber || member.member_number,
             created_at: member.created_at || member.createdAt || null,
             createdAt: member.createdAt || member.created_at || null,
+            ...(hasInstagramUpdate || hasCouponUsageOverrideUpdate ? { socialConnections: nextSocialConnections } : {}),
           };
+
+          updatedMemberForReturn = updatedMember;
+          return updatedMember;
         }),
       );
       
@@ -6364,6 +6689,35 @@ export default function PartySupplyApp() {
       }
       if (normalizedUpdates.email !== undefined && normalizedUpdates.email !== oldMember.email) {
         changes.push({ field: 'Email', old: oldMember.email || '--', new: normalizedUpdates.email || '--' });
+      }
+      if (hasInstagramUpdate) {
+        const nextInstagram = getInstagramConnection({ socialConnections: nextSocialConnections });
+        const oldInstagramLabel = formatInstagramHandle(oldInstagram.handle) || '--';
+        const nextInstagramLabel = formatInstagramHandle(nextInstagram.handle) || '--';
+        const oldState = oldInstagram.isConnected ? 'confirmado' : 'sin confirmar';
+        const nextState = nextInstagram.isConnected ? 'confirmado' : 'sin confirmar';
+        if (
+          oldInstagramLabel !== nextInstagramLabel ||
+          oldState !== nextState ||
+          String(oldInstagram.notes || '') !== String(nextInstagram.notes || '')
+        ) {
+          changes.push({
+            field: 'Instagram',
+            old: `${oldInstagramLabel} (${oldState})`,
+            new: `${nextInstagramLabel} (${nextState})`,
+          });
+        }
+      }
+      if (hasCouponUsageOverrideUpdate) {
+        const oldReenabledCodes = getCouponUsageOverrides(oldMember).reenabledCodes;
+        const nextReenabledCodes = getCouponUsageOverrides({ socialConnections: nextSocialConnections }).reenabledCodes;
+        if (oldReenabledCodes.join(',') !== nextReenabledCodes.join(',')) {
+          changes.push({
+            field: 'Cupones habilitados',
+            old: oldReenabledCodes.length ? oldReenabledCodes.join(', ') : '--',
+            new: nextReenabledCodes.length ? nextReenabledCodes.join(', ') : '--',
+          });
+        }
       }
       if (pointsDelta !== 0) {
         changes.push({ field: 'Puntos', old: Number(oldMember.points || 0), new: Number(normalizedUpdates.points || 0), isPrice: false });
@@ -6384,6 +6738,11 @@ export default function PartySupplyApp() {
       }, logReason);
       
       showNotification('success', 'Socio Actualizado', 'Cambios guardados.');
+      return updatedMemberForReturn || {
+        ...oldMember,
+        ...normalizedUpdates,
+        ...(hasInstagramUpdate || hasCouponUsageOverrideUpdate ? { socialConnections: nextSocialConnections } : {}),
+      };
     } catch (e) { 
       console.error(e);
       const constraint = String(e?.message || e?.details || e?.hint || '').toLowerCase();
@@ -7231,10 +7590,28 @@ export default function PartySupplyApp() {
     setLoginError('');
   };
 
-  const finalizeLogin = async (verifiedUser, { offline = false, rememberSession = false } = {}) => {
+  const finalizeLogin = async (verifiedUser, { offline = false, rememberSession = false, password = '' } = {}) => {
+    let supabaseAuthMeta = { signedIn: false, reason: offline ? 'offline' : 'not-attempted' };
+
+    if (!offline && authMode === 'supabase') {
+      supabaseAuthMeta = await signInSupabaseAuthForAppUser({
+        user: verifiedUser,
+        password,
+      });
+
+      if (supabaseAuthMeta.error) {
+        console.warn('No se pudo abrir sesion en Supabase Auth:', supabaseAuthMeta.error?.message || supabaseAuthMeta.error);
+      }
+    }
+
     const nextSession = {
       ...(await buildSessionMeta(verifiedUser)),
       rememberedSession: Boolean(rememberSession),
+      supabaseAuth: {
+        signedIn: Boolean(supabaseAuthMeta.signedIn),
+        reason: supabaseAuthMeta.reason || null,
+        authUserId: supabaseAuthMeta.authUser?.id || null,
+      },
     };
     setAppUsers((prev) =>
       Array.isArray(prev)
@@ -7342,6 +7719,7 @@ export default function PartySupplyApp() {
       await finalizeLogin(verifiedUser, {
         offline: shouldSkipCloudLoginLog,
         rememberSession: rememberLoginSession,
+        password: passwordInput,
       });
     } catch (error) {
       console.error('No se pudo iniciar sesión:', error);
@@ -7970,7 +8348,7 @@ export default function PartySupplyApp() {
     }
 
     if (isRegisterClosed) {
-      setTempOpeningBalance('');
+      setTempOpeningBalance('0');
       setTempClosingTime('21:00');
       setIsOpeningBalanceModalOpen(true);
     } else {
@@ -9014,6 +9392,9 @@ export default function PartySupplyApp() {
   };
 
   const extractCouponCodeFromSaleItem = (item) => {
+    const explicitCode = String(item?.couponCode || item?.coupon_code || '').trim();
+    if (explicitCode) return explicitCode.toUpperCase();
+
     const title = String(item?.title || '');
     const description = String(item?.description || '');
     const couponMatch =
@@ -9043,9 +9424,14 @@ export default function PartySupplyApp() {
         .filter(Boolean);
     });
 
+    const reenabledCodes = new Set(getCouponUsageOverrides(client).reenabledCodes);
+    const activeUsedCoupons = Array.from(new Set(usedCoupons))
+      .filter((code) => !reenabledCodes.has(String(code || '').trim().toUpperCase()));
+
     return {
       ...client,
-      usedCoupons: Array.from(new Set(usedCoupons)),
+      usedCoupons: activeUsedCoupons,
+      couponUsageReenabledCodes: Array.from(reenabledCodes),
     };
   };
 
@@ -9108,6 +9494,9 @@ export default function PartySupplyApp() {
       const pointsSpent = cart.reduce((acc, i) => acc + (i.isReward ? i.pointsCost : 0), 0);
       const clientId = toOptionalDbId(posSelectedClient?.id);
       const actor = getActorContext();
+      const saleCouponCodes = Array.from(
+        new Set(cart.map((item) => extractCouponCodeFromSaleItem(item)).filter(Boolean)),
+      );
 
       const salePayload = {
         total,
@@ -9124,11 +9513,12 @@ export default function PartySupplyApp() {
         cash_change: cashChange,
       };
 
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       const buildItemsPayload = (saleId = null) => cart.map(i => {
         let productId = i.productId || i.id;
-        if (i.isCustom || i.isCombo || i.isDiscount || i.isReward || !uuidRegex.test(String(productId || ''))) {
+        if (i.isCustom || i.isCombo || i.isDiscount || i.isReward) {
           productId = null;
+        } else {
+          productId = toOptionalDbId(productId);
         }
 
         return {
@@ -9149,6 +9539,16 @@ export default function PartySupplyApp() {
       let pointsChange = null;
       const previousPoints = clientId ? Number(posSelectedClient?.points || 0) : 0;
       const newPoints = clientId ? previousPoints - pointsSpent + pointsEarned : 0;
+      const previousCouponOverrides = clientId ? getCouponUsageOverrides(posSelectedClient).reenabledCodes : [];
+      const consumedCouponOverrides = new Set(saleCouponCodes);
+      const nextCouponOverrides = previousCouponOverrides.filter((code) => !consumedCouponOverrides.has(code));
+      const shouldConsumeCouponOverride = clientId && previousCouponOverrides.length !== nextCouponOverrides.length;
+      const nextClientSocialConnections = shouldConsumeCouponOverride
+        ? buildSocialConnectionsWithCouponUsageOverrides(
+            getSocialConnections(posSelectedClient),
+            { reenabledCodes: nextCouponOverrides },
+          )
+        : getSocialConnections(posSelectedClient);
 
       if (clientId) {
         pointsChange = { previous: previousPoints, new: newPoints, diff: newPoints - previousPoints };
@@ -9159,6 +9559,8 @@ export default function PartySupplyApp() {
           memberNumber: posSelectedClient?.memberNumber || posSelectedClient?.member_number || null,
           created_at: posSelectedClient?.created_at || posSelectedClient?.createdAt || null,
           createdAt: posSelectedClient?.createdAt || posSelectedClient?.created_at || null,
+          ...(shouldConsumeCouponOverride ? { socialConnections: nextClientSocialConnections } : {}),
+          couponUsageReenabledCodes: nextCouponOverrides,
         };
       }
 
@@ -9170,6 +9572,16 @@ export default function PartySupplyApp() {
           ? [{ client_id: String(clientId), points: newPoints }]
           : [],
       });
+
+      if (sale && shouldConsumeCouponOverride && clientId && !isLocalDemoMode()) {
+        const { error: couponOverrideUpdateError } = await supabase
+          .from('clients')
+          .update({ social_connections: nextClientSocialConnections })
+          .eq('id', clientId);
+        if (couponOverrideUpdateError) {
+          throw new Error(`Fallo actualizando cupones habilitados del cliente: ${couponOverrideUpdateError.message}`);
+        }
+      }
 
       if (sale) {
         stockChanges = getSaleStockDeltaPreview(checkoutStockDelta).stockChanges;
@@ -9199,7 +9611,10 @@ export default function PartySupplyApp() {
           if (!clientId) return;
 
           if (!isLocalDemoMode()) {
-            const { error: clientUpdateError } = await supabase.from('clients').update({ points: newPoints }).eq('id', clientId);
+            const clientUpdates = shouldConsumeCouponOverride
+              ? { points: newPoints, social_connections: nextClientSocialConnections }
+              : { points: newPoints };
+            const { error: clientUpdateError } = await supabase.from('clients').update(clientUpdates).eq('id', clientId);
             if (clientUpdateError) {
               throw new Error(`Fallo actualizando puntos del cliente: ${clientUpdateError.message}`);
             }
@@ -9256,7 +9671,7 @@ export default function PartySupplyApp() {
       };
 
       tx.isTest = isTestRecord(tx);
-      setTransactions([tx, ...transactions]);
+      upsertLocalTransaction(tx);
 
       const logItems = cart.map(item => ({
         id: item.id,
@@ -9266,6 +9681,7 @@ export default function PartySupplyApp() {
         subtotal: (Number(item.price) || 0) * (Number(item.quantity) || 0),
         isReward: item.isReward || false,
         isDiscount: item.isDiscount || false,
+        couponCode: item.couponCode || item.coupon_code || undefined,
         type: item.type || (item.isDiscount ? 'discount' : undefined),
         product_type: item.product_type || 'quantity',
         isCustom: item.isCustom || false,
@@ -9285,7 +9701,7 @@ export default function PartySupplyApp() {
 
       const isGuest = !posSelectedClient || posSelectedClient.id === 'guest';
       
-      addLog('Venta Realizada', { 
+      await addLog('Venta Realizada', {
         transactionId: tx.id, total: total, items: logItems,
         subtotal,
         payment: paymentSummary,
@@ -9566,8 +9982,6 @@ export default function PartySupplyApp() {
           if (clientDb) clientId = clientDb.id;
       }
 
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      
       let origCreatedAt = undefined;
       try {
           const [day, month, year] = tx.date.split('/');
@@ -9599,7 +10013,7 @@ export default function PartySupplyApp() {
           );
           
           let prodId = prod ? prod.id : (i.productId || i.id);
-          if (!uuidRegex.test(String(prodId || ''))) prodId = null; 
+          prodId = toOptionalDbId(prodId);
           
           return {
               ...(saleId ? { sale_id: saleId } : {}),
@@ -9938,10 +10352,9 @@ export default function PartySupplyApp() {
         cash_change: safeCashChange
       };
 
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       const newItemsPayload = finalItems.map(i => {
         let prodId = i.productId || i.id;
-        if (!uuidRegex.test(String(prodId || ''))) prodId = null; 
+        prodId = toOptionalDbId(prodId);
 
         return {
           sale_id: editingTransaction.id,
@@ -10189,7 +10602,7 @@ export default function PartySupplyApp() {
     'flex-1',
     'min-w-0',
     'min-h-0',
-    'p-4',
+    'app-main-content',
     'bg-slate-100',
     'relative',
   ].join(' ');
@@ -10639,7 +11052,10 @@ export default function PartySupplyApp() {
                   isLoading={isDashboardModuleLoading && transactions.length === 0 && dailyLogs.length === 0}
                   isProfitSyncing={isDashboardProfitSyncing}
                   emptyStateMessage={dashboardOfflineEmptyMessage}
-                  onOpenExpenseModal={() => setIsExpenseModalOpen(true)}
+                  onOpenExpenseModal={() => {
+                    setExpenseToEdit(null);
+                    setIsExpenseModalOpen(true);
+                  }}
                   onAlertClick={handleDashboardAlertClick} 
                   onNavigate={(tab, payload = {}) => {
                     if (tab === 'inventory') {
@@ -10653,11 +11069,16 @@ export default function PartySupplyApp() {
                     setActiveTab(tab);
                   }}
                   onViewTransaction={(tx) => setDetailsModalTx(tx)}
+                  onViewExpense={(expense) => {
+                    setExpenseToEdit(expense);
+                    setIsExpenseModalOpen(true);
+                  }}
+                  onRequireFullTransactions={() => loadTransactionsCloudData({ force: true })}
                 />
               </PersistentTabPanel>
             )}
             {canAccessTab(currentUser, 'inventory') && <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={handleEditProductRequest} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} closeDetailsToken={inventoryPanelCloseToken} navigationRequest={inventoryNavigationRequest} onProductDetailRequest={handleProductDetailRequest} /></PersistentTabPanel>}
-            <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{canManageRegister ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">Necesitas permiso para abrir la caja y realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} offers={offers} currentUser={currentUser} userCatalog={userCatalog} />)}</PersistentTabPanel>
+            <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{canManageRegister ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">Necesitas permiso para abrir la caja y realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} onUpdateClient={handleUpdateMemberWithLog} offers={offers} currentUser={currentUser} userCatalog={userCatalog} />)}</PersistentTabPanel>
             <PersistentTabPanel tab="clients" activeTab={activeTab} className="h-full min-h-0"><ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={handleCheckMemberPointExpirations} /></PersistentTabPanel>
             {canViewAgenda && (
               <PersistentTabPanel tab="agenda" activeTab={activeTab} className="h-full min-h-0">
@@ -10674,7 +11095,7 @@ export default function PartySupplyApp() {
             <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} offers={offers} currentUser={currentUser} userCatalog={userCatalog} isLoading={isOrdersModuleLoading && budgets.length === 0 && orders.length === 0} emptyStateMessage={ordersOfflineEmptyMessage} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onUpdateOrder={handleUpdateOrder} onDeleteBudget={handleDeleteBudget} onDeleteOrder={handleDeleteOrder} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
             <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={historyLogs} inventory={inventory} currentUser={currentUser} userCatalog={userCatalog} members={members} isLoading={isHistoryModuleLoading && transactions.length === 0 && historyLogs.length === 0} emptyStateMessage={historyOfflineEmptyMessage} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setHistoryLogs} navigationRequest={historyNavigationRequest} onSoftReload={() => Promise.all([loadHistoryCloudData({ force: true }), loadTransactionsCloudData({ force: true })])} isActive={activeTab === 'history'} /></PersistentTabPanel>
             {canViewReports && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members} isLoading={isReportsModuleLoading && pastClosures.length === 0} emptyStateMessage={reportsOfflineEmptyMessage} onLoadReportDetail={fetchCashClosureDetailById} /></PersistentTabPanel>)}
-            {canViewMetrics && (<PersistentTabPanel tab="metrics" activeTab={activeTab} className="h-full min-h-0"><MetricsView transactions={transactions} expenses={expenses} pastClosures={pastClosures} inventory={inventory} members={members} budgets={budgets} orders={orders} dailyLogs={dailyLogs} currentUser={currentUser} userCatalog={userCatalog} isLoading={isMetricsModuleLoading && transactions.length === 0 && expenses.length === 0 && pastClosures.length === 0} isProfitSyncing={isMetricsProfitSyncing} emptyStateMessage={metricsOfflineEmptyMessage} onRefresh={async () => { await loadCoreCloudData({ force: true }); await loadTransactionsCloudData({ force: true }); return loadMetricsCloudData({ force: true, includeTransactions: false }); }} isActive={activeTab === 'metrics'} /></PersistentTabPanel>)}
+            {canViewMetrics && (<PersistentTabPanel tab="metrics" activeTab={activeTab} className="h-full min-h-0"><MetricsView transactions={transactions} expenses={expenses} pastClosures={pastClosures} inventory={inventory} members={members} budgets={budgets} orders={orders} dailyLogs={dailyLogs} currentUser={currentUser} userCatalog={userCatalog} isLoading={isMetricsModuleLoading && transactions.length === 0 && expenses.length === 0 && pastClosures.length === 0} isProfitSyncing={isMetricsProfitSyncing} emptyStateMessage={metricsOfflineEmptyMessage} onRefresh={async () => { await loadCoreCloudData({ force: true }); return loadMetricsCloudData({ force: true, includeTransactions: true }); }} isActive={activeTab === 'metrics'} /></PersistentTabPanel>)}
             {canViewLogs && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView initialLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} userCatalog={userCatalog} inventory={inventory} isActive={activeTab === 'logs'} /></PersistentTabPanel>)}
             {canViewSessions && (<PersistentTabPanel tab="sessions" activeTab={activeTab} className="h-full min-h-0"><SessionsView initialLogs={dailyLogs} currentSessionMeta={currentSessionMeta} userCatalog={userCatalog} /></PersistentTabPanel>)}
             {canViewUserManagement && (
@@ -10787,7 +11208,17 @@ export default function PartySupplyApp() {
             closeMemberIdentityPanel();
           }}
         />
-        <ExpenseModal isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} onSave={handleAddExpense} />
+        <ExpenseModal
+          isOpen={isExpenseModalOpen}
+          onClose={() => {
+            setIsExpenseModalOpen(false);
+            setExpenseToEdit(null);
+          }}
+          onSave={expenseToEdit ? (expenseData) => handleUpdateExpense(expenseToEdit.id, expenseData) : handleAddExpense}
+          initialExpense={expenseToEdit}
+          mode={expenseToEdit ? 'edit' : 'create'}
+          readOnly={Boolean(expenseToEdit) && !hasPermission(currentUser, 'extras.expenses.manage')}
+        />
         
         <TransactionDetailModal
           transaction={detailsModalTx}

@@ -483,52 +483,58 @@ export default function BulkEditorView({
         .no-spinners { -moz-appearance: textfield; }
       `}</style>
 
-      {/* HEADER PRINCIPAL */}
-      <div className="bg-white p-2 rounded-xl shadow-sm border border-amber-200 shrink-0 flex items-center justify-between gap-3 z-10 relative overflow-hidden pl-3 pr-2">
-        <div className="absolute top-0 left-0 w-1 bg-amber-400 h-full"></div>
+      <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
+        {/* PANEL DE CONTROL */}
+        <aside className="relative z-10 flex w-[300px] shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm min-[1600px]:w-[320px]">
+        <div className="h-1 shrink-0 bg-amber-400" />
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 custom-scrollbar">
         
-        <div className="flex items-center gap-2 border-r border-slate-200 pr-3">
-          <span className="text-[11px] font-black text-fuchsia-800 uppercase tracking-wider hidden md:block">Acción:</span>
+        <section className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
+          <span className="mb-2 block text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">Ajuste masivo</span>
           <select 
-            className="px-2 py-1.5 border border-fuchsia-200 rounded-md text-xs font-bold outline-none bg-fuchsia-50/50 focus:ring-2 focus:ring-fuchsia-500 cursor-pointer text-fuchsia-900"
+            className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-800 outline-none transition-all focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
             value={bulkAction.field}
             onChange={(e) => setBulkAction({...bulkAction, field: e.target.value})}
           >
             <option value="price">Aumentar Precio</option>
             <option value="purchasePrice">Aumentar Costo</option>
           </select>
-          <div className="relative">
+          <div className="relative mt-2">
             <input 
               type="number" 
               placeholder="Ej: 15" 
-              className="no-spinners w-16 pl-2 pr-5 py-1.5 border border-fuchsia-200 rounded-md text-xs font-black outline-none bg-white focus:ring-2 focus:ring-fuchsia-500 text-center"
+              className="no-spinners w-full rounded-md border border-slate-200 bg-white py-1.5 pl-2 pr-7 text-center text-xs font-black text-slate-900 outline-none transition-all focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
               value={bulkAction.percentage}
               onChange={(e) => setBulkAction({...bulkAction, percentage: e.target.value})}
             />
-            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-fuchsia-400 font-bold text-xs">%</span>
+            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-black text-slate-400">%</span>
           </div>
           <button 
             onClick={applyBulkPercentage}
             disabled={selectedIds.length === 0 || !bulkAction.percentage}
-            className="bg-fuchsia-600 text-white px-3 py-1.5 rounded-md font-bold text-xs hover:bg-fuchsia-700 disabled:opacity-50 transition-colors flex items-center gap-1 shadow-sm whitespace-nowrap"
+            className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md bg-slate-900 px-3 py-2 text-xs font-black text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"
           >
             <ArrowRight size={14} /> Aplicar a {selectedIds.length}
           </button>
-        </div>
+        </section>
 
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          <div className="relative flex-1">
+        <section className="rounded-lg border border-slate-200 bg-white p-2.5">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">Filtros</span>
+            <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-black text-slate-600">{filteredProducts.length}</span>
+          </div>
+          <div className="relative mb-2">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
             <input 
               type="text" 
               placeholder="Buscar producto..." 
-              className="w-full pl-8 pr-3 py-1.5 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-amber-400 outline-none text-xs font-bold transition-all"
+              className="w-full rounded-md border border-slate-200 bg-slate-50 py-2 pl-8 pr-3 text-xs font-bold outline-none transition-all focus:border-amber-400 focus:bg-white focus:ring-2 focus:ring-amber-200"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
           <select 
-            className="px-3 py-1.5 border border-slate-200 rounded-lg bg-slate-50 font-bold outline-none focus:ring-2 focus:ring-amber-400 text-xs cursor-pointer w-48 transition-all shrink-0"
+            className="mb-2 w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-bold text-slate-800 outline-none transition-all focus:border-amber-400 focus:bg-white focus:ring-2 focus:ring-amber-200"
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
           >
@@ -538,43 +544,47 @@ export default function BulkEditorView({
           <button
             type="button"
             onClick={() => setShowOnlyOutOfStock((prev) => !prev)}
-            className={`px-3 py-1.5 rounded-lg font-black text-xs border transition-all shrink-0 flex items-center gap-1.5 ${
+            className={`mb-2 flex w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs font-black transition-all ${
               showOnlyOutOfStock
-                ? 'bg-red-50 border-red-200 text-red-700 shadow-inner'
+                ? 'bg-red-50 border-red-200 text-red-700'
                 : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-white'
             }`}
             title="Filtrar sólo productos agotados"
           >
-            <PackageX size={14} />
-            Agotados
+            <span className="flex items-center gap-1.5">
+              <PackageX size={14} />
+              Agotados
+            </span>
+            <span className="text-[10px] opacity-70">{visibleOutOfStockIds.length}</span>
           </button>
           <button
             type="button"
             onClick={handleSelectOutOfStock}
             disabled={visibleOutOfStockIds.length === 0}
-            className={`px-3 py-1.5 rounded-lg font-black text-xs border transition-all shrink-0 flex items-center gap-1.5 ${
+            className={`flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-xs font-black transition-all ${
               areAllVisibleOutOfStockSelected
                 ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
                 : 'bg-white border-amber-200 text-amber-700 hover:bg-amber-50'
-            } disabled:opacity-50 disabled:cursor-not-allowed`}
+            } disabled:cursor-not-allowed disabled:opacity-45`}
             title="Seleccionar todos los agotados visibles para exportación o reposición"
           >
             <CheckSquare size={14} />
             {areAllVisibleOutOfStockSelected ? 'Agotados listos' : `Seleccionar agotados${visibleOutOfStockIds.length > 0 ? ` (${visibleOutOfStockIds.length})` : ''}`}
           </button>
-        </div>
+        </section>
 
-        <div className="pl-3 border-l border-slate-200 flex items-center gap-2">
+        <section className="rounded-lg border border-slate-200 bg-white p-2.5">
+          <p className="mb-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">Salida</p>
           <button 
             onClick={openExportPreview}
-            className="bg-indigo-600 text-white px-3 py-1.5 rounded-md font-bold text-xs shadow-md hover:bg-indigo-700 transition-colors flex items-center gap-1.5 whitespace-nowrap"
+            className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-black text-slate-700 transition-colors hover:bg-white"
           >
             <FileText size={14} />
             {selectedIds.length > 0 ? `Añadir al PDF (${selectedIds.length})` : `Ver Presupuesto ${exportItems.length > 0 ? `(${exportItems.length})` : ''}`}
           </button>
 
           {showOnlyOutOfStock && (
-            <span className="hidden xl:inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-amber-800">
+            <span className="mb-2 flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[10px] font-bold leading-snug text-amber-800">
               <PackageX size={12} />
               Exporta agotados y podés sumar otros para reponer
             </span>
@@ -583,7 +593,7 @@ export default function BulkEditorView({
           <button 
             onClick={handleResetAllEdits}
             disabled={(!hasPendingBulkChanges && selectedIds.length === 0 && bulkAction.percentage === '') || isSaving}
-            className="bg-white text-slate-700 px-3 py-1.5 rounded-md font-black text-xs shadow-sm border border-slate-200 hover:bg-slate-50 disabled:opacity-50 transition-colors flex items-center gap-1.5 whitespace-nowrap"
+            className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
           >
             <RotateCcw size={14} />
             Deshacer todo
@@ -594,22 +604,23 @@ export default function BulkEditorView({
             pending={isSaving}
             disabled={selectedIds.length === 0 || isSaving}
             loadingLabel="Guardando..."
-            className="bg-slate-900 text-white px-4 py-1.5 rounded-md font-black text-xs shadow-md hover:bg-slate-800 disabled:opacity-50 transition-colors flex items-center gap-2 whitespace-nowrap"
+            className="flex w-full items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-xs font-black text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-45"
           >
             {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-            Guardar Cambios ({selectedIds.length})
+            Guardar cambios ({selectedIds.length})
           </AsyncActionButton>
+        </section>
         </div>
-      </div>
+        </aside>
 
       {/* TABLA PRINCIPAL CON SCROLL LAZY LOAD */}
-      <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col relative z-0">
+      <div className="relative z-0 flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-y-auto custom-scrollbar flex-1 relative" onScroll={handleMainScroll}>
           <table className="w-full text-left border-collapse relative">
             <thead className="bg-slate-800 text-white sticky top-0 z-20 shadow-md">
               <tr>
                 <th className="p-1.5 w-8 text-center">
-                  <button onClick={toggleSelectAll} className="hover:text-fuchsia-300 transition-colors">
+                  <button onClick={toggleSelectAll} className="transition-colors hover:text-emerald-200">
                     {areAllFilteredSelected ? <CheckSquare size={14} /> : <Square size={14} />}
                   </button>
                 </th>
@@ -636,9 +647,9 @@ export default function BulkEditorView({
                 const priceDiff = calculateDiffPercent(origPrice, newPrice);
 
                 return (
-                  <tr key={p.id} className={`transition-colors ${isSelected ? 'bg-fuchsia-50/70' : isWeight ? 'bg-amber-50/20' : 'hover:bg-slate-50'}`}>
+                  <tr key={p.id} className={`transition-colors ${isSelected ? 'bg-emerald-50/70' : isWeight ? 'bg-amber-50/20' : 'hover:bg-slate-50'}`}>
                     <td className="p-1.5 text-center border-r border-slate-100">
-                      <button onClick={() => toggleSelect(p.id)} className={`transition-colors ${isSelected ? 'text-fuchsia-600' : 'text-slate-300 hover:text-slate-500'}`}>
+                      <button onClick={() => toggleSelect(p.id)} className={`transition-colors ${isSelected ? 'text-emerald-600' : 'text-slate-300 hover:text-slate-500'}`}>
                         {isSelected ? <CheckSquare size={14} /> : <Square size={14} />}
                       </button>
                     </td>
@@ -760,6 +771,7 @@ export default function BulkEditorView({
             </tbody>
           </table>
         </div>
+      </div>
       </div>
 
       {/* ✨ HUD COMPACTO: VISTA PREVIA Y EDICIÓN DE CANTIDADES */}

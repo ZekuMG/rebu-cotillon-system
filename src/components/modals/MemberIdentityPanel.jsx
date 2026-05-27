@@ -8,11 +8,25 @@ import {
   Gift,
   Package,
   Tag,
+  Instagram,
 } from 'lucide-react';
 import { formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
+import {
+  formatInstagramHandle,
+  getInstagramConnection,
+  normalizeInstagramHandle,
+} from '../../utils/socialConnections';
 
-const INITIAL_MEMBER_FORM = { name: '', dni: '', phone: '', email: '', extraInfo: '' };
+const INITIAL_MEMBER_FORM = {
+  name: '',
+  dni: '',
+  phone: '',
+  email: '',
+  extraInfo: '',
+  instagramHandle: '',
+  instagramConnected: false,
+};
 const MEMBER_RESULT_LIMIT = 6;
 
 const sanitizeOptionalMemberField = (value) => {
@@ -27,6 +41,8 @@ const sanitizeMemberPayload = (data = {}) => ({
   phone: sanitizeOptionalMemberField(data.phone),
   email: sanitizeOptionalMemberField(data.email),
   extraInfo: sanitizeOptionalMemberField(data.extraInfo),
+  instagramHandle: normalizeInstagramHandle(data.instagramHandle),
+  instagramConnected: Boolean(data.instagramConnected),
 });
 
 const isRealMember = (client) => Boolean(client && client.id !== 'guest' && client.id !== 0);
@@ -99,13 +115,15 @@ export const MemberIdentityPanel = ({
       const dni = String(member?.dni || '').toLowerCase();
       const phone = String(member?.phone || '').toLowerCase();
       const email = String(member?.email || '').toLowerCase();
+      const instagram = getInstagramConnection(member).handle;
 
       return (
         name.includes(search) ||
         memberNumber.includes(search) ||
         dni.includes(search) ||
         phone.includes(search) ||
-        email.includes(search)
+        email.includes(search) ||
+        instagram.includes(search)
       );
     });
   }, [clients, memberSearch]);
@@ -209,13 +227,20 @@ export const MemberIdentityPanel = ({
               <p className="text-[11px] font-bold text-slate-500">#{formatMemberNumber(activeMember.memberNumber)}</p>
             </div>
           </div>
-          {(activeMember?.phone || activeMember?.email || activeMember?.dni) && (
+          {(activeMember?.phone || activeMember?.email || activeMember?.dni || formatInstagramHandle(getInstagramConnection(activeMember).handle)) && (
             <div className="mt-2 rounded-lg bg-white/60 px-3 py-2 text-[10px] space-y-1 leading-snug">
               <p className="text-slate-700 truncate">
                 <span className="font-bold text-slate-600">T:</span> {activeMember?.phone || '—'} {activeMember?.dni && `| DNI: ${activeMember.dni}`}
               </p>
               {activeMember?.email && (
                 <p className="text-slate-700 truncate"><span className="font-bold text-slate-600">E:</span> {activeMember.email}</p>
+              )}
+              {formatInstagramHandle(getInstagramConnection(activeMember).handle) && (
+                <p className="flex items-center gap-1 truncate text-fuchsia-700">
+                  <Instagram size={11} />
+                  {formatInstagramHandle(getInstagramConnection(activeMember).handle)}
+                  {getInstagramConnection(activeMember).isConnected ? ' confirmado' : ' sin confirmar'}
+                </p>
               )}
             </div>
           )}
@@ -263,7 +288,7 @@ export const MemberIdentityPanel = ({
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-xl font-black text-slate-900">Seleccionar socio</h3>
-            <p className="mt-1 text-sm text-slate-500">Busca por nombre, DNI, telefono, email o numero de socio.</p>
+            <p className="mt-1 text-sm text-slate-500">Busca por nombre, DNI, telefono, email, Instagram o numero de socio.</p>
           </div>
         </div>
         <div className="relative mt-4">
@@ -291,6 +316,8 @@ export const MemberIdentityPanel = ({
         ) : (
           displayedMembers.map((member) => {
             const isCurrent = activeMember && String(activeMember.id) === String(member.id);
+            const instagram = getInstagramConnection(member);
+            const instagramLabel = formatInstagramHandle(instagram.handle);
 
             return (
               <button
@@ -314,6 +341,13 @@ export const MemberIdentityPanel = ({
                         #{formatMemberNumber(member.memberNumber)} {member.phone && `· ${member.phone}`} {member.dni && `· DNI: ${member.dni}`}
                       </p>
                       {member.email && <p className="truncate text-[9px] text-slate-400">{member.email}</p>}
+                      {instagramLabel && (
+                        <p className={`mt-0.5 flex items-center gap-1 truncate text-[9px] font-bold ${instagram.isConnected ? 'text-fuchsia-600' : 'text-slate-400'}`}>
+                          <Instagram size={10} />
+                          {instagramLabel}
+                          {instagram.isConnected ? ' OK' : ''}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="shrink-0 text-right">
@@ -581,6 +615,34 @@ export const MemberIdentityPanel = ({
               className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-700 outline-none transition-all focus:border-fuchsia-400 focus:bg-white focus:ring-2 focus:ring-fuchsia-100"
               placeholder="cliente@ejemplo.com"
             />
+          </div>
+
+          <div className="md:col-span-2 rounded-2xl border border-fuchsia-100 bg-fuchsia-50/70 p-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <label className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-[0.12em] text-fuchsia-700">
+                <Instagram size={14} />
+                Instagram
+              </label>
+              <label className="inline-flex cursor-pointer items-center gap-2 text-[11px] font-black text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={Boolean(newMemberData.instagramConnected)}
+                  onChange={(event) => setNewMemberData((prev) => ({ ...prev, instagramConnected: event.target.checked }))}
+                  className="h-4 w-4 rounded border-fuchsia-200 text-fuchsia-600 focus:ring-fuchsia-200"
+                />
+                Confirmado
+              </label>
+            </div>
+            <input
+              type="text"
+              value={newMemberData.instagramHandle}
+              onChange={(event) => setNewMemberData((prev) => ({ ...prev, instagramHandle: event.target.value }))}
+              className="w-full rounded-xl border border-fuchsia-100 bg-white px-3 py-3 text-sm font-medium text-slate-700 outline-none transition-all focus:border-fuchsia-400 focus:ring-2 focus:ring-fuchsia-100"
+              placeholder="@usuario"
+            />
+            <p className="mt-2 text-[11px] font-semibold text-fuchsia-700">
+              Si esta confirmado, el socio puede usar REBUINSTA una sola vez.
+            </p>
           </div>
         </div>
 

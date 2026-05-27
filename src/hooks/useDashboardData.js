@@ -6,88 +6,13 @@ import {
   buildInventoryLookups,
   buildSalesDataset,
   getItemCategories,
-  getItemCost,
+  getItemQty,
+  getItemRevenue,
   getLiveProduct,
-  isTemporaryCustomItem,
   makeDashboardRange,
   normalizeText,
   parseMetricDate,
-  shouldSkipCostItem,
 } from '../utils/salesMetricsCore';
-
-const getDashboardStockChangeCost = (change = {}, lookups) => {
-  const productId = change.productId || change.product_id || change.id;
-  const product = productId ? lookups.byId.get(String(productId)) : null;
-  const qty = Math.abs(Number(
-    change.quantitySold ??
-      change.quantityReserved ??
-      change.quantityChanged ??
-      change.quantity ??
-      change.qty ??
-      0
-  ) || 0);
-  if (qty <= 0) return 0;
-
-  const unitCost = Number(
-    product?.purchasePrice ??
-      product?.purchase_price ??
-      change.purchasePrice ??
-      change.purchase_price ??
-      change.unitCost ??
-      change.unit_cost ??
-      change.cost ??
-      0
-  ) || 0;
-
-  return unitCost * qty;
-};
-
-const getDashboardTransactionCost = (tx = {}, lookups) => {
-  const items = Array.isArray(tx.items) ? tx.items : [];
-  const stockChanges = Array.isArray(tx.stockChanges) ? tx.stockChanges : [];
-  const itemCost = items.reduce((sum, item) => sum + getItemCost(item, lookups), 0);
-
-  if (!stockChanges.length) return itemCost;
-
-  const stockCost = stockChanges.reduce((sum, change) => sum + getDashboardStockChangeCost(change, lookups), 0);
-  const customItemCost = items.reduce((sum, item) => {
-    if (!isTemporaryCustomItem(item) || shouldSkipCostItem(item)) return sum;
-    return sum + getItemCost(item, lookups);
-  }, 0);
-
-  return Math.max(stockCost + customItemCost, itemCost);
-};
-
-const rebuildDashboardSalesDataset = (dataset, lookups) => {
-  const filteredTransactions = (dataset.filteredTransactions || []).map((tx) => {
-    const cost = getDashboardTransactionCost(tx, lookups);
-    const total = Number(tx.total || 0);
-    const profit = total - cost;
-    return {
-      ...tx,
-      cost,
-      profit,
-      net: profit,
-    };
-  });
-  const revenue = filteredTransactions.reduce((sum, tx) => sum + (Number(tx.total) || 0), 0);
-  const cost = filteredTransactions.reduce((sum, tx) => sum + (Number(tx.cost) || 0), 0);
-  const expenses = Number(dataset.stats?.expenses || 0);
-
-  return {
-    ...dataset,
-    filteredTransactions,
-    stats: {
-      ...dataset.stats,
-      revenue,
-      gross: revenue,
-      cost,
-      profit: revenue - cost - expenses,
-      net: revenue - cost - expenses,
-      averageTicket: filteredTransactions.length ? revenue / filteredTransactions.length : 0,
-    },
-  };
-};
 
 export default function useDashboardData({ 
   transactions, 
@@ -102,7 +27,7 @@ export default function useDashboardData({
   const lookups = useMemo(() => buildInventoryLookups(inventory || []), [inventory]);
   const dashboardRange = useMemo(() => makeDashboardRange(globalFilter), [globalFilter]);
   const salesDataset = useMemo(() => {
-    const dataset = buildSalesDataset({
+    return buildSalesDataset({
       transactions,
       dailyLogs,
       expenses,
@@ -116,7 +41,6 @@ export default function useDashboardData({
         productType: 'all',
       },
     });
-    return rebuildDashboardSalesDataset(dataset, lookups);
   }, [transactions, dailyLogs, expenses, inventory, dashboardRange, lookups]);
 
   const safeParseDate = useCallback((dateStr) => {
@@ -149,6 +73,9 @@ export default function useDashboardData({
   }, [getLiveProductForItem, lookups]);
 
   const getRankingItemRevenue = useCallback((item, txTotal = 0) => {
+    const explicitRevenue = getItemRevenue(item);
+    if (explicitRevenue > 0) return explicitRevenue;
+
     const qty = Number(item?.qty) || Number(item?.quantity) || 0;
     const price = Number(item?.price) || Number(item?.unit_price) || Number(item?.newPrice) || 0;
     if (qty <= 0 || price <= 0) return 0;
@@ -415,8 +342,9 @@ export default function useDashboardData({
     const statsMap = {};
 
     filteredData.forEach(tx => {
-      tx.items.forEach(item => {
-        const qty = Number(item.qty) || Number(item.quantity) || 0;
+      (tx.metricItems || tx.items || []).forEach(item => {
+        if (item?.isDiscount || item?.is_discount || item?.type === 'discount') return;
+        const qty = getItemQty(item);
         const revenue = getRankingItemRevenue(item, tx.total);
         
         const liveProduct = getLiveProductForItem(item);
@@ -467,7 +395,9 @@ export default function useDashboardData({
 
   const lowStockProducts = useMemo(() => {
     if (!inventory) return [];
-    return inventory.filter((p) => p.stock < 10).sort((a, b) => a.stock - b.stock);
+    return inventory
+      .filter((p) => p.is_active !== false && p.stock < 10)
+      .sort((a, b) => a.stock - b.stock);
   }, [inventory]);
 
   const expiringProducts = useMemo(() => {
@@ -477,7 +407,7 @@ export default function useDashboardData({
     today.setHours(0, 0, 0, 0); 
 
     const alerts = inventory
-      .filter(p => p.expiration_date) 
+      .filter(p => p.is_active !== false && p.expiration_date) 
       .map(p => {
         const [year, month, day] = p.expiration_date.split('-');
         const expDate = new Date(year, month - 1, day);

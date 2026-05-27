@@ -28,6 +28,10 @@ import { hasPermission } from '../utils/userPermissions';
 import { FancyPrice } from '../components/FancyPrice';
 
 const INVENTORY_BATCH_SIZE = 50;
+const REBU_WIDE_QUERY = '(min-width: 1920px)';
+
+const isWideResolution = () =>
+  typeof window !== 'undefined' && window.matchMedia(REBU_WIDE_QUERY).matches;
 
 // âœ¨ HELPER: Verifica si la fecha es menor a 14 dÃ­as o ya pasÃ³
 const getExpirationInfo = (dateString) => {
@@ -91,6 +95,8 @@ export default function InventoryView({
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [sortFilterSearch, setSortFilterSearch] = useState('');
   const [expandedCategoryProductId, setExpandedCategoryProductId] = useState(null);
+  const [isWideLayout, setIsWideLayout] = useState(isWideResolution);
+  const maxGridColumns = isWideLayout ? 10 : 8;
   const canCreateProducts = hasPermission(currentUser, 'inventory.create');
   const canEditProducts = hasPermission(currentUser, 'inventory.edit');
   const canDeleteProducts = hasPermission(currentUser, 'inventory.delete');
@@ -108,6 +114,20 @@ export default function InventoryView({
   useEffect(() => {
     setVisibleCount(INVENTORY_BATCH_SIZE);
   }, [inventorySearch]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const mediaQuery = window.matchMedia(REBU_WIDE_QUERY);
+    const handleChange = () => setIsWideLayout(mediaQuery.matches);
+    handleChange();
+    mediaQuery.addEventListener?.('change', handleChange);
+    return () => mediaQuery.removeEventListener?.('change', handleChange);
+  }, []);
+
+  useEffect(() => {
+    if (gridColumns <= maxGridColumns) return;
+    setGridColumns(maxGridColumns);
+  }, [gridColumns, maxGridColumns, setGridColumns]);
 
   useEffect(() => {
     setVisibleCount(INVENTORY_BATCH_SIZE);
@@ -487,9 +507,9 @@ export default function InventoryView({
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowGridMenu(false)}></div>
                     <div className="absolute top-full right-0 mt-2 w-64 bg-white rounded-xl shadow-xl border border-slate-200 p-4 z-50 animate-in fade-in zoom-in-95">
-                      <div className="flex justify-between items-center mb-3"><span className="text-xs font-bold text-slate-500 uppercase">Tamaño</span><span className="text-xs font-bold text-fuchsia-600 bg-fuchsia-50 px-2 py-0.5 rounded-full border border-fuchsia-100">{gridColumns} columnas</span></div>
-                      <div className="relative h-6 flex items-center"><input type="range" min="4" max="10" step="1" value={gridColumns} onChange={(e) => setGridColumns(Number(e.target.value))} className="custom-range w-full" /></div>
-                      <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-mono"><span>Grande (4x)</span><span>Pequeño (10x)</span></div>
+                      <div className="flex justify-between items-center mb-3"><span className="text-xs font-bold text-slate-500 uppercase">Tamaño</span><span className="text-xs font-bold text-fuchsia-600 bg-fuchsia-50 px-2 py-0.5 rounded-full border border-fuchsia-100">{Math.min(gridColumns, maxGridColumns)} columnas</span></div>
+                      <div className="relative h-6 flex items-center"><input type="range" min="4" max={maxGridColumns} step="1" value={Math.min(gridColumns, maxGridColumns)} onChange={(e) => setGridColumns(Number(e.target.value))} className="custom-range w-full" /></div>
+                      <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-mono"><span>Grande (4x)</span><span>Chico ({maxGridColumns}x)</span></div>
                     </div>
                   </>
                 )}
@@ -707,7 +727,7 @@ export default function InventoryView({
           selectedProduct.image || selectedProduct.imageThumb || selectedProduct.image_thumb;
 
         return (
-        <div className="w-[320px] bg-white border-l shadow-2xl flex flex-col shrink-0 animate-in slide-in-from-right duration-300 relative z-20">
+        <div className="rebu-side-panel bg-white border-l shadow-2xl flex flex-col shrink-0 animate-in slide-in-from-right duration-300 relative z-20">
           <div className="px-4 py-3 border-b flex justify-between items-start bg-slate-50">
             <div>
               <h3 className="font-bold text-slate-800 text-base">Gesti{"\u00f3"}n de Stock</h3>

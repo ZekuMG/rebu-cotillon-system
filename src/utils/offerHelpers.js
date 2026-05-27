@@ -66,6 +66,11 @@ export const defaultCanonicalOfferForm = {
   discountValue: '',
   offerPrice: '',
   profitMargin: '',
+  maxUsesPerClient: '',
+  receivedCodeExpiresAfter: { value: '', unit: 'days' },
+  requiresClient: false,
+  stackable: true,
+  globalUsageLimit: '',
 };
 
 export function getCanonicalOfferOptions() {
@@ -261,6 +266,17 @@ export function normalizeLegacyOffer(offer = {}, productsByCategory = {}, invent
     offerPrice: offer.offerPrice || '',
     profitMargin: offer.profitMargin || '',
     couponCode: '',
+    maxUsesPerClient: offer.maxUsesPerClient || '',
+    receivedCodeExpiresAfter:
+      offer.receivedCodeExpiresAfter && typeof offer.receivedCodeExpiresAfter === 'object'
+        ? {
+            value: offer.receivedCodeExpiresAfter.value || '',
+            unit: offer.receivedCodeExpiresAfter.unit || 'days',
+          }
+        : { value: '', unit: 'days' },
+    requiresClient: Boolean(offer.requiresClient),
+    stackable: offer.stackable !== false,
+    globalUsageLimit: offer.globalUsageLimit || '',
   };
 
   const scope = inferOfferScope(offer, productsByCategory, inventory);
@@ -356,6 +372,16 @@ export function buildLegacyOfferPayload(offerForm, productsByCategory = {}, inve
     discountValue: Number(offerForm.discountValue) || 0,
     offerPrice: Number(offerForm.offerPrice) || 0,
     profitMargin: offerForm.profitMargin || '',
+    // Stage 1: usage rules stay in the wizard state. The legacy offers table
+    // does not persist or enforce these fields until the POS rules engine exists.
+    maxUsesPerClient: offerForm.maxUsesPerClient || '',
+    receivedCodeExpiresAfter:
+      offerForm.receivedCodeExpiresAfter && typeof offerForm.receivedCodeExpiresAfter === 'object'
+        ? offerForm.receivedCodeExpiresAfter
+        : { value: '', unit: 'days' },
+    requiresClient: Boolean(offerForm.requiresClient || Number(offerForm.maxUsesPerClient || 0) > 0),
+    stackable: offerForm.stackable !== false,
+    globalUsageLimit: offerForm.globalUsageLimit || '',
   };
 
   switch (offerForm.benefitType) {

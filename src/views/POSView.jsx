@@ -42,13 +42,30 @@ import {
   getPaymentSummary,
   normalizePaymentBreakdown,
 } from '../utils/paymentBreakdown';
+import {
+  couponRequiresInstagramConnection,
+  formatInstagramHandle,
+  getCouponUsageOverrides,
+  getInstagramConnection,
+  hasInstagramConnection,
+  normalizeInstagramHandle,
+} from '../utils/socialConnections';
 
 const POS_BATCH_SIZE = 50;
-const POS_CART_DEFAULT_WIDTH = 384;
-const POS_CART_MIN_WIDTH = 352;
-const POS_CART_MAX_WIDTH = 520;
+const REBU_WIDE_QUERY = '(min-width: 1920px)';
+const POS_CART_BOUNDS = {
+  compact: { min: 352, default: 360, max: 384 },
+  wide: { min: 352, default: 384, max: 520 },
+};
 
-const clampCartWidth = (value) => Math.min(POS_CART_MAX_WIDTH, Math.max(POS_CART_MIN_WIDTH, value));
+const isWideResolution = () =>
+  typeof window !== 'undefined' && window.matchMedia(REBU_WIDE_QUERY).matches;
+
+const getPosCartBounds = (isWide = isWideResolution()) =>
+  isWide ? POS_CART_BOUNDS.wide : POS_CART_BOUNDS.compact;
+
+const clampCartWidth = (value, bounds = getPosCartBounds()) =>
+  Math.min(bounds.max, Math.max(bounds.min, value));
 
 const formatComboIncludedQty = (quantity, productType) => {
   const safeQuantity = Number(quantity || 0);
@@ -420,6 +437,7 @@ export default function POSView({
   onOpenMemberPanel,
   onOpenClientModal,
   onOpenRedemptionModal,
+  onUpdateClient,
   transactions = [],
   offers = [], // Recibimos las ofertas
   currentUser: _currentUser = null,
@@ -444,18 +462,22 @@ export default function POSView({
   const [paymentLines, setPaymentLines] = useState([createPaymentLine({ method: selectedPayment || 'Efectivo', installments: installments || 1, cashReceived: '' })]);
   const [isSplitPaymentMode, setIsSplitPaymentMode] = useState(false);
   const [activeSplitLineIndex, setActiveSplitLineIndex] = useState(0);
+  const [isWideLayout, setIsWideLayout] = useState(isWideResolution);
   const { isPending, runAction } = usePendingAction();
+  const cartBounds = useMemo(() => getPosCartBounds(isWideLayout), [isWideLayout]);
+  const maxGridColumns = isWideLayout ? 10 : 8;
   const [cartPanelWidth, setCartPanelWidth] = useState(() => {
-    if (typeof window === 'undefined') return POS_CART_DEFAULT_WIDTH;
+    const initialBounds = getPosCartBounds();
+    if (typeof window === 'undefined') return initialBounds.default;
     const storedWidth = Number(window.localStorage.getItem('rebu-pos-cart-width'));
-    return Number.isFinite(storedWidth) ? clampCartWidth(storedWidth) : POS_CART_DEFAULT_WIDTH;
+    return Number.isFinite(storedWidth) ? clampCartWidth(storedWidth, initialBounds) : initialBounds.default;
   });
 
   const startCartResize = (event) => {
     event.preventDefault();
 
     const handlePointerMove = (moveEvent) => {
-      const nextWidth = clampCartWidth(window.innerWidth - moveEvent.clientX);
+      const nextWidth = clampCartWidth(window.innerWidth - moveEvent.clientX, cartBounds);
       setCartPanelWidth(nextWidth);
     };
 
@@ -497,6 +519,24 @@ export default function POSView({
   }, [posSearch, selectedCategory, sortBy]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const mediaQuery = window.matchMedia(REBU_WIDE_QUERY);
+    const handleChange = () => setIsWideLayout(mediaQuery.matches);
+    handleChange();
+    mediaQuery.addEventListener?.('change', handleChange);
+    return () => mediaQuery.removeEventListener?.('change', handleChange);
+  }, []);
+
+  useEffect(() => {
+    setCartPanelWidth((currentWidth) => clampCartWidth(currentWidth, cartBounds));
+  }, [cartBounds]);
+
+  useEffect(() => {
+    if (gridColumns <= maxGridColumns) return;
+    setGridColumns(maxGridColumns);
+  }, [gridColumns, maxGridColumns, setGridColumns]);
+
+  useEffect(() => {
     if (cart.length === 0) {
       setIsSplitPaymentMode(false);
       setActiveSplitLineIndex(0);
@@ -510,6 +550,9 @@ export default function POSView({
   }, [cartPanelWidth]);
 
   const extractCouponCodeFromItem = (item) => {
+    const explicitCode = String(item?.couponCode || item?.coupon_code || '').trim();
+    if (explicitCode) return explicitCode.toUpperCase();
+
     const title = String(item?.title || '');
     const description = String(item?.description || '');
     const couponMatch =
@@ -522,12 +565,9 @@ export default function POSView({
   const selectedClientUsedCoupons = useMemo(() => {
     if (!selectedClient || selectedClient.id === 'guest') return new Set();
 
-    if (Array.isArray(selectedClient.usedCoupons) && selectedClient.usedCoupons.length > 0) {
-      return new Set(selectedClient.usedCoupons.map((code) => String(code).trim().toUpperCase()).filter(Boolean));
-    }
-
     const memberId = String(selectedClient.id || '');
     const memberNumber = String(selectedClient.memberNumber || '');
+    const reenabledCodes = new Set(getCouponUsageOverrides(selectedClient).reenabledCodes);
 
     const usedCodes = (transactions || []).flatMap((tx) => {
       if (tx.status === 'voided' || !tx.client) return [];
@@ -543,7 +583,15 @@ export default function POSView({
         .filter(Boolean);
     });
 
-    return new Set(usedCodes);
+    const snapshotUsedCodes = Array.isArray(selectedClient.usedCoupons)
+      ? selectedClient.usedCoupons.map((code) => String(code).trim().toUpperCase()).filter(Boolean)
+      : [];
+
+    return new Set(
+      [...usedCodes, ...snapshotUsedCodes]
+        .map((code) => String(code || '').trim().toUpperCase())
+        .filter((code) => code && !reenabledCodes.has(code)),
+    );
   }, [selectedClient, transactions]);
 
   const getEffectiveStock = (productId, originalStock) => {
@@ -628,16 +676,40 @@ export default function POSView({
     setIsDiscountDrawerOpen(false);
   };
 
-  const handleApplyOfferDiscount = (offer) => {
+  const handleApplyOfferDiscount = (offer, options = {}) => {
     const canonical = offer?.canonical || normalizeLegacyOffer(offer, productsByCategory, inventory);
     const baseTotal = getDiscountBaseTotal();
     const offerId = offer?.id ?? canonical?.couponCode ?? offer?.name;
     const configuredDiscountValue = parseOfferNumericValue(canonical?.discountValue ?? offer?.discountValue ?? 0);
     const couponCode = String(canonical?.couponCode || '').trim().toUpperCase();
+    const effectiveClient = options.clientOverride || selectedClient;
+    const effectiveUsedCoupons = options.clientOverride
+      ? (() => {
+          const reenabledCodes = new Set(getCouponUsageOverrides(options.clientOverride).reenabledCodes);
+          return new Set(
+            (options.clientOverride.usedCoupons || [])
+              .map((code) => String(code).trim().toUpperCase())
+              .filter((code) => code && !reenabledCodes.has(code)),
+          );
+        })()
+      : selectedClientUsedCoupons;
 
     if (baseTotal <= 0) return { ok: false, reason: 'no_base' };
-    if (canonical?.benefitType === 'coupon' && couponCode && selectedClientUsedCoupons.has(couponCode)) {
+    if (canonical?.benefitType === 'coupon' && couponCode && effectiveUsedCoupons.has(couponCode)) {
       return { ok: false, reason: 'used_before', couponCode };
+    }
+    if (canonical?.benefitType === 'coupon' && couponRequiresInstagramConnection(couponCode)) {
+      const hasRealClient = effectiveClient && effectiveClient.id !== 'guest' && effectiveClient.id !== 0;
+      if (!hasRealClient) {
+        return { ok: false, reason: 'instagram_member_required', couponCode };
+      }
+      const instagram = getInstagramConnection(effectiveClient);
+      if (!instagram.handle) {
+        return { ok: false, reason: 'instagram_missing', couponCode };
+      }
+      if (!hasInstagramConnection(effectiveClient)) {
+        return { ok: false, reason: 'instagram_unconfirmed', couponCode, instagramHandle: instagram.handle };
+      }
     }
     if (
       offerId &&
@@ -666,6 +738,7 @@ export default function POSView({
       quantity: 1,
       isCustom: true,
       isDiscount: true,
+      couponCode,
       originalOfferId: offerId,
       discountMode: canonical.discountMode === 'percentage' ? 'percentage' : 'fixed',
       discountPercent: canonical.discountMode === 'percentage' ? configuredDiscountValue : 0,
@@ -689,10 +762,139 @@ export default function POSView({
     }
 
     const result = handleApplyOfferDiscount(offer);
-    if (!result.ok) showOfferApplyError(result);
+    if (!result.ok) showOfferApplyError(result, offer);
   };
 
-  const showOfferApplyError = (result) => {
+  const updateSelectedClientInstagram = async (updates) => {
+    if (!selectedClient || selectedClient.id === 'guest' || selectedClient.id === 0 || !onUpdateClient) {
+      return null;
+    }
+
+    const updatedClient = await onUpdateClient(selectedClient.id, updates);
+    if (!updatedClient?.id) return null;
+
+    const nextClient = {
+      ...selectedClient,
+      ...updatedClient,
+      usedCoupons: selectedClient.usedCoupons || updatedClient.usedCoupons || [],
+    };
+    setSelectedClient(nextClient);
+    return nextClient;
+  };
+
+  const applyOfferAfterInstagramUpdate = (offer, updatedClient) => {
+    const result = handleApplyOfferDiscount(offer, { clientOverride: updatedClient });
+    if (!result.ok) {
+      showOfferApplyError(result, offer);
+      return;
+    }
+
+    Swal.fire({
+      title: 'Cupón aplicado',
+      text: 'Instagram confirmado. REBUINSTA ya quedo agregado al pedido.',
+      icon: 'success',
+      timer: 1800,
+      showConfirmButton: false,
+    });
+  };
+
+  const handleMissingInstagramForCoupon = async (result, offer) => {
+    if (!onUpdateClient) {
+      Swal.fire({
+        title: 'No se pudo aplicar',
+        text: `El socio seleccionado todavia no tiene Instagram confirmado para usar ${result.couponCode || 'este cupon'}.`,
+        icon: 'warning',
+        confirmButtonColor: '#059669',
+      });
+      return;
+    }
+
+    const firstStep = await Swal.fire({
+      title: 'Instagram requerido',
+      text: `El socio seleccionado todavia no tiene Instagram confirmado para usar ${result.couponCode || 'este cupon'}.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Agregar Instagram',
+      cancelButtonText: 'Salir',
+      confirmButtonColor: '#059669',
+      cancelButtonColor: '#64748b',
+    });
+
+    if (!firstStep.isConfirmed) return;
+
+    const inputStep = await Swal.fire({
+      title: 'Agregar Instagram',
+      input: 'text',
+      inputLabel: selectedClient?.name ? `Instagram de ${selectedClient.name}` : 'Usuario de Instagram',
+      inputPlaceholder: '@usuario',
+      showCancelButton: true,
+      confirmButtonText: 'Guardar y confirmar',
+      cancelButtonText: 'Salir',
+      confirmButtonColor: '#059669',
+      cancelButtonColor: '#64748b',
+      inputValidator: (value) => {
+        const normalized = normalizeInstagramHandle(value);
+        if (!normalized) return 'Ingresá un usuario de Instagram.';
+        return undefined;
+      },
+    });
+
+    if (!inputStep.isConfirmed) return;
+
+    const normalizedHandle = normalizeInstagramHandle(inputStep.value);
+    const updatedClient = await updateSelectedClientInstagram({
+      instagramHandle: normalizedHandle,
+      instagramConnected: true,
+      instagramNotes: `Confirmado desde POS para ${result.couponCode || 'cupon'}`,
+    });
+
+    if (!updatedClient) return;
+    applyOfferAfterInstagramUpdate(offer, updatedClient);
+  };
+
+  const handleUnconfirmedInstagramForCoupon = async (result, offer) => {
+    const instagram = getInstagramConnection(selectedClient);
+    const instagramLabel = formatInstagramHandle(result.instagramHandle || instagram.handle) || 'Instagram cargado';
+
+    const decision = await Swal.fire({
+      title: 'Confirmar Instagram',
+      html: `
+        <div style="text-align:left">
+          <p>El socio tiene <strong>${instagramLabel}</strong>, pero todavia no esta confirmado.</p>
+          <p style="margin-top:8px;color:#64748b;font-size:13px">Confirmalo solo si corresponde habilitar REBUINSTA para este socio.</p>
+        </div>
+      `,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonText: 'Confirmar',
+      cancelButtonText: 'No confirmar',
+      confirmButtonColor: '#059669',
+      cancelButtonColor: '#64748b',
+    });
+
+    if (!decision.isConfirmed) return;
+
+    const updatedClient = await updateSelectedClientInstagram({
+      instagramHandle: instagram.handle,
+      instagramConnected: true,
+      instagramNotes: instagram.notes || `Confirmado desde POS para ${result.couponCode || 'cupon'}`,
+    });
+
+    if (!updatedClient) return;
+    applyOfferAfterInstagramUpdate(offer, updatedClient);
+  };
+
+  const showOfferApplyError = (result, offer = null) => {
+    if (result.reason === 'instagram_missing') {
+      handleMissingInstagramForCoupon(result, offer);
+      return;
+    }
+
+    if (result.reason === 'instagram_unconfirmed') {
+      handleUnconfirmedInstagramForCoupon(result, offer);
+      return;
+    }
+
     Swal.fire({
       title: 'No se pudo aplicar',
       text:
@@ -700,6 +902,10 @@ export default function POSView({
           ? 'Primero agrega productos al pedido para usar descuentos o cupones.'
           : result.reason === 'used_before'
           ? `El codigo ${result.couponCode || 'del cupon'} ya fue utilizado anteriormente por este socio.`
+          : result.reason === 'instagram_member_required'
+          ? `El codigo ${result.couponCode || 'del cupon'} requiere seleccionar un socio con Instagram confirmado.`
+          : result.reason === 'instagram_missing' || result.reason === 'instagram_unconfirmed'
+          ? `El socio seleccionado todavia no tiene Instagram confirmado para usar ${result.couponCode || 'este cupon'}.`
           : result.reason === 'duplicate'
           ? 'Ese descuento o cupon ya fue aplicado al pedido actual.'
           : 'Ese descuento o cupon no tiene un valor valido.',
@@ -1517,8 +1723,8 @@ export default function POSView({
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowGridMenu(false)}></div>
                     <div className="absolute top-full right-0 mt-2 w-60 bg-white rounded-xl shadow-2xl border border-slate-200 p-5 z-50 animate-in fade-in zoom-in-95">
-                      <div className="flex justify-between items-center mb-4"><span className="text-xs font-bold text-slate-500 uppercase">Tamaño</span><span className="text-xs font-bold text-fuchsia-600 bg-fuchsia-50 px-2 py-1 rounded-md border border-fuchsia-100">{gridColumns}x</span></div>
-                      <div className="relative h-6 flex items-center"><input type="range" min="4" max="10" step="1" value={gridColumns} onChange={(e) => setGridColumns(Number(e.target.value))} className="custom-range w-full" /></div>
+                      <div className="flex justify-between items-center mb-4"><span className="text-xs font-bold text-slate-500 uppercase">Tamaño</span><span className="text-xs font-bold text-fuchsia-600 bg-fuchsia-50 px-2 py-1 rounded-md border border-fuchsia-100">{Math.min(gridColumns, maxGridColumns)}x</span></div>
+                      <div className="relative h-6 flex items-center"><input type="range" min="4" max={maxGridColumns} step="1" value={Math.min(gridColumns, maxGridColumns)} onChange={(e) => setGridColumns(Number(e.target.value))} className="custom-range w-full" /></div>
                     </div>
                   </>
                 )}
@@ -2238,7 +2444,7 @@ export default function POSView({
                         key={`drawer-${offer.id}`}
                         onClick={() => {
                           const result = handleApplyOfferDiscount(offer);
-                          if (!result.ok) showOfferApplyError(result);
+                          if (!result.ok) showOfferApplyError(result, offer);
                         }}
                         disabled={discountBaseTotal <= 0}
                         className="w-full rounded-xl border border-emerald-200 bg-white p-4 text-left shadow-sm transition-colors hover:border-emerald-400 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"

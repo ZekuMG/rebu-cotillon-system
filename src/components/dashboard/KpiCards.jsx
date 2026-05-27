@@ -20,6 +20,7 @@ import { HintIcon } from '../HintIcon';
 export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, currentUser, setTempOpeningBalance, setIsOpeningBalanceModalOpen, globalFilter, expenses = [], isNetProfitPending = false, isNetProfitUnverified = false, onOpenExpenseModal }) => {
   const canManageExpenses = hasPermission(currentUser, 'extras.expenses.manage');
   const canManageRegister = hasPermission(currentUser, 'register.manage');
+  const canViewProfit = hasPermission(currentUser, 'metrics.viewProfit');
   const netProfitStatusLabel = isNetProfitPending
     ? 'Sincronizando...'
     : isNetProfitUnverified
@@ -71,27 +72,29 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
       );
     case 'net':
       return (
-        <div className={`bg-white p-3 rounded-lg shadow-sm border relative overflow-hidden flex flex-col justify-between h-24 ${isNetProfitUnverified ? 'border-amber-200' : 'border-emerald-100'}`}>
+        <div className={`bg-white p-3 rounded-lg shadow-sm border relative overflow-hidden flex flex-col justify-between h-24 ${!canViewProfit ? 'border-slate-200' : isNetProfitUnverified ? 'border-amber-200' : 'border-emerald-100'}`}>
           <div className="flex justify-between items-start z-10">
-            <span className={`text-[11px] font-black uppercase tracking-wide ${isNetProfitUnverified ? 'text-amber-600' : 'text-emerald-500'}`}>Ganancia Neta</span>
+            <span className={`text-[11px] font-black uppercase tracking-wide ${!canViewProfit ? 'text-slate-400' : isNetProfitUnverified ? 'text-amber-600' : 'text-emerald-500'}`}>Ganancia Neta</span>
             <div className="flex items-center gap-1.5">
               <HintIcon
-                hint={isNetProfitPending
-                  ? 'Esperando costos/productos para calcular la ganancia neta real.'
-                  : isNetProfitUnverified
-                    ? 'Hay ventas pero no se detectaron costos vendidos. Revisa que los productos tengan costo cargado antes de tomar este valor como final.'
-                    : 'Ganancia neta del periodo: ingreso bruto menos costos de productos vendidos y gastos registrados.'}
+                hint={!canViewProfit
+                  ? 'Tu usuario no tiene permiso para ver costos y ganancias.'
+                  : isNetProfitPending
+                    ? 'Esperando costos/productos para calcular la ganancia neta real.'
+                    : isNetProfitUnverified
+                      ? 'Hay ventas pero no se detectaron costos vendidos. Revisa que los productos tengan costo cargado antes de tomar este valor como final.'
+                      : 'Ganancia neta del periodo: ingreso bruto menos costos de productos vendidos y gastos registrados.'}
                 size={13}
                 side="left"
               />
-              <DollarSign size={14} className={isNetProfitUnverified ? 'text-amber-500' : 'text-emerald-500'} />
+              <DollarSign size={14} className={!canViewProfit ? 'text-slate-400' : isNetProfitUnverified ? 'text-amber-500' : 'text-emerald-500'} />
             </div>
           </div>
           {/* ♻️ FIX: FancyPrice */}
-          <span className={`font-black z-10 ${isNetProfitUnverified ? 'text-amber-600' : 'text-emerald-600'} ${netProfitStatusLabel ? 'text-[11px] uppercase tracking-[0.08em]' : 'text-xl'}`}>
-            {netProfitStatusLabel || <FancyPrice amount={kpiStats.net} />}
+          <span className={`font-black z-10 ${!canViewProfit ? 'text-slate-400' : isNetProfitUnverified ? 'text-amber-600' : 'text-emerald-600'} ${netProfitStatusLabel || !canViewProfit ? 'text-[11px] uppercase tracking-[0.08em]' : 'text-xl'}`}>
+            {!canViewProfit ? 'No disponible' : netProfitStatusLabel || <FancyPrice amount={kpiStats.net} />}
           </span>
-          <div className={`absolute bottom-0 left-0 w-full h-1 ${isNetProfitUnverified ? 'bg-amber-400' : 'bg-emerald-400'}`}></div>
+          <div className={`absolute bottom-0 left-0 w-full h-1 ${!canViewProfit ? 'bg-slate-300' : isNetProfitUnverified ? 'bg-amber-400' : 'bg-emerald-400'}`}></div>
         </div>
       );
     case 'opening':

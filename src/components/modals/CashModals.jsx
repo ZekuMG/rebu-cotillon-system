@@ -7,6 +7,8 @@ import {
   Clock,
   AlertTriangle,
   Lock,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import AsyncActionButton from '../AsyncActionButton';
 import usePendingAction from '../../hooks/usePendingAction';
@@ -15,6 +17,16 @@ import { FancyPrice } from '../FancyPrice';
 
 export const OpeningBalanceModal = ({ isOpen, onClose, tempOpeningBalance, setTempOpeningBalance, tempClosingTime, setTempClosingTime, onSave }) => {
   const { isPending, runAction } = usePendingAction();
+  const currentOpeningBalance = Number(tempOpeningBalance || 0);
+  const updateOpeningBalance = (delta) => {
+    const nextAmount = Math.max(0, currentOpeningBalance + delta);
+    setTempOpeningBalance(String(nextAmount));
+  };
+  const handleOpeningBalanceChange = (event) => {
+    const sanitizedValue = String(event.target.value || '').replace(/[^\d]/g, '');
+    setTempOpeningBalance(sanitizedValue);
+  };
+
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
@@ -26,10 +38,38 @@ export const OpeningBalanceModal = ({ isOpen, onClose, tempOpeningBalance, setTe
         <div className="p-6 space-y-5">
           <div>
             <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Monto Inicial en Caja</label>
-            <div className="relative">
-              <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-              <input type="number" placeholder="0" className="w-full pl-10 pr-4 py-3 text-xl font-bold border-2 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none" value={tempOpeningBalance} onChange={(e) => setTempOpeningBalance(e.target.value)} autoFocus />
+            <div className="relative rounded-xl border-2 border-slate-200 bg-slate-50 shadow-inner transition focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-100">
+              <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-600" size={20} />
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="0"
+                className="no-number-spinner w-full rounded-xl bg-transparent py-3 pl-10 pr-16 text-xl font-black tabular-nums text-slate-900 outline-none"
+                value={tempOpeningBalance}
+                onChange={handleOpeningBalanceChange}
+                autoFocus
+              />
+              <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-emerald-200 bg-white shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => updateOpeningBalance(1000)}
+                  className="flex h-6 w-10 items-center justify-center text-emerald-700 transition hover:bg-emerald-50 active:bg-emerald-100"
+                  title="Sumar $1000"
+                >
+                  <ChevronUp size={16} strokeWidth={3} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateOpeningBalance(-1000)}
+                  disabled={currentOpeningBalance <= 0}
+                  className="flex h-6 w-10 items-center justify-center border-t border-emerald-100 text-emerald-700 transition hover:bg-emerald-50 active:bg-emerald-100 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
+                  title="Restar $1000"
+                >
+                  <ChevronDown size={16} strokeWidth={3} />
+                </button>
+              </div>
             </div>
+            <p className="mt-1 text-[10px] font-bold text-slate-400">Los controles ajustan de $1000 en $1000.</p>
           </div>
           <div>
             <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Horario de Cierre Programado</label>

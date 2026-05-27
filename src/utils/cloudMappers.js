@@ -74,6 +74,7 @@ export const mapMemberRecords = (clients = []) =>
   clients.map((client) => ({
     ...client,
     memberNumber: client.member_number,
+    socialConnections: client.social_connections || client.socialConnections || {},
     createdAt: client.created_at,
   }));
 
@@ -146,6 +147,7 @@ const mapSaleItemRecord = (item) => ({
   isCustom: Boolean(item.is_custom),
   isDiscount: Boolean(item.is_discount),
   isCombo: Boolean(item.is_combo),
+  couponCode: item.coupon_code || item.couponCode || null,
   productId: item.product_id,
   product_type: item.product_type || null,
 });
@@ -167,6 +169,7 @@ const mapRecoveredSaleItem = (item) => ({
   product_type: item.product_type || null,
   isCustom: Boolean(item.isCustom ?? item.is_custom ?? false),
   isCombo: Boolean(item.isCombo ?? item.is_combo ?? false),
+  couponCode: item.couponCode || item.coupon_code || null,
   category: item.category || null,
   categories: Array.isArray(item.categories) ? item.categories : null,
   productsIncluded: Array.isArray(item.productsIncluded || item.products_included)
@@ -243,6 +246,7 @@ const enrichSaleItemsWithSnapshot = (items = [], snapshotItems = []) => {
       product_type: item.product_type || snapshotItem.product_type || null,
       isCustom: item.isCustom ?? snapshotItem.isCustom,
       isCombo: item.isCombo ?? snapshotItem.isCombo,
+      couponCode: item.couponCode || snapshotItem.couponCode || null,
       category: item.category || snapshotItem.category || null,
       categories: item.categories || snapshotItem.categories || null,
       productsIncluded: item.productsIncluded || snapshotItem.productsIncluded || [],

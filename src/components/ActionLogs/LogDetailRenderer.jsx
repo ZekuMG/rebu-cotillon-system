@@ -1642,6 +1642,85 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
         </div>
       );
 
+    case 'Gasto Editado': {
+      const previous = details.previous || {};
+      const next = details.next || {};
+      const previousAmount = Number(previous.amount || 0);
+      const nextAmount = Number(next.amount || 0);
+      const previousPayment = previous.paymentMethod || previous.payment_method || 'Efectivo';
+      const nextPayment = next.paymentMethod || next.payment_method || 'Efectivo';
+      const cleanText = (value, fallback = '-') => {
+        const text = String(value ?? '').trim();
+        return text || fallback;
+      };
+      const didTextChange = (oldValue, newValue) => cleanText(oldValue, '') !== cleanText(newValue, '');
+      const changes = [
+        {
+          field: 'Monto',
+          old: previousAmount,
+          new: nextAmount,
+          isPrice: true,
+          changed: previousAmount !== nextAmount,
+        },
+        {
+          field: 'Descripcion',
+          old: cleanText(previous.description),
+          new: cleanText(next.description),
+          changed: didTextChange(previous.description, next.description),
+        },
+        {
+          field: 'Categoria',
+          old: cleanText(previous.category, 'Sin categoria'),
+          new: cleanText(next.category, 'Sin categoria'),
+          changed: didTextChange(previous.category, next.category),
+        },
+        {
+          field: 'Metodo de Pago',
+          old: cleanText(previousPayment),
+          new: cleanText(nextPayment),
+          changed: didTextChange(previousPayment, nextPayment),
+        },
+      ].filter((change) => change.changed);
+
+      return (
+        <div className="space-y-4">
+          <Card icon={'\u270f'} title="Gasto Actualizado">
+            {details.id && (
+              <Item label="ID de gasto">
+                <Badge color="amber">#{details.id}</Badge>
+              </Item>
+            )}
+            <Item label="Descripcion" value={cleanText(next.description, 'Gasto registrado')} />
+            <Item label="Monto actual">
+              <span className="text-[#dc2626] text-[14px] font-bold">
+                -<FancyPrice amount={nextAmount} />
+              </span>
+            </Item>
+            <Item label="Categoria" value={cleanText(next.category, 'Sin categoria')} />
+            <Item label="Metodo de Pago" value={cleanText(nextPayment)} />
+          </Card>
+
+          <Card icon={'\u21c4'} title="Cambios aplicados">
+            {changes.length > 0 ? (
+              changes.map((change) => (
+                <ChangeRow
+                  key={change.field}
+                  field={change.field}
+                  oldVal={change.old}
+                  newVal={change.new}
+                  isPrice={change.isPrice}
+                />
+              ))
+            ) : (
+              <Item label="Diferencias" value="Sin cambios detectados" />
+            )}
+          </Card>
+
+          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+        </div>
+      );
+    }
+
     case 'Alta de Producto':
       return (
         <div className="space-y-4">

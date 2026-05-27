@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { formatCurrency, formatNumber, isTestRecord, isVentaLog, normalizeDate } from '../utils/helpers';
 import { getPaymentMethodLabel, getPaymentMethodTotals, normalizePaymentBreakdown } from '../utils/paymentBreakdown';
-import { buildSalesDataset, getExplicitItemUnitCost } from '../utils/salesMetricsCore';
+import { buildSalesDataset, getExplicitItemUnitCost, getMetricProductKey } from '../utils/salesMetricsCore';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -94,12 +94,13 @@ const makeRange = (filters = {}) => {
 };
 
 const makePreviousRange = (range) => {
-  if (!range.start || !range.end) return { start: null, end: null, label: 'Sin comparación' };
+  if (!range.start || !range.end) return { start: null, end: null, label: 'Sin comparación', isComparable: false };
   const duration = Math.max(DAY_MS, range.end.getTime() - range.start.getTime() + 1);
   return {
     start: new Date(range.start.getTime() - duration),
     end: new Date(range.start.getTime() - 1),
     label: 'Período anterior',
+    isComparable: true,
   };
 };
 
@@ -258,7 +259,7 @@ const addToMap = (map, key, seed, patch) => {
 };
 
 const calculateChange = (current, previous) => {
-  if (!previous) return current ? 100 : 0;
+  if (!previous) return current ? null : 0;
   return ((current - previous) / Math.abs(previous)) * 100;
 };
 
@@ -317,6 +318,14 @@ const makeFilterOptions = ({ transactions, inventory, members, orders, budgets }
   const clients = new Map();
   const products = new Map();
   const categories = new Map();
+  const lookups = buildInventoryLookups(inventory);
+  const upsertProductOption = (key, label, product = null, item = null) => {
+    if (!key) return;
+    const current = products.get(key) || { label: label || 'Producto', categories: new Set(), types: new Set() };
+    getItemCategories(item || {}, product).forEach((category) => current.categories.add(category));
+    current.types.add(getItemProductType(item || {}, product));
+    products.set(key, current);
+  };
 
   transactions.forEach((tx) => {
     users.set(getUserKey(tx), getUserLabel(tx));
@@ -324,17 +333,17 @@ const makeFilterOptions = ({ transactions, inventory, members, orders, budgets }
       .forEach((line) => payments.set(line.method, getPaymentMethodLabel(line.method)));
     clients.set(getClientKey(tx), getClientName(tx));
     (tx.items || []).forEach((item) => {
-      if (item?.isDiscount) return;
-      const productId = getProductId(item);
-      const productKey = productId ? String(productId) : normalizeText(item.title || item.product_title);
-      products.set(productKey, item.title || item.product_title || 'Producto');
-      getItemCategories(item).forEach((category) => categories.set(category, category));
+      if (item?.isDiscount || item?.is_discount) return;
+      const product = getLiveProduct(item, lookups);
+      const productKey = getMetricProductKey(item, product);
+      upsertProductOption(productKey, item.title || item.product_title || product?.title || 'Producto', product, item);
+      getItemCategories(item, product).forEach((category) => categories.set(category, category));
     });
   });
 
   inventory.forEach((product) => {
     const productKey = product.id !== undefined && product.id !== null ? String(product.id) : normalizeText(product.title);
-    products.set(productKey, product.title || 'Producto');
+    upsertProductOption(productKey, product.title || 'Producto', product, {});
     getItemCategories({}, product).forEach((category) => categories.set(category, category));
   });
 
@@ -351,7 +360,14 @@ const makeFilterOptions = ({ transactions, inventory, members, orders, budgets }
     users: [...users.entries()].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label)),
     payments: [...payments.entries()].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label)),
     clients: [...clients.entries()].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label)),
-    products: [...products.entries()].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label)),
+    products: [...products.entries()]
+      .map(([value, option]) => ({
+        value,
+        label: option.label,
+        categories: [...option.categories],
+        types: [...option.types],
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label)),
     categories: [...categories.entries()].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label)),
   };
 };
@@ -378,7 +394,7 @@ const _filterTransactions = ({ transactions, range, filters, lookups }) =>
       if (filters.product || filters.category || filters.productType !== 'all') {
         const hasItem = (tx.items || []).some((item) => {
           const product = getLiveProduct(item, lookups);
-          const productKey = getProductId(item) ? String(getProductId(item)) : normalizeText(item.title || item.product_title);
+          const productKey = getMetricProductKey(item, product);
           const matchesProduct = !filters.product || productKey === filters.product;
           const matchesCategory = !filters.category || getItemCategories(item, product).includes(filters.category);
           const matchesType = filters.productType === 'all' || getItemProductType(item, product) === filters.productType;
@@ -400,6 +416,64 @@ const _filterExpenses = ({ expenses, range, filters }) =>
       return true;
     });
 
+const getRecordItems = (record = {}) => {
+  if (Array.isArray(record.itemsSnapshot)) return record.itemsSnapshot;
+  if (Array.isArray(record.items)) return record.items;
+  if (Array.isArray(record.itemsSold)) return record.itemsSold;
+  if (Array.isArray(record.items_sold_list)) return record.items_sold_list;
+  return [];
+};
+
+const getRecordPaymentMap = (record = {}) => {
+  if (record.paymentMethods && typeof record.paymentMethods === 'object') return record.paymentMethods;
+  if (record.payment_methods_summary && typeof record.payment_methods_summary === 'object') return record.payment_methods_summary;
+  return null;
+};
+
+const recordMatchesPaymentFilter = (record = {}, filters = {}) => {
+  if (!filters.payment) return true;
+
+  const paymentMap = getRecordPaymentMap(record);
+  if (paymentMap) {
+    const selectedLabel = getPaymentMethodLabel(filters.payment);
+    return Object.keys(paymentMap).some((method) => method === filters.payment || method === selectedLabel);
+  }
+
+  const total = record.totalAmount ?? record.paidTotal ?? record.totalSales ?? record.total ?? 0;
+  const lines = normalizePaymentBreakdown(
+    record.paymentBreakdown,
+    record.paymentMethod,
+    record.installments,
+    record.cashReceived,
+    record.cashChange,
+    total,
+  );
+  return lines.some((line) => line.method === filters.payment);
+};
+
+const recordMatchesClientFilter = (record = {}, filters = {}) => {
+  if (!filters.client) return true;
+
+  const [filterName = '', filterMemberNumber = ''] = String(filters.client).split('|');
+  const recordName = normalizeText(record.customerName || record.clientName || record.client?.name || record.name || '');
+  const recordMemberNumber = String(record.memberNumber || record.client?.memberNumber || record.member_id || record.memberId || '');
+
+  if (filterMemberNumber && recordMemberNumber && filterMemberNumber === recordMemberNumber) return true;
+  return Boolean(filterName && recordName && filterName === recordName);
+};
+
+const recordMatchesItemFilters = (record = {}, filters = {}, lookups) => {
+  if (!filters.product && !filters.category && filters.productType === 'all') return true;
+  return getRecordItems(record).some((item) => {
+    const product = getLiveProduct(item, lookups);
+    const productKey = getMetricProductKey(item, product);
+    const matchesProduct = !filters.product || productKey === filters.product;
+    const matchesCategory = !filters.category || getItemCategories(item, product).includes(filters.category);
+    const matchesType = filters.productType === 'all' || getItemProductType(item, product) === filters.productType;
+    return matchesProduct && matchesCategory && matchesType;
+  });
+};
+
 const filterRecordsByDate = (records, range, filters) =>
   (records || [])
     .map((record) => ({ ...record, metricDate: getRecordDate(record) }))
@@ -409,14 +483,56 @@ const filterRecordsByDate = (records, range, filters) =>
       return true;
     });
 
-const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, range, filters, lookups }) => {
+const filterBusinessRecords = (records, range, filters, lookups) =>
+  filterRecordsByDate(records, range, filters).filter((record) => {
+    if (filters.user && getUserKey(record) !== filters.user) return false;
+    if (!recordMatchesPaymentFilter(record, filters)) return false;
+    if (!recordMatchesClientFilter(record, filters)) return false;
+    if (!recordMatchesItemFilters(record, filters, lookups)) return false;
+    return true;
+  });
+
+const filterClosureRecords = (records, range, filters) =>
+  filterRecordsByDate(records, range, filters).filter((record) => {
+    if (filters.user && getUserKey(record) !== filters.user) return false;
+    return true;
+  });
+
+const getMemberKey = (member = {}) =>
+  `${normalizeText(member.name)}|${member.memberNumber || member.member_number || ''}`;
+
+const filterMemberCreationRecords = (members = [], range, filters = {}) =>
+  (members || [])
+    .map((member) => ({ ...member, metricDate: parseAnyDate(member.createdAt || member.created_at) }))
+    .filter((member) => {
+      if (!isInRange(member.metricDate, range)) return false;
+      if (!filters.includeTest && (member.isTest || isTestRecord(member))) return false;
+      if (filters.client && getMemberKey(member) !== filters.client) return false;
+      return true;
+    });
+
+const buildMemberCreationStats = (members = [], range, filters = {}) => {
+  const createdMembers = filterMemberCreationRecords(members, range, filters);
+  return {
+    newCount: createdMembers.length,
+    newMembers: createdMembers
+      .map((member) => ({
+        ...member,
+        createdAtLabel: member.metricDate ? member.metricDate.toLocaleDateString('es-AR') : '-',
+      }))
+      .sort((a, b) => (b.metricDate?.getTime?.() || 0) - (a.metricDate?.getTime?.() || 0)),
+  };
+};
+
+const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, members, range, filters, lookups }) => {
   const isHourlyRange = ['today', 'yesterday', '3d'].includes(filters.preset);
   const salesDataset = buildSalesDataset({ transactions, expenses, range, filters, lookups });
   const filteredTransactions = salesDataset.filteredTransactions;
   const filteredExpenses = salesDataset.filteredExpenses;
-  const filteredBudgets = filterRecordsByDate(budgets, range, filters);
-  const filteredOrders = filterRecordsByDate(orders, range, filters);
-  const filteredClosures = filterRecordsByDate(closures, range, filters);
+  const filteredBudgets = filterBusinessRecords(budgets, range, filters, lookups);
+  const filteredOrders = filterBusinessRecords(orders, range, filters, lookups);
+  const filteredClosures = filterClosureRecords(closures, range, filters);
+  const memberCreationStats = buildMemberCreationStats(members, range, filters);
 
   const periodMap = new Map();
   const productMap = new Map();
@@ -427,6 +543,7 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
   const hourMap = new Map();
   const weekdayMap = new Map();
   const typeMap = new Map();
+  const finalConsumerStats = { name: 'CONSUMIDOR FINAL', revenue: 0, salesCount: 0, averageTicket: 0 };
 
   let revenue = 0;
   let cost = 0;
@@ -459,10 +576,20 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
       salesCount: current.salesCount + 1,
     }));
 
-    const totalsByPayment = getPaymentMethodTotals(tx.paymentBreakdown, tx.payment, tx.installments, tx.cashReceived, tx.cashChange, tx.total);
+    const hasPaymentBreakdown = Array.isArray(tx.paymentBreakdown) && tx.paymentBreakdown.length > 0;
+    const paymentScopeRatio = hasPaymentBreakdown && Number.isFinite(tx.metricScopeRatio) ? tx.metricScopeRatio : 1;
+    const paymentTotal = hasPaymentBreakdown ? toNumber(tx.originalTotal ?? tx.total) : tx.total;
+    const totalsByPayment = getPaymentMethodTotals(
+      tx.paymentBreakdown,
+      tx.payment,
+      tx.installments,
+      tx.cashReceived,
+      tx.cashChange,
+      paymentTotal,
+    );
     Object.entries(totalsByPayment).forEach(([method, amount]) => {
       addToMap(paymentMap, method, { name: method, value: 0, salesCount: 0 }, (current) => ({
-        value: current.value + toNumber(amount),
+        value: current.value + (toNumber(amount) * paymentScopeRatio),
         salesCount: current.salesCount + 1,
       }));
     });
@@ -474,7 +601,10 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
     }));
 
     const clientName = getClientName(tx);
-    if (!isFinalConsumerName(clientName)) {
+    if (isFinalConsumerName(clientName)) {
+      finalConsumerStats.revenue += txRevenue;
+      finalConsumerStats.salesCount += 1;
+    } else {
       addToMap(clientMap, getClientKey(tx), { name: clientName, revenue: 0, salesCount: 0, lastDate: tx.metricDate }, (current) => ({
         revenue: current.revenue + txRevenue,
         salesCount: current.salesCount + 1,
@@ -482,14 +612,14 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
       }));
     }
 
-    (tx.items || []).forEach((item) => {
-      if (item?.isDiscount) return;
+    (tx.metricItems || tx.items || []).forEach((item) => {
+      if (item?.isDiscount || item?.is_discount) return;
       const product = getLiveProduct(item, lookups);
       const title = item.title || item.product_title || product?.title || 'Producto';
       const qty = getItemQty(item);
       const itemRevenue = getItemRevenue(item);
       const itemCost = getItemCost(item, lookups);
-      const productKey = getProductId(item) ? String(getProductId(item)) : normalizeText(title);
+      const productKey = getMetricProductKey(item, product);
       const productType = getItemProductType(item, product);
       const categories = getItemCategories(item, product);
       itemsSold += qty;
@@ -544,8 +674,10 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
   const stats = {
     revenue,
     cost,
+    discounts: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.discountImpact), 0),
+    discountImpact: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.discountImpact), 0),
     expenses: totalExpenses,
-    profit: revenue - cost - totalExpenses,
+    profit: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.profit), 0) - totalExpenses,
     salesCount: filteredTransactions.length,
     averageTicket: filteredTransactions.length ? revenue / filteredTransactions.length : 0,
     itemsSold,
@@ -596,11 +728,16 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, rang
       total: item.revenue + item.profit,
       averageTicket: item.salesCount ? item.revenue / item.salesCount : 0,
     })), 'revenue', 12),
-    clientStats: sortBy([...clientMap.values()].map((item) => ({
+    clientStats: [...clientMap.values()].map((item) => ({
       ...item,
       averageTicket: item.salesCount ? item.revenue / item.salesCount : 0,
       lastDateLabel: item.lastDate ? item.lastDate.toLocaleDateString('es-AR') : '-',
-    })), 'revenue', 12),
+    })).sort((a, b) => toNumber(b.revenue) - toNumber(a.revenue)),
+    finalConsumerStats: {
+      ...finalConsumerStats,
+      averageTicket: finalConsumerStats.salesCount ? finalConsumerStats.revenue / finalConsumerStats.salesCount : 0,
+    },
+    memberStats: memberCreationStats,
     hourStats: [...hourMap.values()].sort((a, b) => a.key.localeCompare(b.key)),
     weekdayStats: [...weekdayMap.values()],
     typeStats: sortBy([...typeMap.values()], 'revenue', 4),
@@ -637,9 +774,9 @@ const buildStockStats = (inventory = []) => {
   };
 };
 
-const buildOrderStats = (orders = [], budgets = [], range, filters) => {
-  const filteredOrders = filterRecordsByDate(orders, range, filters);
-  const filteredBudgets = filterRecordsByDate(budgets, range, filters);
+const buildOrderStats = (orders = [], budgets = [], range, filters, lookups) => {
+  const filteredOrders = filterBusinessRecords(orders, range, filters, lookups);
+  const filteredBudgets = filterBusinessRecords(budgets, range, filters, lookups);
   const byStatus = new Map();
 
   filteredOrders.forEach((order) => {
@@ -667,7 +804,7 @@ const buildOrderStats = (orders = [], budgets = [], range, filters) => {
 };
 
 const buildClosureStats = (closures = [], range, filters) => {
-  const filteredClosures = filterRecordsByDate(closures, range, filters);
+  const filteredClosures = filterClosureRecords(closures, range, filters);
   const manual = filteredClosures.filter((closure) => !String(closure.type || '').toLowerCase().includes('autom')).length;
   const automatic = filteredClosures.length - manual;
   return {
@@ -785,6 +922,7 @@ export default function useMetricsData({
       budgets,
       orders,
       closures: pastClosures,
+      members,
       range,
       filters,
       lookups,
@@ -795,18 +933,23 @@ export default function useMetricsData({
       budgets,
       orders,
       closures: pastClosures,
+      members,
       range: previousRange,
       filters,
       lookups,
     });
     const stockStats = buildStockStats(inventory);
-    const orderStats = buildOrderStats(orders, budgets, range, filters);
+    const orderStats = buildOrderStats(orders, budgets, range, filters, lookups);
     const closureStats = buildClosureStats(pastClosures, range, filters);
     const recommendations = buildRecommendations({ current, previous, stockStats, orderStats, members });
+    const canComparePreviousRange = Boolean(previousRange.isComparable);
+    const getComparableChange = (currentValue, previousValue) =>
+      canComparePreviousRange ? calculateChange(currentValue, previousValue) : null;
 
     return {
       range,
       previousRange,
+      canComparePreviousRange,
       filterOptions,
       current,
       previous,
@@ -815,11 +958,11 @@ export default function useMetricsData({
       closureStats,
       recommendations,
       changes: {
-        revenue: calculateChange(current.stats.revenue, previous.stats.revenue),
-        profit: calculateChange(current.stats.profit, previous.stats.profit),
-        salesCount: calculateChange(current.stats.salesCount, previous.stats.salesCount),
-        averageTicket: calculateChange(current.stats.averageTicket, previous.stats.averageTicket),
-        expenses: calculateChange(current.stats.expenses, previous.stats.expenses),
+        revenue: getComparableChange(current.stats.revenue, previous.stats.revenue),
+        profit: getComparableChange(current.stats.profit, previous.stats.profit),
+        salesCount: getComparableChange(current.stats.salesCount, previous.stats.salesCount),
+        averageTicket: getComparableChange(current.stats.averageTicket, previous.stats.averageTicket),
+        expenses: getComparableChange(current.stats.expenses, previous.stats.expenses),
       },
     };
   }, [transactions, dailyLogs, expenses, pastClosures, inventory, members, budgets, orders, filters]);

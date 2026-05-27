@@ -93,6 +93,8 @@ export const normalizeAppUserRecord = (record) => {
     forceReauthPermissionsVersion: Number(
       record.force_reauth_permissions_version || record.forceReauthPermissionsVersion || 0,
     ),
+    authUserId: record.auth_user_id || record.authUserId || null,
+    authEmail: record.auth_email || record.authEmail || null,
     effectivePermissions: getEffectivePermissions({
       role,
       permissionsOverride: normalizePermissionsOverride(record.permissions_override || record.permissionsOverride),
@@ -224,8 +226,28 @@ const APP_USERS_TABLE_MINIMAL_SELECT = [
   'created_by',
 ].join(',');
 
+const APP_USERS_PUBLIC_FORBIDDEN_COLUMNS = new Set([
+  'permissions_override',
+  'permissions_version',
+  'force_reauth_permissions_version',
+  'created_by',
+  'created_at',
+  'updated_at',
+]);
+
+const sanitizeAppUsersPublicSelect = (sourceName, selectColumns) => {
+  if (sourceName !== 'app_users_public') return selectColumns;
+
+  const safeColumns = String(selectColumns || '')
+    .split(',')
+    .map((column) => column.trim())
+    .filter((column) => column && !APP_USERS_PUBLIC_FORBIDDEN_COLUMNS.has(column.toLowerCase()));
+
+  return safeColumns.join(',') || APP_USERS_PUBLIC_MINIMAL_SELECT;
+};
+
 const isMissingPrivateUsersRpc = (error) =>
-  /list_app_users_private|verify_app_user_login_private|function .* does not exist|schema cache|PGRST202|permission denied|42501/i.test(
+  /list_app_users_private|verify_app_user_login_private|verify_app_user_login_auth_bridge|function .* does not exist|schema cache|PGRST202|permission denied|42501/i.test(
     [error?.message, error?.details, error?.hint, error?.code].filter(Boolean).join(' '),
   );
 
@@ -238,6 +260,7 @@ const readAppUsersFromSource = async ({
   let useActiveFilter = !includeInactive;
   let useOrdering = orderUsers;
   let lastError = null;
+  const initialSelectColumns = sanitizeAppUsersPublicSelect(sourceName, selectColumns);
 
   while (true) {
     const result = await runSelectWithSchemaFallback((safeSelect) => {
@@ -252,7 +275,7 @@ const readAppUsersFromSource = async ({
       }
 
       return query;
-    }, selectColumns);
+    }, initialSelectColumns);
 
     if (!result.error) {
       const normalizedUsers = (result.data || []).map(normalizeAppUserRecord).filter(Boolean);
@@ -369,10 +392,19 @@ export const bootstrapAppUsers = async ({ systemUser, sellerUser }) => {
 };
 
 export const verifyAppUserLogin = async ({ userId, password }) => {
-  let { data, error } = await supabase.rpc('verify_app_user_login_private', {
+  let { data, error } = await supabase.rpc('verify_app_user_login_auth_bridge', {
     p_user_id: userId,
     p_password: password,
   });
+
+  if (error && isMissingPrivateUsersRpc(error)) {
+    const privateResult = await supabase.rpc('verify_app_user_login_private', {
+      p_user_id: userId,
+      p_password: password,
+    });
+    data = privateResult.data;
+    error = privateResult.error;
+  }
 
   if (error && isMissingPrivateUsersRpc(error)) {
     const legacyResult = await supabase.rpc('verify_app_user_login', {
@@ -386,6 +418,28 @@ export const verifyAppUserLogin = async ({ userId, password }) => {
   if (error) throw error;
   if (Array.isArray(data)) return normalizeAppUserRecord(data[0] || null);
   return normalizeAppUserRecord(data || null);
+};
+
+export const signInSupabaseAuthForAppUser = async ({ user, password }) => {
+  const email = String(user?.authEmail || user?.auth_email || '').trim();
+  if (!email || !password) {
+    return { signedIn: false, reason: 'missing-auth-email' };
+  }
+
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (error) {
+    return { signedIn: false, reason: 'auth-login-failed', error };
+  }
+
+  return {
+    signedIn: Boolean(data?.session?.access_token),
+    session: data?.session || null,
+    authUser: data?.user || null,
+  };
 };
 
 export const createAppUser = async ({ actorId, displayName, role, password, avatar, nameColor, theme, metricsViewMode }) => {

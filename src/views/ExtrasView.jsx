@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Plus,
   Trash2,
@@ -133,6 +133,90 @@ function ProductPreviewGrid({ items = [], fallbackIcon: FallbackIcon = Package, 
           <FallbackIcon size={22} />
         </div>
       )}
+    </div>
+  );
+}
+
+function formatOfferProductStock(product) {
+  const stock = Number(product?.stock);
+  if (!Number.isFinite(stock)) return 'Stock s/d';
+  if (product?.product_type === 'weight') {
+    if (stock >= 1000) return `${formatNumber(stock / 1000)} kg`;
+    return `${formatNumber(stock)} g`;
+  }
+  return `${formatNumber(stock)} u.`;
+}
+
+function getOfferProductStatus(product) {
+  const stock = Number(product?.stock);
+  const isWeight = product?.product_type === 'weight';
+
+  if (!Number.isFinite(stock)) {
+    return {
+      label: 'Stock sin dato',
+      bar: 'bg-slate-300',
+      dot: 'bg-slate-300',
+      chip: 'border-slate-200 bg-slate-50 text-slate-500',
+    };
+  }
+
+  if (stock <= 0) {
+    return {
+      label: 'Sin stock',
+      bar: 'bg-red-500',
+      dot: 'bg-red-500',
+      chip: 'border-red-200 bg-red-50 text-red-700',
+    };
+  }
+
+  const lowLimit = isWeight ? 500 : 5;
+  if (stock <= lowLimit) {
+    return {
+      label: 'Stock bajo',
+      bar: 'bg-amber-500',
+      dot: 'bg-amber-500',
+      chip: 'border-amber-200 bg-amber-50 text-amber-700',
+    };
+  }
+
+  return {
+    label: 'Disponible',
+    bar: 'bg-emerald-500',
+    dot: 'bg-emerald-500',
+    chip: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  };
+}
+
+function OfferProductDetailRow({ product, isCombo = false, onPreviewEnter, onPreviewLeave }) {
+  const status = getOfferProductStatus(product);
+  const lineDisplay = getComboProductLineDisplay(product);
+
+  return (
+    <div
+      onMouseEnter={(event) => onPreviewEnter?.(product, event.currentTarget.getBoundingClientRect())}
+      onMouseLeave={onPreviewLeave}
+      className="group relative grid min-h-[44px] grid-cols-[3px_minmax(0,1fr)_auto] items-center gap-2 border-b border-slate-100 bg-white py-2 pl-0 pr-2.5 transition-colors last:border-b-0 hover:bg-slate-50"
+    >
+      <span className={`h-full min-h-[30px] w-[3px] rounded-r-full ${status.bar}`} title={status.label} />
+      <div className="min-w-0">
+        <p className="truncate text-[12px] font-black leading-tight text-slate-800">{product.title}</p>
+        {isCombo ? (
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-[10px] font-bold text-slate-500">
+            <span className="rounded border border-emerald-100 bg-emerald-50 px-1.5 py-0.5 text-emerald-700">{lineDisplay.quantityLabel}</span>
+            <span><FancyPrice amount={lineDisplay.referenceAmount} /> {lineDisplay.referenceUnitLabel}</span>
+            <span className="text-slate-300">|</span>
+            <span>Total: <FancyPrice amount={lineDisplay.totalAmount} /></span>
+          </div>
+        ) : (
+          <p className="mt-1 text-[10px] font-semibold text-slate-500">
+            Precio: <span className="font-bold text-slate-700"><FancyPrice amount={Number(product.price || 0)} /></span>
+          </p>
+        )}
+      </div>
+      <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-bold ${status.chip}`}>
+        <span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
+        {formatOfferProductStock(product)}
+      </span>
     </div>
   );
 }
@@ -857,6 +941,42 @@ export default function ExtrasView({
   const [offerWizardStep, setOfferWizardStep] = useState(1);
   const [offerForm, setOfferForm] = useState({ ...defaultCanonicalOfferForm, productsIncluded: [] });
   const [offerProductSearch, setOfferProductSearch] = useState('');
+  const [offerProductCategoryFilter, setOfferProductCategoryFilter] = useState('all');
+  const [offerProductImagePreview, setOfferProductImagePreview] = useState(null);
+  const [offerProductImageLightbox, setOfferProductImageLightbox] = useState(null);
+  const offerPreviewHideTimeoutRef = useRef(null);
+
+  const clearOfferProductPreviewHide = () => {
+    if (offerPreviewHideTimeoutRef.current) {
+      clearTimeout(offerPreviewHideTimeoutRef.current);
+      offerPreviewHideTimeoutRef.current = null;
+    }
+  };
+
+  const scheduleOfferProductPreviewHide = () => {
+    clearOfferProductPreviewHide();
+    offerPreviewHideTimeoutRef.current = setTimeout(() => setOfferProductImagePreview(null), 120);
+  };
+
+  const showOfferProductImagePreview = (product, rect) => {
+    const image = getProductImageUrl(product, { preferOriginal: true }) || getProductImageUrl(product);
+    clearOfferProductPreviewHide();
+    const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280;
+    const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 720;
+    const previewWidth = 180;
+    const previewHeight = 176;
+    const preferredLeft = rect.right + 12;
+    const left = Math.min(Math.max(12, preferredLeft), viewportWidth - previewWidth - 12);
+    const top = Math.min(Math.max(12, rect.top - 18), viewportHeight - previewHeight - 12);
+
+    setOfferProductImagePreview({
+      product,
+      image,
+      left,
+      top,
+      width: previewWidth,
+    });
+  };
 
   // ==========================================
   // 3. ESTADOS DE PREMIOS
@@ -1191,19 +1311,24 @@ export default function ExtrasView({
     const currentIds = offerForm.productsIncluded.map((product) => product.id);
     let available = inventory.filter((product) => !currentIds.includes(product.id));
 
+    if (offerProductCategoryFilter !== 'all') {
+      available = available.filter((product) => productHasCategory(product, offerProductCategoryFilter));
+    }
+
     if (offerProductSearch.trim()) {
       available = available.filter((product) =>
         product.title.toLowerCase().includes(offerProductSearch.toLowerCase())
       );
     }
     return available;
-  }, [inventory, offerForm.productsIncluded, offerProductSearch]);
+  }, [inventory, offerForm.productsIncluded, offerProductCategoryFilter, offerProductSearch, productHasCategory]);
   const openNewOfferModal = () => {
     if (isReadOnly) return;
     setOfferForm({ ...defaultCanonicalOfferForm, productsIncluded: [] });
     setEditingOfferId(null);
     setOfferWizardStep(1);
     setOfferProductSearch('');
+    setOfferProductCategoryFilter('all');
     setIsOfferModalOpen(true);
   };
   const openEditOfferModal = (offer) => {
@@ -1212,6 +1337,7 @@ export default function ExtrasView({
     setEditingOfferId(offer.id);
     setOfferWizardStep(5);
     setOfferProductSearch('');
+    setOfferProductCategoryFilter('all');
     setIsOfferModalOpen(true);
   };
 
@@ -1221,6 +1347,7 @@ export default function ExtrasView({
     setEditingOfferId(null);
     setOfferWizardStep(1);
     setOfferProductSearch('');
+    setOfferProductCategoryFilter('all');
   };
   const handleAddProductToOffer = (product) => {
     if (isReadOnly) return;
@@ -1284,6 +1411,9 @@ export default function ExtrasView({
         nextForm.scopeMode = 'all_products';
         nextForm.categoryName = '';
         nextForm.productsIncluded = [];
+      } else if (prev.scopeMode !== 'products') {
+        nextForm.scopeMode = 'products';
+        nextForm.categoryName = '';
       }
 
       if (benefitType === 'combo' || benefitType === 'fixed_price') {
@@ -1292,33 +1422,6 @@ export default function ExtrasView({
       }
 
       return nextForm;
-    });
-  };
-  const handleOfferScopeChange = (scopeMode) => {
-    if (isReadOnly) return;
-    setOfferForm((prev) => {
-      if (prev.benefitType === 'combo' || prev.benefitType === 'fixed_price') {
-        return {
-          ...prev,
-          scopeMode: 'products',
-          categoryName: '',
-        };
-      }
-
-      if (prev.benefitType === 'coupon') {
-        return {
-          ...prev,
-          scopeMode: 'all_products',
-          categoryName: '',
-          productsIncluded: [],
-        };
-      }
-
-      return {
-        ...prev,
-        scopeMode,
-        categoryName: scopeMode === 'category' ? prev.categoryName : '',
-      };
     });
   };
 
@@ -1514,7 +1617,7 @@ export default function ExtrasView({
   const offerModalAvailableFeed = useIncrementalList(availableProductsForOffer, {
     initialCount: INCREMENTAL_BATCH_SIZE,
     step: INCREMENTAL_BATCH_SIZE,
-    resetKey: `${offerProductSearch}-${availableProductsForOffer.length}-${editingOfferId || 'new'}-${offerForm.scopeMode}`,
+    resetKey: `${offerProductSearch}-${offerProductCategoryFilter}-${availableProductsForOffer.length}-${editingOfferId || 'new'}-${offerForm.scopeMode}`,
   });
   const offerModalIncludedFeed = useIncrementalList(offerResolvedProducts, {
     initialCount: INCREMENTAL_BATCH_SIZE,
@@ -2049,7 +2152,7 @@ export default function ExtrasView({
         <div className={extrasTabClass('offers')}>
           <div className="h-full overflow-hidden p-2 sm:p-2.5 lg:p-3">
             <div className="grid h-full min-h-0 gap-2 xl:grid-cols-[minmax(0,0.95fr)_minmax(340px,1.05fr)]">
-              <div className="flex min-h-0 flex-col rounded-[22px] border border-emerald-200 bg-emerald-50/60 p-2 sm:p-2.5">
+              <div className="flex min-h-0 flex-col rounded-[22px] border border-slate-200 bg-white p-2 sm:p-2.5">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex min-w-0 flex-1 items-center gap-2">
                     <div className="flex shrink-0 items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.16em]">
@@ -2068,7 +2171,7 @@ export default function ExtrasView({
                       <input
                         type="text"
                         placeholder="Buscar oferta..."
-                        className="w-full rounded-xl border border-emerald-200 bg-white py-1.5 pl-8 pr-2.5 text-xs font-medium outline-none transition-all focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/25"
+                        className="w-full rounded-xl border border-slate-200 bg-white py-1.5 pl-8 pr-2.5 text-xs font-medium outline-none transition-all focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/25"
                         value={offersSearch}
                         onChange={(e) => setOffersSearch(e.target.value)}
                       />
@@ -2087,7 +2190,7 @@ export default function ExtrasView({
                         className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-xs font-semibold transition-all ${
                           isOfferTypeMenuOpen
                             ? 'border-emerald-400 bg-emerald-50 text-emerald-900 shadow-sm'
-                            : 'border-emerald-200 bg-white/95 text-slate-700 hover:border-emerald-300'
+                            : 'border-slate-200 bg-white text-slate-700 hover:border-emerald-300'
                         }`}
                       >
                         <span>{currentOfferTypeFilterLabel}</span>
@@ -2098,7 +2201,7 @@ export default function ExtrasView({
                       </button>
                       {isOfferTypeMenuOpen && (
                         <div className="absolute right-0 top-[calc(100%+6px)] z-20 w-full overflow-hidden rounded-2xl border border-emerald-200 bg-white shadow-xl shadow-emerald-900/10">
-                          <div className="border-b border-emerald-100 bg-emerald-50/80 px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">
+                          <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-slate-600">
                             Filtrar por tipo
                           </div>
                           <div className="p-1.5">
@@ -2150,7 +2253,7 @@ export default function ExtrasView({
                       <TicketPercent size={28} className="text-slate-300" />
                     </div>
                     <p className="text-base font-black text-slate-500">No hay ofertas configuradas.</p>
-                    <p className="mt-1 text-sm text-slate-400">Crea una nueva regla para verla en detalle aqui.</p>
+                    <p className="mt-1 text-sm text-slate-400">Crea una nueva oferta para verla en detalle aqui.</p>
                   </div>
                 ) : (
                   <div className="flex-1 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none' }} onScroll={offersFeed.handleScroll}>
@@ -2165,8 +2268,8 @@ export default function ExtrasView({
                           onClick={() => setSelectedOfferId(offer.id)}
                           className={`flex min-h-[148px] cursor-pointer flex-col rounded-[20px] border px-3.5 py-3.5 transition-all ${
                             isActive
-                              ? 'border-emerald-400 bg-white shadow-sm'
-                              : 'border-emerald-200 bg-white/90 hover:border-emerald-300 hover:bg-white'
+                              ? 'border-emerald-400 bg-white shadow-sm ring-1 ring-emerald-100'
+                              : 'border-slate-200 bg-white hover:border-emerald-300 hover:bg-slate-50'
                           }`}
                         >
                           <ProductPreviewGrid
@@ -2201,10 +2304,10 @@ export default function ExtrasView({
                 )}
               </div>
 
-              <div className="flex min-h-0 flex-col rounded-[22px] border border-emerald-200 bg-emerald-50/35 p-2 sm:p-2.5">
+              <div className="flex min-h-0 flex-col rounded-[22px] border border-slate-200 bg-white p-2 sm:p-2.5">
                 {selectedOffer ? (
                   <div className="flex h-full min-h-0 flex-col">
-                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-emerald-100 pb-2">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-1.5 text-emerald-700">
@@ -2217,7 +2320,7 @@ export default function ExtrasView({
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-[16px] text-slate-500">
+                        <p className="text-[13px] font-semibold text-slate-500">
                           {selectedOffer.canonicalModeLabel}
                           {selectedOffer.canonicalSubtypeLabel ? ` · ${selectedOffer.canonicalSubtypeLabel}` : ''}
                           {' · '}
@@ -2245,16 +2348,16 @@ export default function ExtrasView({
                     </div>
 
                     <div className="mb-2 grid grid-cols-2 gap-2 lg:grid-cols-4">
-                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3">
-                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-500">Tipo</p>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Tipo</p>
                         <p className="mt-1 text-sm font-black text-slate-900">{selectedOffer.canonicalTypeLabel}</p>
                       </div>
-                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3">
-                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-500">Alcance</p>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Alcance</p>
                         <p className="mt-1 text-sm font-black text-slate-900">{selectedOffer.scopeSummary}</p>
                       </div>
-                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3">
-                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-500">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
                           {selectedOffer.canonicalType === 'discount'
                             ? 'Descuento'
                             : selectedOffer.canonicalType === 'coupon'
@@ -2275,8 +2378,8 @@ export default function ExtrasView({
                             : 'Auto'}
                         </p>
                       </div>
-                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3">
-                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-500">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
                           {selectedOffer.canonicalType === 'coupon' ? 'Codigo' : 'Productos'}
                         </p>
                         <p className="mt-1 text-sm font-black text-slate-900">
@@ -2289,49 +2392,18 @@ export default function ExtrasView({
 
                     <div className="min-h-0 flex-1 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none' }} onScroll={selectedOfferProductsFeed.handleScroll}>
                       {selectedOffer.resolvedProductsIncluded.length > 0 ? (
-                        <div className="grid gap-2 sm:grid-cols-2">
+                        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                           {selectedOfferProductsFeed.visibleItems.map((product) => {
                             const isManualComboOffer = selectedOffer.canonicalType === 'combo' || selectedOffer.canonicalType === 'fixed_price';
-                            const lineDisplay = getComboProductLineDisplay(product);
 
                             return (
-                              <div
+                              <OfferProductDetailRow
                                 key={product.id}
-                                className="flex items-center gap-2.5 rounded-[16px] border border-emerald-200 bg-white/90 px-2.5 py-2"
-                              >
-                                {getProductImageUrl(product) ? (
-                                  <img
-                                    src={getProductImageUrl(product)}
-                                    alt={product.title}
-                                    loading="lazy"
-                                    decoding="async"
-                                    fetchpriority="low"
-                                    className="h-10 w-10 rounded-lg border border-slate-200 object-cover"
-                                    onError={(e) => {
-                                      e.target.style.display = 'none';
-                                    }}
-                                  />
-                                ) : (
-                                  <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white">
-                                    <Package size={16} className="text-slate-300" />
-                                  </div>
-                                )}
-                                <div className="min-w-0">
-                                  <p className="truncate text-xs font-black text-slate-800">{product.title}</p>
-                                  {isManualComboOffer ? (
-                                    <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] font-bold text-slate-500">
-                                      <span className="rounded-full border border-emerald-100 bg-emerald-50 px-1.5 py-0.5 text-emerald-700">{lineDisplay.quantityLabel}</span>
-                                      <span><FancyPrice amount={lineDisplay.referenceAmount} /> {lineDisplay.referenceUnitLabel}</span>
-                                      <span className="text-slate-300">|</span>
-                                      <span>Total: <FancyPrice amount={lineDisplay.totalAmount} /></span>
-                                    </div>
-                                  ) : (
-                                    <p className="text-[11px] text-slate-500">
-                                      Precio: <span className="font-bold text-slate-700"><FancyPrice amount={Number(product.price || 0)} /></span>
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
+                                product={product}
+                                isCombo={isManualComboOffer}
+                                onPreviewEnter={showOfferProductImagePreview}
+                                onPreviewLeave={scheduleOfferProductPreviewHide}
+                              />
                             );
                           })}
                         </div>
@@ -2352,7 +2424,7 @@ export default function ExtrasView({
                     </div>
                   </div>
                 ) : (
-                  <div className="flex h-full min-h-0 flex-col items-center justify-center rounded-[20px] border border-dashed border-green-200 bg-green-50/30 text-center">
+                  <div className="flex h-full min-h-0 flex-col items-center justify-center rounded-[20px] border border-dashed border-slate-200 bg-slate-50 text-center">
                     <div className="mb-4 rounded-full border border-slate-200 bg-white p-4">
                       <TicketPercent size={28} className="text-slate-300" />
                     </div>
@@ -3340,6 +3412,8 @@ export default function ExtrasView({
         offerCategoryProducts={offerCategoryProducts}
         offerProductSearch={offerProductSearch}
         setOfferProductSearch={setOfferProductSearch}
+        offerProductCategoryFilter={offerProductCategoryFilter}
+        setOfferProductCategoryFilter={setOfferProductCategoryFilter}
         availableProductsForOffer={availableProductsForOffer}
         offerModalAvailableFeed={offerModalAvailableFeed}
         offerModalIncludedFeed={offerModalIncludedFeed}
@@ -3347,7 +3421,6 @@ export default function ExtrasView({
         handleRemoveProductFromOffer={handleRemoveProductFromOffer}
         handleUpdateProductQuantityInOffer={handleUpdateProductQuantityInOffer}
         handleOfferBenefitTypeChange={handleOfferBenefitTypeChange}
-        handleOfferScopeChange={handleOfferScopeChange}
         handleAdvanceOfferWizard={handleAdvanceOfferWizard}
         handleSaveOfferWizard={handleSaveOfferWizard}
         closeOfferModal={closeOfferModal}
@@ -4492,6 +4565,60 @@ export default function ExtrasView({
           </div>
         </div>
       )}
+
+      {offerProductImagePreview ? (
+        <button
+          type="button"
+          onMouseEnter={clearOfferProductPreviewHide}
+          onMouseLeave={scheduleOfferProductPreviewHide}
+          onClick={() => offerProductImagePreview.image && setOfferProductImageLightbox(offerProductImagePreview)}
+          disabled={!offerProductImagePreview.image}
+          className="fixed z-[130] rounded-xl border border-slate-200 bg-white p-1.5 text-left shadow-2xl shadow-slate-950/25 transition-transform hover:scale-[1.01] disabled:cursor-default"
+          style={{ left: offerProductImagePreview.left, top: offerProductImagePreview.top, width: offerProductImagePreview.width }}
+          title={offerProductImagePreview.image ? 'Ver imagen completa' : undefined}
+        >
+          {offerProductImagePreview.image ? (
+            <img
+              src={offerProductImagePreview.image}
+              alt={offerProductImagePreview.product.title}
+              loading="lazy"
+              decoding="async"
+              fetchpriority="low"
+              className="h-36 w-full rounded-lg object-cover"
+            />
+          ) : (
+            <div className="flex h-36 w-full flex-col items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-slate-400">
+              <Package size={20} />
+              <span className="mt-1 text-[10px] font-bold">Sin imagen</span>
+            </div>
+          )}
+          <p className="mt-1 truncate px-1 text-[10px] font-black text-slate-700">
+            {offerProductImagePreview.image ? 'Click para ampliar' : offerProductImagePreview.product.title}
+          </p>
+        </button>
+      ) : null}
+
+      {offerProductImageLightbox ? (
+        <div className="fixed inset-0 z-[140] flex items-center justify-center bg-slate-950/82 p-5 backdrop-blur-sm" onClick={() => setOfferProductImageLightbox(null)}>
+          <div className="max-h-full max-w-5xl overflow-hidden rounded-2xl border border-white/10 bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-3 py-2">
+              <p className="truncate text-sm font-black text-slate-900">{offerProductImageLightbox.product.title}</p>
+              <button
+                type="button"
+                onClick={() => setOfferProductImageLightbox(null)}
+                className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+              >
+                <X size={16} strokeWidth={3} />
+              </button>
+            </div>
+            <img
+              src={offerProductImageLightbox.image}
+              alt={offerProductImageLightbox.product.title}
+              className="max-h-[78vh] max-w-full bg-slate-100 object-contain"
+            />
+          </div>
+        </div>
+      ) : null}
 
     </div>
   );

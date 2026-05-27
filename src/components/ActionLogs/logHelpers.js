@@ -39,6 +39,7 @@ export const getDetailTitle = (rawAction) => {
     'Modificación Pedido': 'Ajuste de Pedido',
     'Venta Modificada': 'Ajuste de Pedido',
     'Nuevo Gasto': 'Comprobante de Gasto',
+    'Gasto Editado': 'Edicion de Gasto',
     Gasto: 'Comprobante de Gasto',
     'Alta de Producto': 'Ingreso de Producto',
     'Edición Producto': 'Modificación de Inventario',
@@ -113,6 +114,7 @@ export const getDetailIcon = (rawAction) => {
     'Edición de Puntos': '\u{1F3C6}',
     'Baja de Socio': '\u{1F464}',
     'Nuevo Gasto': '\u{1F4C9}',
+    'Gasto Editado': '\u270f\ufe0f',
     Gasto: '\u{1F4C9}',
     'Nuevo Premio': '\u{1F381}',
     'Editar Premio': '\u{1F381}',
@@ -170,6 +172,7 @@ export const getDetailColor = (rawAction) => {
     'Pedido Cancelado': 'red',
     'Pedido Eliminado': 'red',
     'Nuevo Gasto': 'red',
+    'Gasto Editado': 'amber',
     Gasto: 'red',
     'Oferta Eliminada': 'red',
     'Cup\u00f3n Eliminado': 'red',
@@ -216,7 +219,7 @@ export const ACTION_GROUPS = [
   { label: '\u{1F4B0} Caja', actions: ['Apertura de Caja', 'Cierre de Caja', 'Cierre de Caja (Silencioso)', 'Cierre Autom\u00e1tico'] },
   { label: '\u{1F6D2} Ventas', actions: ['Venta Realizada', 'Venta Anulada', 'Venta Restaurada', 'Venta Modificada', 'Venta Eliminada'] },
   { label: '\u{1F4E6} Pedidos', actions: ['Presupuesto Creado', 'Presupuesto Editado', 'Presupuesto Eliminado', 'Pedido Creado', 'Pedido Editado', 'Pago Pedido', 'Pedido Retirado', 'Pedido Cancelado', 'Pedido Eliminado'] },
-  { label: '\u{1F4C9} Gastos', actions: ['Nuevo Gasto'] },
+  { label: '\u{1F4C9} Gastos', actions: ['Nuevo Gasto', 'Gasto Editado'] },
   { label: '\u{1F4E6} Productos', actions: ['Alta de Producto', 'Edición Producto', 'Edición Masiva', 'Baja Producto', 'Producto Duplicado'] },
   { label: '\u{1F3AB} Ofertas y Descuentos', actions: ['Oferta Creada', 'Oferta Editada', 'Oferta Eliminada', 'Cup\u00f3n Creado', 'Cup\u00f3n Editado', 'Cup\u00f3n Eliminado'] },
   { label: '\u{1F464} Socios', actions: ['Nuevo Socio', 'Edición de Socio', 'Edición de Puntos', 'Baja de Socio'] },
@@ -282,7 +285,7 @@ export const extractRealNote = (log) => {
     const lowerReason = cleanReason.toLowerCase();
 
     if (!generics.includes(lowerReason)) {
-      if (!((action === 'Nuevo Gasto' || action === 'Gasto') && lowerReason === String(details.category || '').toLowerCase())) {
+      if (!((action === 'Nuevo Gasto' || action === 'Gasto' || action === 'Gasto Editado') && lowerReason === String(details.category || details.next?.category || details.previous?.category || '').toLowerCase())) {
         return cleanReason;
       }
     }
@@ -297,7 +300,7 @@ export const extractRealNote = (log) => {
     const lowerCandidate = cleanCandidate.toLowerCase();
 
     if (!generics.includes(lowerCandidate)) {
-      if ((action === 'Nuevo Gasto' || action === 'Gasto') && lowerCandidate === String(details.category || '').toLowerCase()) {
+      if ((action === 'Nuevo Gasto' || action === 'Gasto' || action === 'Gasto Editado') && lowerCandidate === String(details.category || details.next?.category || details.previous?.category || '').toLowerCase()) {
         continue;
       }
 

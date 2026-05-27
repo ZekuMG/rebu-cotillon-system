@@ -83,7 +83,7 @@ export const SCHEMA_OPTIONAL_COLUMNS = {
     'expiration_date',
     'is_active',
   ]),
-  clients: new Set(['dni', 'phone', 'email', 'extrainfo', 'extra_info', 'updated_at', 'is_active']),
+  clients: new Set(['dni', 'phone', 'email', 'extrainfo', 'extra_info', 'social_connections', 'updated_at', 'is_active']),
   rewards: new Set(['is_active']),
   logs: new Set(['details', 'reason', 'user', 'user_id', 'user_role', 'user_name']),
   expenses: new Set(['payment_method', 'user_id', 'user_role', 'user_name']),

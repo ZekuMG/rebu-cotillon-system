@@ -113,6 +113,17 @@ export const EditTransactionModal = ({
   const getItemsSubtotal = (items = []) =>
     items.reduce((acc, i) => acc + getLineSubtotal(i), 0);
 
+  const formatProductStock = (product = {}) => {
+    const stock = Number(product.stock || 0);
+    if ((product.product_type || 'quantity') === 'weight') {
+      if (Math.abs(stock) >= 1000) {
+        return `${(stock / 1000).toLocaleString('es-AR', { maximumFractionDigits: 2 })} kg`;
+      }
+      return `${stock.toLocaleString('es-AR', { maximumFractionDigits: 0 })} g`;
+    }
+    return `${stock.toLocaleString('es-AR', { maximumFractionDigits: 0 })} u`;
+  };
+
   const getTransactionPaymentLines = (sourceTransaction, subtotal) => {
     if (Array.isArray(sourceTransaction.paymentBreakdown) && sourceTransaction.paymentBreakdown.length > 0) {
       return normalizePaymentBreakdown(
@@ -697,8 +708,12 @@ export const EditTransactionModal = ({
               <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 shadow-xl rounded-xl max-h-48 overflow-y-auto z-20 p-1 animate-in fade-in slide-in-from-top-2">
                 {inventory.filter((p) => p.title.toLowerCase().includes(transactionSearch.toLowerCase())).map((p) => (
                   <button key={p.id} onClick={() => handleAddLocalItem(p)} className="w-full text-left p-2.5 hover:bg-blue-50 text-sm flex justify-between items-center rounded-lg transition-colors group">
-                    <span className="font-medium text-slate-700 group-hover:text-blue-700 flex items-center gap-2">
-                      <Package size={14} className="text-slate-400" /> {p.title}
+                    <span className="font-medium text-slate-700 group-hover:text-blue-700 flex min-w-0 items-center gap-2">
+                      <Package size={14} className="shrink-0 text-slate-400" />
+                      <span className="min-w-0 truncate">{p.title}</span>
+                      <span className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-black text-slate-500 group-hover:border-blue-200 group-hover:bg-blue-50 group-hover:text-blue-600">
+                        {formatProductStock(p)}
+                      </span>
                     </span>
                     {/* ♻️ FIX: FancyPrice en el precio del buscador */}
                     <span className="font-bold text-slate-800">
@@ -734,8 +749,12 @@ export const EditTransactionModal = ({
               <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 shadow-xl rounded-xl max-h-48 overflow-y-auto z-20 p-1 animate-in fade-in slide-in-from-top-2">
                 {inventory.filter((p) => p.title.toLowerCase().includes(transactionSearch.toLowerCase())).map((p) => (
                   <button key={p.id} onClick={() => handleAddLocalItem(p)} className="w-full text-left p-2.5 hover:bg-blue-50 text-sm flex justify-between items-center rounded-lg transition-colors group">
-                    <span className="font-medium text-slate-700 group-hover:text-blue-700 flex items-center gap-2">
-                      <Package size={14} className="text-slate-400" /> {p.title}
+                    <span className="font-medium text-slate-700 group-hover:text-blue-700 flex min-w-0 items-center gap-2">
+                      <Package size={14} className="shrink-0 text-slate-400" />
+                      <span className="min-w-0 truncate">{p.title}</span>
+                      <span className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-black text-slate-500 group-hover:border-blue-200 group-hover:bg-blue-50 group-hover:text-blue-600">
+                        {formatProductStock(p)}
+                      </span>
                     </span>
                     <span className="font-bold text-slate-800">
                       <FancyPrice amount={p.price} />

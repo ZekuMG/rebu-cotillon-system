@@ -130,8 +130,9 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
       case 'Venta Anulada':
         return (d.originalTotal || d.total) != null ? <FancyPrice amount={d.originalTotal || d.total} /> : '';
       case 'Nuevo Gasto':
+      case 'Gasto Editado':
       case 'Gasto':
-        return d.amount != null ? <><span className="text-red-500 mr-1">-</span><FancyPrice amount={d.amount} /></> : '';
+        return (d.next?.amount ?? d.amount) != null ? <><span className="text-red-500 mr-1">-</span><FancyPrice amount={d.next?.amount ?? d.amount} /></> : '';
       case 'Alta de Producto':
       case 'Baja Producto':
       case 'Producto Duplicado':
@@ -224,8 +225,9 @@ export default function LogDetailModal({ selectedLog, onClose, onUpdateNote, onR
       case 'Producto Duplicado':
         return d.newTitle || d.title || 'Producto Copiado';
       case 'Nuevo Gasto':
+      case 'Gasto Editado':
       case 'Gasto':
-        return d.description || 'Gasto registrado';
+        return d.next?.description || d.description || d.previous?.description || 'Gasto registrado';
       case 'Nuevo Socio':
       case 'Edición de Socio':
       case 'Edición de Puntos':
