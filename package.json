@@ -1,7 +1,7 @@
 {
   "name": "cotillon-rebu-system",
   "productName": "Rebu Cotillón",
-  "version": "1.0.13",
+  "version": "1.0.16",
   "private": true,
   "main": "electron-main.cjs",
   "type": "module",
@@ -10,7 +10,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "electron:dev": "concurrently -k \"cross-env BROWSER=none npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:dev": "concurrently -k -s first \"cross-env BROWSER=none npm run dev -- --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on tcp:127.0.0.1:5173 && cross-env ELECTRON_START_URL=http://127.0.0.1:5173 electron .\"",
     "electron:build": "vite build && electron-builder -w --publish always",
     "publish": "dotenv electron-builder -- --publish always",
     "dev:fresh": "npm run build && npm run electron:dev"

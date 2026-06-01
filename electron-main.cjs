@@ -76,7 +76,8 @@ function createWindow() {
     },
   });
 
-  const startUrl = process.env.ELECTRON_START_URL || `file://${path.join(__dirname, './dist/index.html')}`;
+  const startUrl = process.env.ELECTRON_START_URL
+    || (isDev ? 'http://127.0.0.1:5173' : `file://${path.join(__dirname, './dist/index.html')}`);
   mainWindow.loadURL(startUrl);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
@@ -118,18 +119,6 @@ app.on('ready', () => {
       return { success: true, filePath };
     } catch (error) {
       console.error('Error generando PDF:', error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('print-silent', async (event) => {
-    try {
-      if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
-      if (!mainWindow) return { success: false, error: 'Ventana no disponible' };
-      mainWindow.webContents.print({ silent: true, printBackground: true });
-      return { success: true };
-    } catch (error) {
-      console.error('Error imprimiendo:', error);
       return { success: false, error: error.message };
     }
   });

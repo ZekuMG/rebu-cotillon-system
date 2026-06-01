@@ -8327,14 +8327,10 @@ export default function PartySupplyApp() {
     setTicketToView(tx);
   };
 
-  const handlePrintTicket = async () => {
-    if (window.electronAPI?.printSilent) {
-      const result = await window.electronAPI.printSilent();
-      if (!result?.success) {
-        showNotification('error', 'No se pudo imprimir', result?.error || 'Fallo la impresion silenciosa.');
-        return;
-      }
-      showNotification('success', 'Imprimiendo...', 'El ticket se envió a la impresora.');
+  const handlePrintTicket = () => {
+    if (window.electronAPI && window.electronAPI.printSilent) {
+      window.electronAPI.printSilent();
+      showNotification('success', 'Imprimiendo...', 'El ticket se envio a la impresora.');
     } else {
       window.print();
     }

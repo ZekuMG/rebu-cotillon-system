@@ -347,7 +347,7 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
     setRows((prev) =>
       prev.map((row, index) => {
         if (row.id !== rowId) return row;
-        const product = entry.code ? barcodeLookup.get(entry.code) || row.product : row.product;
+        const product = row.productCleared ? null : entry.code ? barcodeLookup.get(entry.code) || row.product : row.product;
         return {
           ...buildReviewRow(
             {
@@ -362,6 +362,7 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
           assignmentQuery: row.assignmentQuery,
           changeProductMode: row.changeProductMode,
           manualAssigned: row.manualAssigned,
+          productCleared: row.productCleared,
         };
       }),
     );
@@ -377,12 +378,46 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
           assignmentQuery: '',
           changeProductMode: false,
           manualAssigned: true,
+          productCleared: false,
           isAssociated: row.isAssociated,
           sourceRowId: row.sourceRowId,
           duplicateOptions: row.duplicateOptions,
         };
       }),
     );
+  };
+
+  const clearProductFromRow = (rowId) => {
+    const targetRow = rows.find((row) => row.id === rowId);
+    const sourceId = targetRow?.sourceRowId || targetRow?.id;
+
+    setRows((prev) =>
+      prev.map((row, index) => {
+        if (row.id !== rowId) return row;
+        return {
+          ...buildReviewRow(
+            {
+              entry: row.entry,
+              product: null,
+              duplicateOptions: row.duplicateOptions,
+              duplicateResolved: row.duplicateResolved,
+            },
+            index,
+          ),
+          id: row.id,
+          assignmentQuery: '',
+          changeProductMode: true,
+          manualAssigned: false,
+          productCleared: true,
+          isAssociated: row.isAssociated,
+          sourceRowId: row.sourceRowId,
+          duplicateOptions: row.duplicateOptions,
+          applied: false,
+        };
+      }),
+    );
+
+    if (sourceId) setActiveTarget(sourceId, rowId);
   };
 
   const addAssociatedProductRow = (sourceRow) => {
@@ -465,6 +500,7 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
           assignmentQuery: row.assignmentQuery,
           changeProductMode: row.changeProductMode,
           manualAssigned: row.manualAssigned,
+          productCleared: row.productCleared,
           isAssociated: row.isAssociated,
           sourceRowId: row.sourceRowId,
           applied: row.applied,
@@ -825,6 +861,17 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
                               {row.product && (
                                 <button
                                   type="button"
+                                  onClick={() => clearProductFromRow(row.id)}
+                                  className="shrink-0 inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-red-700 hover:bg-red-100"
+                                  title="Quitar el producto enlazado a este articulo del Excel"
+                                >
+                                  <X size={10} />
+                                  Quitar producto
+                                </button>
+                              )}
+                              {row.product && (
+                                <button
+                                  type="button"
                                   onClick={() => handleApplyRows([row])}
                                   disabled={!canApplyRow || isApplying}
                                   className="shrink-0 inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
@@ -1143,6 +1190,17 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
                                             className="shrink-0 rounded-md border border-sky-200 bg-white px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-sky-700 hover:bg-sky-50"
                                           >
                                             {associatedRow.changeProductMode ? 'Cancelar' : 'Cambiar'}
+                                          </button>
+                                        )}
+                                        {associatedRow.product && (
+                                          <button
+                                            type="button"
+                                            onClick={() => clearProductFromRow(associatedRow.id)}
+                                            className="shrink-0 inline-flex items-center gap-1 rounded-md border border-red-200 bg-white px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-red-600 hover:bg-red-50"
+                                            title="Quitar solo el producto enlazado"
+                                          >
+                                            <X size={10} />
+                                            Quitar producto
                                           </button>
                                         )}
                                         {associatedRow.product && (

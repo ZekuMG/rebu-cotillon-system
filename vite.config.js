@@ -31,6 +31,16 @@ export default defineConfig({
     },
   },
 
+  server: {
+    host: '127.0.0.1',
+    port: 5173,
+    strictPort: true,
+    hmr: {
+      host: '127.0.0.1',
+      protocol: 'ws',
+    },
+  },
+
   build: {
     target: 'esnext', // Recomiendo 'esnext' para Electron, pero 'es2015' funcionará si prefieres no tocarlo.
     outDir: 'dist',

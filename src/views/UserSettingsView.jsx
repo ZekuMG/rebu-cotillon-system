@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BarChart3, Palette, Save, Shield, UserRound } from 'lucide-react';
+import { BarChart3, Palette, Save, Shield, UserRound, Printer } from 'lucide-react';
 import {
   getInitialsFromName,
   getRoleLabel,
@@ -31,6 +31,7 @@ export default function UserSettingsView({
   const [nameColor, setNameColor] = useState('#0f172a');
   const [theme, setTheme] = useState('light');
   const [metricsViewMode, setMetricsViewMode] = useState('modern');
+  const [thermalPrinterWidthMm, setThermalPrinterWidthMm] = useState(80);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -41,6 +42,13 @@ export default function UserSettingsView({
     setNameColor(currentUser?.nameColor || '#0f172a');
     setTheme(currentUser?.theme || 'light');
     setMetricsViewMode(normalizeMetricsViewMode(currentUser?.metricsViewMode || getLocalMetricsViewMode()));
+    
+    try {
+      const saved = window.localStorage.getItem('rebu_thermal_printer_width_mm');
+      setThermalPrinterWidthMm(saved ? Number(saved) : 80);
+    } catch {
+      setThermalPrinterWidthMm(80);
+    }
   }, [currentUser]);
 
   const previewRole = useMemo(
@@ -90,6 +98,12 @@ export default function UserSettingsView({
         theme,
         metricsViewMode,
       });
+
+      try {
+        window.localStorage.setItem('rebu_thermal_printer_width_mm', String(thermalPrinterWidthMm));
+      } catch {
+        // localStorage no disponible
+      }
 
       setPassword('');
       setConfirmPassword('');
@@ -315,6 +329,50 @@ export default function UserSettingsView({
                 <p className="mt-1 text-sm font-semibold">Vista completa anterior.</p>
               </button>
             </div>
+          </div>
+
+          <div className="rounded-[24px] border border-slate-200 bg-white/90 p-4 shadow-sm">
+            <div className="mb-4 flex items-center gap-2">
+              <Printer size={16} className="text-slate-500" />
+              <h4 className="text-sm font-black uppercase tracking-[0.12em] text-slate-600">
+                Impresora térmica
+              </h4>
+            </div>
+
+            <label className="rounded-[18px] border border-slate-200 bg-slate-50/90 p-3">
+              <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                Ancho de papel (mm)
+              </span>
+              <p className="mt-1 text-xs text-slate-600 mb-2">
+                Xprinter XP-58: 58mm | Estándar: 80mm | Grande: 100mm
+              </p>
+              <div className="flex gap-2 mb-2">
+                {[58, 80, 100].map((width) => (
+                  <button
+                    key={width}
+                    type="button"
+                    onClick={() => setThermalPrinterWidthMm(width)}
+                    className={`flex-1 rounded-[12px] border px-3 py-2 text-sm font-bold transition ${
+                      thermalPrinterWidthMm === width
+                        ? 'border-fuchsia-500 bg-fuchsia-100 text-fuchsia-700'
+                        : 'border-slate-300 bg-white text-slate-600 hover:border-fuchsia-300'
+                    }`}
+                  >
+                    {width}mm
+                  </button>
+                ))}
+              </div>
+              <input
+                type="number"
+                min="30"
+                max="200"
+                step="1"
+                value={thermalPrinterWidthMm}
+                onChange={(e) => setThermalPrinterWidthMm(Number(e.target.value) || 80)}
+                className="w-full rounded-[12px] border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-fuchsia-400"
+                placeholder="Personalizado"
+              />
+            </label>
           </div>
         </div>
       </div>
