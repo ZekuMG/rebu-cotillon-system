@@ -2113,6 +2113,8 @@ export default function PartySupplyApp() {
   
   const [isCloudLoading, setIsCloudLoading] = useState(false);
   const [isAuthBootLoading, setIsAuthBootLoading] = useState(true);
+  const [isSoftReloading, setIsSoftReloading] = useState(false);
+  const [isForceReloading, setIsForceReloading] = useState(false);
   const [isOfflineReadOnly, setIsOfflineReadOnly] = useState(false);
   const [isReconnectAttempting, setIsReconnectAttempting] = useState(false);
   const [offlineSnapshotAt, setOfflineSnapshotAt] = useState(null);
@@ -3344,6 +3346,11 @@ export default function PartySupplyApp() {
       };
     }
 
+    const bootSharedUsersSnapshot = loadOfflineSharedUsersSnapshot();
+    const hasBootSharedUsersSnapshot =
+      bootSharedUsersSnapshot?.authMode === 'supabase' &&
+      Array.isArray(bootSharedUsersSnapshot.users) &&
+      bootSharedUsersSnapshot.users.length > 0;
     const hydratedFromCache = hydrateOfflineSnapshots();
     if (hydratedFromCache || isBrowserOffline()) {
       setIsOfflineReadOnly(true);
@@ -3352,6 +3359,10 @@ export default function PartySupplyApp() {
     if (isBrowserOffline()) {
       setIsAuthBootLoading(false);
     } else {
+      if (hasBootSharedUsersSnapshot) {
+        setIsAuthBootLoading(false);
+      }
+
       void loadCoreCloudData({ showSpinner: false });
       void loadAppUsers()
         .catch((error) => {
@@ -3362,7 +3373,7 @@ export default function PartySupplyApp() {
           if (recoveredFromCache) setIsOfflineReadOnly(true);
         })
         .finally(() => {
-          if (!disposed) {
+          if (!disposed && !hasBootSharedUsersSnapshot) {
             setIsAuthBootLoading(false);
           }
         });
@@ -4069,18 +4080,72 @@ export default function PartySupplyApp() {
     }
   };
 
-  const handleSoftReload = () => {
+  const handleSoftReload = async () => {
+    if (isSoftReloading) return;
+
     if (isLocalDemoMode()) {
       applyLocalDemoSnapshot();
       showNotification('info', 'Modo demo local', 'Se reiniciaron los datos demo locales.');
       return;
     }
 
-    fetchCloudData(false, { force: false });
-    showNotification('info', 'Recarga suave', 'Revalidamos el modulo visible y los datos vencidos sin rehacer toda la nube.');
+    if (isOfflineReadOnly) {
+      await handleReconnectCloud();
+      return;
+    }
+
+    setIsSoftReloading(true);
+    try {
+      const moduleKey = TAB_TO_DATA_MODULE[activeTabRef.current];
+      if (moduleKey) {
+        await loadModuleForTab(activeTabRef.current, { force: true });
+      } else {
+        await loadCoreCloudData({ showSpinner: false, force: true });
+      }
+      showNotification(
+        'success',
+        'Actualizado',
+        moduleKey ? 'Se recargo el modulo visible.' : 'Se recargaron los datos base.'
+      );
+    } catch (error) {
+      console.error('No se pudo actualizar manualmente:', error);
+      showNotification(
+        'error',
+        'No se pudo actualizar',
+        error?.message || 'La nube no respondio. Podes intentar una recarga total.'
+      );
+    } finally {
+      setIsSoftReloading(false);
+    }
   };
-  const handleForceReload = () => {
-    window.location.reload();
+  const handleForceReload = async () => {
+    if (isForceReloading || isSoftReloading) return;
+
+    if (isLocalDemoMode()) {
+      applyLocalDemoSnapshot();
+      showNotification('info', 'Modo demo local', 'Se reiniciaron los datos demo locales.');
+      return;
+    }
+
+    setIsForceReloading(true);
+    try {
+      void loadAppUsers({ force: true, includeInactive: activeTabRef.current === 'user-management' }).catch((error) => {
+        console.warn('No se pudieron refrescar usuarios durante la recarga total. Seguimos con cache local.', error);
+      });
+      await loadCoreCloudData({ showSpinner: false, force: true });
+      await loadModuleForTab(activeTabRef.current, { force: true });
+      setIsOfflineReadOnly(false);
+      showNotification('success', 'Base actualizada', 'Se recargaron datos base y el modulo visible. Usuarios se actualiza en segundo plano.');
+    } catch (error) {
+      console.error('No se pudo completar la recarga total:', error);
+      showNotification(
+        'error',
+        'No se pudo recargar la base',
+        error?.message || 'La nube no respondio. Si la app quedo inconsistente, reinicia Electron.'
+      );
+    } finally {
+      setIsForceReloading(false);
+    }
   };
 
   useEffect(() => {
@@ -4090,7 +4155,7 @@ export default function PartySupplyApp() {
       event.preventDefault();
 
       if (event.ctrlKey) {
-        handleForceReload();
+        void handleForceReload();
         return;
       }
 
@@ -10973,20 +11038,22 @@ export default function PartySupplyApp() {
                 <button
                   type="button"
                   onClick={handleSoftReload}
+                  disabled={isSoftReloading || isForceReloading || isCloudLoading || isReconnectAttempting}
                   className="app-topbar-action"
-                  title="Recarga datos vencidos y el modulo visible sin reiniciar"
+                  title="Recargar ahora los datos base y el modulo visible"
                 >
-                  <RefreshCw size={12} />
-                  Actualizar
+                  <RefreshCw size={12} className={isSoftReloading ? 'animate-spin' : ''} />
+                  {isSoftReloading ? 'Actualizando' : 'Actualizar'}
                 </button>
                 <button
                   type="button"
                   onClick={handleForceReload}
+                  disabled={isSoftReloading || isForceReloading || isCloudLoading || isReconnectAttempting}
                   className="app-topbar-action is-strong"
-                  title="Recarga completa de la aplicacion"
+                  title="Recarga fuerte de base de datos sin reiniciar la aplicacion"
                 >
-                  <RefreshCw size={12} />
-                  Recarga total
+                  <RefreshCw size={12} className={isForceReloading ? 'animate-spin' : ''} />
+                  {isForceReloading ? 'Recargando' : 'Recarga total'}
                 </button>
               </div>
             </div>
@@ -11075,7 +11142,7 @@ export default function PartySupplyApp() {
             )}
             {canAccessTab(currentUser, 'inventory') && <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={handleEditProductRequest} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} closeDetailsToken={inventoryPanelCloseToken} navigationRequest={inventoryNavigationRequest} onProductDetailRequest={handleProductDetailRequest} /></PersistentTabPanel>}
             <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{canManageRegister ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">Necesitas permiso para abrir la caja y realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} onUpdateClient={handleUpdateMemberWithLog} offers={offers} currentUser={currentUser} userCatalog={userCatalog} />)}</PersistentTabPanel>
-            <PersistentTabPanel tab="clients" activeTab={activeTab} className="h-full min-h-0"><ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={handleCheckMemberPointExpirations} /></PersistentTabPanel>
+            <PersistentTabPanel tab="clients" activeTab={activeTab} className="h-full min-h-0"><ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} userCatalog={userCatalog} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={handleCheckMemberPointExpirations} /></PersistentTabPanel>
             {canViewAgenda && (
               <PersistentTabPanel tab="agenda" activeTab={activeTab} className="h-full min-h-0">
                 <AgendaView

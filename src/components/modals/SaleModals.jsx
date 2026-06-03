@@ -117,6 +117,17 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
     return price < 100 ? price * 1000 : price;
   };
 
+  const purchaseSubtotal = orderedItems.reduce((sum, item) => {
+    if (item.isReward || item.isDiscount) return sum;
+    return sum + (Number(getItemSubtotal(item)) || 0);
+  }, 0);
+  const purchaseDiscountTotal = orderedItems.reduce((sum, item) => {
+    if (!item.isReward && !item.isDiscount) return sum;
+    return sum + getItemDiscountAmount(item);
+  }, 0);
+  const purchaseNetBeforeSurcharge = Math.max(0, purchaseSubtotal - purchaseDiscountTotal);
+  const purchaseSurcharge = Math.max(0, Number(transaction.total || 0) - purchaseNetBeforeSurcharge);
+
   return (
     <div className="sale-success-modal fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
       <div className="sale-success-panel mx-auto flex max-h-[92vh] w-full max-w-[1120px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl animate-in fade-in zoom-in duration-300">
@@ -129,7 +140,7 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
         </div>
 
         <div className="grid min-h-0 flex-1 gap-0 overflow-hidden lg:grid-cols-[300px_minmax(360px,1fr)_300px]">
-          <div className="order-2 min-h-0 space-y-2 overflow-y-auto px-3.5 pb-3.5 pt-1 md:px-4 md:pb-4 md:pt-1.5">
+          <div className="order-2 min-h-0 space-y-2 overflow-y-auto border-r border-slate-200 bg-slate-50 px-3 pb-3 pt-2 md:px-3.5 md:pb-3.5">
             <div className="hidden">
               <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">Número de compra</p>
               <p className="text-[26px] font-black leading-none text-slate-800 sm:col-start-2 sm:row-start-2">#{String(transaction.id).padStart(6, '0')}</p>
@@ -152,18 +163,18 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
             </div>
 
             <div className="grid gap-1.5 sm:grid-cols-3">
-              <div className="min-w-0 rounded-xl border border-blue-100 bg-blue-50 px-3 py-1.5 min-h-[68px]">
-                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-blue-400">Usuario</p>
+              <div className="min-w-0 rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1.5 min-h-[56px]">
+                <p className="text-[9px] font-black uppercase tracking-[0.12em] text-blue-400">Usuario</p>
                 <p className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px] font-black leading-tight text-blue-700">
                   <User size={13} className="shrink-0" />
                   <span className="min-w-0 break-words">{transaction.user || 'Sin usuario'}</span>
                 </p>
               </div>
-              <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-1 text-center min-h-[68px] flex flex-col items-center justify-center">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-center min-h-[56px] flex flex-col items-center justify-center">
                 <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Número de compra</p>
-                <p className="mt-0.5 text-[24px] font-black leading-none text-slate-800">#{String(transaction.id).padStart(6, '0')}</p>
+                <p className="mt-0.5 text-[22px] font-black leading-none text-slate-800">#{String(transaction.id).padStart(6, '0')}</p>
               </div>
-              <div className="min-w-0 rounded-xl border border-fuchsia-100 bg-fuchsia-50 px-3 py-1.5 min-h-[68px]">
+              <div className="min-w-0 rounded-lg border border-fuchsia-100 bg-fuchsia-50 px-2.5 py-1.5 min-h-[56px]">
                 <p className="text-[10px] font-black uppercase tracking-[0.12em] text-fuchsia-400">Método de pago</p>
                 <p className="mt-0.5 flex min-w-0 items-start gap-1.5 text-[12px] font-black leading-tight text-fuchsia-700">
                   <CreditCard size={13} className="mt-[1px] shrink-0" />
@@ -173,7 +184,7 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
             </div>
 
             <div className="grid gap-2">
-              <div className="min-w-0 rounded-xl border border-sky-100 bg-gradient-to-br from-sky-50 to-white px-3 py-2">
+              <div className="sale-success-member-card min-w-0 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Socio</p>
@@ -194,20 +205,20 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
                     </span>
                   </div>
                 </div>
-                <div className="mt-1 grid gap-1 sm:grid-cols-4">
-                  <div className="rounded-lg bg-white/80 px-2.5 py-1">
+                <div className="mt-2 grid gap-1.5 sm:grid-cols-4">
+                  <div className="sale-success-metric-cell rounded-lg border border-sky-100 bg-white px-2.5 py-1.5">
                     <p className="text-[9px] font-black uppercase tracking-[0.12em] text-sky-400">Antes</p>
                     <p className="mt-0.5 text-[13px] font-black text-sky-700">{memberNumber ? previousPoints : 'Sin socio'}</p>
                   </div>
-                  <div className="rounded-lg bg-white/80 px-2.5 py-1">
+                  <div className="sale-success-metric-cell rounded-lg border border-sky-100 bg-white px-2.5 py-1.5">
                     <p className="text-[9px] font-black uppercase tracking-[0.12em] text-rose-400">Canjeados</p>
                     <p className="mt-0.5 text-[13px] font-black text-rose-600">{Number(transaction.pointsSpent || 0)}</p>
                   </div>
-                  <div className="rounded-lg bg-white/80 px-2.5 py-1">
+                  <div className="sale-success-metric-cell rounded-lg border border-sky-100 bg-white px-2.5 py-1.5">
                     <p className="text-[9px] font-black uppercase tracking-[0.12em] text-emerald-400">Ganados</p>
                     <p className="mt-0.5 text-[13px] font-black text-emerald-600">{Number(transaction.pointsEarned || 0)}</p>
                   </div>
-                  <div className="rounded-lg bg-white/80 px-2.5 py-1">
+                  <div className="sale-success-metric-cell rounded-lg border border-sky-100 bg-white px-2.5 py-1.5">
                     <p className="text-[9px] font-black uppercase tracking-[0.12em] text-blue-400">{memberNumber ? 'Actuales' : 'Estado'}</p>
                     <p className="mt-0.5 text-[13px] font-black text-blue-700">{memberNumber ? currentPoints : 'Sin socio'}</p>
                   </div>
@@ -221,33 +232,65 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
                   {memberNumber ? <p>Actuales: {currentPoints}</p> : <p>Sin socio asignado</p>}
                 </div>
               </div>
-              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+              <div className="sale-success-purchase-card rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                 <div className="flex items-center gap-1.5">
                   <Receipt size={15} className="text-slate-500" />
-                  <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-500">Datos de la compra</p>
+                  <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-500">Compra y pago</p>
                 </div>
                 <div className="mt-2 grid gap-1.5 text-[13px] text-slate-700 sm:grid-cols-2">
-                  <div className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-1.5">
+                  <div className="sale-success-purchase-cell flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
                     <span className="font-bold text-slate-500">Fecha</span>
                     <span className="font-black text-slate-800">{transaction.date || '-'}</span>
                   </div>
-                  <div className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-1.5">
+                  <div className="sale-success-purchase-cell flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
                     <span className="font-bold text-slate-500">Hora</span>
                     <span className="font-black text-slate-800">{transaction.time || '-'}</span>
                   </div>
-                  <div className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-1.5">
+                  <div className="sale-success-purchase-cell flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
                     <span className="font-bold text-slate-500">Items</span>
                     <span className="font-black text-slate-800">{totalItems}</span>
                   </div>
-                  <div className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-1.5">
+                  <div className="sale-success-purchase-cell flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
                     <span className="font-bold text-slate-500">Estado</span>
                     <span className="font-black text-emerald-600">Completada</span>
                   </div>
                 </div>
+                <div className="mt-2 divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                  {paymentItems.map((paymentItem) => {
+                    const showCashDetail = paymentItem.method === 'Efectivo' && isCashOnlyPayment;
+                    return (
+                      <div key={paymentItem.key} className="px-3 py-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="min-w-0 break-words text-[12px] font-black leading-tight text-slate-700">{paymentItem.title}</span>
+                          <span className="shrink-0 text-[13px] font-black text-slate-900">
+                            <FancyPrice amount={paymentItem.chargedAmount || 0} />
+                          </span>
+                        </div>
+                        {showCashDetail && (
+                          <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px]">
+                            <div className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-1">
+                              <span className="font-bold text-blue-600">Recibido</span>
+                              <span className="font-black text-blue-700">
+                                <FancyPrice amount={Number(paymentItem.cashReceived || effectiveCashReceived || 0)} />
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-1">
+                              <span className="font-bold text-emerald-600">Devolucion</span>
+                              <span className="font-black text-emerald-700">
+                                <FancyPrice amount={Number(paymentItem.cashChange || 0)} />
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
-            <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+            {false && (
+            <div className="hidden">
               {paymentItems.map((paymentItem) => {
                 const showCashDetail = paymentItem.method === 'Efectivo' && isCashOnlyPayment;
                 return (
@@ -292,6 +335,7 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
                 </span>
               </div>
             </div>
+            )}
           </div>
 
           <div className="order-3 flex min-h-0 flex-col border-t border-slate-200 bg-slate-50 px-2.5 pb-2.5 pt-2 lg:h-full lg:border-l lg:border-t-0 lg:px-[3%] lg:pb-3 lg:pt-2.5">
@@ -384,6 +428,38 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
                   </div>
                 );
               })}
+            </div>
+            <div className="mt-2 shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">Resumen</p>
+                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-black text-emerald-700">
+                  Completada
+                </span>
+              </div>
+              <div className="mt-2 space-y-1 text-[12px] font-bold">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-500">Subtotal</span>
+                  <span className="font-black text-slate-800"><FancyPrice amount={purchaseSubtotal} /></span>
+                </div>
+                {purchaseDiscountTotal > 0 && (
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-emerald-600">Descuentos / beneficios</span>
+                    <span className="font-black text-emerald-700">-<FancyPrice amount={purchaseDiscountTotal} /></span>
+                  </div>
+                )}
+                {purchaseSurcharge > 0.5 && (
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-amber-600">Recargos</span>
+                    <span className="font-black text-amber-700"><FancyPrice amount={purchaseSurcharge} /></span>
+                  </div>
+                )}
+              </div>
+              <div className="mt-2 flex items-end justify-between gap-3 border-t border-slate-200 pt-2">
+                <span className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-600">Total</span>
+                <span className="text-[24px] font-black leading-none text-green-600">
+                  <FancyPrice amount={transaction.total} />
+                </span>
+              </div>
             </div>
           </div>
 

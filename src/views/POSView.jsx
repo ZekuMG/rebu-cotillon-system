@@ -463,6 +463,7 @@ export default function POSView({
   const [isSplitPaymentMode, setIsSplitPaymentMode] = useState(false);
   const [activeSplitLineIndex, setActiveSplitLineIndex] = useState(0);
   const [isWideLayout, setIsWideLayout] = useState(isWideResolution);
+  const [productHoverPreview, setProductHoverPreview] = useState(null);
   const { isPending, runAction } = usePendingAction();
   const cartBounds = useMemo(() => getPosCartBounds(isWideLayout), [isWideLayout]);
   const maxGridColumns = isWideLayout ? 10 : 8;
@@ -489,6 +490,33 @@ export default function POSView({
     window.addEventListener('mousemove', handlePointerMove);
     window.addEventListener('mouseup', stopResize);
   };
+
+  const updateProductHoverPreview = (event, product, imageSrc) => {
+    if (!imageSrc || typeof window === 'undefined') return;
+
+    const previewSize = isWideLayout ? 220 : 184;
+    const offset = 18;
+    const viewportPadding = 12;
+    let x = event.clientX + offset;
+    let y = event.clientY + offset;
+
+    if (x + previewSize > window.innerWidth - viewportPadding) {
+      x = event.clientX - previewSize - offset;
+    }
+    if (y + previewSize > window.innerHeight - viewportPadding) {
+      y = window.innerHeight - previewSize - viewportPadding;
+    }
+
+    setProductHoverPreview({
+      src: imageSrc,
+      title: product?.title || 'Producto',
+      x: Math.max(viewportPadding, x),
+      y: Math.max(viewportPadding, y),
+      size: previewSize,
+    });
+  };
+
+  const clearProductHoverPreview = () => setProductHoverPreview(null);
 
   const openMemberSelectPanel = () => {
     if (onOpenMemberPanel) {
@@ -1733,6 +1761,7 @@ export default function POSView({
             <div className="flex h-8 min-[1920px]:h-9 items-center rounded-lg border bg-slate-100 p-0.5">
               <button onClick={() => setPosViewMode('grid')} className={`flex h-full items-center rounded-md px-2 transition-all ${posViewMode === 'grid' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><LayoutGrid size={17} /></button>
               <button onClick={() => setPosViewMode('list')} className={`flex h-full items-center rounded-md px-2 transition-all ${posViewMode === 'list' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><List size={17} /></button>
+              <button onClick={() => setPosViewMode('compact')} className={`flex h-full items-center rounded-md px-2 transition-all ${posViewMode === 'compact' ? 'bg-white text-fuchsia-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`} title="Vista Mostrador"><ScanBarcode size={17} /></button>
             </div>
           </div>
         </div>
@@ -1847,6 +1876,108 @@ export default function POSView({
                         </div>
                       </div>
                     </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : posViewMode === 'compact' ? (
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              <div className="sticky top-0 z-10 grid grid-cols-[112px_minmax(0,1.7fr)_104px_96px_42px] items-center gap-2 border-b border-slate-200 bg-slate-100/95 px-3 py-2 text-[10px] font-black uppercase tracking-[0.08em] text-slate-500 backdrop-blur min-[1920px]:grid-cols-[136px_minmax(0,2.1fr)_128px_116px_48px]">
+                <span className="truncate">Codigo</span>
+                <span className="truncate">Producto</span>
+                <span className="text-right">Stock</span>
+                <span className="text-right">Precio</span>
+                <span className="sr-only">Sumar</span>
+              </div>
+
+              <button
+                onClick={() => setIsCustomModalOpen(true)}
+                className="grid w-full grid-cols-[112px_minmax(0,1.7fr)_104px_96px_42px] items-center gap-2 border-b border-l-4 border-dashed border-b-fuchsia-100 border-l-fuchsia-400 bg-fuchsia-50/70 px-3 py-2 text-left transition hover:bg-fuchsia-50 active:scale-[0.995] min-[1920px]:grid-cols-[136px_minmax(0,2.1fr)_128px_116px_48px]"
+              >
+                <span className="inline-flex min-w-0 items-center gap-1.5 truncate text-[11px] font-black uppercase tracking-[0.08em] text-fuchsia-500">
+                  <Wand2 size={12} />
+                  Libre
+                </span>
+                <span className="min-w-0 truncate text-[13px] font-black text-fuchsia-800">Articulo personalizado</span>
+                <span className="truncate text-right text-[11px] font-bold text-fuchsia-500">Manual</span>
+                <span className="truncate text-right text-[12px] font-black text-fuchsia-700">Precio</span>
+                <span className="ml-auto flex h-7 w-7 items-center justify-center rounded-lg bg-white text-fuchsia-600 shadow-sm">
+                  <Plus size={14} />
+                </span>
+              </button>
+
+              {displayedProducts.map((product) => {
+                const effectiveStock = getEffectiveStock(product.id, product.stock);
+                const isOutOfStock = effectiveStock <= 0;
+                const isWeight = product.product_type === 'weight';
+                const expired = isProductExpired(product.expiration_date);
+                const productImage = product.imageThumb || product.image_thumb || product.image;
+                const stockTone = isOutOfStock
+                  ? 'border-l-slate-300 bg-slate-50 text-slate-400'
+                  : expired
+                    ? 'border-l-red-500 bg-red-50/50'
+                    : effectiveStock <= (isWeight ? 200 : 5)
+                      ? 'border-l-amber-400 bg-amber-50/45'
+                      : 'border-l-emerald-400 bg-white';
+                const stockText = isOutOfStock
+                  ? 'Agotado'
+                  : isWeight
+                    ? formatWeight(effectiveStock)
+                    : `${effectiveStock} u.`;
+
+                return (
+                  <button
+                    key={product.id}
+                    onClick={() => {
+                      if (!isOutOfStock) handleProductClick(product);
+                    }}
+                    onMouseEnter={(event) => updateProductHoverPreview(event, product, productImage)}
+                    onMouseMove={(event) => updateProductHoverPreview(event, product, productImage)}
+                    onMouseLeave={clearProductHoverPreview}
+                    onBlur={clearProductHoverPreview}
+                    aria-disabled={isOutOfStock}
+                    className={`grid w-full grid-cols-[112px_minmax(0,1.7fr)_104px_96px_42px] items-center gap-2 border-b border-l-4 border-b-slate-100 px-3 py-1.5 text-left transition last:border-b-0 hover:bg-fuchsia-50/40 active:scale-[0.995] min-[1920px]:grid-cols-[136px_minmax(0,2.1fr)_128px_116px_48px] ${stockTone} ${isOutOfStock ? 'cursor-not-allowed opacity-70 grayscale' : 'hover:border-l-fuchsia-400'}`}
+                  >
+                    <span className="min-w-0 truncate text-[11px] font-semibold leading-tight text-slate-400" title={product.barcode || 'Sin codigo'}>
+                      <ScanBarcode size={11} className="mr-1 inline text-slate-300" />
+                      {product.barcode || '-'}
+                    </span>
+                    <span className="min-w-0">
+                      <span className={`block truncate text-[13px] font-black leading-tight ${expired ? 'text-red-700' : 'text-slate-800'}`} title={product.title}>
+                        {product.title}
+                      </span>
+                      <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] font-bold text-slate-400">
+                        {isWeight && (
+                          <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-amber-700">
+                            <Scale size={9} /> Peso
+                          </span>
+                        )}
+                        {expired && (
+                          <span className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 text-red-700">
+                            <AlertTriangle size={9} /> Vencido
+                          </span>
+                        )}
+                        {!isWeight && !expired && (
+                          <span className="truncate">{Array.isArray(product.categories) ? product.categories[0] : product.category || 'General'}</span>
+                        )}
+                      </span>
+                    </span>
+                    <span className={`truncate text-right text-[12px] font-black leading-tight ${isOutOfStock ? 'text-slate-400' : effectiveStock <= (isWeight ? 200 : 5) ? 'text-amber-700' : 'text-emerald-700'}`}>
+                      {stockText}
+                    </span>
+                    <span className="truncate text-right text-[13px] font-black leading-tight text-slate-900">
+                      <FancyPrice amount={isWeight ? product.price * 1000 : product.price} />
+                      {isWeight && <span className="text-[10px] font-medium text-slate-400">/kg</span>}
+                    </span>
+                    {!isOutOfStock ? (
+                      <span className={`ml-auto flex h-7 w-7 items-center justify-center rounded-lg text-white shadow-sm transition ${isWeight ? 'bg-amber-500' : 'bg-slate-900'}`}>
+                        {isWeight ? <Scale size={13} /> : <Plus size={14} />}
+                      </span>
+                    ) : (
+                      <span className="ml-auto flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-slate-100 text-slate-300">
+                        <X size={13} />
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -2530,6 +2661,34 @@ export default function POSView({
             </div>
           </div>
         </>
+      )}
+
+      {productHoverPreview && (
+        <div
+          className="pointer-events-none fixed z-[90] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl ring-1 ring-black/5 animate-in fade-in zoom-in-95 duration-100"
+          style={{
+            left: productHoverPreview.x,
+            top: productHoverPreview.y,
+            width: productHoverPreview.size,
+          }}
+        >
+          <div
+            className="bg-slate-100"
+            style={{ width: productHoverPreview.size, height: productHoverPreview.size }}
+          >
+            <img
+              src={productHoverPreview.src}
+              alt={productHoverPreview.title}
+              className="h-full w-full object-cover"
+              decoding="async"
+            />
+          </div>
+          <div className="border-t border-slate-100 bg-white px-2.5 py-2">
+            <p className="truncate text-[11px] font-black leading-tight text-slate-800">
+              {productHoverPreview.title}
+            </p>
+          </div>
+        </div>
       )}
 
     </div>

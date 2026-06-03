@@ -407,7 +407,7 @@ export default function useDashboardData({
     today.setHours(0, 0, 0, 0); 
 
     const alerts = inventory
-      .filter(p => p.is_active !== false && p.expiration_date) 
+      .filter(p => p.is_active !== false && p.expiration_date && Number(p.stock || 0) > 0) 
       .map(p => {
         const [year, month, day] = p.expiration_date.split('-');
         const expDate = new Date(year, month - 1, day);

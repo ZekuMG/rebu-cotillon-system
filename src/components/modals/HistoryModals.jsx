@@ -130,7 +130,7 @@ export const TransactionDetailModal = ({
   const paymentDetails = paymentItems.map((item) => item.title || item.label || item.method).join(' + ');
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-40 p-4 animate-in fade-in duration-200">
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4 animate-in fade-in duration-200">
       <div className="bg-[#f8fafc] rounded-2xl shadow-2xl max-w-5xl w-full max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
         
         {/* HEADER */}

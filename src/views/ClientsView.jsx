@@ -27,6 +27,7 @@ import { formatNumber, isTestRecord } from '../utils/helpers'; // ✨ Importado 
 import AsyncActionButton from '../components/AsyncActionButton';
 import { FancyPrice } from '../components/FancyPrice';
 import { hasPermission } from '../utils/userPermissions';
+import { TransactionDetailModal } from '../components/modals/HistoryModals';
 import useIncrementalFeed from '../hooks/useIncrementalFeed';
 import usePendingAction from '../hooks/usePendingAction';
 import { buildPointExpirationReport, normalizeMemberName } from '../utils/memberPointsExpiration';
@@ -123,6 +124,7 @@ export default function ClientsView({
   onViewTicket,
   onEditTransaction,
   onDeleteTransaction,
+  userCatalog,
   transactions = [],
   checkExpirations 
 }) {
@@ -309,7 +311,7 @@ export default function ClientsView({
   };
 
   useEffect(() => {
-    if (selectedMember) {
+    if (!selectedMember) {
       setIsDrawerEditMode(false);
       setDrawerFormData({});
     }
@@ -439,10 +441,16 @@ export default function ClientsView({
     setIsModalOpen(true);
   };
 
-  const openEditModal = (member) => {
-    setModalMode('edit');
-    setFormData(buildMemberFormData(member));
-    setIsModalOpen(true);
+  const openDrawerEdit = (member) => {
+    setSelectedMember(member);
+    setDrawerFormData(buildMemberFormData(member));
+    setIsDrawerEditMode(true);
+  };
+
+  const openDrawerDetails = (member) => {
+    setIsDrawerEditMode(false);
+    setDrawerFormData({});
+    setSelectedMember(member);
   };
 
   const handleSubmit = async (e) => {
@@ -792,9 +800,9 @@ export default function ClientsView({
                         </td>
                         <td className="px-4 py-3 text-center">
                           <div className="flex items-center justify-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                            <button onClick={() => setSelectedMember(member)} className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Ver Detalles e Historial"><History size={16} /></button>
-                            {canEditClients && <button onClick={() => openEditModal(member)} className="p-1.5 text-gray-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Editar Socio"><Edit2 size={16} /></button>}
-                            {canDeleteClients && <button onClick={() => handleDeleteRequest(member)} className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Eliminar Socio"><Trash2 size={16} /></button>}
+                            <button onClick={(event) => { event.stopPropagation(); openDrawerDetails(member); }} className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Ver Detalles e Historial"><History size={16} /></button>
+                            {canEditClients && <button onClick={(event) => { event.stopPropagation(); openDrawerEdit(member); }} className="p-1.5 text-gray-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Editar Socio"><Edit2 size={16} /></button>}
+                            {canDeleteClients && <button onClick={(event) => { event.stopPropagation(); handleDeleteRequest(member); }} className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Eliminar Socio"><Trash2 size={16} /></button>}
                           </div>
                         </td>
                   </tr>
@@ -924,7 +932,7 @@ export default function ClientsView({
                       onChange={e => setDrawerFormData({...drawerFormData, instagramNotes: e.target.value})}
                     />
                     <p className="mt-2 text-[11px] font-semibold text-fuchsia-700">
-                      REBUINSTA solo se habilita si el socio tiene Instagram confirmado.
+                      Instagram queda guardado en la ficha del socio. La confirmaciÃ³n permite validar promociones que lo requieran, como REBUINSTA.
                     </p>
                   </div>
                   <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Notas</label><textarea rows="3" className="w-full rounded-lg border p-2.5 outline-none focus:ring-2 focus:ring-blue-100 resize-none" value={drawerFormData.extraInfo} onChange={e => setDrawerFormData({...drawerFormData, extraInfo: e.target.value})} /></div>
@@ -1087,7 +1095,24 @@ export default function ClientsView({
       )}
 
       {/* --- MODAL DETALLES TRANSACCIÓN --- */}
-      {selectedTx && (
+      <TransactionDetailModal
+        transaction={selectedTx}
+        onClose={() => setSelectedTx(null)}
+        currentUser={currentUser}
+        userCatalog={userCatalog}
+        members={members}
+        onEditTransaction={(transaction) => {
+          setSelectedTx(null);
+          if (onEditTransaction) onEditTransaction(transaction);
+        }}
+        onDeleteTransaction={(transaction) => {
+          setSelectedTx(null);
+          if (onDeleteTransaction) onDeleteTransaction(transaction);
+        }}
+        onViewTicket={onViewTicket}
+      />
+
+      {false && selectedTx && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[80vh] overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="p-4 border-b bg-slate-50 flex justify-between items-center">
@@ -1252,7 +1277,7 @@ export default function ClientsView({
                   onChange={(e) => setFormData({...formData, instagramNotes: e.target.value})}
                 />
                 <p className="mt-2 text-[11px] font-semibold text-fuchsia-700">
-                  Para usar REBUINSTA, el Instagram debe estar confirmado.
+                  Instagram queda guardado en la ficha del socio. La confirmaciÃ³n permite validar promociones que lo requieran, como REBUINSTA.
                 </p>
               </div>
               <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Notas / Extra</label><textarea rows="2" className="w-full rounded-lg border border-gray-300 p-2.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-sm resize-none" placeholder="Información adicional..." value={formData.extraInfo} onChange={(e) => setFormData({...formData, extraInfo: e.target.value})}></textarea></div>
