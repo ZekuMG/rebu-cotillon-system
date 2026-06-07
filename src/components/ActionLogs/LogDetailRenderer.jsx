@@ -380,6 +380,285 @@ const ChangesCard = ({ changes = [] }) => {
   );
 };
 
+const isPlainRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
+
+const toTitleCaseLabel = (key = '') => {
+  const labels = {
+    id: 'ID',
+    userId: 'ID de usuario',
+    user_id: 'ID de usuario',
+    userName: 'Usuario',
+    user_name: 'Usuario',
+    userRole: 'Rol',
+    user_role: 'Rol',
+    amount: 'Monto',
+    total: 'Total',
+    subtotal: 'Subtotal',
+    discount: 'Descuento',
+    category: 'Categoria',
+    description: 'Descripcion',
+    paymentMethod: 'Metodo de pago',
+    payment_method: 'Metodo de pago',
+    createdAt: 'Fecha de creacion',
+    created_at: 'Fecha de creacion',
+    updatedAt: 'Fecha de actualizacion',
+    updated_at: 'Fecha de actualizacion',
+    previous: 'Antes',
+    next: 'Despues',
+  };
+  if (labels[key]) return labels[key];
+  return String(key)
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
+
+const isMoneyLikeKey = (key = '') => /amount|total|subtotal|price|cost|balance|discount|paid|payment|refund|change/i.test(key);
+
+const formatAuditValue = (key, value) => {
+  if (value === null || value === undefined || value === '') return 'Sin dato';
+  if (typeof value === 'boolean') return value ? 'Si' : 'No';
+  if (typeof value === 'number' && isMoneyLikeKey(key)) return <FancyPrice amount={value} />;
+  if (typeof value === 'number') return formatNumber(value);
+  if (Array.isArray(value)) return `${value.length} elemento${value.length === 1 ? '' : 's'}`;
+  if (isPlainRecord(value)) return `${Object.keys(value).length} dato${Object.keys(value).length === 1 ? '' : 's'}`;
+  return String(value);
+};
+
+const stringifyComparableValue = (value) => {
+  if (value === null || value === undefined) return '';
+  if (isPlainRecord(value) || Array.isArray(value)) return JSON.stringify(value);
+  return String(value);
+};
+
+const buildGenericChanges = (previous = {}, next = {}) => {
+  if (!isPlainRecord(previous) || !isPlainRecord(next)) return [];
+  const keys = Array.from(new Set([...Object.keys(previous), ...Object.keys(next)]));
+  return keys
+    .filter((key) => stringifyComparableValue(previous[key]) !== stringifyComparableValue(next[key]))
+    .map((key) => ({
+      key,
+      label: toTitleCaseLabel(key),
+      old: previous[key],
+      next: next[key],
+      isPrice: typeof previous[key] === 'number' && typeof next[key] === 'number' && isMoneyLikeKey(key),
+    }));
+};
+
+const GenericObjectSummary = ({ title, icon = '📌', value }) => {
+  if (!isPlainRecord(value)) return null;
+  const entries = Object.entries(value)
+    .filter(([, entryValue]) => entryValue !== undefined && typeof entryValue !== 'function')
+    .slice(0, 12);
+  if (!entries.length) return null;
+
+  return (
+    <Card icon={icon} title={title}>
+      {entries.map(([key, entryValue]) => (
+        <Item key={`${title}-${key}`} label={toTitleCaseLabel(key)} className={isPlainRecord(entryValue) || Array.isArray(entryValue) ? 'items-start' : ''}>
+          {isPlainRecord(entryValue) || Array.isArray(entryValue) ? (
+            <span className="block max-w-[250px] truncate text-[10px] font-mono text-slate-600" title={JSON.stringify(entryValue)}>
+              {formatAuditValue(key, entryValue)}
+            </span>
+          ) : (
+            formatAuditValue(key, entryValue)
+          )}
+        </Item>
+      ))}
+    </Card>
+  );
+};
+
+const GenericArraySummary = ({ title, icon = '📦', items = [] }) => {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  return (
+    <Card icon={icon} title={title}>
+      {items.slice(0, 8).map((item, idx) => {
+        if (!isPlainRecord(item)) {
+          return <Item key={`${title}-${idx}`} label={`Item ${idx + 1}`} value={String(item)} />;
+        }
+        const name = item.title || item.name || item.description || item.product || `Item ${idx + 1}`;
+        const amount = item.total ?? item.subtotal ?? item.amount ?? item.price;
+        const qty = item.quantity ?? item.qty ?? item.count;
+        return (
+          <div key={`${title}-${idx}-${name}`} className="rounded-[9px] border border-[#eaecf1] bg-[#f4f6f9] px-3 py-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate text-[11px] font-bold text-slate-800">{name}</span>
+              {amount !== undefined && (
+                <span className="shrink-0 text-[11px] font-bold text-slate-800">
+                  {typeof amount === 'number' ? <FancyPrice amount={amount} /> : String(amount)}
+                </span>
+              )}
+            </div>
+            <div className="mt-1 flex flex-wrap gap-2 text-[10px] font-semibold text-slate-500">
+              {qty !== undefined && <span>Cantidad: {formatNumber(Number(qty) || 0)}</span>}
+              {item.category && <span>{item.category}</span>}
+              {(item.id || item.productId) && <span>ID {item.id || item.productId}</span>}
+            </div>
+          </div>
+        );
+      })}
+      {items.length > 8 && (
+        <Item label="Restantes" value={`${items.length - 8} elemento${items.length - 8 === 1 ? '' : 's'} mas`} />
+      )}
+    </Card>
+  );
+};
+
+const getProductLogPhotoUrl = (item = {}) => {
+  const candidates = [
+    item.photoThumbUrl,
+    item.photoUrl,
+    item.appliedPhotoThumbUrl,
+    item.appliedPhotoUrl,
+    item.productPhotoUrl,
+    item.productPhotoThumbUrl,
+    item.imageUrl,
+    item.thumbnailUrl,
+    item.thumbUrl,
+  ];
+  const direct = candidates.find((value) => typeof value === 'string' && value.trim() && !value.includes('[imagen omitida]'));
+  if (direct) return direct;
+
+  const sourceUrl = String(item.sourceUrl || '').trim();
+  if (/\/imagen\/producto\/|\.jpe?g|\.png|\.webp|\.gif/i.test(sourceUrl)) return sourceUrl;
+  return '';
+};
+
+const ProductImageUpdatesCard = ({ items = [] }) => {
+  const productItems = Array.isArray(items)
+    ? items.filter((item) => isPlainRecord(item) && (item.title || item.name || item.product || item.barcode || getProductLogPhotoUrl(item)))
+    : [];
+  if (!productItems.length) return null;
+
+  return (
+    <Card icon="📷" title={`Productos actualizados (${productItems.length})`}>
+      <div className="max-h-[420px] overflow-y-auto pr-1 custom-scrollbar">
+        <div className="space-y-1 overflow-hidden rounded-[10px] border border-[#eaecf1] bg-white p-1">
+        {productItems.map((item, idx) => {
+          const photoUrl = getProductLogPhotoUrl(item);
+          const title = item.title || item.name || item.product || item.foundTitle || `Producto ${idx + 1}`;
+          const barcode = item.barcode || item.code || item.codigo || '';
+          const sourceUrl = item.sourceUrl || item.productUrl || '';
+          return (
+            <div key={`${item.id || barcode || title}-${idx}`} className="grid grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-2.5 bg-[#f8fafc] px-2.5 py-1.5 transition-colors hover:bg-white">
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-white">
+                {photoUrl ? (
+                  <img src={photoUrl} alt={title} className="h-full w-full object-contain" />
+                ) : (
+                  <span className="text-[8px] font-black uppercase text-slate-300">Sin</span>
+                )}
+              </div>
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <p className="truncate text-[11px] font-black leading-tight text-slate-900" title={title}>{title}</p>
+                  {photoUrl && <span className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-emerald-700">Foto</span>}
+                </div>
+                <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[9px] font-bold text-slate-500">
+                  {barcode && <span className="truncate font-mono text-slate-700">{barcode}</span>}
+                  {item.foundTitle && item.foundTitle !== title && (
+                    <span className="truncate text-slate-400" title={item.foundTitle}>{item.foundTitle}</span>
+                  )}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {sourceUrl ? (
+                  <a href={sourceUrl} target="_blank" rel="noreferrer" className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[9px] font-black text-blue-600 transition-colors hover:border-blue-200 hover:bg-blue-50">
+                    Fuente
+                  </a>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+        </div>
+      </div>
+    </Card>
+  );
+};
+
+const GenericRawJsonCard = ({ details }) => (
+  <details className="overflow-hidden rounded-[14px] border border-[#d4d9e3] bg-white shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
+    <summary className="flex cursor-pointer items-center justify-between px-3.5 py-3 text-[10px] font-extrabold uppercase tracking-wider text-slate-500 hover:bg-slate-50">
+      <span className="flex items-center gap-2"><FileText size={13} /> JSON original</span>
+      <span className="text-[9px] font-bold normal-case text-slate-400">Auditoria</span>
+    </summary>
+    <div className="border-t border-slate-200 bg-slate-900 p-3">
+      <pre className="max-h-[300px] overflow-auto whitespace-pre-wrap break-words text-[10px] font-mono leading-relaxed text-emerald-300 custom-scrollbar">
+        {JSON.stringify(details, null, 2)}
+      </pre>
+    </div>
+  </details>
+);
+
+const GenericLogDetails = ({ details, action, validNote, log, onUpdateNote }) => {
+  const previous = isPlainRecord(details?.previous) ? details.previous : null;
+  const next = isPlainRecord(details?.next) ? details.next : null;
+  const changes = buildGenericChanges(previous, next);
+  const reservedKeys = new Set(['previous', 'next', 'items', 'products', 'lines', 'snapshot', 'paymentBreakdown']);
+  const mainDetails = Object.fromEntries(
+    Object.entries(details || {}).filter(([key, value]) => (
+      !reservedKeys.has(key) &&
+      value !== undefined &&
+      typeof value !== 'function' &&
+      !Array.isArray(value) &&
+      !isPlainRecord(value)
+    ))
+  );
+  const arrays = Object.entries(details || {}).filter(([, value]) => Array.isArray(value) && value.length > 0);
+  const productImageItems = Array.isArray(details?.items) ? details.items : [];
+  const hasProductImageItems = productImageItems.some((item) => getProductLogPhotoUrl(item) || item?.imageStateAfter || item?.foundTitle);
+  const arraysToRender = arrays.filter(([key]) => !(key === 'items' && hasProductImageItems));
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-[14px] border border-slate-200 bg-white p-3.5 shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Resumen interpretado</p>
+            <h3 className="mt-1 truncate text-[15px] font-black text-slate-900">{action || 'Registro'}</h3>
+            <p className="mt-1 text-[11px] font-semibold leading-relaxed text-slate-500">
+              El sistema organizo el JSON en datos principales, cambios y auditoria tecnica.
+            </p>
+          </div>
+          <Badge color={changes.length > 0 ? 'amber' : 'slate'}>
+            {changes.length > 0 ? `${changes.length} cambio${changes.length === 1 ? '' : 's'}` : 'Sin diff'}
+          </Badge>
+        </div>
+      </div>
+
+      <GenericObjectSummary title="Datos principales" icon="📄" value={mainDetails} />
+
+      {next && <GenericObjectSummary title={previous ? 'Estado nuevo' : 'Datos guardados'} icon="✅" value={next} />}
+      {previous && <GenericObjectSummary title="Estado anterior" icon="↩" value={previous} />}
+
+      {changes.length > 0 && (
+        <Card icon="⇄" title="Cambios detectados">
+          {changes.map((change) => (
+            <ChangeRow
+              key={change.key}
+              field={change.label}
+              oldVal={change.isPrice ? change.old : formatAuditValue(change.key, change.old)}
+              newVal={change.isPrice ? change.next : formatAuditValue(change.key, change.next)}
+              isPrice={change.isPrice}
+            />
+          ))}
+        </Card>
+      )}
+
+      {hasProductImageItems && <ProductImageUpdatesCard items={productImageItems} />}
+
+      {arraysToRender.map(([key, value]) => (
+        <GenericArraySummary key={key} title={toTitleCaseLabel(key)} items={value} />
+      ))}
+
+      <GenericRawJsonCard details={details} />
+      <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
+    </div>
+  );
+};
+
 const EditableReasonCard = ({ note, logId, onUpdateNote }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(note || '');
@@ -2472,16 +2751,13 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
 
     default: {
       return (
-        <div className="space-y-4">
-          <Card icon="📄" title="Datos del Registro">
-            <div className="bg-[#1e293b] rounded-[9px] p-3 overflow-x-auto">
-              <pre className="text-[10px] text-[#4ade80] font-mono whitespace-pre-wrap">
-                {JSON.stringify(details, null, 2)}
-              </pre>
-            </div>
-          </Card>
-          <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
-        </div>
+        <GenericLogDetails
+          details={details}
+          action={action}
+          validNote={validNote}
+          log={log}
+          onUpdateNote={onUpdateNote}
+        />
       );
     }
   }

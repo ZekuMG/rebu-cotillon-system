@@ -18,6 +18,7 @@ import appPackage from '../package.json';
 // --- CONEXIÓN A LA NUBE ---
 import { supabase } from './supabase/client';
 import { uploadProductImage, deleteProductImage, uploadProductThumbFromSource } from './utils/storage';
+import { hasProductImage } from './utils/productImages';
 import { formatDateAR, formatNumber, formatTimeAR, formatTimeFullAR, isTestRecord } from './utils/helpers';
 import {
   mapAgendaContactRecord,
@@ -9240,6 +9241,147 @@ export default function PartySupplyApp() {
     }
   };
 
+  const dataUrlToProductImageFile = async (dataUrl, barcode) => {
+    if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
+      throw new Error('La imagen recibida no es valida.');
+    }
+
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    const mime = blob.type || 'image/jpeg';
+    const extension = mime.includes('png')
+      ? 'png'
+      : mime.includes('webp')
+        ? 'webp'
+        : mime.includes('gif')
+          ? 'gif'
+          : 'jpg';
+    const safeBarcode = String(barcode || 'producto').replace(/[^a-z0-9_-]/gi, '').slice(0, 48) || 'producto';
+
+    return new File([blob], `casa-alberto-${safeBarcode}.${extension}`, { type: mime });
+  };
+
+  const handleApplyProductImageImports = async (rowsToApply = []) => {
+    if (blockIfOfflineReadonly('importar fotos de productos')) return { appliedIds: [], failedRows: [] };
+
+    const safeRows = Array.isArray(rowsToApply)
+      ? rowsToApply.filter((row) => row?.productId && row?.imageDataUrl)
+      : [];
+
+    if (safeRows.length === 0) {
+      showNotification('warning', 'Sin fotos seleccionadas', 'Aprobá al menos una foto encontrada para aplicarla.');
+      return { appliedIds: [], failedRows: [] };
+    }
+
+    try {
+      Swal.fire({
+        title: 'Guardando fotos...',
+        text: `Aplicando ${safeRows.length} imagen(es) al inventario.`,
+        allowOutsideClick: false,
+        didOpen: () => Swal.showLoading(),
+      });
+
+      const applied = [];
+      const failedRows = [];
+
+      for (const row of safeRows) {
+        const currentProduct = inventory.find((product) => String(product.id) === String(row.productId));
+        if (!currentProduct) {
+          failedRows.push({ ...row, error: 'Producto no encontrado.' });
+          continue;
+        }
+
+        const currentProductDetail = isLocalDemoMode()
+          ? currentProduct
+          : await fetchProductCloudDetail(currentProduct.id).catch(() => currentProduct);
+
+        if (hasProductImage(currentProductDetail || currentProduct)) {
+          failedRows.push({ ...row, error: 'El producto ya tiene imagen.' });
+          continue;
+        }
+
+        try {
+          let uploadedImage;
+          if (isLocalDemoMode()) {
+            uploadedImage = { image: row.imageDataUrl, imageThumb: row.imageDataUrl };
+          } else {
+            const file = await dataUrlToProductImageFile(row.imageDataUrl, row.barcode);
+            uploadedImage = await uploadProductImage(file);
+          }
+
+          const { data } = await updateWithSchemaFallback(
+            'products',
+            currentProduct.id,
+            {
+              image: uploadedImage.image,
+              image_thumb: uploadedImage.imageThumb,
+            },
+            CLOUD_SELECTS.products
+          );
+          const updatedProduct = mapInventoryRecords([data])[0];
+          applied.push({
+            product: updatedProduct,
+            before: currentProduct,
+            source: {
+              provider: 'Cotillon Casa Alberto',
+              barcode: row.barcode,
+              foundTitle: row.foundTitle,
+              sourceUrl: row.imageUrl || row.sourceUrl || row.url || '',
+              searchedAt: new Date().toISOString(),
+            },
+          });
+        } catch (error) {
+          failedRows.push({ ...row, error: error?.message || 'No se pudo guardar la foto.' });
+        }
+      }
+
+      if (applied.length > 0) {
+        const updatedById = new Map(applied.map((entry) => [String(entry.product.id), entry.product]));
+        setInventory((prev) => prev.map((product) => updatedById.get(String(product.id)) || product));
+
+        addLog('Importacion Imagenes Productos', {
+          count: applied.length,
+          source: 'Productos Avanzado / Cotillon Casa Alberto',
+          items: applied.map((entry) => ({
+            id: entry.product.id,
+            title: entry.product.title,
+            barcode: entry.product.barcode || entry.source.barcode || '',
+            imageStateBefore: entry.before.image ? 'Cargada' : 'Sin imagen',
+            imageStateAfter: entry.product.image ? 'Cargada' : 'Sin imagen',
+            photoUrl: entry.product.image || '',
+            photoThumbUrl: entry.product.imageThumb || entry.product.image_thumb || entry.product.image || '',
+            sourceUrl: entry.source.sourceUrl,
+            foundTitle: entry.source.foundTitle,
+            searchedAt: entry.source.searchedAt,
+          })),
+        }, 'Productos Avanzado / Fotos por Codigo');
+      }
+
+      Swal.close();
+
+      if (applied.length > 0) {
+        showNotification(
+          'success',
+          'Fotos importadas',
+          `${applied.length} producto(s) actualizado(s)${failedRows.length > 0 ? `, ${failedRows.length} sin aplicar.` : '.'}`
+        );
+      } else {
+        showNotification('warning', 'Sin cambios', 'No se pudo aplicar ninguna foto.');
+      }
+
+      return {
+        appliedIds: applied.map((entry) => entry.product.id),
+        products: applied.map((entry) => entry.product),
+        failedRows,
+      };
+    } catch (error) {
+      console.error('Error importando imagenes de productos:', error);
+      Swal.close();
+      showNotification('error', 'Error', error?.message || 'No se pudieron importar las fotos.');
+      return { appliedIds: [], failedRows: safeRows.map((row) => ({ ...row, error: 'Fallo general.' })) };
+    }
+  };
+
   const handleBulkSaveSingle = async (product, editData) => {
     if (blockIfOfflineReadonly('guardar cambios de productos')) return;
     try {
@@ -11218,6 +11360,7 @@ export default function PartySupplyApp() {
                 setExportConfig={setBulkExportConfig}
                 onCreateFixedProduct={handleCreateFixedProduct}
                 onApplyExcelImport={handleExcelProductImport}
+                onApplyProductImageImports={handleApplyProductImageImports}
                 />
               </PersistentTabPanel>
             )}

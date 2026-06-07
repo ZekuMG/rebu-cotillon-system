@@ -1,13 +1,19 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow;
+let supplierImageLoginWindow;
 
 const APP_NAME = 'Rebu Cotillon System';
 const isDev = !app.isPackaged;
+const SUPPLIER_IMAGE_PARTITION = 'persist:rebu-casa-alberto-images';
+const SUPPLIER_LOGIN_URL = 'http://cotilloncasaalberto.com.ar/pedido/login.php';
+const SUPPLIER_DEFAULT_ORIGIN = 'http://cotilloncasaalberto.com.ar';
+const SUPPLIER_SEARCH_PATH = '/pedido/carpeta_ver.php';
+const SUPPLIER_RESTRICTED_PATH = '/pedido/index_restringido.php';
 const sanitizePdfFileName = (value) => {
   const fallback = 'rebu-documento.pdf';
   const baseName = String(value || fallback)
@@ -43,6 +49,970 @@ const getPrimaryLocalIp = () => {
     return null;
   }
   return null;
+};
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const waitForWebContentsLoad = (webContents, timeoutMs = 10000) =>
+  new Promise((resolve) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      webContents.removeListener('did-finish-load', onFinish);
+      webContents.removeListener('did-fail-load', onFail);
+    };
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+    const onFinish = () => finish({ success: true });
+    const onFail = (_event, errorCode, errorDescription) => {
+      // ERR_ABORTED (-3) suele aparecer cuando el proveedor redirige de login
+      // a la zona restringida. No es un fallo real de sesion/carga.
+      if (errorCode === -3) return;
+      finish({ success: false, error: errorDescription || `Error de carga ${errorCode}` });
+    };
+    const timer = setTimeout(() => finish({ success: false, timeout: true }), timeoutMs);
+
+    webContents.once('did-finish-load', onFinish);
+    webContents.once('did-fail-load', onFail);
+  });
+
+const loadUrlAndWait = async (targetWindow, targetUrl, timeoutMs = 15000) => {
+  const loadPromise = waitForWebContentsLoad(targetWindow.webContents, timeoutMs);
+  try {
+    await targetWindow.loadURL(targetUrl);
+  } catch (error) {
+    if (!String(error?.message || '').includes('ERR_ABORTED')) {
+      throw error;
+    }
+  }
+  return loadPromise;
+};
+
+const attachSupplierErrorLogging = (supplierWindow, label = 'supplier') => {
+  const errorEvents = [];
+  const pushErrorEvent = (type, payload = {}) => {
+    const event = {
+      type,
+      at: new Date().toISOString(),
+      url: supplierWindow.webContents.getURL(),
+      ...payload,
+    };
+    errorEvents.push(event);
+    if (errorEvents.length > 40) errorEvents.shift();
+    console.error('[supplier-image:error]', label, type, JSON.stringify(event));
+  };
+
+  supplierWindow.__rebuSupplierErrorEvents = errorEvents;
+  supplierWindow.__rebuSupplierPushErrorEvent = pushErrorEvent;
+
+  supplierWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    if (errorCode !== -3) {
+      pushErrorEvent('did-fail-load', { errorCode, errorDescription, validatedURL });
+    }
+  });
+
+  return { errorEvents, pushErrorEvent };
+};
+
+const createSupplierBrowserWindow = ({ show = false, width = 1100, height = 760 } = {}) => {
+  const supplierWindow = new BrowserWindow({
+    width,
+    height,
+    show,
+    parent: show ? mainWindow : undefined,
+    title: 'Proveedor - Cotillon Casa Alberto',
+    webPreferences: {
+      partition: SUPPLIER_IMAGE_PARTITION,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+
+  supplierWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url && /^https?:\/\//i.test(url) && url.includes('cotilloncasaalberto.com.ar')) {
+      supplierWindow.loadURL(url);
+    }
+    return { action: 'deny' };
+  });
+  attachSupplierErrorLogging(supplierWindow, show ? 'login' : 'worker');
+
+  return supplierWindow;
+};
+
+const getSupplierSearchUrl = () => {
+  try {
+    const currentUrl = supplierImageLoginWindow && !supplierImageLoginWindow.isDestroyed()
+      ? supplierImageLoginWindow.webContents.getURL()
+      : '';
+    const parsedUrl = currentUrl ? new URL(currentUrl) : null;
+    if (parsedUrl?.hostname?.includes('cotilloncasaalberto.com.ar')) {
+      if (/carpeta_ver|seccion_detalle|buscar|busqueda|resultado/i.test(parsedUrl.pathname || '')) {
+        return parsedUrl.href;
+      }
+      return `${parsedUrl.origin}${SUPPLIER_SEARCH_PATH}`;
+    }
+  } catch {
+    // Si no hay URL valida de la ventana de login, usamos el origen historico del proveedor.
+  }
+  return `${SUPPLIER_DEFAULT_ORIGIN}${SUPPLIER_SEARCH_PATH}`;
+};
+
+const buildSupplierDirectSearchUrls = (query, currentUrl = '') => {
+  const safeQuery = String(query || '').trim();
+  if (!safeQuery) return [];
+
+  let origin = SUPPLIER_DEFAULT_ORIGIN;
+  try {
+    const parsedUrl = currentUrl ? new URL(currentUrl) : null;
+    if (parsedUrl?.hostname?.includes('cotilloncasaalberto.com.ar')) {
+      origin = parsedUrl.origin;
+    }
+  } catch {
+    origin = SUPPLIER_DEFAULT_ORIGIN;
+  }
+
+  const buildUrl = (path, params = {}) => {
+    const url = new URL(path, origin);
+    Object.entries(params).forEach(([key, value]) => {
+      url.searchParams.set(key, value);
+    });
+    return url.href;
+  };
+
+  return [
+    buildUrl('/pedido/carpeta_ver.php', { buscar_txt: safeQuery }),
+    buildUrl(SUPPLIER_RESTRICTED_PATH, { buscar_txt: safeQuery }),
+    buildUrl('/pedido/buscar.php', { buscar_txt: safeQuery }),
+    buildUrl('/pedido/busqueda.php', { buscar_txt: safeQuery }),
+    buildUrl('/pedido/seccion_detalle.php', { buscar_txt: safeQuery }),
+  ].filter((url, index, urls) => urls.indexOf(url) === index);
+};
+
+const getSupplierLoginState = async () => {
+  if (!supplierImageLoginWindow || supplierImageLoginWindow.isDestroyed()) {
+    return { hasWindow: false, url: '', isLikelyLoggedIn: false };
+  }
+
+  const url = supplierImageLoginWindow.webContents.getURL();
+  let pageState = null;
+  try {
+    pageState = await supplierImageLoginWindow.webContents.executeJavaScript(
+      `(() => {
+        const passwordInputs = Array.from(document.querySelectorAll('input[type="password"]'));
+        const visiblePasswordInputs = passwordInputs.filter((input) => {
+          const style = window.getComputedStyle(input);
+          const rect = input.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        });
+        return {
+          text: String(document.body?.innerText || "").slice(0, 1200),
+          hasVisiblePasswordInput: visiblePasswordInputs.length > 0,
+        };
+      })()`,
+      true
+    );
+  } catch {
+    pageState = null;
+  }
+  const normalized = String(pageState?.text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const isLoginText = normalized.includes('usuario') && (normalized.includes('clave') || normalized.includes('contrasena'));
+  const isLikelyLoggedIn =
+    /index_restringido|seccion_detalle|pedido/i.test(url || '') &&
+    !/login/i.test(url || '') &&
+    !pageState?.hasVisiblePasswordInput;
+
+  return { hasWindow: true, url, isLikelyLoggedIn, hasVisiblePasswordInput: Boolean(pageState?.hasVisiblePasswordInput), isLoginText };
+};
+
+const buildSupplierSearchScript = (barcode) => `
+(() => {
+  try {
+    const barcode = ${JSON.stringify(String(barcode || '').trim())};
+    const normalize = (value) => String(value || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
+    const textOf = (node) => normalize(node?.innerText || node?.textContent || '');
+    const bodyText = textOf(document.body);
+    const hasVisiblePasswordInput = Array.from(document.querySelectorAll('input[type="password"]')).some((input) => {
+      const style = window.getComputedStyle(input);
+      const rect = input.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    });
+    const isLoginPage =
+      /login\\.php/i.test(location.href || '') ||
+      hasVisiblePasswordInput ||
+      (/login/i.test(document.title || '') && bodyText.includes('usuario'));
+
+    const setInputValue = (input, value) => {
+      const descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+      if (descriptor && descriptor.set) {
+        descriptor.set.call(input, value);
+      } else {
+        input.value = value;
+      }
+    };
+    const labelText = (input) => Array.from(document.querySelectorAll('label'))
+      .find((label) => label.htmlFor && label.htmlFor === input.id)?.innerText || '';
+    const fieldText = (input) => normalize([
+      input.name,
+      input.id,
+      input.placeholder,
+      input.getAttribute('aria-label'),
+      input.closest('label')?.innerText,
+      labelText(input),
+    ].filter(Boolean).join(' '));
+
+    const inputs = Array.from(document.querySelectorAll('input, textarea'));
+    const usableInput = (input) => {
+      const type = normalize(input.type);
+      return !['hidden', 'password', 'submit', 'button', 'checkbox', 'radio', 'file'].includes(type);
+    };
+    const codeInput = inputs.find((input) => input.name === 'buscar_txt' || input.id === 'buscar_txt') ||
+    inputs.find((input) => {
+      if (!usableInput(input)) return false;
+      const metadata = fieldText(input);
+      return metadata.includes('codigo') || metadata.includes('cod') || metadata.includes('barra') || metadata.includes('buscar');
+    }) || inputs.find(usableInput);
+
+    if (!barcode) return { submitted: false, isLoginPage, reason: 'empty_barcode', url: location.href };
+    if (isLoginPage) return { submitted: false, isLoginPage, reason: 'login_required', url: location.href };
+    if (!codeInput) return { submitted: false, isLoginPage, reason: 'search_field_not_found', url: location.href };
+
+    setInputValue(codeInput, barcode);
+
+    const form = codeInput.form || codeInput.closest('form');
+    if (form) {
+      const formData = new FormData(form);
+      formData.set(codeInput.name || 'buscar_txt', barcode);
+      const actionUrl = new URL(form.getAttribute('action') || location.href, location.href);
+      if (/index_restringido|seccion_detalle/i.test(actionUrl.pathname || '')) {
+        actionUrl.pathname = '/pedido/carpeta_ver.php';
+        actionUrl.search = '';
+      }
+      const method = String(form.method || 'get').toLowerCase();
+      if (method === 'get') {
+        for (const [key, value] of formData.entries()) {
+          if (typeof value === 'string') actionUrl.searchParams.set(key, value);
+        }
+        location.href = actionUrl.href;
+      } else {
+        HTMLFormElement.prototype.submit.call(form);
+      }
+      return {
+        submitted: true,
+        via: method === 'get' ? 'form-action-query' : 'native-form',
+        inputName: codeInput.name || codeInput.id || codeInput.placeholder || '',
+        url: actionUrl.href,
+      };
+    }
+
+    const searchParams = new URLSearchParams(location.search);
+    searchParams.set(codeInput.name || 'buscar_txt', barcode);
+    var fallbackSearchUrl = new URL('/pedido/carpeta_ver.php', location.origin);
+    for (const [key, value] of searchParams.entries()) {
+      fallbackSearchUrl.searchParams.set(key, value);
+    }
+    fallbackSearchUrl.searchParams.set(codeInput.name || 'buscar_txt', barcode);
+    location.href = fallbackSearchUrl.href;
+    return {
+      submitted: true,
+      via: 'location-query',
+      inputName: codeInput.name || codeInput.id || codeInput.placeholder || '',
+      url: fallbackSearchUrl.href,
+    };
+  } catch (error) {
+    return {
+      submitted: false,
+      isLoginPage: false,
+      reason: 'script_error',
+      message: error?.message || 'Error ejecutando busqueda en proveedor.',
+      stack: error?.stack || '',
+      url: location.href,
+    };
+  }
+})()
+`;
+
+const buildSupplierTitleSearchQueries = (title) => {
+  const rawTitle = String(title || '').replace(/\s+/g, ' ').trim();
+  if (!rawTitle) return [];
+
+  const normalize = (value) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const stopWords = new Set([
+    'unidad', 'unidades', 'unid', 'unidads', 'color', 'colores',
+    'surtido', 'surtida', 'surtidos', 'surtidas', 'importado',
+    'importada', 'nro', 'numero', 'modelo', 'cod', 'codigo',
+  ]);
+
+  const originalWords = rawTitle.split(/\s+/);
+  const normalizedWords = normalize(rawTitle).split(/\s+/);
+  const significantOriginal = originalWords.filter((word, index) => {
+    const normalized = normalizedWords[index] || normalize(word);
+    if (!normalized || normalized.length < 4) return false;
+    if (/^x?\d+[a-z]*$/i.test(normalized)) return false;
+    if (stopWords.has(normalized)) return false;
+    return true;
+  });
+
+  const queries = [
+    rawTitle,
+    significantOriginal.slice(0, 5).join(' '),
+    significantOriginal.slice(0, 4).join(' '),
+    significantOriginal.slice(0, 3).join(' '),
+    significantOriginal.slice(-3).join(' '),
+  ]
+    .map((query) => String(query || '').replace(/\s+/g, ' ').trim())
+    .filter((query) => query.length >= 4);
+
+  return [...new Set(queries)].slice(0, 5);
+};
+
+const buildSupplierExtractScript = (barcode, productTitle) => `
+(function () {
+  try {
+    var barcode = ${JSON.stringify(String(barcode || '').trim())};
+    var productTitle = ${JSON.stringify(String(productTitle || '').trim())};
+    var normalize = function (value) {
+      return String(value || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
+    };
+    var compactDigits = function (value) {
+      return String(value || '').replace(/\\D/g, '').replace(/^0+/, '') || String(value || '').replace(/\\D/g, '');
+    };
+    var barcodeDigits = compactDigits(barcode);
+    var cleanText = function (value) {
+      return String(value || '').replace(/\\s+/g, ' ').trim();
+    };
+    var bodyText = normalize((document.body && (document.body.innerText || document.body.textContent)) || '');
+    var passwordInputs = Array.prototype.slice.call(document.querySelectorAll('input[type="password"]'));
+    var hasVisiblePasswordInput = passwordInputs.some(function (input) {
+      var style = window.getComputedStyle(input);
+      var rect = input.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    });
+    var isLoginPage =
+      /login\\.php/i.test(location.href || '') ||
+      hasVisiblePasswordInput ||
+      (/login/i.test(document.title || '') && bodyText.includes('usuario'));
+
+    if (isLoginPage) {
+      return { status: 'login_required', message: 'La sesion del proveedor necesita login.', url: location.href };
+    }
+
+    var barcodeText = normalize(barcode);
+    var tokenStopWords = {
+      unidad: true,
+      unidades: true,
+      unid: true,
+      color: true,
+      colores: true,
+      surtido: true,
+      surtida: true,
+      surtidos: true,
+      surtidas: true,
+      importado: true,
+      importada: true,
+      codigo: true,
+      cod: true,
+      numero: true,
+      modelo: true
+    };
+    var normalizeToken = function (value) {
+      return normalize(value).replace(/[^a-z0-9]/g, '');
+    };
+    var titleTokens = normalize(productTitle)
+      .split(/\\s+/)
+      .map(normalizeToken)
+      .filter(function (token) {
+        return token.length >= 4 && !tokenStopWords[token] && !/^x?\\d+[a-z]*$/i.test(token);
+      })
+      .slice(0, 8);
+    var levenshtein = function (a, b) {
+      if (a === b) return 0;
+      if (!a) return b.length;
+      if (!b) return a.length;
+      var prev = [];
+      var curr = [];
+      for (var j = 0; j <= b.length; j += 1) prev[j] = j;
+      for (var i = 1; i <= a.length; i += 1) {
+        curr[0] = i;
+        for (var k = 1; k <= b.length; k += 1) {
+          var cost = a.charAt(i - 1) === b.charAt(k - 1) ? 0 : 1;
+          curr[k] = Math.min(
+            curr[k - 1] + 1,
+            prev[k] + 1,
+            prev[k - 1] + cost
+          );
+        }
+        var temp = prev;
+        prev = curr;
+        curr = temp;
+      }
+      return prev[b.length];
+    };
+    var tokenMatchesText = function (token, text) {
+      if (!token || !text) return false;
+      if (text.includes(token)) return true;
+      var words = text.split(/\\s+/).map(normalizeToken).filter(function (word) { return word.length >= 4; });
+      return words.some(function (word) {
+        if (word.includes(token) || token.includes(word)) return true;
+        if (token.length >= 5 && word.length >= 5 && token.slice(0, 4) === word.slice(0, 4)) return true;
+        var maxLen = Math.max(token.length, word.length);
+        var distance = levenshtein(token, word);
+        return maxLen <= 6 ? distance <= 1 : distance <= 2;
+      });
+    };
+    var imageNodes = Array.prototype.slice.call(document.images || []);
+    var seenSources = {};
+    var isSupplierDetailUrl = function (href) {
+      return /\/pedido\/detalle(?:_mobile)?\.php\?[^#]*\bidp=\d+/i.test(String(href || ''));
+    };
+    var normalizeSupplierHref = function (href) {
+      try {
+        var parsedHref = new URL(href, location.href);
+        if (
+          parsedHref.hostname.includes('cotilloncasaalberto.com.ar') &&
+          location.protocol === 'http:' &&
+          parsedHref.protocol === 'https:'
+        ) {
+          parsedHref.protocol = 'http:';
+        }
+        return parsedHref.href;
+      } catch (hrefError) {
+        return '';
+      }
+    };
+    var getNearestProductLink = function (startNode) {
+      var node = startNode;
+      for (var depth = 0; depth < 10 && node; depth += 1) {
+        var directLink = typeof node.closest === 'function' ? node.closest('a[href]') : null;
+        var linkList = typeof node.querySelectorAll === 'function' ? Array.prototype.slice.call(node.querySelectorAll('a[href]')) : [];
+        if (directLink) linkList.unshift(directLink);
+        var detailLink = linkList.map(function (candidate) {
+          return normalizeSupplierHref(candidate && candidate.href);
+        }).find(function (href) {
+          return (
+            href &&
+            href.includes('cotilloncasaalberto.com.ar') &&
+            isSupplierDetailUrl(href) &&
+            !/javascript:|mailto:|whatsapp|facebook|instagram|youtube|imagen\\/producto|idcarpeta=/i.test(href)
+          );
+        });
+        if (detailLink) {
+          return detailLink;
+        }
+        node = node.parentElement;
+      }
+      var productContainers = Array.prototype.slice.call(document.querySelectorAll('.producto, .caja_productos, [class*="producto"]'));
+      var matchingContainer = productContainers.find(function (container) {
+        if (!container || typeof container.querySelectorAll !== 'function') return false;
+        var hrefs = Array.prototype.slice.call(container.querySelectorAll('a[href]')).map(function (link) {
+          return normalizeSupplierHref(link && link.href);
+        });
+        if (!hrefs.some(isSupplierDetailUrl)) return false;
+        var containerText = cleanText(container.innerText || container.textContent || '');
+        return barcodeDigits
+          ? compactDigits(containerText).includes(barcodeDigits)
+          : normalize(containerText).includes(barcodeText);
+      });
+      if (matchingContainer) {
+        var fallbackDetailLink = Array.prototype.slice.call(matchingContainer.querySelectorAll('a[href]')).map(function (link) {
+          return normalizeSupplierHref(link && link.href);
+        }).find(isSupplierDetailUrl);
+        if (fallbackDetailLink) return fallbackDetailLink;
+      }
+      return '';
+    };
+
+    var candidates = imageNodes.map(function (img) {
+      var rawSrc = img.currentSrc || img.src || img.getAttribute('src') || '';
+      if (!rawSrc) return null;
+      var src;
+      try {
+        var srcUrl = new URL(rawSrc, location.href);
+        if (
+          srcUrl.hostname.includes('cotilloncasaalberto.com.ar') &&
+          location.protocol === 'http:' &&
+          srcUrl.protocol === 'https:'
+        ) {
+          srcUrl.protocol = 'http:';
+        }
+        src = srcUrl.href;
+      } catch (srcError) {
+        return null;
+      }
+      if (seenSources[src]) return null;
+      seenSources[src] = true;
+
+      var srcLower = normalize(src);
+      var altLower = normalize(img.alt || img.title || '');
+      var width = Number(img.naturalWidth || img.width || 0);
+      var height = Number(img.naturalHeight || img.height || 0);
+      if (width < 70 || height < 70) return null;
+      if (srcLower.includes('logo') || srcLower.includes('banner') || srcLower.includes('sprite') || srcLower.includes('icon')) return null;
+      if (/\\/imagen\\/producto\\/grande\\/f36613\\.jpg/i.test(src)) return null;
+
+      var node = img;
+      var contexts = [];
+      var bestNode = img;
+      for (var depth = 0; depth < 10 && node; depth += 1) {
+        var rawContext = cleanText(node.innerText || node.textContent || '');
+        var context = normalize(rawContext);
+        if (context) contexts.push({ raw: rawContext, normalized: context, node: node });
+        if (
+          barcodeDigits &&
+          compactDigits(rawContext).includes(barcodeDigits) &&
+          rawContext.length < 900
+        ) {
+          bestNode = node;
+          break;
+        }
+        node = node.parentElement;
+      }
+
+      var exactContext = contexts.find(function (context) {
+        return barcodeDigits
+          ? compactDigits(context.raw).includes(barcodeDigits)
+          : context.normalized.includes(barcodeText);
+      });
+      var readableContext = contexts.find(function (context) { return context.normalized.length > 20; });
+      var contextText = (exactContext && exactContext.normalized) || (readableContext && readableContext.normalized) || '';
+      var rawText = (exactContext && exactContext.raw) || (readableContext && readableContext.raw) || '';
+      var sourceDigits = compactDigits(src + ' ' + (img.alt || '') + ' ' + (img.title || ''));
+      var hasBarcode = Boolean(
+        barcodeDigits &&
+        (
+          compactDigits(rawText).includes(barcodeDigits) ||
+          sourceDigits.includes(barcodeDigits)
+        )
+      );
+      var titleSearchText = contextText + ' ' + altLower;
+      var tokenMatches = titleTokens.filter(function (token) { return tokenMatchesText(token, titleSearchText); }).length;
+      var titleSimilarity = titleTokens.length > 0
+        ? Math.round((tokenMatches / titleTokens.length) * 100)
+        : 0;
+      var productishSource = /producto|prod|grande|foto|imagen|catalogo|catalog|uploads/i.test(src);
+      var productUrl = getNearestProductLink(bestNode || img);
+      var area = width * height;
+      var score =
+        (hasBarcode ? 200 : 0) +
+        (productUrl ? 90 : -120) +
+        (productishSource ? 35 : 0) +
+        (tokenMatches * 10) +
+        Math.min(50, Math.round(area / 14000));
+
+      return {
+        src: src,
+        productUrl: productUrl,
+        title: cleanText(rawText || img.alt || img.title || productTitle || 'Producto encontrado').slice(0, 160),
+        width: width,
+        height: height,
+        score: score,
+        hasBarcode: hasBarcode,
+        tokenMatches: tokenMatches,
+        titleSimilarity: titleSimilarity,
+        productishSource: productishSource,
+        contextLength: rawText.length,
+      };
+    }).filter(Boolean).sort(function (a, b) { return b.score - a.score; });
+
+    var hasBarcodeInPage = Boolean(bodyText.includes(barcodeText) || (barcodeDigits && compactDigits(bodyText).includes(barcodeDigits)));
+    var matchedCandidates = candidates.filter(function (candidate) {
+      return candidate.hasBarcode;
+    }).map(function (candidate) {
+      candidate.matchQuality = 'barcode_exact';
+      return candidate;
+    }).slice(0, 8);
+
+    if (matchedCandidates.length === 0 && titleTokens.length > 0) {
+      matchedCandidates = candidates.filter(function (candidate) {
+        var requiredMatches = titleTokens.length <= 1 ? 1 : 2;
+        return (
+          !candidate.hasBarcode &&
+          Boolean(candidate.productUrl) &&
+          candidate.tokenMatches >= requiredMatches &&
+          candidate.titleSimilarity >= 60
+        );
+      }).sort(function (a, b) {
+        return (b.titleSimilarity - a.titleSimilarity) || (b.score - a.score);
+      }).map(function (candidate) {
+        candidate.matchQuality = 'title_similarity';
+        return candidate;
+      }).slice(0, 8);
+    }
+
+    if (matchedCandidates.length === 0) {
+      return {
+        status: 'not_found',
+        message: hasBarcodeInPage
+          ? 'El codigo aparece, pero no hay imagen cercana para elegir.'
+          : 'No aparecio el codigo exacto en los resultados.',
+        url: location.href,
+        candidatesSeen: candidates.length,
+      };
+    }
+
+    var collectDetailImageCandidates = function (candidate) {
+      if (!candidate.productUrl || !isSupplierDetailUrl(candidate.productUrl)) {
+        return Promise.resolve([candidate]);
+      }
+
+      return fetch(candidate.productUrl, { credentials: 'include', cache: 'no-store' }).then(function (response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.text();
+      }).then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var detailTitle = cleanText(
+          (doc.querySelector('h1, h2, .titulo, .title, [class*="nombre"], [class*="producto"]') || {}).innerText ||
+          candidate.title ||
+          productTitle
+        );
+        var detailImages = Array.prototype.slice.call(doc.images || []).map(function (detailImg) {
+          return normalizeSupplierHref(detailImg.currentSrc || detailImg.src || detailImg.getAttribute('src') || '');
+        }).filter(function (src) {
+          var srcLower = normalize(src);
+          return (
+            src &&
+            src.includes('cotilloncasaalberto.com.ar') &&
+            !seenSources['detail:' + src] &&
+            !srcLower.includes('logo') &&
+            !srcLower.includes('banner') &&
+            !srcLower.includes('sprite') &&
+            !srcLower.includes('icon') &&
+            !/\\/imagen\\/producto\\/grande\\/f36613\\.jpg/i.test(src) &&
+            /imagen\\/producto|producto\\/grande|producto\\/mediana|producto\\/chica|uploads|catalog/i.test(src)
+          );
+        }).slice(0, 8);
+
+        if (detailImages.length === 0) return [candidate];
+        return detailImages.map(function (src, index) {
+          seenSources['detail:' + src] = true;
+          return {
+            src: src,
+            productUrl: candidate.productUrl,
+            title: detailTitle || candidate.title,
+            width: candidate.width,
+            height: candidate.height,
+            score: candidate.score + Math.max(0, 20 - index),
+            hasBarcode: candidate.hasBarcode,
+            tokenMatches: candidate.tokenMatches,
+            titleSimilarity: candidate.titleSimilarity,
+            productishSource: true,
+            contextLength: candidate.contextLength,
+            matchQuality: candidate.matchQuality,
+          };
+        });
+      }).catch(function () {
+        return [candidate];
+      });
+    };
+
+    var hydrateCandidate = function (candidate) {
+      return fetch(candidate.src, { credentials: 'include', cache: 'no-store' }).then(function (response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.blob();
+      }).then(function (blob) {
+        if (!String(blob.type || '').startsWith('image/')) throw new Error('La respuesta no es una imagen.');
+        return new Promise(function (resolve, reject) {
+          var reader = new FileReader();
+          reader.onload = function () { resolve(reader.result); };
+          reader.onerror = function () { reject(new Error('No se pudo leer la imagen.')); };
+          reader.readAsDataURL(blob);
+        });
+      }).then(function (dataUrl) {
+        return {
+          foundTitle: candidate.title,
+          imageUrl: candidate.src,
+          productUrl: candidate.productUrl || '',
+          imageDataUrl: dataUrl,
+          width: candidate.width,
+          height: candidate.height,
+          score: candidate.score,
+          matchQuality: candidate.matchQuality || 'barcode_exact',
+          titleSimilarity: candidate.titleSimilarity || 0,
+        };
+      });
+    };
+
+    return matchedCandidates.reduce(function (chain, candidate) {
+      return chain.then(function (hydratedCandidates) {
+        return collectDetailImageCandidates(candidate).then(function (expandedCandidates) {
+          return expandedCandidates.reduce(function (imageChain, expandedCandidate) {
+            return imageChain.then(function () {
+              return hydrateCandidate(expandedCandidate).then(function (hydrated) {
+                hydratedCandidates.push(hydrated);
+              }).catch(function (imageError) {
+                return null;
+              });
+            });
+          }, Promise.resolve()).then(function () {
+            return hydratedCandidates;
+          });
+        });
+      });
+    }, Promise.resolve([])).then(function (hydratedCandidates) {
+      if (hydratedCandidates.length === 0) {
+        return {
+          status: 'error',
+          message: 'Se encontraron resultados, pero no se pudieron descargar sus imagenes.',
+          url: location.href,
+          candidatesSeen: matchedCandidates.length,
+        };
+      }
+
+      var best = hydratedCandidates[0];
+      return {
+        status: 'found',
+        barcode: barcode,
+        productTitle: productTitle,
+        foundTitle: best.foundTitle,
+        imageUrl: best.imageUrl,
+        productUrl: best.productUrl,
+        imageDataUrl: best.imageDataUrl,
+        width: best.width,
+        height: best.height,
+        score: best.score,
+        matchQuality: best.matchQuality || 'barcode_exact',
+        titleSimilarity: best.titleSimilarity || 0,
+        candidates: hydratedCandidates,
+        selectedCandidateIndex: 0,
+        url: location.href,
+      };
+    });
+  } catch (error) {
+    return {
+      status: 'error',
+      message: error && error.message ? error.message : 'Error inspeccionando resultados del proveedor.',
+      stack: error && error.stack ? error.stack : '',
+      url: location.href,
+    };
+  }
+})()
+`;
+
+const searchSupplierImageByBarcode = async ({ barcode, title }) => {
+  const safeBarcode = String(barcode || '').trim();
+  if (!safeBarcode) {
+    return { status: 'skipped', message: 'Producto sin codigo de barras.' };
+  }
+
+  let workerWindow;
+  try {
+    workerWindow = createSupplierBrowserWindow({ show: false, width: 1000, height: 760 });
+
+    const waitAfterSearchSubmit = async () => {
+      await Promise.race([
+        waitForWebContentsLoad(workerWindow.webContents, 6500),
+        delay(1800).then(() => ({ success: true, settledByDelay: true })),
+      ]);
+      await delay(250);
+    };
+
+    const runSearchAttempt = async ({ query, extractBarcode, fallbackSearch }) => {
+      const extractCurrentPage = async (via) => {
+        try {
+          const extractResult = await workerWindow.webContents.executeJavaScript(
+            buildSupplierExtractScript(extractBarcode || safeBarcode, title),
+            true
+          );
+          return {
+            ...extractResult,
+            fallbackSearch: fallbackSearch || extractResult?.fallbackSearch || '',
+            searchedQuery: query,
+            searchedBarcode: extractBarcode || safeBarcode,
+            originalBarcode: safeBarcode,
+            via,
+          };
+        } catch (error) {
+          workerWindow.__rebuSupplierPushErrorEvent?.('extract-script-error', {
+            barcode: safeBarcode,
+            query,
+            fallbackSearch: fallbackSearch || 'barcode',
+            title,
+            message: error?.message || '',
+            stack: error?.stack || '',
+          });
+          return {
+            status: 'error',
+            message: error?.message || 'Script de extraccion fallo en proveedor.',
+            fallbackSearch: fallbackSearch || '',
+            searchedQuery: query,
+            via,
+          };
+        }
+      };
+
+      const runSubmitScript = async () => {
+        try {
+          return await workerWindow.webContents.executeJavaScript(
+            buildSupplierSearchScript(query),
+            true
+          );
+        } catch (error) {
+          workerWindow.__rebuSupplierPushErrorEvent?.('submit-script-error', {
+            barcode: safeBarcode,
+            query,
+            fallbackSearch: fallbackSearch || 'barcode',
+            title,
+            message: error?.message || '',
+            stack: error?.stack || '',
+          });
+          return {
+            submitted: false,
+            reason: 'script_error',
+            message: error?.message || 'Script de busqueda fallo en proveedor.',
+          };
+        }
+      };
+
+      let lastResult = null;
+      const directUrls = buildSupplierDirectSearchUrls(query, workerWindow.webContents.getURL());
+      const urlsToTry = fallbackSearch === 'title' ? directUrls.slice(0, 1) : directUrls;
+      for (const directUrl of urlsToTry) {
+        const loadResult = await loadUrlAndWait(workerWindow, directUrl, 6500);
+        if (!loadResult.success && !loadResult.timeout) {
+          workerWindow.__rebuSupplierPushErrorEvent?.('direct-search-load-error', {
+            barcode: safeBarcode,
+            query,
+            fallbackSearch: fallbackSearch || 'barcode',
+            title,
+            url: directUrl,
+            message: loadResult.error || '',
+          });
+          continue;
+        }
+        await delay(250);
+        lastResult = await extractCurrentPage(`direct:${directUrl}`);
+        if (lastResult?.status === 'found' || lastResult?.status === 'login_required') {
+          return lastResult;
+        }
+      }
+
+      const submitResult = await runSubmitScript();
+      if (submitResult?.isLoginPage || submitResult?.reason === 'login_required') {
+        return {
+          status: 'login_required',
+          message: 'Inicia sesion en el proveedor y volve a buscar.',
+          fallbackSearch: fallbackSearch || '',
+          searchedQuery: query,
+          via: 'submit-script',
+        };
+      }
+
+      if (submitResult?.submitted) {
+        await waitAfterSearchSubmit();
+        lastResult = await extractCurrentPage(submitResult?.via || 'submit-script');
+        if (lastResult?.status === 'found' || lastResult?.status === 'login_required') {
+          return lastResult;
+        }
+      } else {
+        workerWindow.__rebuSupplierPushErrorEvent?.('submit-not-started', {
+          barcode: safeBarcode,
+          query,
+          fallbackSearch: fallbackSearch || 'barcode',
+          title,
+          message: submitResult?.message || 'No se pudo iniciar la busqueda.',
+          reason: submitResult?.reason || '',
+          url: submitResult?.url || '',
+        });
+      }
+
+      return lastResult || {
+        status: 'not_found',
+        message: 'No aparecio el codigo exacto en los resultados.',
+        fallbackSearch: fallbackSearch || '',
+        searchedQuery: query,
+      };
+    };
+
+    const attempts = [
+      {
+        query: safeBarcode,
+        extractBarcode: safeBarcode,
+        fallbackSearch: '',
+      },
+    ];
+
+    const trimmedBarcode = safeBarcode.length > 5 ? safeBarcode.slice(0, -1) : '';
+    if (trimmedBarcode && trimmedBarcode !== safeBarcode) {
+      attempts.push({
+        query: trimmedBarcode,
+        extractBarcode: trimmedBarcode,
+        fallbackSearch: 'trimmed_barcode',
+      });
+    }
+
+    for (const titleQuery of buildSupplierTitleSearchQueries(title)) {
+      attempts.push({
+        query: titleQuery,
+        extractBarcode: safeBarcode,
+        fallbackSearch: 'title',
+      });
+    }
+
+    let lastResult = null;
+    for (const attempt of attempts) {
+      const result = await runSearchAttempt(attempt);
+      lastResult = result;
+
+      if (result?.status === 'found') {
+        const message = result.fallbackSearch === 'trimmed_barcode'
+          ? 'Coincidencia con codigo sin ultimo digito'
+          : result.fallbackSearch === 'title'
+            ? result.message || 'Coincidencia por nombre'
+            : result.message;
+        return {
+          ...result,
+          message,
+        };
+      }
+
+      if (result?.status === 'login_required') return result;
+      if (result?.status === 'error' && attempt.fallbackSearch !== 'title') {
+        workerWindow.__rebuSupplierPushErrorEvent?.('search-attempt-error', {
+          barcode: safeBarcode,
+          query: attempt.query,
+          fallbackSearch: attempt.fallbackSearch || 'barcode',
+          title,
+          message: result?.message || '',
+          url: result?.url || workerWindow.webContents.getURL(),
+        });
+      }
+    }
+
+    if (lastResult?.status === 'error') {
+      workerWindow.__rebuSupplierPushErrorEvent?.('extract-result-error', {
+        barcode: safeBarcode,
+        title,
+        message: lastResult?.message || '',
+        url: lastResult?.url || workerWindow.webContents.getURL(),
+      });
+    }
+    return lastResult || { status: 'not_found', message: 'No se encontro foto.' };
+  } catch (error) {
+    workerWindow?.__rebuSupplierPushErrorEvent?.('search-error', {
+      barcode: safeBarcode,
+      title,
+      message: error?.message || '',
+      stack: error?.stack || '',
+    });
+    return { status: 'error', message: error?.message || 'Fallo la busqueda en el proveedor.' };
+  } finally {
+    if (workerWindow && !workerWindow.isDestroyed()) {
+      workerWindow.close();
+    }
+  }
 };
 
 app.setName(APP_NAME);
@@ -131,6 +1101,57 @@ app.on('ready', () => {
       platform: `${os.platform?.() || 'desktop'} ${os.release?.() || ''}`.trim(),
       runtime: 'Electron',
     };
+  });
+
+  ipcMain.handle('open-external-url', async (event, targetUrl) => {
+    if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+    try {
+      const parsedUrl = new URL(String(targetUrl || ''));
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+        return { success: false, error: 'URL no permitida' };
+      }
+      await shell.openExternal(parsedUrl.href);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error?.message || 'No se pudo abrir el enlace.' };
+    }
+  });
+
+  ipcMain.handle('supplier-image-open-login', async (event) => {
+    if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+
+    try {
+      if (supplierImageLoginWindow && !supplierImageLoginWindow.isDestroyed()) {
+        supplierImageLoginWindow.show();
+        supplierImageLoginWindow.focus();
+        return { success: true, reused: true, loginState: await getSupplierLoginState() };
+      }
+
+      supplierImageLoginWindow = createSupplierBrowserWindow({ show: true, width: 1120, height: 780 });
+      supplierImageLoginWindow.on('closed', () => {
+        supplierImageLoginWindow = null;
+      });
+
+      await loadUrlAndWait(supplierImageLoginWindow, SUPPLIER_LOGIN_URL, 18000);
+      return { success: true, loginState: await getSupplierLoginState() };
+    } catch (error) {
+      return { success: false, error: error?.message || 'No se pudo abrir el login del proveedor.' };
+    }
+  });
+
+  ipcMain.handle('supplier-image-login-state', async (event) => {
+    if (!isTrustedIpcSender(event)) return { hasWindow: false, isLikelyLoggedIn: false };
+    return getSupplierLoginState();
+  });
+
+  ipcMain.handle('supplier-image-search', async (event, request) => {
+    if (!isTrustedIpcSender(event)) {
+      return { status: 'error', message: 'Origen IPC no autorizado' };
+    }
+
+    const barcode = String(request?.barcode || '').trim();
+    const title = String(request?.title || '').trim();
+    return searchSupplierImageByBarcode({ barcode, title });
   });
 
   createWindow();

@@ -24,6 +24,7 @@ export const CLOUD_SELECTS = {
     'stock',
     'category',
     'barcode',
+    'image',
     'image_thumb',
     'product_type',
     'expiration_date',
