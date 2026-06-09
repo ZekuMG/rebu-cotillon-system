@@ -58,6 +58,11 @@ export const mapInventoryRecords = (products = []) =>
   products.map((product) => ({
     ...product,
     imageThumb: product.image_thumb || product.imageThumb || '',
+    supplierLinks: product.supplier_links && typeof product.supplier_links === 'object'
+      ? product.supplier_links
+      : product.supplierLinks && typeof product.supplierLinks === 'object'
+        ? product.supplierLinks
+        : {},
     categories: product.category
       ? product.category.split(',').map((category) => category.trim()).filter(Boolean)
       : [],
@@ -74,6 +79,7 @@ export const mapMemberRecords = (clients = []) =>
   clients.map((client) => ({
     ...client,
     memberNumber: client.member_number,
+    extraInfo: client.extraInfo || client.extrainfo || '',
     socialConnections: client.social_connections || client.socialConnections || {},
     createdAt: client.created_at,
   }));

@@ -45,7 +45,9 @@ export default function BulkEditorView({
   setExportConfig,
   onCreateFixedProduct,
   onApplyExcelImport,
-  onApplyProductImageImports
+  onApplyProductImageImports,
+  onImageImportTaskChange,
+  imageImportOpenRequest = 0,
 }) {
   const buildEditStateFromInventory = (inventory) => {
     const nextEdits = {};
@@ -115,6 +117,12 @@ export default function BulkEditorView({
       // La preferencia es solo comodidad local; si falla, la vista sigue funcionando.
     }
   }, [activeToolMode]);
+
+  useEffect(() => {
+    if (!imageImportOpenRequest || imageImportRows.length === 0) return;
+    setActiveToolMode('bulk');
+    setIsImageImportModalOpen(true);
+  }, [imageImportOpenRequest, imageImportRows.length]);
 
   useEffect(() => {
     setMainLimit(ITEMS_PER_CHUNK);
@@ -581,12 +589,14 @@ export default function BulkEditorView({
         }
 
         if (result?.status === 'found') {
-          const candidates = Array.isArray(result.candidates) && result.candidates.length > 0
+          const rawCandidates = Array.isArray(result.candidates) && result.candidates.length > 0
             ? result.candidates
             : [{
                 foundTitle: result.foundTitle || row.title,
                 imageUrl: result.imageUrl || '',
                 productUrl: result.productUrl || result.sourceUrl || '',
+                casaAlbertoId: result.casaAlbertoId || result.externalProductId || '',
+                supplierCode: result.supplierCode || '',
                 imageDataUrl: result.imageDataUrl || '',
                 width: result.width || 0,
                 height: result.height || 0,
@@ -594,6 +604,10 @@ export default function BulkEditorView({
                 matchQuality: result.matchQuality || '',
                 titleSimilarity: result.titleSimilarity || 0,
               }];
+          const candidates = rawCandidates.map((candidate) => ({
+            ...candidate,
+            originalImageDataUrl: candidate.originalImageDataUrl || candidate.imageDataUrl || '',
+          }));
           const selectedCandidate = candidates[0] || {};
           const isTitleSimilarityMatch = selectedCandidate.matchQuality === 'title_similarity' || result.matchQuality === 'title_similarity';
           const isTrimmedBarcodeMatch = result.fallbackSearch === 'trimmed_barcode';
@@ -604,7 +618,9 @@ export default function BulkEditorView({
             selectedCandidateIndex: 0,
             foundTitle: selectedCandidate.foundTitle || result.foundTitle || row.title,
                 imageUrl: selectedCandidate.imageUrl || result.imageUrl || '',
-                productUrl: selectedCandidate.productUrl || result.productUrl || result.url || '',
+            productUrl: selectedCandidate.productUrl || result.productUrl || result.url || '',
+            casaAlbertoId: selectedCandidate.casaAlbertoId || selectedCandidate.externalProductId || result.casaAlbertoId || result.externalProductId || '',
+            supplierCode: selectedCandidate.supplierCode || result.supplierCode || '',
             imageDataUrl: selectedCandidate.imageDataUrl || result.imageDataUrl || '',
             sourceUrl: result.url || '',
             score: result.score || 0,
@@ -662,6 +678,8 @@ export default function BulkEditorView({
         foundTitle: candidate.foundTitle || row.foundTitle,
         imageUrl: candidate.imageUrl || row.imageUrl,
         productUrl: candidate.productUrl || row.productUrl || row.sourceUrl,
+        casaAlbertoId: candidate.casaAlbertoId || candidate.externalProductId || row.casaAlbertoId || row.externalProductId || '',
+        supplierCode: candidate.supplierCode || row.supplierCode || '',
         imageDataUrl: candidate.imageDataUrl || row.imageDataUrl,
         score: candidate.score || row.score,
         matchQuality: candidate.matchQuality || row.matchQuality || '',
@@ -806,16 +824,46 @@ export default function BulkEditorView({
   const handleCenterImageCandidate = async (rowId, candidateIndex) => {
     const row = imageImportRows.find((item) => item.rowId === rowId);
     const candidate = row?.candidates?.[candidateIndex];
-    const sourceDataUrl = candidate?.imageDataUrl || row?.imageDataUrl;
+    const originalDataUrl = candidate?.originalImageDataUrl || candidate?.imageDataUrl || row?.imageDataUrl;
+    const sourceDataUrl = candidate?.imageDataUrl || originalDataUrl;
     if (!row || !candidate || !sourceDataUrl) return;
 
     try {
-      const centeredDataUrl = await centerProductImageDataUrl(sourceDataUrl);
+      if (candidate.centered && originalDataUrl) {
+        setImageImportRows((prev) => prev.map((item) => {
+          if (item.rowId !== rowId) return item;
+          const nextCandidates = (item.candidates || []).map((nextCandidate, index) => (
+            index === candidateIndex
+              ? {
+                  ...nextCandidate,
+                  imageDataUrl: originalDataUrl,
+                  originalImageDataUrl: originalDataUrl,
+                  centered: false,
+                }
+              : nextCandidate
+          ));
+          const isSelected = Number(item.selectedCandidateIndex || 0) === candidateIndex;
+          return {
+            ...item,
+            candidates: nextCandidates,
+            imageDataUrl: isSelected ? originalDataUrl : item.imageDataUrl,
+            message: isSelected ? 'Foto original restaurada' : item.message,
+          };
+        }));
+        return;
+      }
+
+      const centeredDataUrl = await centerProductImageDataUrl(originalDataUrl);
       setImageImportRows((prev) => prev.map((item) => {
         if (item.rowId !== rowId) return item;
         const nextCandidates = (item.candidates || []).map((nextCandidate, index) => (
           index === candidateIndex
-            ? { ...nextCandidate, imageDataUrl: centeredDataUrl, centered: true }
+            ? {
+                ...nextCandidate,
+                imageDataUrl: centeredDataUrl,
+                originalImageDataUrl: originalDataUrl,
+                centered: true,
+              }
             : nextCandidate
         ));
         const isSelected = Number(item.selectedCandidateIndex || 0) === candidateIndex;
@@ -943,6 +991,49 @@ export default function BulkEditorView({
   });
   const nextImageImportBatchLabel = hasImageImportSearchStarted ? 'Otros 10' : 'Probar 10';
   const imageCandidatePickerRow = imageImportRows.find((row) => row.rowId === imageCandidatePickerRowId) || null;
+
+  useEffect(() => {
+    if (!onImageImportTaskChange) return;
+    if (imageImportRows.length === 0) {
+      onImageImportTaskChange(null);
+      return;
+    }
+
+    const phase = isApplyingImages
+      ? 'applying'
+      : isSearchingImages && isImageImportPaused
+        ? 'paused'
+        : isSearchingImages
+          ? 'searching'
+          : imageImportStats.applied > 0
+            ? 'completed'
+            : 'ready';
+
+    onImageImportTaskChange({
+      phase,
+      total: imageImportRows.length,
+      processed: imageImportProcessedCount,
+      found: imageImportStats.found,
+      approved: imageImportStats.approved,
+      applied: imageImportStats.applied,
+      errors: imageImportStats.error + imageImportStats.login_required,
+      modalOpen: isImageImportModalOpen,
+      updatedAt: Date.now(),
+    });
+  }, [
+    imageImportRows.length,
+    imageImportProcessedCount,
+    imageImportStats.found,
+    imageImportStats.approved,
+    imageImportStats.applied,
+    imageImportStats.error,
+    imageImportStats.login_required,
+    isApplyingImages,
+    isSearchingImages,
+    isImageImportPaused,
+    isImageImportModalOpen,
+    onImageImportTaskChange,
+  ]);
 
   const getImageImportStatusMeta = (status) => {
     if (status === 'found') return { label: 'Encontrada', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' };
@@ -1713,8 +1804,8 @@ export default function BulkEditorView({
                 <button
                   type="button"
                   onClick={() => setIsImageImportModalOpen(false)}
-                  disabled={isSearchingImages || isApplyingImages}
-                  className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+                  className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                  title={isSearchingImages || isApplyingImages ? 'Cerrar; la tarea continuara en segundo plano' : 'Cerrar'}
                 >
                   <X size={18} />
                 </button>
@@ -2086,11 +2177,13 @@ export default function BulkEditorView({
                                       type="button"
                                       onClick={() => handleCenterImageCandidate(imageCandidatePickerRow.rowId, candidateIndex)}
                                       className={`inline-flex items-center gap-1 text-[10px] font-bold ${
-                                        candidate.centered ? 'text-emerald-600' : 'text-amber-600 hover:text-amber-700'
+                                        candidate.centered
+                                          ? 'text-slate-600 hover:text-slate-900'
+                                          : 'text-amber-600 hover:text-amber-700'
                                       }`}
                                     >
-                                      <Crosshair size={11} />
-                                      {candidate.centered ? 'Centrada' : 'Centrar'}
+                                      {candidate.centered ? <RotateCcw size={11} /> : <Crosshair size={11} />}
+                                      {candidate.centered ? 'Volver a original' : 'Centrar'}
                                     </button>
                                   ) : null}
                                 </div>

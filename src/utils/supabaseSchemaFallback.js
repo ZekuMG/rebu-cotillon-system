@@ -82,6 +82,7 @@ export const SCHEMA_OPTIONAL_COLUMNS = {
     'product_type',
     'expiration_date',
     'is_active',
+    'supplier_links',
   ]),
   clients: new Set(['dni', 'phone', 'email', 'extrainfo', 'extra_info', 'social_connections', 'updated_at', 'is_active']),
   rewards: new Set(['is_active']),

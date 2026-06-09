@@ -6,9 +6,6 @@ import useDebouncedValue from '../hooks/useDebouncedValue';
 import useLogsFeed from '../hooks/useLogsFeed';
 import { SESSION_LOG_ACTIONS, SESSIONS_PAGE_SIZE } from '../utils/cloudSelects';
 
-const SESSION_ABSENT_MS = 10 * 60 * 1000;
-const SESSION_EXPIRED_MS = 60 * 60 * 1000;
-
 const parseSessionTime = (value) => {
   if (!value) return 0;
   const parsed = new Date(value).getTime();
@@ -45,20 +42,10 @@ const matchesSessionDay = (session, dayFilter) => {
   return `${localYear}-${localMonth}-${localDay}` === dayFilter;
 };
 
-const getSessionStatus = (session, nowMs = Date.now()) => {
+const getSessionStatus = (session) => {
   if (session.closedAt) return 'Cerrada';
   if (session.expiredAt || session.status === 'Expirada') return 'Expirada';
-
-  const activitySource = session.lastActivityAt || session.startedAt;
-  const lastActivityMs = parseSessionTime(activitySource);
-  const inactivityMs = lastActivityMs > 0 ? Math.max(0, nowMs - lastActivityMs) : 0;
-
-  if (session.status === 'Ausente' || session.absentAt || inactivityMs >= SESSION_ABSENT_MS) {
-    if (inactivityMs >= SESSION_EXPIRED_MS) return 'Expirada';
-    return 'Ausente';
-  }
-
-  if (inactivityMs >= SESSION_EXPIRED_MS) return 'Expirada';
+  if (session.status === 'Ausente' || session.absentAt) return 'Ausente';
   return 'Activa';
 };
 
@@ -97,7 +84,7 @@ const getStatusMeta = (session, status) => {
   if (status === 'Expirada') {
     return {
       primary: 'Expirada',
-      secondary: '1 hora sin actividad',
+      secondary: 'Expiración registrada',
     };
   }
 
@@ -457,7 +444,7 @@ export default function SessionsView({
           <span>Usuario</span>
           <span>Equipo</span>
           <span>Ingreso</span>
-          <span>Últ. actividad</span>
+          <span>Último evento</span>
           <span>Salida / Estado</span>
           <span>IP</span>
         </div>
@@ -521,7 +508,7 @@ export default function SessionsView({
                     <p className="font-bold text-slate-700">
                       {formatDateTime(session.lastActivityAt, session.startedDate, session.startedTime)}
                     </p>
-                    <p className="mt-0.5 text-[12px] font-medium text-slate-400">Último movimiento</p>
+                    <p className="mt-0.5 text-[12px] font-medium text-slate-400">Referencia de sesión</p>
                   </div>
 
                   <div className="min-w-0">

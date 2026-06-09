@@ -9,7 +9,11 @@ import {
   Database,
   WifiOff,
   Moon,
-  Sun
+  Sun,
+  Camera,
+  Loader2,
+  CheckCircle2,
+  X
 } from 'lucide-react';
 import Swal from 'sweetalert2';
 import logoRebuImg from './assets/logo-rebu.jpg';
@@ -206,9 +210,6 @@ const METRICS_SNAPSHOT_LIMITS = {
 };
 const HISTORY_LOG_INITIAL_LIMIT = 50;
 const HISTORY_LOG_RECENT_SYNC_LIMIT = 50;
-const SESSION_ABSENT_MS = 10 * 60 * 1000;
-const SESSION_EXPIRED_MS = 60 * 60 * 1000;
-const SESSION_ACTIVITY_UPDATE_THROTTLE_MS = 5000;
 const LOCAL_TRANSACTION_OVERRIDE_TTL_MS = 45 * 1000;
 const APP_USERS_FRESHNESS_MS = 15 * 1000;
 const OFFLINE_BOOT_TIMEOUT_MS = 5500;
@@ -3469,6 +3470,9 @@ export default function PartySupplyApp() {
   const [currentUser, setCurrentUser] = useState(null);
   const [currentSessionMeta, setCurrentSessionMeta] = useState(null);
   const [activeTab, setActiveTab] = useState('pos');
+  const [imageImportTask, setImageImportTask] = useState(null);
+  const [isImageImportTaskOpen, setIsImageImportTaskOpen] = useState(false);
+  const [imageImportOpenRequest, setImageImportOpenRequest] = useState(0);
   const [userSettings, setUserSettings] = useState(() => loadUserSettings());
   const [loginTheme, setLoginTheme] = useState(() => loadLoginThemePreference());
   const [isThemeSaving, setIsThemeSaving] = useState(false);
@@ -4018,25 +4022,6 @@ export default function PartySupplyApp() {
     };
   };
 
-  const getSessionInactivityMs = (sessionMeta, nowMs = Date.now()) => {
-    if (!sessionMeta) return 0;
-    const lastActivitySource = sessionMeta.lastActivityAt || sessionMeta.startedAt;
-    const lastActivityMs = lastActivitySource ? new Date(lastActivitySource).getTime() : nowMs;
-    if (!Number.isFinite(lastActivityMs)) return 0;
-    return Math.max(0, nowMs - lastActivityMs);
-  };
-
-  const deriveSessionStatus = (sessionMeta, nowMs = Date.now()) => {
-    if (!sessionMeta) return 'Activa';
-    if (sessionMeta.closedAt) return 'Cerrada';
-    if (sessionMeta.expiredAt || sessionMeta.status === 'Expirada') return 'Expirada';
-
-    const inactivityMs = getSessionInactivityMs(sessionMeta, nowMs);
-    if (!sessionMeta.rememberedSession && inactivityMs >= SESSION_EXPIRED_MS) return 'Expirada';
-    if (sessionMeta.status === 'Ausente' || sessionMeta.absentAt || inactivityMs >= SESSION_ABSENT_MS) return 'Ausente';
-    return 'Activa';
-  };
-
   const blockIfOfflineReadonly = (actionLabel = 'realizar cambios') => {
     if (isLocalDemoMode()) return false;
     if (!isOfflineReadOnly) return false;
@@ -4298,146 +4283,6 @@ export default function PartySupplyApp() {
     setRememberLoginSession(false);
     setLoginError('');
   };
-
-  const writeSessionTransitionLog = async (action, sessionMeta, reason) => {
-    if (!sessionMeta) return;
-    await (writeLogEntryRef.current || writeLogEntry)({
-      action,
-      details: sessionMeta,
-      reason,
-      userName: sessionMeta.userName || currentUserRef.current?.displayName || currentUserRef.current?.name || 'Sistema',
-    });
-  };
-
-  const updateSessionStatus = async (nextStatus, reason, extraFields = {}) => {
-    const sessionMeta = currentSessionMetaRef.current;
-    if (!sessionMeta) return;
-
-    const now = new Date();
-    const statusFieldMap = {
-      Ausente: { absentAt: now.toISOString(), expiredAt: null },
-      Activa: { absentAt: null, expiredAt: null },
-      Expirada: { expiredAt: now.toISOString() },
-    };
-
-    const nextSession = {
-      ...sessionMeta,
-      ...statusFieldMap[nextStatus],
-      ...extraFields,
-      status: nextStatus,
-    };
-
-    currentSessionMetaRef.current = nextSession;
-    setCurrentSessionMeta(nextSession);
-
-    const actionMap = {
-      Ausente: 'Sesion Ausente',
-      Activa: 'Sesion Reanudada',
-      Expirada: 'Sesion Expirada',
-    };
-
-    await writeSessionTransitionLog(actionMap[nextStatus], nextSession, reason);
-    return nextSession;
-  };
-
-  const expireCurrentSession = async () => {
-    const sessionMeta = currentSessionMetaRef.current;
-    if (!sessionMeta) return;
-
-    const expiredSession = await updateSessionStatus(
-      'Expirada',
-      '1 hora sin actividad'
-    );
-
-    clearAuthenticatedState();
-    showNotificationRef.current?.(
-      'warning',
-      'Sesión expirada',
-      'La sesión expiró por inactividad. Volvé a ingresar para continuar.'
-    );
-
-    return expiredSession;
-  };
-
-  useEffect(() => {
-    const handleSessionActivity = () => {
-      const sessionMeta = currentSessionMetaRef.current;
-      if (!sessionMeta) return;
-
-      const now = new Date();
-      const nowIso = now.toISOString();
-      const statusNow = deriveSessionStatus(sessionMeta, now.getTime());
-
-      if (statusNow === 'Expirada') {
-        void expireCurrentSession();
-        return;
-      }
-
-      if (statusNow === 'Ausente' && (sessionMeta.status === 'Ausente' || sessionMeta.absentAt)) {
-        const resumedSession = {
-          ...sessionMeta,
-          lastActivityAt: nowIso,
-          status: 'Activa',
-          absentAt: null,
-        };
-
-        currentSessionMetaRef.current = resumedSession;
-        setCurrentSessionMeta(resumedSession);
-        void writeSessionTransitionLog('Sesion Reanudada', resumedSession, 'Actividad detectada nuevamente');
-        return;
-      }
-
-      const lastActivityMs = sessionMeta.lastActivityAt ? new Date(sessionMeta.lastActivityAt).getTime() : 0;
-      if (Number.isFinite(lastActivityMs) && now.getTime() - lastActivityMs < SESSION_ACTIVITY_UPDATE_THROTTLE_MS) {
-        return;
-      }
-
-      const nextSession = {
-        ...sessionMeta,
-        lastActivityAt: nowIso,
-        status: 'Activa',
-      };
-
-      currentSessionMetaRef.current = nextSession;
-      setCurrentSessionMeta(nextSession);
-    };
-
-    const activityEvents = ['pointerdown', 'keydown', 'wheel', 'touchstart', 'focus'];
-
-    activityEvents.forEach((eventName) => {
-      window.addEventListener(eventName, handleSessionActivity, { passive: true });
-    });
-
-    return () => {
-      activityEvents.forEach((eventName) => {
-        window.removeEventListener(eventName, handleSessionActivity);
-      });
-    };
-  // Session activity listeners are global and intentionally registered once.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      const sessionMeta = currentSessionMetaRef.current;
-      if (!sessionMeta) return;
-
-      const derivedStatus = deriveSessionStatus(sessionMeta);
-
-      if (derivedStatus === 'Expirada' && sessionMeta.status !== 'Expirada') {
-        void expireCurrentSession();
-        return;
-      }
-
-      if (derivedStatus === 'Ausente' && sessionMeta.status === 'Activa') {
-        void updateSessionStatus('Ausente', '10 minutos sin actividad');
-      }
-    }, 5000);
-
-    return () => window.clearInterval(intervalId);
-  // Session expiry poller reads refs and should not be recreated every render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const handleUpdateLogNote = async (logId, newNote) => {
     try {
@@ -6521,7 +6366,6 @@ export default function PartySupplyApp() {
   const handleAddMemberWithLog = async (data) => {
     if (blockIfOfflineReadonly('crear socios')) return;
     try {
-       const memberNum = Math.floor(10000 + Math.random() * 90000);
        const normalizedData = {
          ...data,
          name: String(data?.name || '').trim(),
@@ -6539,7 +6383,47 @@ export default function PartySupplyApp() {
          showNotification('error', 'Nombre requerido', 'El nombre del socio no puede quedar vacío.');
          return null;
        }
-       
+
+       const getHighestKnownMemberNumber = (memberList = []) =>
+         (Array.isArray(memberList) ? memberList : []).reduce((maxNumber, member) => {
+           const memberNumber = Number(member?.memberNumber ?? member?.member_number ?? 0);
+           return Number.isFinite(memberNumber) ? Math.max(maxNumber, memberNumber) : maxNumber;
+         }, 0);
+
+       const getNextMemberNumber = async () => {
+         const localNextNumber = getHighestKnownMemberNumber(members) + 1;
+         if (isLocalDemoMode()) return localNextNumber;
+
+         try {
+           const { data: latestClient, error } = await supabase
+             .from('clients')
+             .select('member_number')
+             .not('member_number', 'is', null)
+             .order('member_number', { ascending: false })
+             .limit(1)
+             .maybeSingle();
+
+           if (error) throw error;
+
+           const cloudNextNumber = Number(latestClient?.member_number || 0) + 1;
+           return Math.max(localNextNumber, cloudNextNumber || 1);
+         } catch (error) {
+           console.warn('No se pudo consultar el ultimo numero de socio; usando cache local.', error);
+           return localNextNumber;
+         }
+       };
+
+       const isMemberNumberDuplicateError = (error) => {
+         const errorText = [
+           error?.message,
+           error?.details,
+           error?.hint,
+           error?.code,
+         ].filter(Boolean).join(' ').toLowerCase();
+
+         return error?.code === '23505' && /member[_\s-]?number|clients_member/.test(errorText);
+       };
+
        const duplicatedName = members.some((member) =>
          normalizeMemberName(member?.name) === normalizeMemberName(normalizedData.name)
        );
@@ -6559,21 +6443,42 @@ export default function PartySupplyApp() {
          },
        );
 
-       const payload = { 
-         name: normalizedData.name, 
-         dni: normalizedData.dni, 
-         phone: normalizedData.phone, 
-         email: normalizedData.email, 
-         social_connections: socialConnections,
-         points: normalizedData.points, 
-         member_number: memberNum 
-       };
+       const firstMemberNumber = await getNextMemberNumber();
+       let newClient = null;
+       let memberNum = firstMemberNumber;
+       const maxMemberNumberAttempts = 5;
 
-       const { data: newClient } = await insertWithSchemaFallback('clients', payload, CLOUD_SELECTS.clients);
+       for (let attempt = 0; attempt < maxMemberNumberAttempts; attempt += 1) {
+         memberNum = firstMemberNumber + attempt;
+         const payload = {
+           name: normalizedData.name,
+           dni: normalizedData.dni,
+           phone: normalizedData.phone,
+           email: normalizedData.email,
+           extraInfo: normalizedData.extraInfo,
+           social_connections: socialConnections,
+           points: normalizedData.points,
+           member_number: memberNum
+         };
+
+         try {
+           const insertResult = await insertWithSchemaFallback('clients', payload, CLOUD_SELECTS.clients);
+           newClient = insertResult.data;
+           break;
+         } catch (insertError) {
+           if (isMemberNumberDuplicateError(insertError) && attempt < maxMemberNumberAttempts - 1) {
+             continue;
+           }
+           throw insertError;
+         }
+       }
+
+       if (!newClient?.id) throw new Error('Supabase no devolvio el socio creado.');
        
        const clientFormatted = {
          ...newClient,
          memberNumber: newClient.member_number,
+         extraInfo: newClient.extraInfo || normalizedData.extraInfo || '',
          socialConnections: newClient.social_connections || socialConnections,
          createdAt: newClient.created_at || newClient.createdAt || null,
        };
@@ -6609,7 +6514,9 @@ export default function PartySupplyApp() {
     } catch (e) { 
        console.error(e);
        const constraint = String(e?.message || e?.details || e?.hint || '').toLowerCase();
-       if (constraint.includes('clients_dni_key')) {
+       if (constraint.includes('member_number') || constraint.includes('clients_member')) {
+         showNotification('error', 'N° Socio duplicado', 'No se pudo reservar un numero de socio libre. Intenta nuevamente.');
+       } else if (constraint.includes('clients_dni_key')) {
          showNotification('error', 'DNI Duplicado', 'Ese DNI ya pertenece a otro socio.');
        } else if (constraint.includes('clients_phone_key')) {
          showNotification('error', 'Teléfono Duplicado', 'Ese teléfono ya pertenece a otro socio.');
@@ -6672,6 +6579,7 @@ export default function PartySupplyApp() {
       if (normalizedInput.dni !== undefined) dbUpdates.dni = normalizedInput.dni;
       if (normalizedInput.phone !== undefined) dbUpdates.phone = normalizedInput.phone;
       if (normalizedInput.email !== undefined) dbUpdates.email = normalizedInput.email;
+      if (normalizedInput.extraInfo !== undefined) dbUpdates.extraInfo = normalizedInput.extraInfo;
       
       if (normalizedInput.points !== undefined) dbUpdates.points = normalizedInput.points;
       if (normalizedInput.memberNumber !== undefined) dbUpdates.member_number = normalizedInput.memberNumber;
@@ -9274,20 +9182,34 @@ export default function PartySupplyApp() {
     }
 
     try {
-      Swal.fire({
-        title: 'Guardando fotos...',
-        text: `Aplicando ${safeRows.length} imagen(es) al inventario.`,
-        allowOutsideClick: false,
-        didOpen: () => Swal.showLoading(),
-      });
-
       const applied = [];
       const failedRows = [];
+      setImageImportTask((current) => ({
+        ...(current || {}),
+        phase: 'applying',
+        total: safeRows.length,
+        processed: 0,
+        applied: 0,
+        errors: 0,
+        updatedAt: Date.now(),
+      }));
 
-      for (const row of safeRows) {
+      for (const [rowIndex, row] of safeRows.entries()) {
+        const publishApplyProgress = () => {
+          setImageImportTask((current) => ({
+            ...(current || {}),
+            phase: 'applying',
+            total: safeRows.length,
+            processed: rowIndex + 1,
+            applied: applied.length,
+            errors: failedRows.length,
+            updatedAt: Date.now(),
+          }));
+        };
         const currentProduct = inventory.find((product) => String(product.id) === String(row.productId));
         if (!currentProduct) {
           failedRows.push({ ...row, error: 'Producto no encontrado.' });
+          publishApplyProgress();
           continue;
         }
 
@@ -9297,6 +9219,7 @@ export default function PartySupplyApp() {
 
         if (hasProductImage(currentProductDetail || currentProduct)) {
           failedRows.push({ ...row, error: 'El producto ya tiene imagen.' });
+          publishApplyProgress();
           continue;
         }
 
@@ -9309,12 +9232,42 @@ export default function PartySupplyApp() {
             uploadedImage = await uploadProductImage(file);
           }
 
-          const { data } = await updateWithSchemaFallback(
+          const verifiedAt = new Date().toISOString();
+          const existingSupplierLinks = (
+            currentProductDetail?.supplierLinks ||
+            currentProductDetail?.supplier_links ||
+            currentProduct?.supplierLinks ||
+            currentProduct?.supplier_links
+          );
+          const safeSupplierLinks = existingSupplierLinks && typeof existingSupplierLinks === 'object'
+            ? existingSupplierLinks
+            : {};
+          const casaAlbertoLink = {
+            provider: 'Cotillon Casa Alberto',
+            providerCode: String(row.supplierCode || '').trim(),
+            casaAlbertoId: String(row.casaAlbertoId || row.externalProductId || '').trim(),
+            productUrl: row.productUrl || row.sourceUrl || '',
+            imageUrl: row.imageUrl || '',
+            foundTitle: row.foundTitle || '',
+            matchedBy: row.fallbackSearch === 'trimmed_barcode'
+              ? 'trimmed_barcode'
+              : row.matchQuality || 'barcode_exact',
+            inventoryBarcode: String(row.barcode || currentProduct.barcode || '').trim(),
+            searchedQuery: row.searchedQuery || '',
+            titleSimilarity: Number(row.titleSimilarity || 0),
+            verifiedAt,
+          };
+
+          const { data, payload: savedPayload } = await updateWithSchemaFallback(
             'products',
             currentProduct.id,
             {
               image: uploadedImage.image,
               image_thumb: uploadedImage.imageThumb,
+              supplier_links: {
+                ...safeSupplierLinks,
+                casa_alberto: casaAlbertoLink,
+              },
             },
             CLOUD_SELECTS.products
           );
@@ -9325,14 +9278,21 @@ export default function PartySupplyApp() {
             source: {
               provider: 'Cotillon Casa Alberto',
               barcode: row.barcode,
+              providerCode: casaAlbertoLink.providerCode,
+              casaAlbertoId: casaAlbertoLink.casaAlbertoId,
+              productUrl: casaAlbertoLink.productUrl,
+              matchedBy: casaAlbertoLink.matchedBy,
+              supplierLinkSaved: Boolean(savedPayload?.supplier_links),
               foundTitle: row.foundTitle,
               sourceUrl: row.imageUrl || row.sourceUrl || row.url || '',
-              searchedAt: new Date().toISOString(),
+              searchedAt: verifiedAt,
             },
           });
         } catch (error) {
           failedRows.push({ ...row, error: error?.message || 'No se pudo guardar la foto.' });
         }
+
+        publishApplyProgress();
       }
 
       if (applied.length > 0) {
@@ -9351,23 +9311,26 @@ export default function PartySupplyApp() {
             photoUrl: entry.product.image || '',
             photoThumbUrl: entry.product.imageThumb || entry.product.image_thumb || entry.product.image || '',
             sourceUrl: entry.source.sourceUrl,
+            productUrl: entry.source.productUrl,
+            providerCode: entry.source.providerCode,
+            casaAlbertoId: entry.source.casaAlbertoId,
+            matchedBy: entry.source.matchedBy,
+            supplierLinkSaved: entry.source.supplierLinkSaved,
             foundTitle: entry.source.foundTitle,
             searchedAt: entry.source.searchedAt,
           })),
         }, 'Productos Avanzado / Fotos por Codigo');
       }
 
-      Swal.close();
-
-      if (applied.length > 0) {
-        showNotification(
-          'success',
-          'Fotos importadas',
-          `${applied.length} producto(s) actualizado(s)${failedRows.length > 0 ? `, ${failedRows.length} sin aplicar.` : '.'}`
-        );
-      } else {
-        showNotification('warning', 'Sin cambios', 'No se pudo aplicar ninguna foto.');
-      }
+      setImageImportTask((current) => ({
+        ...(current || {}),
+        phase: applied.length > 0 ? 'completed' : 'error',
+        total: safeRows.length,
+        processed: safeRows.length,
+        applied: applied.length,
+        errors: failedRows.length,
+        updatedAt: Date.now(),
+      }));
 
       return {
         appliedIds: applied.map((entry) => entry.product.id),
@@ -9376,7 +9339,12 @@ export default function PartySupplyApp() {
       };
     } catch (error) {
       console.error('Error importando imagenes de productos:', error);
-      Swal.close();
+      setImageImportTask((current) => ({
+        ...(current || {}),
+        phase: 'error',
+        errors: safeRows.length,
+        updatedAt: Date.now(),
+      }));
       showNotification('error', 'Error', error?.message || 'No se pudieron importar las fotos.');
       return { appliedIds: [], failedRows: safeRows.map((row) => ({ ...row, error: 'Fallo general.' })) };
     }
@@ -11162,6 +11130,100 @@ export default function PartySupplyApp() {
               </div>
             </div>
             <div className="app-topbar-tools flex shrink-0 items-center gap-3">
+              {imageImportTask && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setIsImageImportTaskOpen((current) => !current)}
+                    className={`app-topbar-action ${
+                      imageImportTask.phase === 'completed' ? 'text-emerald-700' : ''
+                    }`}
+                    title="Estado de la importacion de fotos"
+                  >
+                    {['searching', 'applying'].includes(imageImportTask.phase) ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : imageImportTask.phase === 'completed' ? (
+                      <CheckCircle2 size={13} />
+                    ) : (
+                      <Camera size={13} />
+                    )}
+                    <span>
+                      {imageImportTask.phase === 'applying'
+                        ? `Guardando ${imageImportTask.processed || 0}/${imageImportTask.total || 0}`
+                        : imageImportTask.phase === 'searching'
+                          ? `Buscando ${imageImportTask.processed || 0}/${imageImportTask.total || 0}`
+                          : imageImportTask.phase === 'paused'
+                            ? 'Fotos pausadas'
+                            : imageImportTask.phase === 'error'
+                              ? 'Fotos con problemas'
+                            : imageImportTask.phase === 'completed'
+                              ? `${imageImportTask.applied || 0} fotos aplicadas`
+                              : `${imageImportTask.found || 0} fotos encontradas`}
+                    </span>
+                  </button>
+
+                  {isImageImportTaskOpen && (
+                    <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-md border border-slate-200 bg-white p-3 text-left shadow-lg">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[10px] font-black uppercase tracking-[0.1em] text-slate-500">Fotos por codigo</p>
+                          <p className="mt-1 text-xs font-bold text-slate-800">
+                            {imageImportTask.phase === 'applying'
+                              ? 'Guardando fotos en productos'
+                              : imageImportTask.phase === 'searching'
+                                ? 'Buscando en Casa Alberto'
+                                : imageImportTask.phase === 'paused'
+                                  ? 'Busqueda pausada'
+                                  : imageImportTask.phase === 'error'
+                                    ? 'La tarea termino con problemas'
+                                  : imageImportTask.phase === 'completed'
+                                    ? 'Ultima aplicacion terminada'
+                                    : 'Lote listo para revisar'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setIsImageImportTaskOpen(false)}
+                          className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                          aria-label="Cerrar estado de fotos"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                        <div
+                          className={`h-full transition-all duration-300 ${
+                            imageImportTask.phase === 'completed' ? 'bg-emerald-500' : 'bg-blue-500'
+                          }`}
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              Math.round(((imageImportTask.processed || 0) / Math.max(1, imageImportTask.total || 1)) * 100)
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="mt-2 flex items-center justify-between text-[10px] font-bold text-slate-500">
+                        <span>{imageImportTask.processed || 0} procesadas</span>
+                        <span>{imageImportTask.applied || 0} aplicadas</span>
+                        <span>{imageImportTask.errors || 0} problemas</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTab('bulk-editor');
+                          setImageImportOpenRequest((current) => current + 1);
+                          setIsImageImportTaskOpen(false);
+                        }}
+                        className="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-[11px] font-black text-slate-700 transition-colors hover:bg-slate-100"
+                      >
+                        <Camera size={13} />
+                        Ver lote de fotos
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="app-topbar-actions flex items-center gap-2">
                 <button
                   onClick={canManageRegister ? toggleRegisterStatus : undefined}
@@ -11361,6 +11423,8 @@ export default function PartySupplyApp() {
                 onCreateFixedProduct={handleCreateFixedProduct}
                 onApplyExcelImport={handleExcelProductImport}
                 onApplyProductImageImports={handleApplyProductImageImports}
+                onImageImportTaskChange={setImageImportTask}
+                imageImportOpenRequest={imageImportOpenRequest}
                 />
               </PersistentTabPanel>
             )}

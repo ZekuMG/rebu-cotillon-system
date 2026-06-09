@@ -12,7 +12,6 @@ const isDev = !app.isPackaged;
 const SUPPLIER_IMAGE_PARTITION = 'persist:rebu-casa-alberto-images';
 const SUPPLIER_LOGIN_URL = 'http://cotilloncasaalberto.com.ar/pedido/login.php';
 const SUPPLIER_DEFAULT_ORIGIN = 'http://cotilloncasaalberto.com.ar';
-const SUPPLIER_SEARCH_PATH = '/pedido/carpeta_ver.php';
 const SUPPLIER_RESTRICTED_PATH = '/pedido/index_restringido.php';
 const sanitizePdfFileName = (value) => {
   const fallback = 'rebu-documento.pdf';
@@ -145,53 +144,19 @@ const createSupplierBrowserWindow = ({ show = false, width = 1100, height = 760 
   return supplierWindow;
 };
 
-const getSupplierSearchUrl = () => {
+const getSupplierRestrictedUrl = () => {
   try {
     const currentUrl = supplierImageLoginWindow && !supplierImageLoginWindow.isDestroyed()
       ? supplierImageLoginWindow.webContents.getURL()
       : '';
     const parsedUrl = currentUrl ? new URL(currentUrl) : null;
     if (parsedUrl?.hostname?.includes('cotilloncasaalberto.com.ar')) {
-      if (/carpeta_ver|seccion_detalle|buscar|busqueda|resultado/i.test(parsedUrl.pathname || '')) {
-        return parsedUrl.href;
-      }
-      return `${parsedUrl.origin}${SUPPLIER_SEARCH_PATH}`;
+      return `${parsedUrl.origin}${SUPPLIER_RESTRICTED_PATH}`;
     }
   } catch {
     // Si no hay URL valida de la ventana de login, usamos el origen historico del proveedor.
   }
-  return `${SUPPLIER_DEFAULT_ORIGIN}${SUPPLIER_SEARCH_PATH}`;
-};
-
-const buildSupplierDirectSearchUrls = (query, currentUrl = '') => {
-  const safeQuery = String(query || '').trim();
-  if (!safeQuery) return [];
-
-  let origin = SUPPLIER_DEFAULT_ORIGIN;
-  try {
-    const parsedUrl = currentUrl ? new URL(currentUrl) : null;
-    if (parsedUrl?.hostname?.includes('cotilloncasaalberto.com.ar')) {
-      origin = parsedUrl.origin;
-    }
-  } catch {
-    origin = SUPPLIER_DEFAULT_ORIGIN;
-  }
-
-  const buildUrl = (path, params = {}) => {
-    const url = new URL(path, origin);
-    Object.entries(params).forEach(([key, value]) => {
-      url.searchParams.set(key, value);
-    });
-    return url.href;
-  };
-
-  return [
-    buildUrl('/pedido/carpeta_ver.php', { buscar_txt: safeQuery }),
-    buildUrl(SUPPLIER_RESTRICTED_PATH, { buscar_txt: safeQuery }),
-    buildUrl('/pedido/buscar.php', { buscar_txt: safeQuery }),
-    buildUrl('/pedido/busqueda.php', { buscar_txt: safeQuery }),
-    buildUrl('/pedido/seccion_detalle.php', { buscar_txt: safeQuery }),
-  ].filter((url, index, urls) => urls.indexOf(url) === index);
+  return `${SUPPLIER_DEFAULT_ORIGIN}${SUPPLIER_RESTRICTED_PATH}`;
 };
 
 const getSupplierLoginState = async () => {
@@ -230,10 +195,10 @@ const getSupplierLoginState = async () => {
   return { hasWindow: true, url, isLikelyLoggedIn, hasVisiblePasswordInput: Boolean(pageState?.hasVisiblePasswordInput), isLoginText };
 };
 
-const buildSupplierSearchScript = (barcode) => `
+const buildSupplierSearchScript = (searchValue) => `
 (() => {
   try {
-    const barcode = ${JSON.stringify(String(barcode || '').trim())};
+    const searchValue = ${JSON.stringify(String(searchValue || '').trim())};
     const normalize = (value) => String(value || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
     const textOf = (node) => normalize(node?.innerText || node?.textContent || '');
     const bodyText = textOf(document.body);
@@ -255,74 +220,49 @@ const buildSupplierSearchScript = (barcode) => `
         input.value = value;
       }
     };
-    const labelText = (input) => Array.from(document.querySelectorAll('label'))
-      .find((label) => label.htmlFor && label.htmlFor === input.id)?.innerText || '';
-    const fieldText = (input) => normalize([
-      input.name,
-      input.id,
-      input.placeholder,
-      input.getAttribute('aria-label'),
-      input.closest('label')?.innerText,
-      labelText(input),
-    ].filter(Boolean).join(' '));
+    const searchInput = document.querySelector('input#buscar_txt[name="buscar_txt"]') ||
+      document.querySelector('input#buscar_txt') ||
+      document.querySelector('input[name="buscar_txt"]');
 
-    const inputs = Array.from(document.querySelectorAll('input, textarea'));
-    const usableInput = (input) => {
-      const type = normalize(input.type);
-      return !['hidden', 'password', 'submit', 'button', 'checkbox', 'radio', 'file'].includes(type);
-    };
-    const codeInput = inputs.find((input) => input.name === 'buscar_txt' || input.id === 'buscar_txt') ||
-    inputs.find((input) => {
-      if (!usableInput(input)) return false;
-      const metadata = fieldText(input);
-      return metadata.includes('codigo') || metadata.includes('cod') || metadata.includes('barra') || metadata.includes('buscar');
-    }) || inputs.find(usableInput);
-
-    if (!barcode) return { submitted: false, isLoginPage, reason: 'empty_barcode', url: location.href };
+    if (!searchValue) return { submitted: false, isLoginPage, reason: 'empty_search', url: location.href };
     if (isLoginPage) return { submitted: false, isLoginPage, reason: 'login_required', url: location.href };
-    if (!codeInput) return { submitted: false, isLoginPage, reason: 'search_field_not_found', url: location.href };
+    if (!searchInput) return { submitted: false, isLoginPage, reason: 'search_field_not_found', url: location.href };
 
-    setInputValue(codeInput, barcode);
+    setInputValue(searchInput, searchValue);
+    searchInput.focus();
 
-    const form = codeInput.form || codeInput.closest('form');
-    if (form) {
-      const formData = new FormData(form);
-      formData.set(codeInput.name || 'buscar_txt', barcode);
-      const actionUrl = new URL(form.getAttribute('action') || location.href, location.href);
-      if (/index_restringido|seccion_detalle/i.test(actionUrl.pathname || '')) {
-        actionUrl.pathname = '/pedido/carpeta_ver.php';
-        actionUrl.search = '';
-      }
-      const method = String(form.method || 'get').toLowerCase();
-      if (method === 'get') {
-        for (const [key, value] of formData.entries()) {
-          if (typeof value === 'string') actionUrl.searchParams.set(key, value);
-        }
-        location.href = actionUrl.href;
-      } else {
-        HTMLFormElement.prototype.submit.call(form);
-      }
+    const form = searchInput.form || searchInput.closest('form');
+    if (!form) {
       return {
-        submitted: true,
-        via: method === 'get' ? 'form-action-query' : 'native-form',
-        inputName: codeInput.name || codeInput.id || codeInput.placeholder || '',
-        url: actionUrl.href,
+        submitted: false,
+        isLoginPage,
+        reason: 'search_form_not_found',
+        inputName: searchInput.name || searchInput.id || '',
+        url: location.href,
       };
     }
 
-    const searchParams = new URLSearchParams(location.search);
-    searchParams.set(codeInput.name || 'buscar_txt', barcode);
-    var fallbackSearchUrl = new URL('/pedido/carpeta_ver.php', location.origin);
-    for (const [key, value] of searchParams.entries()) {
-      fallbackSearchUrl.searchParams.set(key, value);
-    }
-    fallbackSearchUrl.searchParams.set(codeInput.name || 'buscar_txt', barcode);
-    location.href = fallbackSearchUrl.href;
+    const submitButton = Array.from(form.querySelectorAll('button, input')).find((element) => {
+      const type = normalize(element.type || '');
+      return type === 'submit' && !element.disabled;
+    });
+
+    window.setTimeout(() => {
+      if (typeof form.requestSubmit === 'function') {
+        form.requestSubmit(submitButton || undefined);
+      } else if (submitButton && typeof submitButton.click === 'function') {
+        submitButton.click();
+      } else {
+        HTMLFormElement.prototype.submit.call(form);
+      }
+    }, 0);
+
     return {
       submitted: true,
-      via: 'location-query',
-      inputName: codeInput.name || codeInput.id || codeInput.placeholder || '',
-      url: fallbackSearchUrl.href,
+      via: 'supplier-search-input',
+      inputName: searchInput.name || searchInput.id || '',
+      value: searchValue,
+      url: location.href,
     };
   } catch (error) {
     return {
@@ -357,12 +297,12 @@ const buildSupplierTitleSearchQueries = (title) => {
   ]);
 
   const originalWords = rawTitle.split(/\s+/);
-  const normalizedWords = normalize(rawTitle).split(/\s+/);
-  const significantOriginal = originalWords.filter((word, index) => {
-    const normalized = normalizedWords[index] || normalize(word);
-    if (!normalized || normalized.length < 4) return false;
-    if (/^x?\d+[a-z]*$/i.test(normalized)) return false;
-    if (stopWords.has(normalized)) return false;
+  const significantOriginal = originalWords.filter((word) => {
+    const normalizedWord = normalize(word);
+    const compactWord = normalizedWord.replace(/\s+/g, '');
+    if (!compactWord || compactWord.length < 4) return false;
+    if (/^x?\d+[a-z]*$/i.test(compactWord)) return false;
+    if (stopWords.has(compactWord)) return false;
     return true;
   });
 
@@ -379,11 +319,12 @@ const buildSupplierTitleSearchQueries = (title) => {
   return [...new Set(queries)].slice(0, 5);
 };
 
-const buildSupplierExtractScript = (barcode, productTitle) => `
+const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
 (function () {
   try {
     var barcode = ${JSON.stringify(String(barcode || '').trim())};
     var productTitle = ${JSON.stringify(String(productTitle || '').trim())};
+    var searchMode = ${JSON.stringify(String(searchMode || '').trim())};
     var normalize = function (value) {
       return String(value || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
     };
@@ -478,6 +419,13 @@ const buildSupplierExtractScript = (barcode, productTitle) => `
     var isSupplierDetailUrl = function (href) {
       return /\/pedido\/detalle(?:_mobile)?\.php\?[^#]*\bidp=\d+/i.test(String(href || ''));
     };
+    var getSupplierProductId = function (href) {
+      try {
+        return new URL(href, location.href).searchParams.get('idp') || '';
+      } catch (hrefError) {
+        return '';
+      }
+    };
     var normalizeSupplierHref = function (href) {
       try {
         var parsedHref = new URL(href, location.href);
@@ -557,9 +505,39 @@ const buildSupplierExtractScript = (barcode, productTitle) => `
 
       var srcLower = normalize(src);
       var altLower = normalize(img.alt || img.title || '');
+      var productContainer = typeof img.closest === 'function'
+        ? (img.closest('.caja_productos') || img.closest('.producto'))
+        : null;
+      var productTitleLink = productContainer && productContainer.querySelector
+        ? productContainer.querySelector('.producto_txt a[href], a[href*="detalle.php?idp="], a[href*="detalle_mobile.php?idp="]')
+        : null;
+      var structuredTitle = cleanText(
+        (productTitleLink && (productTitleLink.innerText || productTitleLink.textContent)) ||
+        (productContainer && productContainer.querySelector && productContainer.querySelector('.producto_txt')?.innerText) ||
+        img.alt ||
+        img.title ||
+        ''
+      );
+      var structuredCodeText = cleanText(
+        (productContainer && productContainer.querySelector && productContainer.querySelector('.producto_id')?.innerText) ||
+        ''
+      );
+      var structuredCode = structuredCodeText.replace(/codigo\\s*:/i, '').replace(/\\D/g, '');
+      var structuredCodeComparable = compactDigits(structuredCode);
       var width = Number(img.naturalWidth || img.width || 0);
       var height = Number(img.naturalHeight || img.height || 0);
-      if (width < 70 || height < 70) return null;
+      var isStructuredProductImage = Boolean(
+        productContainer &&
+        (
+          img.classList?.contains('producto_imagen') ||
+          /\\/imagen\\/producto\\//i.test(src)
+        )
+      );
+      if ((width < 70 || height < 70) && !isStructuredProductImage) return null;
+      if (isStructuredProductImage) {
+        width = Math.max(width, 300);
+        height = Math.max(height, 300);
+      }
       if (srcLower.includes('logo') || srcLower.includes('banner') || srcLower.includes('sprite') || srcLower.includes('icon')) return null;
       if (/\\/imagen\\/producto\\/grande\\/f36613\\.jpg/i.test(src)) return null;
 
@@ -587,23 +565,34 @@ const buildSupplierExtractScript = (barcode, productTitle) => `
           : context.normalized.includes(barcodeText);
       });
       var readableContext = contexts.find(function (context) { return context.normalized.length > 20; });
-      var contextText = (exactContext && exactContext.normalized) || (readableContext && readableContext.normalized) || '';
-      var rawText = (exactContext && exactContext.raw) || (readableContext && readableContext.raw) || '';
+      var contextText = normalize([
+        structuredTitle,
+        structuredCodeText,
+        (exactContext && exactContext.normalized) || '',
+        (readableContext && readableContext.normalized) || ''
+      ].filter(Boolean).join(' '));
+      var rawText = cleanText([
+        structuredTitle,
+        structuredCodeText,
+        (exactContext && exactContext.raw) || '',
+        (readableContext && readableContext.raw) || ''
+      ].filter(Boolean).join(' '));
       var sourceDigits = compactDigits(src + ' ' + (img.alt || '') + ' ' + (img.title || ''));
       var hasBarcode = Boolean(
         barcodeDigits &&
         (
-          compactDigits(rawText).includes(barcodeDigits) ||
+          (structuredCodeComparable && structuredCodeComparable === barcodeDigits) ||
+          (!structuredCode && compactDigits(rawText).includes(barcodeDigits)) ||
           sourceDigits.includes(barcodeDigits)
         )
       );
-      var titleSearchText = contextText + ' ' + altLower;
+      var titleSearchText = normalize(structuredTitle) + ' ' + contextText + ' ' + altLower;
       var tokenMatches = titleTokens.filter(function (token) { return tokenMatchesText(token, titleSearchText); }).length;
       var titleSimilarity = titleTokens.length > 0
         ? Math.round((tokenMatches / titleTokens.length) * 100)
         : 0;
       var productishSource = /producto|prod|grande|foto|imagen|catalogo|catalog|uploads/i.test(src);
-      var productUrl = getNearestProductLink(bestNode || img);
+      var productUrl = normalizeSupplierHref(productTitleLink && productTitleLink.href) || getNearestProductLink(productContainer || bestNode || img);
       var area = width * height;
       var score =
         (hasBarcode ? 200 : 0) +
@@ -615,7 +604,9 @@ const buildSupplierExtractScript = (barcode, productTitle) => `
       return {
         src: src,
         productUrl: productUrl,
-        title: cleanText(rawText || img.alt || img.title || productTitle || 'Producto encontrado').slice(0, 160),
+        casaAlbertoId: getSupplierProductId(productUrl),
+        title: cleanText(structuredTitle || rawText || img.alt || img.title || productTitle || 'Producto encontrado').slice(0, 160),
+        supplierCode: structuredCode,
         width: width,
         height: height,
         score: score,
@@ -655,9 +646,11 @@ const buildSupplierExtractScript = (barcode, productTitle) => `
     if (matchedCandidates.length === 0) {
       return {
         status: 'not_found',
-        message: hasBarcodeInPage
-          ? 'El codigo aparece, pero no hay imagen cercana para elegir.'
-          : 'No aparecio el codigo exacto en los resultados.',
+        message: searchMode === 'title'
+          ? 'No se encontro una coincidencia suficiente por nombre.'
+          : hasBarcodeInPage
+            ? 'El codigo aparece, pero no hay imagen cercana para elegir.'
+            : 'No aparecio el codigo exacto en los resultados.',
         url: location.href,
         candidatesSeen: candidates.length,
       };
@@ -701,7 +694,9 @@ const buildSupplierExtractScript = (barcode, productTitle) => `
           return {
             src: src,
             productUrl: candidate.productUrl,
+            casaAlbertoId: candidate.casaAlbertoId || getSupplierProductId(candidate.productUrl),
             title: detailTitle || candidate.title,
+            supplierCode: candidate.supplierCode || '',
             width: candidate.width,
             height: candidate.height,
             score: candidate.score + Math.max(0, 20 - index),
@@ -735,6 +730,8 @@ const buildSupplierExtractScript = (barcode, productTitle) => `
           foundTitle: candidate.title,
           imageUrl: candidate.src,
           productUrl: candidate.productUrl || '',
+          casaAlbertoId: candidate.casaAlbertoId || getSupplierProductId(candidate.productUrl),
+          supplierCode: candidate.supplierCode || '',
           imageDataUrl: dataUrl,
           width: candidate.width,
           height: candidate.height,
@@ -779,6 +776,8 @@ const buildSupplierExtractScript = (barcode, productTitle) => `
         foundTitle: best.foundTitle,
         imageUrl: best.imageUrl,
         productUrl: best.productUrl,
+        casaAlbertoId: best.casaAlbertoId || '',
+        supplierCode: best.supplierCode || '',
         imageDataUrl: best.imageDataUrl,
         width: best.width,
         height: best.height,
@@ -811,19 +810,24 @@ const searchSupplierImageByBarcode = async ({ barcode, title }) => {
   try {
     workerWindow = createSupplierBrowserWindow({ show: false, width: 1000, height: 760 });
 
-    const waitAfterSearchSubmit = async () => {
-      await Promise.race([
-        waitForWebContentsLoad(workerWindow.webContents, 6500),
-        delay(1800).then(() => ({ success: true, settledByDelay: true })),
-      ]);
-      await delay(250);
+    const initialLoad = await loadUrlAndWait(workerWindow, getSupplierRestrictedUrl(), 10000);
+    if (!initialLoad.success && !initialLoad.timeout) {
+      return {
+        status: 'error',
+        message: initialLoad.error || 'No se pudo abrir el buscador del proveedor.',
+      };
+    }
+
+    const waitAfterSearchSubmit = async (loadPromise) => {
+      await loadPromise;
+      await delay(350);
     };
 
     const runSearchAttempt = async ({ query, extractBarcode, fallbackSearch }) => {
       const extractCurrentPage = async (via) => {
         try {
           const extractResult = await workerWindow.webContents.executeJavaScript(
-            buildSupplierExtractScript(extractBarcode || safeBarcode, title),
+            buildSupplierExtractScript(extractBarcode || safeBarcode, title, fallbackSearch),
             true
           );
           return {
@@ -854,11 +858,13 @@ const searchSupplierImageByBarcode = async ({ barcode, title }) => {
       };
 
       const runSubmitScript = async () => {
+        const loadPromise = waitForWebContentsLoad(workerWindow.webContents, 6500);
         try {
-          return await workerWindow.webContents.executeJavaScript(
+          const submitResult = await workerWindow.webContents.executeJavaScript(
             buildSupplierSearchScript(query),
             true
           );
+          return { submitResult, loadPromise };
         } catch (error) {
           workerWindow.__rebuSupplierPushErrorEvent?.('submit-script-error', {
             barcode: safeBarcode,
@@ -869,37 +875,18 @@ const searchSupplierImageByBarcode = async ({ barcode, title }) => {
             stack: error?.stack || '',
           });
           return {
-            submitted: false,
-            reason: 'script_error',
-            message: error?.message || 'Script de busqueda fallo en proveedor.',
+            submitResult: {
+              submitted: false,
+              reason: 'script_error',
+              message: error?.message || 'Script de busqueda fallo en proveedor.',
+            },
+            loadPromise,
           };
         }
       };
 
       let lastResult = null;
-      const directUrls = buildSupplierDirectSearchUrls(query, workerWindow.webContents.getURL());
-      const urlsToTry = fallbackSearch === 'title' ? directUrls.slice(0, 1) : directUrls;
-      for (const directUrl of urlsToTry) {
-        const loadResult = await loadUrlAndWait(workerWindow, directUrl, 6500);
-        if (!loadResult.success && !loadResult.timeout) {
-          workerWindow.__rebuSupplierPushErrorEvent?.('direct-search-load-error', {
-            barcode: safeBarcode,
-            query,
-            fallbackSearch: fallbackSearch || 'barcode',
-            title,
-            url: directUrl,
-            message: loadResult.error || '',
-          });
-          continue;
-        }
-        await delay(250);
-        lastResult = await extractCurrentPage(`direct:${directUrl}`);
-        if (lastResult?.status === 'found' || lastResult?.status === 'login_required') {
-          return lastResult;
-        }
-      }
-
-      const submitResult = await runSubmitScript();
+      const { submitResult, loadPromise } = await runSubmitScript();
       if (submitResult?.isLoginPage || submitResult?.reason === 'login_required') {
         return {
           status: 'login_required',
@@ -911,7 +898,7 @@ const searchSupplierImageByBarcode = async ({ barcode, title }) => {
       }
 
       if (submitResult?.submitted) {
-        await waitAfterSearchSubmit();
+        await waitAfterSearchSubmit(loadPromise);
         lastResult = await extractCurrentPage(submitResult?.via || 'submit-script');
         if (lastResult?.status === 'found' || lastResult?.status === 'login_required') {
           return lastResult;
