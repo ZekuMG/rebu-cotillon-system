@@ -9,9 +9,10 @@ import {
 import AsyncActionButton from '../components/AsyncActionButton';
 import { FancyPrice } from '../components/FancyPrice';
 import BulkExcelImportView from '../components/BulkExcelImportView';
+import { ImageModal } from '../components/modals/SaleModals';
 import Swal from 'sweetalert2';
 import usePendingAction from '../hooks/usePendingAction';
-import { hasProductImage } from '../utils/productImages';
+import { getProductImageUrl, hasProductImage } from '../utils/productImages';
 
 const BULK_EDITOR_TOOL_MODE_STORAGE_KEY = 'rebu_bulk_editor_tool_mode_v1';
 const IMAGE_IMPORT_LIMIT_OPTIONS = [
@@ -93,6 +94,8 @@ export default function BulkEditorView({
   const [imageImportSearchLimit, setImageImportSearchLimit] = useState('10');
   const [isImageImportLimitMenuOpen, setIsImageImportLimitMenuOpen] = useState(false);
   const [imageCandidatePickerRowId, setImageCandidatePickerRowId] = useState(null);
+  const [replaceExistingProductImages, setReplaceExistingProductImages] = useState(false);
+  const [productImagePreview, setProductImagePreview] = useState('');
   const imageImportPausedRef = useRef(false);
   const imageImportStopRef = useRef(false);
 
@@ -153,8 +156,12 @@ export default function BulkEditorView({
     return matchesSearch && matchesCategory && matchesOutOfStock;
   });
 
-  const canImportImageForProduct = (product) => Boolean(product?.barcode) && !hasProductImage(product);
+  const hasSearchableProductTitle = (product) => Boolean(String(product?.title || '').trim());
+  const canImportImageForProduct = (product) => hasSearchableProductTitle(product) && !hasProductImage(product);
   const imageImportCandidates = sandboxInventory.filter(canImportImageForProduct);
+  const selectedImageCorrectionCandidates = sandboxInventory.filter((product) =>
+    selectedIds.includes(product.id) && hasSearchableProductTitle(product) && hasProductImage(product)
+  );
 
   const filteredProductIds = filteredProducts.map((product) => product.id);
   const visibleOutOfStockIds = filteredProducts
@@ -457,12 +464,18 @@ export default function BulkEditorView({
 
   const buildImageImportRows = () => {
     const selectedEligible = sandboxInventory.filter((product) =>
-      selectedIds.includes(product.id) && canImportImageForProduct(product)
+      selectedIds.includes(product.id) &&
+      hasSearchableProductTitle(product) &&
+      (replaceExistingProductImages ? hasProductImage(product) : !hasProductImage(product))
     );
-    const sourceProducts = selectedEligible.length > 0 ? selectedEligible : imageImportCandidates;
+    const sourceProducts = replaceExistingProductImages
+      ? selectedEligible
+      : selectedEligible.length > 0
+        ? selectedEligible
+        : imageImportCandidates;
 
     return sourceProducts.map((product) => ({
-      rowId: `${product.id}-${product.barcode}`,
+      rowId: `${product.id}-${product.barcode || 'title-only'}`,
       productId: product.id,
       title: product.title || 'Producto sin nombre',
       barcode: String(product.barcode || '').trim(),
@@ -472,16 +485,33 @@ export default function BulkEditorView({
       foundTitle: '',
       imageUrl: '',
       imageDataUrl: '',
-      message: 'Listo para buscar',
+      replaceExistingImage: hasProductImage(product),
+      previousImageUrl: product.image || '',
+      previousImageThumbUrl: product.imageThumb || product.image_thumb || '',
+      message: hasProductImage(product)
+        ? 'Lista para corregir la foto actual'
+        : product.barcode
+          ? 'Listo para buscar por codigo y nombre'
+          : 'Sin codigo: se buscara por nombre',
     }));
   };
 
   const openImageImportModal = () => {
+    if (replaceExistingProductImages && selectedImageCorrectionCandidates.length === 0) {
+      Swal.fire({
+        title: 'Selecciona los productos',
+        text: 'Marca en la lista los articulos con foto incorrecta que queres volver a buscar.',
+        icon: 'info',
+        confirmButtonColor: '#0f172a',
+      });
+      return;
+    }
+
     const rows = buildImageImportRows();
     if (rows.length === 0) {
       Swal.fire({
         title: 'Sin productos para buscar',
-        text: 'No hay productos sin foto y con codigo de barras en este lote.',
+        text: 'No hay productos sin foto y con un nombre valido en este lote.',
         icon: 'info',
         confirmButtonColor: '#0f172a',
       });
@@ -576,7 +606,8 @@ export default function BulkEditorView({
         updateImageImportRow(row.rowId, { status: 'searching', message: 'Buscando en proveedor...' });
         const result = await window.electronAPI.supplierImageSearch({
           barcode: row.barcode,
-          title: row.title,
+            title: row.title,
+            searchMode: row.barcode ? 'barcode_then_title' : 'title_only',
         });
 
         if (result?.status === 'login_required') {
@@ -1146,21 +1177,52 @@ export default function BulkEditorView({
 
         <section className="rounded-lg border border-slate-200 bg-white p-2.5">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">Fotos por codigo</span>
-            <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-black text-emerald-700">{imageImportCandidates.length}</span>
+            <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">Fotos de productos</span>
+            <span className={`rounded-md border px-2 py-1 text-[10px] font-black ${
+              replaceExistingProductImages
+                ? 'border-amber-200 bg-amber-50 text-amber-700'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+            }`}>
+              {replaceExistingProductImages ? selectedImageCorrectionCandidates.length : imageImportCandidates.length}
+            </span>
           </div>
           <button
             type="button"
+            onClick={() => setReplaceExistingProductImages((current) => !current)}
+            className={`mb-2 flex w-full items-center justify-between rounded-md border px-2.5 py-2 text-left transition-colors ${
+              replaceExistingProductImages
+                ? 'border-amber-300 bg-amber-50 text-amber-900'
+                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <span>
+              <span className="block text-[11px] font-black">Corregir fotos seleccionadas</span>
+              <span className="mt-0.5 block text-[9px] font-bold opacity-70">Permite reemplazar una foto existente</span>
+            </span>
+            <span className={`h-4 w-7 rounded-full p-0.5 transition-colors ${
+              replaceExistingProductImages ? 'bg-amber-500' : 'bg-slate-300'
+            }`}>
+              <span className={`block h-3 w-3 rounded-full bg-white transition-transform ${
+                replaceExistingProductImages ? 'translate-x-3' : ''
+              }`} />
+            </span>
+          </button>
+          <button
+            type="button"
             onClick={openImageImportModal}
-            disabled={imageImportCandidates.length === 0}
+            disabled={replaceExistingProductImages
+              ? selectedImageCorrectionCandidates.length === 0
+              : imageImportCandidates.length === 0}
             className="flex w-full items-center justify-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-45"
-            title="Buscar fotos en Cotillon Casa Alberto para productos sin imagen y con codigo de barras"
+            title={replaceExistingProductImages
+              ? 'Buscar nuevamente la foto de los productos seleccionados'
+              : 'Buscar fotos en Cotillon Casa Alberto por codigo o nombre'}
           >
             <Camera size={14} />
-            Buscar fotos
+            {replaceExistingProductImages ? 'Buscar reemplazos' : 'Buscar fotos'}
           </button>
           <p className="mt-2 text-[10px] font-bold leading-snug text-slate-500">
-            Usa productos seleccionados aptos o, si no hay seleccion, todos los que no tienen foto.
+            Usa productos seleccionados o todos los que no tienen foto. Sin codigo, busca por nombre.
           </p>
         </section>
 
@@ -1205,24 +1267,25 @@ export default function BulkEditorView({
         </aside>
 
       {/* TABLA PRINCIPAL CON SCROLL LAZY LOAD */}
-      <div className="relative z-0 flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="relative z-0 flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="overflow-y-auto custom-scrollbar flex-1 relative" onScroll={handleMainScroll}>
-          <table className="w-full text-left border-collapse relative">
-            <thead className="bg-slate-800 text-white sticky top-0 z-20 shadow-md">
-              <tr>
-                <th className="p-1.5 w-8 text-center">
+          <table className="relative w-full table-fixed border-collapse text-left">
+            <thead className="bulk-editor-table-header sticky top-0 z-20 text-white">
+              <tr className="h-10">
+                <th className="w-10 px-2 text-center">
                   <button onClick={toggleSelectAll} className="transition-colors hover:text-emerald-200">
                     {areAllFilteredSelected ? <CheckSquare size={14} /> : <Square size={14} />}
                   </button>
                 </th>
-                <th className="p-1.5 text-[10px] uppercase font-black tracking-wider">Producto</th>
-                <th className="p-1.5 text-[10px] uppercase font-black tracking-wider w-28">Costo</th>
-                <th className="p-1.5 text-[10px] uppercase font-black tracking-wider w-28">Precio</th>
-                <th className="p-1.5 text-[10px] uppercase font-black tracking-wider w-20">Stock</th>
-                <th className="p-1.5 text-[10px] uppercase font-black text-center w-[75px]">Acción</th>
+                <th className="w-16 px-1 text-left text-[10px] font-black uppercase tracking-wider">Foto</th>
+                <th className="min-w-[220px] px-2 text-[10px] font-black uppercase tracking-wider">Producto</th>
+                <th className="w-28 px-2 text-[10px] font-black uppercase tracking-wider">Costo</th>
+                <th className="w-28 px-2 text-[10px] font-black uppercase tracking-wider">Precio</th>
+                <th className="w-20 px-2 text-center text-[10px] font-black uppercase tracking-wider">Stock</th>
+                <th className="w-[76px] px-2 text-center text-[10px] font-black uppercase tracking-wider">Acción</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody>
               {filteredProducts.slice(0, mainLimit).map(p => {
                 const isSelected = selectedIds.includes(p.id);
                 const isWeight = p.product_type === 'weight';
@@ -1236,86 +1299,129 @@ export default function BulkEditorView({
                 
                 const costDiff = calculateDiffPercent(origCost, newCost);
                 const priceDiff = calculateDiffPercent(origPrice, newPrice);
+                const stockChanged = Number(editVals.stock) !== getOriginalVal(p, 'stock');
 
                 return (
-                  <tr key={p.id} className={`transition-colors ${isSelected ? 'bg-emerald-50/70' : isWeight ? 'bg-amber-50/20' : 'hover:bg-slate-50'}`}>
-                    <td className="p-1.5 text-center border-r border-slate-100">
-                      <button onClick={() => toggleSelect(p.id)} className={`transition-colors ${isSelected ? 'text-emerald-600' : 'text-slate-300 hover:text-slate-500'}`}>
-                        {isSelected ? <CheckSquare size={14} /> : <Square size={14} />}
-                      </button>
+                  <tr
+                    key={p.id}
+                    className={`bulk-editor-product-row h-14 border-b border-slate-100 transition-colors last:border-b-0 ${
+                      isSelected ? 'is-selected' : ''
+                    }`}
+                  >
+                    <td className="p-0 text-center align-middle">
+                      <div className="flex h-14 items-center justify-center px-2">
+                        <button onClick={() => toggleSelect(p.id)} className={`transition-colors ${isSelected ? 'text-emerald-600' : 'text-slate-300 hover:text-slate-500'}`}>
+                          {isSelected ? <CheckSquare size={14} /> : <Square size={14} />}
+                        </button>
+                      </div>
                     </td>
-                    <td className="p-1.5 border-r border-slate-100">
-                      <div className="flex items-center gap-1.5">
-                        {isWeight ? <Scale size={12} className="text-amber-500 shrink-0" /> : <Package size={12} className="text-blue-500 shrink-0" />}
-                        <div className="min-w-0">
-                          <p className="font-bold text-slate-800 text-[11px] truncate" title={p.title}>{p.title}</p>
-                          <p className="text-[8px] text-slate-400 font-bold uppercase">{isWeight ? 'Por Peso (kg/g)' : 'Por Unidad'}</p>
+                    <td className="w-16 p-0 align-middle">
+                      <div className="flex h-14 items-center px-1">
+                        {getProductImageUrl(p) ? (
+                          <button
+                            type="button"
+                            onClick={() => setProductImagePreview(getProductImageUrl(p))}
+                            className="group relative h-10 w-10 overflow-hidden rounded-md border border-slate-200 bg-white outline-none transition-colors hover:border-blue-400 focus-visible:ring-2 focus-visible:ring-blue-400"
+                            title={`Ampliar imagen de ${p.title}`}
+                          >
+                            <img
+                              src={getProductImageUrl(p)}
+                              alt={p.title}
+                              className="h-full w-full cursor-zoom-in object-cover object-center transition-transform duration-150 group-hover:scale-105"
+                            />
+                          </button>
+                        ) : (
+                          <span className="flex h-10 w-10 items-center justify-center rounded-md border border-dashed border-slate-200 bg-slate-50 text-slate-300">
+                            <ImageIcon size={14} />
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="min-w-0 p-0 align-middle">
+                      <div className="flex h-14 min-w-0 flex-col justify-center gap-1 px-2">
+                        <p className="truncate text-xs font-black leading-none text-slate-800" title={p.title}>{p.title}</p>
+                        <div className="flex min-w-0 items-center gap-1.5 text-[8px] font-bold uppercase leading-none text-slate-400">
+                          {p.category && <span className="max-w-[150px] truncate">{p.category}</span>}
+                          {p.category && <span className="text-slate-300">/</span>}
+                          <span>{isWeight ? 'Por peso' : 'Por unidad'}</span>
                         </div>
                       </div>
                     </td>
                     
-                    <td className="p-1 border-r border-slate-100 align-top">
-                      <div className="flex flex-col gap-0.5">
+                    <td className="p-0 align-middle">
+                      <div className="relative flex h-14 items-center px-2">
                         {costDiff ? (
-                          <div className="flex items-center justify-between text-[9px] text-slate-400 font-medium px-1">
+                          <div className="absolute inset-x-3 top-1 flex items-center justify-between text-[9px] font-medium text-slate-400">
                             <span className="line-through"><FancyPrice amount={origCost} /></span>
                             <span className={`font-black ${costDiff.includes('+') ? 'text-red-500' : 'text-emerald-500'}`}>
                               ({costDiff})
                             </span>
                           </div>
-                        ) : (
-                          <div className="h-[13px]"></div>
-                        )}
-                        <div className="relative">
-                          <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] font-bold">$</span>
+                        ) : null}
+                        <div className={`bulk-editor-number-field flex h-8 w-full overflow-hidden rounded-md border bg-white transition-colors focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 ${
+                          costDiff ? 'border-l-2 border-blue-500' : 'border-slate-200'
+                        }`}>
+                          <span className="flex w-6 shrink-0 items-center justify-center border-r border-slate-200 bg-slate-50 text-[11px] font-black text-slate-500">$</span>
                           <input 
                             type="number" 
                             value={editVals.purchasePrice ?? ''} 
                             onChange={(e) => handleEditChange(p.id, 'purchasePrice', e.target.value)}
-                            className={`no-spinners w-full pl-4 pr-1 py-1 text-[11px] font-bold border rounded outline-none transition-all ${costDiff ? 'bg-amber-100 border-amber-300 text-amber-900' : 'border-transparent hover:border-slate-300 bg-transparent focus:bg-white focus:border-slate-300'}`}
+                            className={`no-spinners min-w-0 flex-1 bg-transparent px-2 text-right text-[13px] font-black tabular-nums outline-none ${
+                              costDiff ? 'text-blue-900' : 'text-slate-800'
+                            }`}
                           />
                         </div>
                       </div>
                     </td>
 
-                    <td className="p-1 border-r border-slate-100 align-top">
-                      <div className="flex flex-col gap-0.5">
+                    <td className="p-0 align-middle">
+                      <div className="relative flex h-14 items-center px-2">
                         {priceDiff ? (
-                          <div className="flex items-center justify-between text-[9px] text-slate-400 font-medium px-1">
+                          <div className="absolute inset-x-3 top-1 flex items-center justify-between text-[9px] font-medium text-slate-400">
                             <span className="line-through"><FancyPrice amount={origPrice} /></span>
                             <span className={`font-black ${priceDiff.includes('+') ? 'text-emerald-500' : 'text-red-500'}`}>
                               ({priceDiff})
                             </span>
                           </div>
-                        ) : (
-                          <div className="h-[13px]"></div>
-                        )}
-                        <div className="relative">
-                          <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] font-bold">$</span>
+                        ) : null}
+                        <div className={`bulk-editor-number-field flex h-8 w-full overflow-hidden rounded-md border bg-white transition-colors focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 ${
+                          priceDiff ? 'border-l-2 border-blue-500' : 'border-slate-200'
+                        }`}>
+                          <span className="flex w-6 shrink-0 items-center justify-center border-r border-slate-200 bg-slate-50 text-[11px] font-black text-slate-500">$</span>
                           <input 
                             type="number" 
                             value={editVals.price ?? ''} 
                             onChange={(e) => handleEditChange(p.id, 'price', e.target.value)}
-                            className={`no-spinners w-full pl-4 pr-1 py-1 text-[11px] font-black border rounded outline-none transition-all ${priceDiff ? 'bg-green-100 border-green-400 text-green-900' : 'border-transparent hover:border-slate-300 bg-transparent focus:bg-white focus:border-slate-300 text-slate-900'}`}
+                            className={`no-spinners min-w-0 flex-1 bg-transparent px-2 text-right text-[13px] font-black tabular-nums outline-none ${
+                              priceDiff ? 'text-blue-900' : 'text-slate-900'
+                            }`}
                           />
                         </div>
                       </div>
                     </td>
 
-                    <td className="p-1 border-r border-slate-100 align-bottom pb-[5px]">
-                      <div className="flex items-center">
-                        <input 
-                          type="number" 
-                          value={editVals.stock ?? ''} 
-                          onChange={(e) => handleEditChange(p.id, 'stock', e.target.value)}
-                          className={`no-spinners w-full p-1 text-[11px] font-bold border rounded outline-none transition-all text-center ${Number(editVals.stock) !== getOriginalVal(p, 'stock') ? 'bg-blue-100 border-blue-300 text-blue-900' : 'border-transparent hover:border-slate-300 bg-transparent text-slate-700'}`}
-                        />
-                        {isWeight && <span className="text-[8px] font-bold text-amber-600 ml-0.5">g</span>}
+                    <td className="p-0 align-middle">
+                      <div className="flex h-14 items-center px-2">
+                        <div className={`bulk-editor-number-field flex h-8 w-full overflow-hidden rounded-md border bg-white transition-colors focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 ${
+                          stockChanged ? 'border-l-2 border-blue-500' : 'border-slate-200'
+                        }`}>
+                          <input
+                            type="number"
+                            value={editVals.stock ?? ''}
+                            onChange={(e) => handleEditChange(p.id, 'stock', e.target.value)}
+                            className={`no-spinners min-w-0 flex-1 bg-transparent px-1 text-right text-[13px] font-black tabular-nums outline-none ${
+                              stockChanged ? 'text-blue-900' : 'text-slate-800'
+                            }`}
+                          />
+                          <span className="flex min-w-6 shrink-0 items-center justify-center border-l border-slate-200 bg-slate-50 px-1 text-[9px] font-black uppercase text-slate-500">
+                            {isWeight ? 'g' : 'u'}
+                          </span>
+                        </div>
                       </div>
                     </td>
 
-                    <td className="p-1 align-middle">
-                      <div className="flex items-center justify-center gap-1.5 min-h-[28px] w-full">
+                    <td className="p-0 align-middle">
+                      <div className="flex h-14 w-full items-center justify-center gap-1.5 px-2">
                         {rowChanged ? (
                           <>
                             <AsyncActionButton 
@@ -1324,7 +1430,7 @@ export default function BulkEditorView({
                               loadingContent={<Loader2 size={12} className="animate-spin" />}
                               disabled={isSaving}
                               title="Guardar Cambio"
-                              className="w-7 h-7 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors flex justify-center items-center shadow-sm disabled:opacity-50"
+                              className="flex h-7 w-7 items-center justify-center rounded-md bg-blue-600 text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
                             >
                               <Save size={14} />
                             </AsyncActionButton>
@@ -1332,7 +1438,7 @@ export default function BulkEditorView({
                               onClick={() => handleResetRow(p)}
                               disabled={isSaving}
                               title="Deshacer"
-                              className="w-7 h-7 bg-slate-200 text-slate-600 rounded hover:bg-slate-300 transition-colors flex justify-center items-center disabled:opacity-50"
+                              className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50"
                             >
                               <RotateCcw size={14} />
                             </button>
@@ -1348,7 +1454,7 @@ export default function BulkEditorView({
               
               {mainLimit < filteredProducts.length && (
                 <tr>
-                  <td colSpan="6" className="p-3 text-center text-slate-400 text-[10px] font-bold bg-slate-50 flex items-center justify-center gap-2">
+                  <td colSpan="7" className="p-3 text-center text-slate-400 text-[10px] font-bold bg-slate-50 flex items-center justify-center gap-2">
                     <ChevronDown size={14} className="animate-bounce" /> Sigue bajando para cargar más...
                   </td>
                 </tr>
@@ -1356,7 +1462,7 @@ export default function BulkEditorView({
               
               {filteredProducts.length === 0 && (
                 <tr>
-                  <td colSpan="6" className="p-8 text-center text-slate-400 font-bold text-xs">No hay productos que coincidan con la búsqueda.</td>
+                  <td colSpan="7" className="p-8 text-center text-slate-400 font-bold text-xs">No hay productos que coincidan con la búsqueda.</td>
                 </tr>
               )}
             </tbody>
@@ -1791,7 +1897,7 @@ export default function BulkEditorView({
               <div className="min-w-0">
                 <h3 className="flex items-center gap-2 text-sm font-black text-slate-900">
                   <Camera size={17} className="text-emerald-600" />
-                  Fotos por codigo de barras
+                  Fotos de productos
                 </h3>
                 <p className="mt-0.5 text-[11px] font-bold text-slate-500">
                   1. Abrir sesion · 2. Probar 10 · 3. Aplicar aprobadas
@@ -2000,7 +2106,7 @@ export default function BulkEditorView({
                         </div>
                         <h4 className="mt-3 text-sm font-black text-slate-900">Lote preparado</h4>
                         <p className="mt-1 text-xs font-bold leading-relaxed text-slate-500">
-                          Hay {imageImportRows.length} productos sin foto y con codigo. Usa <span className="font-black text-slate-800">Probar 10</span> para validar que la sesion del proveedor responda bien.
+                          Hay {imageImportRows.length} productos sin foto. Los que no tienen codigo se buscaran por nombre. Usa <span className="font-black text-slate-800">Probar 10</span> para validar la sesion.
                         </p>
                       </div>
                     </div>
@@ -2084,7 +2190,7 @@ export default function BulkEditorView({
                               </td>
                               <td className="px-2 py-1.5 align-middle">
                                 <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-black text-slate-700">
-                                  {row.barcode}
+                                  {row.barcode || 'Sin codigo'}
                                 </span>
                               </td>
                               <td className="px-2 py-1.5 align-middle">
@@ -2110,7 +2216,9 @@ export default function BulkEditorView({
                     <div className="min-w-0">
                       <h4 className="truncate text-sm font-black text-slate-900">{imageCandidatePickerRow.title}</h4>
                       <p className="mt-0.5 text-[11px] font-bold text-slate-500">
-                        Elegi la foto correcta para codigo {imageCandidatePickerRow.barcode}
+                        {imageCandidatePickerRow.barcode
+                          ? `Elegi la foto correcta para codigo ${imageCandidatePickerRow.barcode}`
+                          : 'Elegi la coincidencia correcta encontrada por nombre'}
                       </p>
                     </div>
                     <button
@@ -2214,6 +2322,11 @@ export default function BulkEditorView({
           </div>
         </div>
       )}
+      <ImageModal
+        isOpen={Boolean(productImagePreview)}
+        image={productImagePreview}
+        onClose={() => setProductImagePreview('')}
+      />
     </div>
   );
 

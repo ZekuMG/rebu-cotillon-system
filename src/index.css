@@ -4785,6 +4785,65 @@ p {
   background-clip: padding-box;
 }
 
+/* Bulk editor rows use explicit surfaces so selection never falls back to a
+   light Tailwind tint while the application is in dark mode. */
+.bulk-editor-view .bulk-editor-table-header {
+  background-color: #1e293b !important;
+  border-bottom: 1px solid #475569;
+  box-shadow: 0 2px 0 rgba(15, 23, 42, 0.2), 0 5px 10px rgba(15, 23, 42, 0.12);
+}
+
+.bulk-editor-view .bulk-editor-table-header th {
+  color: #f8fafc !important;
+}
+
+.bulk-editor-view .bulk-editor-product-row {
+  background-color: transparent;
+}
+
+.bulk-editor-view .bulk-editor-product-row:hover {
+  background-color: #f8fafc;
+}
+
+.bulk-editor-view .bulk-editor-product-row.is-selected {
+  background-color: #ecfdf5;
+  box-shadow: inset 3px 0 0 #10b981;
+}
+
+.bulk-editor-view .bulk-editor-product-row > td {
+  vertical-align: middle;
+}
+
+:root[data-theme='dark'] .bulk-editor-view .bulk-editor-product-row {
+  background-color: #102139 !important;
+}
+
+:root[data-theme='dark'] .bulk-editor-view .bulk-editor-table-header {
+  background-color: #294765 !important;
+  border-bottom-color: #5c7898;
+  box-shadow: 0 2px 0 #07111f, 0 6px 12px rgba(0, 0, 0, 0.28);
+}
+
+:root[data-theme='dark'] .bulk-editor-view .bulk-editor-product-row:hover {
+  background-color: #172d49 !important;
+}
+
+:root[data-theme='dark'] .bulk-editor-view .bulk-editor-product-row.is-selected {
+  background-color: #16333f !important;
+  box-shadow: inset 3px 0 0 #34d399;
+}
+
+:root[data-theme='dark'] .bulk-editor-view .bulk-editor-number-field {
+  background-color: #0b1b2f !important;
+  border-color: #315071 !important;
+}
+
+:root[data-theme='dark'] .bulk-editor-view .bulk-editor-number-field > span {
+  background-color: #102139 !important;
+  border-color: #315071 !important;
+  color: #a9bdd8 !important;
+}
+
 /* Shared modals mounted outside a view root still need gray/semantic colors
    to follow the app theme. Paper-like print previews keep their own styles. */
 :root[data-theme='dark'] [class*='fixed inset-0'] :is(.bg-white, .bg-slate-50, .bg-slate-100, .bg-gray-50, .bg-gray-100) {

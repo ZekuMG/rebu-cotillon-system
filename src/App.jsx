@@ -215,6 +215,7 @@ const APP_USERS_FRESHNESS_MS = 15 * 1000;
 const OFFLINE_BOOT_TIMEOUT_MS = 5500;
 const APP_USERS_BOOT_TIMEOUT_MS = 20000;
 const OFFLINE_LOGIN_TIMEOUT_MS = 6500;
+const CLOUD_RECONNECT_TIMEOUT_MS = 15000;
 const REPORT_LOG_ACTIONS = ['Cierre de Caja', 'Cierre Automático'];
 
 let localDemoIdCounter = 0;
@@ -349,26 +350,67 @@ const isBrowserOffline = () =>
   typeof navigator !== 'undefined' && navigator.onLine === false;
 
 const withTimeout = (promise, timeoutMs, label = 'Operacion') =>
-  Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      window.setTimeout(() => {
-        reject(new Error(`${label} excedio el tiempo de espera offline.`));
-      }, timeoutMs);
-    }),
-  ]);
+  new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      const timeoutError = new Error(`${label} excedio el tiempo de espera.`);
+      timeoutError.code = 'REBU_TIMEOUT';
+      reject(timeoutError);
+    }, timeoutMs);
+
+    Promise.resolve(promise).then(
+      (value) => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timeoutId);
+        reject(error);
+      }
+    );
+  });
 
 const verifyCloudConnection = async () => {
   if (isBrowserOffline()) return false;
 
+  if (window.electronAPI?.clearHostResolverCache) {
+    const cacheResult = await window.electronAPI.clearHostResolverCache().catch(() => null);
+    if (cacheResult && !cacheResult.success) {
+      console.warn('No se pudo limpiar la cache DNS de Electron:', cacheResult.error);
+    }
+  }
+
   const { error } = await withTimeout(
     supabase.from('register_state').select('id').eq('id', 1).limit(1),
-    OFFLINE_LOGIN_TIMEOUT_MS,
+    CLOUD_RECONNECT_TIMEOUT_MS,
     'Reconexión'
   );
 
   if (error) throw error;
   return true;
+};
+
+const getCloudReconnectErrorMessage = (error) => {
+  if (isBrowserOffline()) {
+    return 'Windows informa que no hay conexion a internet.';
+  }
+
+  const errorText = [
+    error?.message,
+    error?.details,
+    error?.hint,
+    error?.code,
+    error?.name,
+  ].filter(Boolean).join(' ');
+
+  if (error?.code === 'REBU_TIMEOUT' || /timeout|tiempo de espera/i.test(errorText)) {
+    return 'El servidor no respondio en 15 segundos. La conexion existe, pero no se pudo contactar Supabase. Revisa DNS o la red y volve a intentar.';
+  }
+
+  if (/failed to fetch|network|load failed|fetch failed|name.*resolve|dns|enotfound/i.test(errorText)) {
+    return 'No se pudo resolver o contactar el servidor de Supabase. Revisa la configuracion DNS de Windows y volve a intentar.';
+  }
+
+  return error?.message || 'La nube todavia no responde. Podes volver a intentarlo en unos segundos.';
 };
 
 const isRecoverableCloudError = (error) => {
@@ -4059,7 +4101,7 @@ export default function PartySupplyApp() {
       showNotification(
         'warning',
         'No se pudo reconectar',
-        error?.message || 'La nube todavia no responde. Podes volver a intentarlo en unos segundos.'
+        getCloudReconnectErrorMessage(error)
       );
     } finally {
       setIsReconnectAttempting(false);
@@ -5040,6 +5082,65 @@ export default function PartySupplyApp() {
 
   const getSaleStockProductId = (item) => item?.productId || item?.product_id || item?.id || null;
 
+  const getSaleItemDatabaseProductId = (item = {}) => {
+    if (
+      item.isCustom ||
+      item.is_custom ||
+      item.isTemporary ||
+      item.isCombo ||
+      item.is_combo ||
+      item.isDiscount ||
+      item.is_discount ||
+      item.isReward ||
+      item.is_reward
+    ) {
+      return null;
+    }
+
+    return toOptionalDbId(item.productId || item.product_id || item.id || null);
+  };
+
+  const sanitizeSaleItemProductIds = async (itemsPayload = []) => {
+    const safeItems = Array.isArray(itemsPayload) ? itemsPayload : [];
+    const candidateIds = Array.from(new Set(
+      safeItems
+        .map((item) => toOptionalDbId(item?.product_id))
+        .filter((id) => id !== null && id !== undefined)
+        .map(String)
+    ));
+
+    if (candidateIds.length === 0) return safeItems;
+
+    let validIds;
+    if (isLocalDemoMode()) {
+      validIds = new Set(
+        inventory
+          .map((product) => product?.id)
+          .filter((id) => id !== null && id !== undefined)
+          .map(String)
+      );
+    } else {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id')
+        .in('id', candidateIds);
+
+      if (error) {
+        throw new Error(`No se pudieron validar los productos de la venta: ${error.message}`);
+      }
+
+      validIds = new Set((data || []).map((product) => String(product.id)));
+    }
+
+    return safeItems.map((item) => {
+      const normalizedId = toOptionalDbId(item?.product_id);
+      if (normalizedId === null || normalizedId === undefined) return item;
+      return validIds.has(String(normalizedId))
+        ? item
+        : { ...item, product_id: null };
+    });
+  };
+
   const getSaleItemUnitCost = (item = {}) =>
     Number(
       item.cost ??
@@ -5369,9 +5470,9 @@ export default function PartySupplyApp() {
 
     if (saleErr) throw saleErr;
 
-    const itemsPayload = items.map((item) => ({
+    const itemsPayload = await sanitizeSaleItemProductIds(items.map((item) => ({
       sale_id: sale.id,
-      product_id: item.isTemporary ? null : item.productId,
+      product_id: getSaleItemDatabaseProductId(item),
       product_title: item.title,
       quantity: item.qty,
       price: item.newPrice,
@@ -5383,7 +5484,7 @@ export default function PartySupplyApp() {
       is_reward: false,
       product_type: item.product_type || 'quantity',
       ...getSaleItemCostPayload(item),
-    }));
+    })));
 
     await insertRowsWithSchemaFallback('sale_items', itemsPayload);
 
@@ -9217,7 +9318,7 @@ export default function PartySupplyApp() {
           ? currentProduct
           : await fetchProductCloudDetail(currentProduct.id).catch(() => currentProduct);
 
-        if (hasProductImage(currentProductDetail || currentProduct)) {
+        if (hasProductImage(currentProductDetail || currentProduct) && !row.replaceExistingImage) {
           failedRows.push({ ...row, error: 'El producto ya tiene imagen.' });
           publishApplyProgress();
           continue;
@@ -9228,7 +9329,10 @@ export default function PartySupplyApp() {
           if (isLocalDemoMode()) {
             uploadedImage = { image: row.imageDataUrl, imageThumb: row.imageDataUrl };
           } else {
-            const file = await dataUrlToProductImageFile(row.imageDataUrl, row.barcode);
+            const file = await dataUrlToProductImageFile(
+              row.imageDataUrl,
+              row.barcode || `producto-${currentProduct.id}`
+            );
             uploadedImage = await uploadProductImage(file);
           }
 
@@ -9271,6 +9375,22 @@ export default function PartySupplyApp() {
             },
             CLOUD_SELECTS.products
           );
+          if (!isLocalDemoMode() && row.replaceExistingImage) {
+            const previousImage = currentProductDetail?.image || currentProduct.image || row.previousImageUrl || '';
+            const previousThumb =
+              currentProductDetail?.image_thumb ||
+              currentProductDetail?.imageThumb ||
+              currentProduct.image_thumb ||
+              currentProduct.imageThumb ||
+              row.previousImageThumbUrl ||
+              '';
+            if (previousImage && previousImage !== uploadedImage.image) {
+              await deleteProductImage(previousImage).catch(() => {});
+            }
+            if (previousThumb && previousThumb !== uploadedImage.imageThumb && previousThumb !== previousImage) {
+              await deleteProductImage(previousThumb).catch(() => {});
+            }
+          }
           const updatedProduct = mapInventoryRecords([data])[0];
           applied.push({
             product: updatedProduct,
@@ -9684,17 +9804,9 @@ export default function PartySupplyApp() {
         cash_change: cashChange,
       };
 
-      const buildItemsPayload = (saleId = null) => cart.map(i => {
-        let productId = i.productId || i.id;
-        if (i.isCustom || i.isCombo || i.isDiscount || i.isReward) {
-          productId = null;
-        } else {
-          productId = toOptionalDbId(productId);
-        }
-
-        return {
+      const buildItemsPayload = (saleId = null) => cart.map(i => ({
           ...(saleId ? { sale_id: saleId } : {}),
-          product_id: productId,
+          product_id: getSaleItemDatabaseProductId(i),
           product_title: i.title,
           quantity: i.quantity,
           price: i.price,
@@ -9702,8 +9814,8 @@ export default function PartySupplyApp() {
           is_reward: !!i.isReward,
           product_type: i.product_type || 'quantity',
           ...getSaleItemCostPayload(i),
-        };
-      });
+      }));
+      const validatedItemsPayload = await sanitizeSaleItemProductIds(buildItemsPayload());
 
       let stockChanges = [];
       let updatedClientForTicket = null;
@@ -9737,7 +9849,7 @@ export default function PartySupplyApp() {
 
       let sale = await registerSaleTransactionCloud({
         salePayload,
-        itemsPayload: buildItemsPayload(),
+        itemsPayload: validatedItemsPayload,
         stockDeltaByProduct: checkoutStockDelta,
         clientPointUpdates: clientId
           ? [{ client_id: String(clientId), points: newPoints }]
@@ -9766,7 +9878,7 @@ export default function PartySupplyApp() {
         const { data: insertedSale, error: saleErr } = await insertWithSchemaFallback('sales', salePayload, 'id');
         if (saleErr) throw saleErr;
         sale = insertedSale;
-        const itemsPayload = buildItemsPayload(sale.id);
+        const itemsPayload = validatedItemsPayload.map((item) => ({ ...item, sale_id: sale.id }));
         const saleItemsPromise = insertRowsWithSchemaFallback('sale_items', itemsPayload).catch((saleItemsErr) => {
           throw new Error(`Supabase rechaz\u00f3 los productos de la venta: ${saleItemsErr.message}`);
         });
@@ -10183,8 +10295,10 @@ export default function PartySupplyApp() {
                p.title === i.title
           );
           
-          let prodId = prod ? prod.id : (i.productId || i.id);
-          prodId = toOptionalDbId(prodId);
+          const prodId = getSaleItemDatabaseProductId({
+            ...i,
+            productId: prod ? prod.id : (i.productId || i.id),
+          });
           
           return {
               ...(saleId ? { sale_id: saleId } : {}),
@@ -10197,6 +10311,7 @@ export default function PartySupplyApp() {
               ...getSaleItemCostPayload(i),
           };
       });
+      const restoredItemsPayload = await sanitizeSaleItemProductIds(buildRestoredItemsPayload());
 
       const clientPointUpdates = [];
       if (clientDb) {
@@ -10210,7 +10325,7 @@ export default function PartySupplyApp() {
       let stockChanges = [];
       let newSale = await registerSaleTransactionCloud({
         salePayload,
-        itemsPayload: buildRestoredItemsPayload(),
+        itemsPayload: restoredItemsPayload,
         stockDeltaByProduct: restoreStockDelta,
         clientPointUpdates,
       });
@@ -10227,7 +10342,7 @@ export default function PartySupplyApp() {
         const { data: insertedSale } = await insertWithSchemaFallback('sales', salePayload, 'id');
         newSale = insertedSale;
 
-        const itemsPayload = buildRestoredItemsPayload(newSale.id);
+        const itemsPayload = restoredItemsPayload.map((item) => ({ ...item, sale_id: newSale.id }));
         if (itemsPayload.length > 0) {
             await insertRowsWithSchemaFallback('sale_items', itemsPayload);
         }
@@ -10523,13 +10638,9 @@ export default function PartySupplyApp() {
         cash_change: safeCashChange
       };
 
-      const newItemsPayload = finalItems.map(i => {
-        let prodId = i.productId || i.id;
-        prodId = toOptionalDbId(prodId);
-
-        return {
+      const newItemsPayload = await sanitizeSaleItemProductIds(finalItems.map(i => ({
           sale_id: editingTransaction.id,
-          product_id: prodId,
+          product_id: getSaleItemDatabaseProductId(i),
           product_title: i.title,
           quantity: i.qty,
           price: i.price,
@@ -10537,8 +10648,7 @@ export default function PartySupplyApp() {
           product_type: i.product_type || 'quantity',
           is_reward: !!i.isReward,
           ...getSaleItemCostPayload(i),
-        };
-      });
+      })));
       
       const clientPointUpdates = [];
       if (pointsChange) {

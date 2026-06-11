@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -472,7 +472,7 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
         var containerText = cleanText(container.innerText || container.textContent || '');
         return barcodeDigits
           ? compactDigits(containerText).includes(barcodeDigits)
-          : normalize(containerText).includes(barcodeText);
+          : false;
       });
       if (matchingContainer) {
         var fallbackDetailLink = Array.prototype.slice.call(matchingContainer.querySelectorAll('a[href]')).map(function (link) {
@@ -559,11 +559,11 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
         node = node.parentElement;
       }
 
-      var exactContext = contexts.find(function (context) {
-        return barcodeDigits
-          ? compactDigits(context.raw).includes(barcodeDigits)
-          : context.normalized.includes(barcodeText);
-      });
+      var exactContext = barcodeDigits
+        ? contexts.find(function (context) {
+            return compactDigits(context.raw).includes(barcodeDigits);
+          })
+        : null;
       var readableContext = contexts.find(function (context) { return context.normalized.length > 20; });
       var contextText = normalize([
         structuredTitle,
@@ -618,7 +618,10 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
       };
     }).filter(Boolean).sort(function (a, b) { return b.score - a.score; });
 
-    var hasBarcodeInPage = Boolean(bodyText.includes(barcodeText) || (barcodeDigits && compactDigits(bodyText).includes(barcodeDigits)));
+    var hasBarcodeInPage = Boolean(
+      barcodeText &&
+      (bodyText.includes(barcodeText) || (barcodeDigits && compactDigits(bodyText).includes(barcodeDigits)))
+    );
     var matchedCandidates = candidates.filter(function (candidate) {
       return candidate.hasBarcode;
     }).map(function (candidate) {
@@ -736,7 +739,7 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
           width: candidate.width,
           height: candidate.height,
           score: candidate.score,
-          matchQuality: candidate.matchQuality || 'barcode_exact',
+          matchQuality: candidate.matchQuality || (searchMode === 'title' ? 'title_similarity' : 'barcode_exact'),
           titleSimilarity: candidate.titleSimilarity || 0,
         };
       });
@@ -782,7 +785,7 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
         width: best.width,
         height: best.height,
         score: best.score,
-        matchQuality: best.matchQuality || 'barcode_exact',
+        matchQuality: best.matchQuality || (searchMode === 'title' ? 'title_similarity' : 'barcode_exact'),
         titleSimilarity: best.titleSimilarity || 0,
         candidates: hydratedCandidates,
         selectedCandidateIndex: 0,
@@ -800,10 +803,12 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
 })()
 `;
 
-const searchSupplierImageByBarcode = async ({ barcode, title }) => {
+const searchSupplierImageByBarcode = async ({ barcode, title, searchMode = '' }) => {
   const safeBarcode = String(barcode || '').trim();
-  if (!safeBarcode) {
-    return { status: 'skipped', message: 'Producto sin codigo de barras.' };
+  const safeTitle = String(title || '').replace(/\s+/g, ' ').trim();
+  const titleOnly = searchMode === 'title_only' || !safeBarcode;
+  if (!safeBarcode && !safeTitle) {
+    return { status: 'skipped', message: 'Producto sin codigo ni nombre para buscar.' };
   }
 
   let workerWindow;
@@ -827,7 +832,7 @@ const searchSupplierImageByBarcode = async ({ barcode, title }) => {
       const extractCurrentPage = async (via) => {
         try {
           const extractResult = await workerWindow.webContents.executeJavaScript(
-            buildSupplierExtractScript(extractBarcode || safeBarcode, title, fallbackSearch),
+            buildSupplierExtractScript(extractBarcode || safeBarcode, safeTitle, fallbackSearch),
             true
           );
           return {
@@ -843,7 +848,7 @@ const searchSupplierImageByBarcode = async ({ barcode, title }) => {
             barcode: safeBarcode,
             query,
             fallbackSearch: fallbackSearch || 'barcode',
-            title,
+            title: safeTitle,
             message: error?.message || '',
             stack: error?.stack || '',
           });
@@ -870,7 +875,7 @@ const searchSupplierImageByBarcode = async ({ barcode, title }) => {
             barcode: safeBarcode,
             query,
             fallbackSearch: fallbackSearch || 'barcode',
-            title,
+            title: safeTitle,
             message: error?.message || '',
             stack: error?.stack || '',
           });
@@ -908,7 +913,7 @@ const searchSupplierImageByBarcode = async ({ barcode, title }) => {
           barcode: safeBarcode,
           query,
           fallbackSearch: fallbackSearch || 'barcode',
-          title,
+          title: safeTitle,
           message: submitResult?.message || 'No se pudo iniciar la busqueda.',
           reason: submitResult?.reason || '',
           url: submitResult?.url || '',
@@ -917,21 +922,24 @@ const searchSupplierImageByBarcode = async ({ barcode, title }) => {
 
       return lastResult || {
         status: 'not_found',
-        message: 'No aparecio el codigo exacto en los resultados.',
+        message: fallbackSearch === 'title'
+          ? 'No se encontro una coincidencia suficiente por nombre.'
+          : 'No aparecio el codigo exacto en los resultados.',
         fallbackSearch: fallbackSearch || '',
         searchedQuery: query,
       };
     };
 
-    const attempts = [
-      {
+    const attempts = [];
+    if (!titleOnly) {
+      attempts.push({
         query: safeBarcode,
         extractBarcode: safeBarcode,
         fallbackSearch: '',
-      },
-    ];
+      });
+    }
 
-    const trimmedBarcode = safeBarcode.length > 5 ? safeBarcode.slice(0, -1) : '';
+    const trimmedBarcode = !titleOnly && safeBarcode.length > 5 ? safeBarcode.slice(0, -1) : '';
     if (trimmedBarcode && trimmedBarcode !== safeBarcode) {
       attempts.push({
         query: trimmedBarcode,
@@ -940,7 +948,7 @@ const searchSupplierImageByBarcode = async ({ barcode, title }) => {
       });
     }
 
-    for (const titleQuery of buildSupplierTitleSearchQueries(title)) {
+    for (const titleQuery of buildSupplierTitleSearchQueries(safeTitle)) {
       attempts.push({
         query: titleQuery,
         extractBarcode: safeBarcode,
@@ -971,7 +979,7 @@ const searchSupplierImageByBarcode = async ({ barcode, title }) => {
           barcode: safeBarcode,
           query: attempt.query,
           fallbackSearch: attempt.fallbackSearch || 'barcode',
-          title,
+          title: safeTitle,
           message: result?.message || '',
           url: result?.url || workerWindow.webContents.getURL(),
         });
@@ -981,7 +989,7 @@ const searchSupplierImageByBarcode = async ({ barcode, title }) => {
     if (lastResult?.status === 'error') {
       workerWindow.__rebuSupplierPushErrorEvent?.('extract-result-error', {
         barcode: safeBarcode,
-        title,
+        title: safeTitle,
         message: lastResult?.message || '',
         url: lastResult?.url || workerWindow.webContents.getURL(),
       });
@@ -990,7 +998,7 @@ const searchSupplierImageByBarcode = async ({ barcode, title }) => {
   } catch (error) {
     workerWindow?.__rebuSupplierPushErrorEvent?.('search-error', {
       barcode: safeBarcode,
-      title,
+      title: safeTitle,
       message: error?.message || '',
       stack: error?.stack || '',
     });
@@ -1090,6 +1098,22 @@ app.on('ready', () => {
     };
   });
 
+  ipcMain.handle('clear-host-resolver-cache', async (event) => {
+    if (!isTrustedIpcSender(event)) {
+      return { success: false, error: 'Origen IPC no autorizado' };
+    }
+
+    try {
+      await session.defaultSession.clearHostResolverCache();
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error?.message || 'No se pudo limpiar la cache DNS de Electron.',
+      };
+    }
+  });
+
   ipcMain.handle('open-external-url', async (event, targetUrl) => {
     if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
     try {
@@ -1138,7 +1162,8 @@ app.on('ready', () => {
 
     const barcode = String(request?.barcode || '').trim();
     const title = String(request?.title || '').trim();
-    return searchSupplierImageByBarcode({ barcode, title });
+    const searchMode = String(request?.searchMode || '').trim();
+    return searchSupplierImageByBarcode({ barcode, title, searchMode });
   });
 
   createWindow();
