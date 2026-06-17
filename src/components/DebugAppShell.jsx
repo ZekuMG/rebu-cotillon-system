@@ -178,19 +178,36 @@ export default function DebugAppShell() {
   const [crash, setCrash] = useState(null);
   const [logs, setLogs] = useState([]);
   const pushedCrashRef = useRef(false);
+  const pendingLogsRef = useRef([]);
+  const logFlushTimerRef = useRef(null);
+  const lastLogRef = useRef({ key: '', at: 0 });
 
   useEffect(() => {
     window.__REBU_APP_READY__ = false;
 
     const pushLog = (level, args) => {
+      const message = formatDebugArgs(args);
+      const now = Date.now();
+      const logKey = `${level}:${message}`;
+      if (lastLogRef.current.key === logKey && now - lastLogRef.current.at < 1000) return;
+      lastLogRef.current = { key: logKey, at: now };
+
       const entry = {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
         level,
         at: new Date().toLocaleString('es-AR'),
-        message: formatDebugArgs(args),
+        message,
       };
 
-      setLogs((prev) => [...prev.slice(-(DEBUG_LOG_LIMIT - 1)), entry]);
+      pendingLogsRef.current.push(entry);
+      if (logFlushTimerRef.current !== null) return;
+
+      logFlushTimerRef.current = window.setTimeout(() => {
+        const pendingLogs = pendingLogsRef.current.splice(0);
+        logFlushTimerRef.current = null;
+        if (!pendingLogs.length) return;
+        setLogs((prev) => [...prev, ...pendingLogs].slice(-DEBUG_LOG_LIMIT));
+      }, 0);
     };
 
     const originalConsole = {
@@ -256,6 +273,11 @@ export default function DebugAppShell() {
 
     return () => {
       window.clearTimeout(timeoutId);
+      if (logFlushTimerRef.current !== null) {
+        window.clearTimeout(logFlushTimerRef.current);
+        logFlushTimerRef.current = null;
+      }
+      pendingLogsRef.current = [];
       window.removeEventListener('error', handleWindowError);
       window.removeEventListener('unhandledrejection', handleUnhandledRejection);
       console.error = originalConsole.error;

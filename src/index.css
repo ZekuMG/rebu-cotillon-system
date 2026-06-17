@@ -3369,17 +3369,23 @@ p {
 }
 
 .metrics-modern-kpi {
-  min-height: 82px;
-  padding: 9px 10px;
+  min-height: 74px;
+  padding: 8px 10px;
   overflow: hidden;
 }
 
 .metrics-view .fancy-price {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-template-columns: minmax(0, auto) max-content;
+  align-items: baseline;
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  vertical-align: baseline;
+  line-height: 1;
 }
 
 .metrics-view .fancy-price-main,
@@ -3395,6 +3401,7 @@ p {
 
 .metrics-view .fancy-price-cents {
   flex-shrink: 0;
+  align-self: baseline;
 }
 
 .metrics-modern-kpi-head {
@@ -3422,7 +3429,7 @@ p {
   display: block;
   min-width: 0;
   max-width: 100%;
-  margin-top: 8px;
+  margin-top: 6px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3434,12 +3441,12 @@ p {
 }
 
 .metrics-modern-kpi-value .fancy-price {
-  display: flex;
+  display: inline-grid;
   max-width: 100%;
 }
 
 .metrics-modern-kpi-detail {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3627,6 +3634,327 @@ p {
 
 .metrics-modern-ledger-rose strong {
   color: #be123c;
+}
+
+.metrics-modern-payment-detail {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  color: #0284c7;
+  font-size: 10px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.metrics-modern-payment-detail:hover {
+  color: #0369a1;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.metrics-modern-payment-list {
+  overflow: hidden;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.metrics-modern-payment-row {
+  position: relative;
+  padding: 8px 0 7px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.metrics-modern-payment-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 1px;
+}
+
+.metrics-modern-payment-main {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) max-content max-content;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.metrics-modern-payment-dot {
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+}
+
+.metrics-modern-payment-name {
+  min-width: 0;
+  overflow: hidden;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metrics-modern-payment-uses,
+.metrics-modern-payment-share {
+  color: #94a3b8;
+  font-size: 9px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.metrics-modern-payment-main strong {
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.metrics-modern-payment-track {
+  height: 2px;
+  margin: 5px 34px 0 13px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+}
+
+.metrics-modern-payment-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.metrics-modern-payment-share {
+  position: absolute;
+  right: 0;
+  bottom: 3px;
+}
+
+.metrics-modern-payment-empty {
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 10px 0 2px;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.metrics-pie-wheel {
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: minmax(190px, 0.9fr) minmax(180px, 1.1fr);
+  min-width: 0;
+  min-height: var(--metrics-pie-height);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.metrics-pie-chart {
+  position: relative;
+  min-width: 0;
+  height: var(--metrics-pie-height);
+  overflow: visible;
+}
+
+.metrics-pie-sector {
+  cursor: pointer;
+  outline: none;
+  transition: opacity 150ms ease, filter 150ms ease;
+}
+
+.metrics-pie-sector:focus {
+  filter: brightness(1.08);
+}
+
+.metrics-pie-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  width: 42%;
+  min-width: 76px;
+  max-width: 132px;
+  transform: translate(-50%, -50%);
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+  text-align: center;
+}
+
+.metrics-pie-center span,
+.metrics-pie-center strong,
+.metrics-pie-center small {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metrics-pie-center span {
+  color: var(--rebu-text-tertiary);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.metrics-pie-center strong {
+  margin-top: 4px;
+  color: var(--rebu-text-primary);
+  font-size: clamp(13px, 1.15vw, 18px);
+  font-weight: 950;
+  letter-spacing: 0;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.metrics-pie-center small {
+  margin-top: 4px;
+  color: var(--rebu-text-muted);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.metrics-pie-legend {
+  max-height: var(--metrics-pie-height);
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-left: 1px solid var(--rebu-border-soft);
+  padding-left: 10px;
+}
+
+.metrics-pie-legend-row {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: 8px minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-bottom: 1px solid var(--rebu-border-soft);
+  border-radius: 5px;
+  background: transparent;
+  padding: 8px 6px;
+  color: var(--rebu-text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 150ms ease, opacity 150ms ease, color 150ms ease;
+}
+
+.metrics-pie-legend-row:last-child {
+  border-bottom-color: transparent;
+}
+
+.metrics-pie-legend-row:hover,
+.metrics-pie-legend-row:focus-visible {
+  background: var(--rebu-surface-2);
+  outline: none;
+}
+
+.metrics-pie-legend-row.is-selected {
+  background: var(--rebu-info-bg);
+  box-shadow: inset 2px 0 0 var(--rebu-info);
+}
+
+.metrics-pie-legend-row.is-dimmed {
+  opacity: 0.45;
+}
+
+.metrics-pie-legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+}
+
+.metrics-pie-legend-copy,
+.metrics-pie-legend-value {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.metrics-pie-legend-copy strong {
+  overflow: hidden;
+  color: var(--rebu-text-primary);
+  font-size: 11px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metrics-pie-legend-copy small,
+.metrics-pie-legend-value small {
+  color: var(--rebu-text-muted);
+  font-size: 9px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.metrics-pie-legend-value {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.metrics-pie-legend-value strong {
+  color: var(--rebu-text-primary);
+  font-size: 11px;
+  font-weight: 950;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.metrics-pie-local-summary {
+  display: grid;
+  min-height: 140px;
+  place-content: center;
+  border: 1px dashed var(--rebu-border);
+  border-radius: 8px;
+  background: var(--rebu-surface-2);
+  padding: 18px;
+  text-align: center;
+}
+
+.metrics-pie-local-summary span {
+  color: var(--rebu-text-tertiary);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.metrics-pie-local-summary strong {
+  margin-top: 5px;
+  color: var(--rebu-success);
+  font-size: 28px;
+  font-weight: 950;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.metrics-pie-local-summary small {
+  margin-top: 7px;
+  color: var(--rebu-text-muted);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+@container (max-width: 520px) {
+  .metrics-pie-wheel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .metrics-pie-chart {
+    height: min(var(--metrics-pie-height), 220px);
+  }
+
+  .metrics-pie-legend {
+    max-height: 190px;
+    border-top: 1px solid var(--rebu-border-soft);
+    border-left: 0;
+    padding-top: 6px;
+    padding-left: 0;
+  }
 }
 
 .metrics-modern-alert {
@@ -3900,7 +4228,8 @@ p {
 :root[data-theme='dark'] .metrics-view-modern .metrics-modern-chart-toggles,
 :root[data-theme='dark'] .metrics-view-modern .metrics-modern-insight,
 :root[data-theme='dark'] .metrics-view-modern .metrics-modern-ledger-row,
-:root[data-theme='dark'] .metrics-view-modern .metrics-modern-alert {
+:root[data-theme='dark'] .metrics-view-modern .metrics-modern-alert,
+:root[data-theme='dark'] .metrics-view-modern .metrics-pie-local-summary {
   background: #0b1b2f !important;
   border-color: #315071 !important;
 }
@@ -3924,8 +4253,55 @@ p {
 :root[data-theme='dark'] .metrics-view-modern .metrics-modern-insight span,
 :root[data-theme='dark'] .metrics-view-modern .metrics-modern-insight small,
 :root[data-theme='dark'] .metrics-view-modern .metrics-modern-ledger-row span,
-:root[data-theme='dark'] .metrics-view-modern .metrics-modern-alert span {
+:root[data-theme='dark'] .metrics-view-modern .metrics-modern-alert span,
+:root[data-theme='dark'] .metrics-view-modern .metrics-modern-payment-uses,
+:root[data-theme='dark'] .metrics-view-modern .metrics-modern-payment-share,
+:root[data-theme='dark'] .metrics-view-modern .metrics-modern-payment-empty {
   color: #a9bdd8 !important;
+}
+
+:root[data-theme='dark'] .metrics-view-modern .metrics-modern-payment-name {
+  color: #dbeafe !important;
+}
+
+:root[data-theme='dark'] .metrics-view-modern .metrics-modern-payment-main strong {
+  color: #f8fafc !important;
+}
+
+:root[data-theme='dark'] .metrics-view-modern .metrics-modern-payment-detail {
+  color: #7dd3fc;
+}
+
+:root[data-theme='dark'] .metrics-view .metrics-pie-center span,
+:root[data-theme='dark'] .metrics-view .metrics-pie-center small,
+:root[data-theme='dark'] .metrics-view .metrics-pie-legend-copy small,
+:root[data-theme='dark'] .metrics-view .metrics-pie-legend-value small {
+  color: #a9bdd8;
+}
+
+:root[data-theme='dark'] .metrics-view .metrics-pie-center strong,
+:root[data-theme='dark'] .metrics-view .metrics-pie-legend-copy strong,
+:root[data-theme='dark'] .metrics-view .metrics-pie-legend-value strong {
+  color: #eaf2ff;
+}
+
+:root[data-theme='dark'] .metrics-view .metrics-pie-legend {
+  border-color: #284263;
+}
+
+:root[data-theme='dark'] .metrics-view .metrics-pie-legend-row {
+  border-color: rgba(49, 80, 113, 0.7);
+  color: #eaf2ff;
+}
+
+:root[data-theme='dark'] .metrics-view .metrics-pie-legend-row:hover,
+:root[data-theme='dark'] .metrics-view .metrics-pie-legend-row:focus-visible {
+  background: #172d49;
+}
+
+:root[data-theme='dark'] .metrics-view .metrics-pie-legend-row.is-selected {
+  background: rgba(14, 165, 233, 0.15);
+  box-shadow: inset 2px 0 0 #38bdf8;
 }
 
 :root[data-theme='dark'] .metrics-view-modern .metrics-modern-change.is-good {
@@ -5227,6 +5603,25 @@ code {
   background: var(--code-bg);
 }
 
+.bulk-excel-import .excel-compare-row {
+  border-left: 2px solid transparent;
+}
+
+.bulk-excel-import .excel-compare-blue {
+  background: rgba(224, 242, 254, 0.62);
+  border-left-color: #60a5fa;
+}
+
+.bulk-excel-import .excel-compare-violet {
+  background: rgba(245, 243, 255, 0.72);
+  border-left-color: #a78bfa;
+}
+
+.bulk-excel-import .excel-compare-emerald {
+  background: rgba(236, 253, 245, 0.72);
+  border-left-color: #34d399;
+}
+
 :root[data-theme='dark'] .bulk-excel-import .excel-review-header {
   background: linear-gradient(135deg, rgba(15, 36, 68, 0.98), rgba(18, 50, 82, 0.96)) !important;
   border-color: rgba(96, 165, 250, 0.24) !important;
@@ -5258,4 +5653,273 @@ code {
 :root[data-theme='dark'] .bulk-excel-import .excel-review-row-active .rounded-xl,
 :root[data-theme='dark'] .bulk-excel-import .excel-review-row-active .rounded-lg {
   border-color: rgba(125, 211, 252, 0.34) !important;
+}
+
+/* Excel review: one quiet working surface per imported row. */
+:root[data-theme='dark'] .bulk-excel-import .excel-review-header {
+  background: #10233f !important;
+  border-color: rgba(148, 163, 184, 0.2) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row {
+  background: #112541 !important;
+  border-top-color: rgba(148, 163, 184, 0.12) !important;
+  border-right-color: transparent !important;
+  border-bottom-color: rgba(148, 163, 184, 0.12) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row:hover,
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-active {
+  background: #142b49 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-active {
+  box-shadow: inset 2px 0 0 #2dd4bf !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-active .rounded-xl,
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-active .rounded-lg {
+  border-color: rgba(148, 163, 184, 0.18) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-target-list,
+:root[data-theme='dark'] .bulk-excel-import .excel-article-panel,
+:root[data-theme='dark'] .bulk-excel-import .excel-assignment-panel {
+  border-color: rgba(148, 163, 184, 0.18) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row {
+  color: #d7e3f2;
+  position: relative;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row + .excel-review-row {
+  border-top: 2px solid #09172a !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-alternate {
+  background: #132943 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-active {
+  background: #18304d !important;
+  box-shadow: inset 2px 0 0 #2aa89a !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-attention {
+  border-left-color: #3d7898 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-target-list {
+  border-color: rgba(112, 137, 165, 0.28) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-target-row {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: #b9c8db !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-target-row:hover {
+  background: rgba(35, 57, 83, 0.72) !important;
+  color: #e2eaf4 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-target-active {
+  background: rgba(30, 55, 81, 0.72) !important;
+  color: #edf3fa !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-target-slate.excel-target-active {
+  box-shadow: inset 3px 0 0 #7089a5;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-target-blue.excel-target-active {
+  box-shadow: inset 3px 0 0 #4f7eb8;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-target-fuchsia.excel-target-active {
+  box-shadow: inset 3px 0 0 #9b5a9e;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-target-row .text-slate-400 {
+  color: #8295ad !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-article-panel,
+:root[data-theme='dark'] .bulk-excel-import .excel-assignment-panel,
+:root[data-theme='dark'] .bulk-excel-import .excel-comparison-panel {
+  border-color: rgba(112, 137, 165, 0.3) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-article-panel .border-slate-200,
+:root[data-theme='dark'] .bulk-excel-import .excel-assignment-panel .border-slate-200,
+:root[data-theme='dark'] .bulk-excel-import .excel-comparison-panel .border-slate-200 {
+  border-color: rgba(112, 137, 165, 0.24) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-comparison-list {
+  border-color: rgba(112, 137, 165, 0.22) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compare-row {
+  border-left: 2px solid transparent;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compare-blue {
+  background: rgba(47, 91, 132, 0.2) !important;
+  border-left-color: #5f8eb9 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compare-violet {
+  background: rgba(104, 69, 126, 0.2) !important;
+  border-left-color: #a174b0 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compare-emerald {
+  background: rgba(43, 102, 89, 0.2) !important;
+  border-left-color: #5fae9d !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-multiplier-compact input {
+  background: #0d2038 !important;
+  border-color: rgba(95, 142, 185, 0.44) !important;
+  color: #d9e8f5 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-create-inline {
+  background: rgba(103, 74, 38, 0.22) !important;
+  border-color: rgba(191, 135, 65, 0.42) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-create-inline:hover {
+  background: rgba(113, 81, 40, 0.34) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-associate-action {
+  color: #8295ad !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-article-panel .text-violet-700 {
+  color: #b78ac3 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-article-panel .text-emerald-700 {
+  color: #6bbcaf !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-article-panel .text-sky-700 {
+  color: #789dbd !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row .bg-blue-50,
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row .bg-sky-50 {
+  background: rgba(45, 75, 111, 0.5) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row .bg-emerald-50 {
+  background: rgba(30, 91, 82, 0.52) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row .bg-red-50 {
+  background: rgba(104, 49, 58, 0.5) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-upload-button {
+  background: #173b3d !important;
+  border-color: #3d8178 !important;
+  color: #b8e2d8 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-upload-button:hover {
+  background: #1c4848 !important;
+  border-color: #58a395 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-upload-title {
+  color: #d6eee8 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-upload-fields {
+  color: #76b9ac !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-row-actions > div {
+  background: #152b46 !important;
+  border-color: rgba(112, 137, 165, 0.34) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-row-actions > div button {
+  color: #c7d3e2 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-row-actions > div button:hover {
+  background: #203a58 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-row-actions > div button:last-child {
+  color: #e598a2 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-result-filter {
+  background: #0c1c31 !important;
+  border-color: rgba(112, 137, 165, 0.28) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-result-filter button[aria-pressed='true'] {
+  background: #294765 !important;
+  color: #edf4fb !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-result-filter button[aria-pressed='false'] {
+  color: #8fa3ba !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-result-filter button[aria-pressed='false']:hover {
+  background: #1b3552 !important;
+  color: #d8e3ef !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-result-select {
+  background: #10233b !important;
+  border-color: rgba(112, 137, 165, 0.32) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-result-select:hover {
+  background: #162d49 !important;
+  border-color: rgba(126, 156, 187, 0.46) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-result-select select {
+  color: #dce7f2 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-result-select option {
+  background: #10233b;
+  color: #dce7f2;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-create-batch {
+  background: #122641 !important;
+  border-color: rgba(112, 137, 165, 0.22) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-create-batch summary:hover {
+  background: #172e4a !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-create-batch > div {
+  border-color: rgba(112, 137, 165, 0.2) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-quick-action {
+  background: #132943 !important;
+  border-color: rgba(112, 137, 165, 0.28) !important;
+  color: #b9c8da !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-quick-action:hover {
+  background: #1b3552 !important;
+  border-color: rgba(126, 156, 187, 0.42) !important;
+  color: #e0e9f3 !important;
 }

@@ -5,9 +5,13 @@ import {
   CheckCircle2,
   Eraser,
   FileSpreadsheet,
+  Filter,
   Link2,
   Loader2,
+  MoreHorizontal,
   Package,
+  PackagePlus,
+  Plus,
   Search,
   ShieldAlert,
   Upload,
@@ -28,6 +32,34 @@ const normalizeHeader = (value) =>
     .replace(/[^a-z0-9]/g, '');
 
 const normalizeCode = (value) => String(value ?? '').trim();
+
+const normalizeProductName = (value) =>
+  String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\b(x|x1|unidad|unidades|un|u)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const getNameSimilarity = (left, right) => {
+  const a = normalizeProductName(left);
+  const b = normalizeProductName(right);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+
+  const aWords = new Set(a.split(' ').filter((word) => word.length > 1));
+  const bWords = new Set(b.split(' ').filter((word) => word.length > 1));
+  if (aWords.size === 0 || bWords.size === 0) return 0;
+
+  let intersection = 0;
+  aWords.forEach((word) => {
+    if (bWords.has(word)) intersection += 1;
+  });
+  return (2 * intersection) / (aWords.size + bWords.size);
+};
 
 const parseNumber = (value) => {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
@@ -75,6 +107,7 @@ const getFirstValue = (row, key) => {
 const buildImportEntry = (row, rowNumber) => {
   const code = normalizeCode(getFirstValue(row, 'Codigo'));
   const description = String(getFirstValue(row, 'Descripcion') ?? '').trim();
+  const category = String(getFirstValue(row, 'Categoria') ?? '').trim();
   const quantity = parseNumber(getFirstValue(row, 'Cantidad'));
   const providerPrice = parseNumber(getFirstValue(row, 'Precio'));
   const discount = parseNumber(getFirstValue(row, 'Descuento'));
@@ -88,6 +121,7 @@ const buildImportEntry = (row, rowNumber) => {
     rowNumber,
     code,
     description,
+    category,
     quantity,
     originalQuantity: quantity,
     quantityInput: quantity ? String(quantity) : '',
@@ -144,7 +178,6 @@ const getEntryInputKey = (field) => {
 
 const getRowBaseErrors = (entry, _product) => {
   const errors = [];
-  if (!entry.code) errors.push('Sin codigo');
   if (!entry.quantity || entry.quantity <= 0) errors.push('Cantidad vacia o cero');
   if (!entry.multiplier || entry.multiplier <= 0) errors.push('Multiplicador invalido');
   if (!entry.cost || entry.cost <= 0) errors.push('Costo vacio o cero');
@@ -239,7 +272,12 @@ const statusAccentClass = {
   slate: 'border-l-slate-300',
 };
 
-export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
+export default function BulkExcelImportView({
+  inventory = [],
+  categories = [],
+  onApplyImport,
+  onCreateProducts,
+}) {
   const fileInputRef = useRef(null);
   const [fileName, setFileName] = useState('');
   const [fileError, setFileError] = useState('');
@@ -248,6 +286,11 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
   const [activeSourceRowId, setActiveSourceRowId] = useState('');
   const [isParsing, setIsParsing] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
+  const [resultFilter, setResultFilter] = useState('all');
+  const [selectedCreateRowIds, setSelectedCreateRowIds] = useState([]);
+  const [createDrafts, setCreateDrafts] = useState([]);
+  const [isCreatePanelOpen, setIsCreatePanelOpen] = useState(false);
+  const [isCreatingProducts, setIsCreatingProducts] = useState(false);
 
   const barcodeLookup = useMemo(() => {
     const map = new Map();
@@ -257,6 +300,70 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
     });
     return map;
   }, [inventory]);
+
+  const availableCategories = useMemo(
+    () => [...new Set((categories || []).map((category) => String(category || '').trim()).filter(Boolean))],
+    [categories],
+  );
+
+  const getDuplicateCandidate = (entry) => {
+    const barcode = normalizeCode(entry?.code);
+    if (barcode) {
+      const barcodeOwner = barcodeLookup.get(barcode);
+      if (barcodeOwner) return { product: barcodeOwner, reason: 'Mismo codigo de barras' };
+    }
+
+    const title = String(entry?.description || '').trim();
+    if (!title) return null;
+    let bestMatch = null;
+    (inventory || []).forEach((product) => {
+      const similarity = getNameSimilarity(title, product?.title);
+      if (similarity >= 0.78 && (!bestMatch || similarity > bestMatch.similarity)) {
+        bestMatch = { product, similarity };
+      }
+    });
+    return bestMatch
+      ? {
+          product: bestMatch.product,
+          reason: `Nombre similar (${Math.round(bestMatch.similarity * 100)}%)`,
+        }
+      : null;
+  };
+
+  const buildCreateDraft = (row) => {
+    const importedCategory = String(row.entry.category || '').trim();
+    const matchedCategory = availableCategories.find(
+      (category) => category.toLowerCase() === importedCategory.toLowerCase(),
+    );
+    const searchedTitle = String(row.assignmentQuery || '').trim();
+    return {
+      rowId: row.id,
+      title: searchedTitle || String(row.entry.description || '').trim(),
+      barcode: row.isAssociated ? '' : normalizeCode(row.entry.code),
+      category: matchedCategory || '',
+      stock: getStockDelta(row.entry),
+      purchasePrice: Number(row.entry.cost || 0),
+      price: Number(row.entry.salePrice || 0),
+      duplicate: getDuplicateCandidate({
+        ...row.entry,
+        description: searchedTitle || row.entry.description,
+      }),
+      error: '',
+    };
+  };
+
+  const getCreateDraftErrors = (draft) => {
+    const errors = [];
+    if (!String(draft.title || '').trim()) errors.push('Falta nombre');
+    if (!String(draft.category || '').trim()) errors.push('Falta categoria');
+    if (!Number(draft.purchasePrice || 0) || Number(draft.purchasePrice) <= 0) errors.push('Falta costo');
+    if (!Number(draft.price || 0) || Number(draft.price) <= 0) errors.push('Falta precio');
+    if (Number(draft.price || 0) > 0 && Number(draft.purchasePrice || 0) > Number(draft.price || 0)) {
+      errors.push('Precio menor al costo');
+    }
+    if (draft.duplicate) errors.push('Posible duplicado');
+    return errors;
+  };
 
   const summary = useMemo(() => {
     const blocked = rows.filter((row) => row.errors.length > 0).length;
@@ -279,6 +386,32 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
       rows.filter((row) => isRowApplicable(row)),
     [rows],
   );
+
+  const creatableRows = useMemo(
+    () => rows.filter((row) => !row.isAssociated && !row.product && row.duplicateResolved),
+    [rows],
+  );
+
+  const validCreateDrafts = createDrafts.filter((draft) => getCreateDraftErrors(draft).length === 0);
+
+  const primaryRows = useMemo(
+    () => rows.filter((row) => !row.isAssociated),
+    [rows],
+  );
+
+  const resultFilterCounts = useMemo(() => ({
+    all: primaryRows.length,
+    unassigned: primaryRows.filter((row) => !row.product).length,
+    blocked: primaryRows.filter((row) => row.product && row.errors.length > 0).length,
+    applied: primaryRows.filter((row) => row.applied).length,
+  }), [primaryRows]);
+
+  const visiblePrimaryRows = useMemo(() => {
+    if (resultFilter === 'unassigned') return primaryRows.filter((row) => !row.product);
+    if (resultFilter === 'blocked') return primaryRows.filter((row) => row.product && row.errors.length > 0);
+    if (resultFilter === 'applied') return primaryRows.filter((row) => row.applied);
+    return primaryRows;
+  }, [primaryRows, resultFilter]);
 
   const parseWorkbookRows = (sheetRows) => {
     const headers = Object.keys(sheetRows[0] || {}).map(normalizeHeader);
@@ -334,6 +467,10 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
 
       setRows(parseWorkbookRows(sheetRows));
       setActiveTargetBySource({});
+      setSelectedCreateRowIds([]);
+      setCreateDrafts([]);
+      setIsCreatePanelOpen(false);
+      setResultFilter('all');
     } catch (error) {
       setRows([]);
       setFileError(error?.message || 'No se pudo leer el archivo.');
@@ -544,6 +681,109 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
     setActiveSourceRowId('');
     setFileName('');
     setFileError('');
+    setSelectedCreateRowIds([]);
+    setCreateDrafts([]);
+    setIsCreatePanelOpen(false);
+    setResultFilter('all');
+  };
+
+  const openCreatePanel = (rowIds) => {
+    const requestedIds = new Set((rowIds || []).map(String));
+    const targetRows = rows.filter(
+      (row) => requestedIds.has(String(row.id)) && !row.product && row.duplicateResolved,
+    );
+    if (targetRows.length === 0) return;
+    setCreateDrafts(targetRows.map(buildCreateDraft));
+    setIsCreatePanelOpen(true);
+    setFileError('');
+  };
+
+  const updateCreateDraft = (rowId, field, value) => {
+    setCreateDrafts((prev) =>
+      prev.map((draft) => (
+        draft.rowId === rowId
+          ? { ...draft, [field]: value, error: '' }
+          : draft
+      )),
+    );
+  };
+
+  const linkDuplicateDraft = (draft) => {
+    if (!draft?.duplicate?.product) return;
+    assignProductToRow(draft.rowId, draft.duplicate.product);
+    setCreateDrafts((prev) => prev.filter((item) => item.rowId !== draft.rowId));
+    setSelectedCreateRowIds((prev) => prev.filter((id) => id !== draft.rowId));
+  };
+
+  const handleCreateProducts = async () => {
+    if (!onCreateProducts || validCreateDrafts.length === 0) return;
+    setIsCreatingProducts(true);
+    setFileError('');
+    try {
+      const result = await onCreateProducts(validCreateDrafts.map((draft) => ({
+        rowId: draft.rowId,
+        title: String(draft.title || '').trim(),
+        barcode: normalizeCode(draft.barcode) || null,
+        category: draft.category,
+        stock: Number(draft.stock || 0),
+        purchasePrice: Number(draft.purchasePrice || 0),
+        price: Number(draft.price || 0),
+      })));
+      const createdByRowId = new Map(
+        (result?.created || []).map((item) => [String(item.rowId), item.product]),
+      );
+      const failedByRowId = new Map(
+        (result?.failed || []).map((item) => [String(item.rowId), item.error || 'No se pudo crear']),
+      );
+
+      setRows((prev) =>
+        prev.map((row, index) => {
+          const product = createdByRowId.get(String(row.id));
+          if (!product) return row;
+          return {
+            ...buildReviewRow({
+              entry: row.entry,
+              product,
+              duplicateOptions: row.duplicateOptions,
+              duplicateResolved: row.duplicateResolved,
+            }, index),
+            id: row.id,
+            product,
+            approvals: {
+              stock: getStockDelta(row.entry) > 0,
+              cost: false,
+              price: false,
+            },
+            applied: false,
+            manualAssigned: false,
+            changeProductMode: false,
+            productCleared: false,
+            isAssociated: row.isAssociated,
+            sourceRowId: row.sourceRowId,
+          };
+        }),
+      );
+
+      setCreateDrafts((prev) =>
+        prev
+          .filter((draft) => !createdByRowId.has(String(draft.rowId)))
+          .map((draft) => ({
+            ...draft,
+            error: failedByRowId.get(String(draft.rowId)) || draft.error,
+          })),
+      );
+      setSelectedCreateRowIds((prev) =>
+        prev.filter((rowId) => !createdByRowId.has(String(rowId))),
+      );
+
+      if (failedByRowId.size === 0) {
+        setIsCreatePanelOpen(false);
+      }
+    } catch (error) {
+      setFileError(error?.message || 'No se pudieron crear los productos seleccionados.');
+    } finally {
+      setIsCreatingProducts(false);
+    }
   };
 
   const setActiveTarget = (sourceRowId, targetId) => {
@@ -670,11 +910,11 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="mt-4 w-full rounded-xl border-2 border-dashed border-emerald-200 bg-emerald-50/70 px-4 py-5 text-emerald-800 hover:bg-emerald-50 hover:border-emerald-300 transition-colors flex flex-col items-center gap-2"
+            className="excel-upload-button mt-4 w-full rounded-xl border border-dashed border-emerald-300 bg-emerald-50/70 px-4 py-5 text-emerald-800 hover:bg-emerald-50 hover:border-emerald-400 transition-colors flex flex-col items-center gap-2"
           >
             {isParsing ? <Loader2 size={24} className="animate-spin" /> : <Upload size={24} />}
-            <span className="text-xs font-black">{fileName || 'Seleccionar archivo .xlsx o .xls'}</span>
-            <span className="text-[10px] font-bold text-emerald-600">Codigo, Descripcion, Cantidad, Precio, Descuento, Costo, Venta</span>
+            <span className="excel-upload-title text-xs font-black">{fileName || 'Seleccionar archivo .xlsx o .xls'}</span>
+            <span className="excel-upload-fields text-[10px] font-bold text-emerald-600">Codigo, Descripcion, Cantidad, Precio, Descuento, Costo, Venta</span>
           </button>
 
           {fileError && (
@@ -685,7 +925,7 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
           )}
         </div>
 
-        <div className="border-b border-slate-200 bg-white px-3 py-2.5">
+        <div className="border-b border-slate-200 bg-white px-3 py-3">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="text-[10px] uppercase tracking-wider font-black text-slate-500">Estado del lote</p>
@@ -717,63 +957,107 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
               />
             ))}
           </div>
-          <div className="mt-2 grid grid-cols-4 gap-1.5">
-            {[
-              ['Filas', summary.total, 'text-slate-700'],
-              ['Sin asignar', summary.unassigned, summary.unassigned > 0 ? 'text-sky-600' : 'text-slate-700'],
-              ['Bloq.', summary.blocked, summary.blocked > 0 ? 'text-red-600' : 'text-slate-700'],
-              ['Aplicar', applicableRows.length, applicableRows.length > 0 ? 'text-emerald-600' : 'text-slate-700'],
-            ].map(([label, value, tone]) => (
-              <div key={label} className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
-                <p className="text-[8px] uppercase tracking-wider text-slate-400 font-black leading-none">{label}</p>
-                <p className={`mt-1 text-[15px] font-black leading-none ${tone}`}>{value}</p>
-              </div>
-            ))}
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] font-black">
+            <span className="text-slate-500"><strong className="text-slate-800">{summary.total}</strong> filas</span>
+            <span className="text-sky-600"><strong>{summary.unassigned}</strong> sin asignar</span>
+            <span className={summary.blocked > 0 ? 'text-red-600' : 'text-slate-400'}><strong>{summary.blocked}</strong> bloqueadas</span>
+            <span className={applicableRows.length > 0 ? 'text-emerald-600' : 'text-slate-400'}><strong>{applicableRows.length}</strong> para aplicar</span>
           </div>
         </div>
+
+        {creatableRows.length > 0 && (
+          <details className="excel-create-batch border-b border-slate-200 bg-white">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5">
+              <span className="flex items-center gap-2 text-[10px] font-black text-slate-600">
+                <PackagePlus size={13} className="text-amber-600" />
+                Crear productos nuevos
+              </span>
+              <span className="rounded-md bg-amber-50 px-2 py-0.5 text-[9px] font-black text-amber-700">
+                {selectedCreateRowIds.length}/{creatableRows.length}
+              </span>
+            </summary>
+            <div className="border-t border-slate-100 px-3 pb-3 pt-2">
+              <p className="text-[9px] font-bold text-slate-500">
+                Selecciona pendientes para crearlos juntos. También puedes crearlos desde cada búsqueda.
+              </p>
+              <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allIds = creatableRows.map((row) => row.id);
+                    setSelectedCreateRowIds(
+                      selectedCreateRowIds.length === allIds.length ? [] : allIds,
+                    );
+                  }}
+                  className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[9px] font-black text-slate-600 hover:bg-slate-50"
+                >
+                  {selectedCreateRowIds.length === creatableRows.length ? 'Limpiar selección' : 'Seleccionar pendientes'}
+                </button>
+                <button
+                  type="button"
+                  disabled={selectedCreateRowIds.length === 0}
+                  onClick={() => openCreatePanel(selectedCreateRowIds)}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-[9px] font-black text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <PackagePlus size={12} />
+                  Crear
+                </button>
+              </div>
+            </div>
+          </details>
+        )}
 
         <div className="p-3 space-y-2 border-b border-slate-200">
           <p className="text-[10px] uppercase tracking-wider font-black text-slate-500">Seleccion rapida</p>
-          <div className="grid grid-cols-2 gap-2">
-            <button type="button" onClick={() => setFieldForEligibleRows('stock', true)} className="rounded-lg border border-blue-200 bg-blue-50 px-2 py-2 text-[11px] font-black text-blue-700 hover:bg-blue-100">Stock</button>
-            <button type="button" onClick={() => setFieldForEligibleRows('cost', true)} className="rounded-lg border border-violet-200 bg-violet-50 px-2 py-2 text-[11px] font-black text-violet-700 hover:bg-violet-100">Costo</button>
-            <button type="button" onClick={() => setFieldForEligibleRows('price', true)} className="rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-2 text-[11px] font-black text-emerald-700 hover:bg-emerald-100">Venta</button>
-            <button type="button" onClick={clearApprovals} className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-[11px] font-black text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-1">
-              <Eraser size={13} /> Limpiar
+          <div className="grid grid-cols-4 gap-1.5">
+            <button type="button" onClick={() => setFieldForEligibleRows('stock', true)} className="excel-quick-action rounded-md border border-slate-200 bg-white px-2 py-2 text-[10px] font-black text-slate-700 hover:bg-slate-50"><span className="mr-1 text-sky-500">●</span>Stock</button>
+            <button type="button" onClick={() => setFieldForEligibleRows('cost', true)} className="excel-quick-action rounded-md border border-slate-200 bg-white px-2 py-2 text-[10px] font-black text-slate-700 hover:bg-slate-50"><span className="mr-1 text-violet-500">●</span>Costo</button>
+            <button type="button" onClick={() => setFieldForEligibleRows('price', true)} className="excel-quick-action rounded-md border border-slate-200 bg-white px-2 py-2 text-[10px] font-black text-slate-700 hover:bg-slate-50"><span className="mr-1 text-emerald-500">●</span>Venta</button>
+            <button type="button" onClick={clearApprovals} className="excel-quick-action rounded-md border border-slate-200 bg-white px-2 py-2 text-[10px] font-black text-slate-500 hover:bg-slate-50 flex items-center justify-center gap-1">
+              <Eraser size={11} /> Limpiar
             </button>
           </div>
-        </div>
-
-        <div className="p-3 mt-auto">
-          <AsyncActionButton
-            onAction={handleApply}
-            pending={isApplying}
-            disabled={applicableRows.length === 0 || isApplying}
-            loadingLabel="Aplicando..."
-            className="w-full rounded-xl bg-slate-900 px-4 py-3 text-xs font-black text-white shadow-sm hover:bg-slate-800 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
-          >
-            {isApplying ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-            Aplicar seleccionados ({applicableRows.length})
-          </AsyncActionButton>
         </div>
       </section>
 
       <section className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col min-h-0">
-        <div className="excel-review-header px-4 py-3 border-b border-slate-200 bg-slate-800 text-white flex items-center justify-between gap-3">
+        <div className="excel-review-header px-4 py-3 border-b border-slate-200 bg-slate-800 text-white flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-black">Revision del lote</h3>
-            <p className="text-[10px] text-slate-300 font-bold">Primero asigna productos. Despues marca Stock, Costo o Venta.</p>
+            <p className="text-[10px] text-slate-300 font-bold">Asigna el producto y confirma solo los valores que cambian.</p>
           </div>
-          <div className="hidden xl:flex items-center gap-2 text-[10px] font-black">
-            <span className="rounded-full border border-sky-300/40 bg-sky-400/15 px-2 py-1 text-sky-100">Celeste = asignar</span>
-            <span className="rounded-full border border-violet-300/40 bg-violet-400/15 px-2 py-1 text-violet-100">Violeta = costo</span>
-            <span className="rounded-full border border-emerald-300/40 bg-emerald-400/15 px-2 py-1 text-emerald-100">Verde = seleccionado</span>
+          <div className="flex items-center gap-2">
+            <label className="excel-result-select relative flex h-8 items-center gap-2 rounded-md border border-white/10 bg-black/10 pl-2 pr-1">
+              <Filter size={12} className="text-slate-400" />
+              <span className="text-[8px] font-black uppercase tracking-wider text-slate-400">Mostrar</span>
+              <select
+                value={resultFilter}
+                onChange={(event) => setResultFilter(event.target.value)}
+                className="h-full min-w-[126px] cursor-pointer appearance-none bg-transparent pl-1 pr-6 text-[10px] font-black text-white outline-none"
+              >
+                <option value="all">Todos ({resultFilterCounts.all})</option>
+                <option value="unassigned">Sin asignar ({resultFilterCounts.unassigned})</option>
+                <option value="blocked">Bloqueados ({resultFilterCounts.blocked})</option>
+                <option value="applied">Aplicados ({resultFilterCounts.applied})</option>
+              </select>
+              <span className="pointer-events-none absolute right-2 text-[9px] text-slate-400">▼</span>
+            </label>
+            <AsyncActionButton
+              onAction={handleApply}
+              pending={isApplying}
+              disabled={applicableRows.length === 0 || isApplying}
+              loadingLabel="Aplicando..."
+              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-3 text-[9px] font-black text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              {isApplying ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+              Aplicar {applicableRows.length}
+            </AsyncActionButton>
+            {summary.duplicates > 0 && (
+              <span className="rounded-md border border-amber-300/30 bg-amber-400/10 px-2.5 py-1 text-[10px] font-black text-amber-100">
+                {summary.duplicates} duplicado(s)
+              </span>
+            )}
           </div>
-          {summary.duplicates > 0 && (
-            <span className="rounded-full border border-sky-300/40 bg-sky-400/15 px-3 py-1 text-[10px] font-black text-sky-100">
-              {summary.duplicates} duplicado(s)
-            </span>
-          )}
         </div>
 
         <div className="flex-1 min-h-0 overflow-auto custom-scrollbar">
@@ -783,9 +1067,21 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
               <p className="font-black text-slate-600">Carga un Excel para revisar productos.</p>
               <p className="text-xs font-bold mt-1 max-w-md">El cruce se hace solo por codigo de barras. Si no existe, vas a elegir el producto manualmente.</p>
             </div>
+          ) : visiblePrimaryRows.length === 0 ? (
+            <div className="h-full min-h-[300px] flex flex-col items-center justify-center text-center p-8 text-slate-400">
+              <Filter size={32} className="mb-3 text-slate-500" />
+              <p className="font-black text-slate-600">No hay artículos en este estado.</p>
+              <button
+                type="button"
+                onClick={() => setResultFilter('all')}
+                className="mt-2 text-[10px] font-black text-sky-600 hover:text-sky-500"
+              >
+                Ver todos los resultados
+              </button>
+            </div>
           ) : (
             <div className="divide-y divide-slate-100">
-              {rows.filter((row) => !row.isAssociated).map((row) => {
+              {visiblePrimaryRows.map((row, rowIndex) => {
                 const status = getRowStatus(row);
                 const associatedRows = rows.filter((candidate) => candidate.sourceRowId === row.id);
                 const productRows = [row, ...associatedRows];
@@ -810,78 +1106,60 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
                 return (
                   <article
                     key={row.id}
-                    onClickCapture={() => setActiveSourceRowId(row.id)}
-                    className={`excel-review-row ${isActiveSource ? 'excel-review-row-active' : ''} ${status.tone === 'amber' ? 'excel-review-row-attention' : ''} border-l-4 p-2 transition-colors ${statusAccentClass[status.tone] || 'border-l-slate-200'}`}
+                    onClick={(event) => {
+                      setActiveSourceRowId(row.id);
+                      if (!event.target.closest('button, input, select, textarea, label, a, summary, details')) {
+                        setActiveTarget(row.id, 'article');
+                      }
+                    }}
+                    className={`excel-review-row ${rowIndex % 2 === 1 ? 'excel-review-row-alternate' : ''} ${isActiveSource ? 'excel-review-row-active' : ''} ${status.tone === 'amber' ? 'excel-review-row-attention' : ''} border-l-2 px-3 py-2 transition-colors ${statusAccentClass[status.tone] || 'border-l-slate-200'}`}
                   >
-                    <div className="grid grid-cols-1 2xl:grid-cols-[minmax(360px,0.9fr)_minmax(640px,1.1fr)] gap-3">
+                    <div className="grid grid-cols-1 2xl:grid-cols-[minmax(390px,0.92fr)_minmax(560px,1.08fr)] gap-3">
                       <div className="min-w-0">
-                        <div className="flex items-start gap-2">
+                        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-2">
                           <div className={`h-7 w-7 rounded-lg border flex items-center justify-center shrink-0 ${
                             row.product ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-sky-50 border-sky-200 text-sky-700'
                           }`}>
                             {row.product ? <Package size={14} /> : <Search size={14} />}
                           </div>
-                          <div className="min-w-0 flex-1">
+                          <div className="min-w-0">
                             <div className="flex items-center gap-2 min-w-0">
                               <p className="font-black text-slate-900 text-[13px] truncate" title={row.entry.description || row.entry.code || row.product?.title}>
                                 {row.entry.description || row.entry.code || 'Fila del Excel'}
                               </p>
-                              <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-black uppercase ${statusClass[status.tone]}`}>
-                                {row.isAssociated ? 'Asociado' : status.label}
-                              </span>
                               {row.isAssociated && (
                                 <span className="shrink-0 rounded-full border border-fuchsia-200 bg-fuchsia-50 px-2 py-0.5 text-[9px] font-black uppercase text-fuchsia-700">
                                   sin codigo
                                 </span>
                               )}
                             </div>
-                            <p className="text-[9px] font-bold text-slate-400 font-mono">
+                            <p className="text-[10px] font-bold text-slate-400 font-mono">
                               {row.isAssociated ? 'Vinculado al codigo Excel' : 'Codigo Excel'}: {row.entry.code || '--'} / Fila {row.entry.rowNumber}
                             </p>
-                            <div className="mt-1 flex items-center gap-1.5 min-w-0">
-                              <span className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-black uppercase ${
-                                row.product
-                                  ? 'border-blue-200 bg-blue-50 text-blue-700'
-                                  : 'border-sky-200 bg-sky-50 text-sky-700'
-                              }`}>
-                                Rebu
-                              </span>
-                              <p className="min-w-0 truncate text-[10px] font-bold text-slate-500" title={row.product?.title || 'Sin producto asignado'}>
-                                {row.product?.title || 'Sin producto asignado'}
-                              </p>
-                              {row.product && (
-                                <button
-                                  type="button"
-                                  onClick={() => toggleChangeProductMode(row.id)}
-                                  className="shrink-0 rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-sky-700 hover:bg-sky-100"
-                                >
-                                  {row.changeProductMode ? 'Cancelar' : 'Cambiar producto'}
-                                </button>
-                              )}
-                              {row.product && (
-                                <button
-                                  type="button"
-                                  onClick={() => clearProductFromRow(row.id)}
-                                  className="shrink-0 inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-red-700 hover:bg-red-100"
-                                  title="Quitar el producto enlazado a este articulo del Excel"
-                                >
-                                  <X size={10} />
-                                  Quitar producto
-                                </button>
-                              )}
-                              {row.product && (
+                          </div>
+                          <div className="excel-row-status flex min-w-[84px] flex-col items-end gap-1.5">
+                            <span className={`rounded-md border px-2 py-0.5 text-[9px] font-black uppercase ${statusClass[status.tone]}`}>
+                              {row.isAssociated ? 'Asociado' : status.label}
+                            </span>
+                            {row.product && (
+                              <div className="flex items-center gap-1">
+                                <ProductRowActions
+                                  changeMode={row.changeProductMode}
+                                  onChange={() => toggleChangeProductMode(row.id)}
+                                  onRemove={() => clearProductFromRow(row.id)}
+                                />
                                 <button
                                   type="button"
                                   onClick={() => handleApplyRows([row])}
                                   disabled={!canApplyRow || isApplying}
-                                  className="shrink-0 inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
+                                  className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[8px] font-black uppercase tracking-wide text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
                                   title={canApplyRow ? 'Aplicar solo esta fila' : 'Marca campos o cambia el producto asignado'}
                                 >
                                   <CheckCircle2 size={10} />
                                   Aplicar
                                 </button>
-                              )}
-                            </div>
+                              </div>
+                            )}
                           </div>
                         </div>
 
@@ -912,21 +1190,13 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
                           </div>
                         )}
 
-                        <div className="mt-2 grid grid-cols-1 gap-1.5">
-                          <ReviewTargetButton
-                            active={activeTargetId === 'article'}
-                            label="Menu 1"
-                            title="Articulo del Excel"
-                            subtitle={`${Number(row.entry.quantity || 0).toLocaleString('es-AR')} de ${Number(row.entry.originalQuantity || row.entry.quantity || 0).toLocaleString('es-AR')} compra`}
-                            tone="slate"
-                            onClick={() => setActiveTarget(row.id, 'article')}
-                          />
+                        <div className="excel-target-list mt-1.5 divide-y divide-slate-200/70 border-y border-slate-200/70">
                           {productRows.map((targetRow, targetIndex) => (
                             <ReviewTargetButton
                               key={targetRow.id}
                               active={activeTargetId === targetRow.id}
-                              label={targetRow.isAssociated ? `Asociado ${targetIndex}` : 'Principal'}
-                              title={targetRow.product?.title || (targetRow.isAssociated ? 'Elegir producto asociado' : 'Producto principal')}
+                              label={targetRow.isAssociated ? `Producto ${targetIndex + 1}` : 'Producto Rebu'}
+                              title={targetRow.product?.title || (targetRow.isAssociated ? 'Elegir producto asociado' : 'Buscar producto Rebu')}
                               subtitle={`${Number(targetRow.entry.quantity || 0).toLocaleString('es-AR')} x ${Number(targetRow.entry.multiplier || 0).toLocaleString('es-AR')} = ${getStockDelta(targetRow).toLocaleString('es-AR')} ${getStockUnit(targetRow.product)}`}
                               tone={targetRow.isAssociated ? 'fuchsia' : 'blue'}
                               onClick={() => setActiveTarget(row.id, targetRow.id)}
@@ -939,7 +1209,7 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
                           <button
                             type="button"
                             onClick={() => addAssociatedProductRow(row)}
-                            className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-fuchsia-700 hover:bg-fuchsia-100"
+                            className="excel-associate-action mt-1 inline-flex items-center gap-1.5 px-1 py-1 text-[9px] font-black uppercase tracking-wide text-slate-400 hover:text-fuchsia-700"
                           >
                             <Link2 size={12} />
                             {associatedRows.length > 0 ? `Asociar otro producto (${associatedRows.length})` : 'Asociar otro producto'}
@@ -966,12 +1236,12 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
                           onRemoveAssociated={removeAssociatedProductRow}
                         />
                       ) : !activeReviewRow?.product ? (
-                        <div className="rounded-xl border border-sky-200 bg-sky-50 p-2">
+                        <div className="excel-assignment-panel min-h-[112px] border-l border-slate-200 pl-4 pt-1">
                           <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="text-[9px] font-black uppercase tracking-wider text-sky-700">Accion necesaria</p>
-                              <p className="mt-0.5 truncate text-[12px] font-black text-sky-950">Asignar producto Rebu</p>
-                              <p className="text-[10px] font-bold text-sky-800">Este menu queda conectado al articulo del Excel.</p>
+                              <p className="text-[9px] font-black uppercase tracking-wider text-slate-400">Producto Rebu</p>
+                              <p className="mt-0.5 truncate text-[12px] font-black text-slate-900">Buscar y asignar</p>
+                              <p className="text-[10px] font-bold text-slate-500">Selecciona una coincidencia o crea un artículo nuevo.</p>
                             </div>
                             <ArrowRight size={16} className="text-sky-500 shrink-0" />
                           </div>
@@ -982,7 +1252,7 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
                                 value={activeReviewRow.assignmentQuery}
                                 onChange={(event) => setAssignmentQuery(activeReviewRow.id, event.target.value)}
                                 placeholder={activeReviewRow.isAssociated ? 'Buscar producto asociado...' : 'Buscar producto principal...'}
-                                className="w-full rounded-lg border border-sky-300 bg-white pl-8 pr-3 py-1.5 text-[11px] font-black text-sky-950 outline-none focus:ring-2 focus:ring-sky-300"
+                                className="w-full rounded-md border border-slate-300 bg-white pl-8 pr-3 py-2 text-[11px] font-black text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-200"
                               />
                               {activeCandidates.length > 0 && (
                                 <div className="absolute z-30 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl">
@@ -1002,11 +1272,38 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
                                   ))}
                                 </div>
                               )}
+                              {activeReviewRow.assignmentQuery.trim() && activeCandidates.length === 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => openCreatePanel([activeReviewRow.id])}
+                                  className="excel-create-inline mt-1.5 flex w-full items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50/60 px-2 py-1.5 text-left transition-colors hover:bg-amber-50"
+                                >
+                                  <span className="min-w-0">
+                                    <span className="block text-[9px] font-black uppercase tracking-wider text-amber-600">
+                                      Crear producto nuevo
+                                    </span>
+                                    <span className="block truncate text-[11px] font-black text-amber-950">
+                                      Crear “{activeReviewRow.assignmentQuery.trim()}”
+                                    </span>
+                                  </span>
+                                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-amber-600 text-white">
+                                    <Plus size={14} />
+                                  </span>
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
                       ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-[repeat(3,minmax(150px,220px))] gap-1.5 md:justify-end">
+                        <div className="excel-comparison-panel border-l border-slate-200 pl-4 pt-1">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-[9px] font-black uppercase tracking-wider text-slate-500">Cambios del producto Rebu</p>
+                              <p className="truncate text-[10px] font-bold text-slate-400">{activeReviewRow.product.title}</p>
+                            </div>
+                            <span className="shrink-0 text-[9px] font-black uppercase text-slate-400">Actual → Final</span>
+                          </div>
+                          <div className="excel-comparison-list mt-1 divide-y divide-slate-200">
                           <CompareField
                             label="Stock"
                             tone="blue"
@@ -1051,6 +1348,7 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
                             onAfterChange={(value) => updateRowEntryValue(activeReviewRow.id, 'salePrice', value)}
                             delta={`${formatDiffPercent(activeReviewRow.product?.price, activeReviewRow.entry.salePrice)} vs actual / Lote $${Number(activeReviewRow.entry.lotSalePrice || activeReviewRow.entry.salePrice || 0).toLocaleString('es-AR')}`}
                           />
+                          </div>
                         </div>
                       )}
 
@@ -1338,26 +1636,284 @@ export default function BulkExcelImportView({ inventory = [], onApplyImport }) {
           )}
         </div>
       </section>
+
+      {isCreatePanelOpen && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
+          <div className="flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-300 bg-slate-50 shadow-2xl">
+            <header className="flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 text-amber-700">
+                    <PackagePlus size={17} />
+                  </span>
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900">Crear productos nuevos</h3>
+                    <p className="text-[10px] font-bold text-slate-500">
+                      Completa los datos marcados para agregarlos al inventario.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCreatePanelOpen(false)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100"
+                title="Cerrar"
+              >
+                <X size={16} />
+              </button>
+            </header>
+
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-900 px-4 py-2.5 text-white">
+              <p className="text-[11px] font-bold text-slate-200">
+                {createDrafts.length === 1
+                  ? 'Vas a crear 1 producto.'
+                  : `Vas a crear ${createDrafts.length} productos.`}
+              </p>
+              <span className={`rounded-md px-2 py-1 text-[9px] font-black uppercase ${
+                validCreateDrafts.length === createDrafts.length
+                  ? 'bg-emerald-400/15 text-emerald-200'
+                  : 'bg-amber-400/15 text-amber-200'
+              }`}>
+                {validCreateDrafts.length === createDrafts.length
+                  ? 'Todo completo'
+                  : `${createDrafts.length - validCreateDrafts.length} por completar`}
+              </span>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-3 custom-scrollbar">
+              <div className="space-y-2">
+                {createDrafts.map((draft) => {
+                  const errors = getCreateDraftErrors(draft);
+                  const needsTitle = !String(draft.title || '').trim();
+                  const needsCategory = !String(draft.category || '').trim();
+                  const needsCost = !Number(draft.purchasePrice || 0) || Number(draft.purchasePrice) <= 0;
+                  const needsPrice = !Number(draft.price || 0) || Number(draft.price) <= 0;
+
+                  return (
+                    <article
+                      key={draft.rowId}
+                      className={`border-l-2 bg-white px-3 py-3 ${
+                        draft.duplicate || draft.error
+                          ? 'border-l-red-400'
+                          : errors.length > 0
+                            ? 'border-l-amber-400'
+                            : 'border-l-emerald-400'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          {needsTitle ? (
+                            <CreateField
+                              label="Nombre"
+                              value={draft.title}
+                              onChange={(value) => updateCreateDraft(draft.rowId, 'title', value)}
+                              placeholder="Nombre del producto"
+                            />
+                          ) : (
+                            <p className="truncate text-[12px] font-black text-slate-900" title={draft.title}>
+                              {draft.title}
+                            </p>
+                          )}
+                          <p className="mt-0.5 text-[9px] font-bold text-slate-400">
+                            Codigo: {draft.barcode || 'Sin codigo de barras'}
+                          </p>
+                        </div>
+                        <span className={`shrink-0 rounded-md px-2 py-1 text-[9px] font-black uppercase ${
+                          errors.length === 0
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : 'bg-amber-50 text-amber-700'
+                        }`}>
+                          {errors.length === 0 ? 'Completo' : 'Falta completar'}
+                        </span>
+                      </div>
+
+                      {draft.duplicate && (
+                        <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+                          <div className="min-w-0">
+                            <p className="text-[9px] font-black uppercase tracking-wider text-red-600">{draft.duplicate.reason}</p>
+                            <p className="truncate text-[11px] font-black text-red-900">{draft.duplicate.product.title}</p>
+                            <p className="text-[9px] font-bold text-red-700">Codigo {draft.duplicate.product.barcode || 'sin codigo'}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => linkDuplicateDraft(draft)}
+                            className="shrink-0 rounded-lg border border-red-300 bg-white px-3 py-2 text-[10px] font-black text-red-700 hover:bg-red-100"
+                          >
+                            Vincular existente
+                          </button>
+                        </div>
+                      )}
+
+                      {!draft.duplicate && (
+                        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(220px,1.5fr)_repeat(3,minmax(100px,0.7fr))]">
+                          {needsCategory ? (
+                            <label>
+                              <span className="mb-1 block text-[9px] font-black uppercase tracking-wider text-amber-700">
+                                Elegí una categoría para continuar
+                              </span>
+                              <select
+                                value={draft.category}
+                                onChange={(event) => updateCreateDraft(draft.rowId, 'category', event.target.value)}
+                                className="h-9 w-full rounded-lg border border-amber-300 bg-amber-50 px-2 text-[11px] font-black text-slate-900 outline-none focus:ring-2 focus:ring-amber-200"
+                              >
+                                <option value="">Elegir categoria...</option>
+                                {availableCategories.map((category) => (
+                                  <option key={category} value={category}>{category}</option>
+                                ))}
+                              </select>
+                            </label>
+                          ) : (
+                            <CreateValue label="Categoría" value={draft.category} />
+                          )}
+                          <CreateValue
+                            label="Stock inicial"
+                            value="0"
+                          />
+                          {needsCost ? (
+                            <CreateField label="Costo" type="number" value={draft.purchasePrice} onChange={(value) => updateCreateDraft(draft.rowId, 'purchasePrice', value)} />
+                          ) : (
+                            <CreateValue label="Costo" value={`$${Number(draft.purchasePrice).toLocaleString('es-AR')}`} />
+                          )}
+                          {needsPrice ? (
+                            <CreateField label="Precio" type="number" value={draft.price} onChange={(value) => updateCreateDraft(draft.rowId, 'price', value)} />
+                          ) : (
+                            <CreateValue label="Precio" value={`$${Number(draft.price).toLocaleString('es-AR')}`} />
+                          )}
+                        </div>
+                      )}
+
+                      {(draft.error || (!draft.duplicate && errors.includes('Precio menor al costo'))) && (
+                        <p className="mt-2 rounded-md bg-red-50 px-2 py-1.5 text-[10px] font-bold text-red-700">
+                          {draft.error || 'El precio de venta no puede ser menor al costo.'}
+                        </p>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+
+            <footer className="flex items-center justify-between gap-3 border-t border-slate-200 bg-white px-4 py-3">
+              <p className="text-[10px] font-bold text-slate-500">
+                Después de crearlos, podrás sumar la cantidad indicada en el Excel.
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsCreatePanelOpen(false)}
+                  className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-[11px] font-black text-slate-600 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <AsyncActionButton
+                  onAction={handleCreateProducts}
+                  pending={isCreatingProducts}
+                  disabled={validCreateDrafts.length === 0 || isCreatingProducts}
+                  loadingLabel="Creando..."
+                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-[11px] font-black text-white hover:bg-emerald-700 disabled:opacity-40"
+                >
+                  <PackagePlus size={15} />
+                  {validCreateDrafts.length === 0
+                    ? 'Completa los datos'
+                    : validCreateDrafts.length === 1
+                      ? 'Crear producto'
+                      : `Crear ${validCreateDrafts.length} productos`}
+                </AsyncActionButton>
+              </div>
+            </footer>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function CreateValue({ label, value, className = '' }) {
+  return (
+    <div className={`rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 ${className}`}>
+      <p className="text-[8px] font-black uppercase tracking-wider text-slate-400">{label}</p>
+      <p className="mt-0.5 truncate text-[11px] font-black text-slate-800">{value}</p>
+    </div>
+  );
+}
+
+function CreateField({ label, value, onChange, type = 'text', placeholder = '' }) {
+  return (
+    <label>
+      <span className="mb-1 block text-[9px] font-black uppercase tracking-wider text-amber-700">{label} requerido</span>
+      <input
+        type={type}
+        min={type === 'number' ? 0 : undefined}
+        step={type === 'number' ? 'any' : undefined}
+        value={value ?? ''}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-9 w-full rounded-lg border border-amber-300 bg-amber-50 px-2 text-[11px] font-black text-slate-900 outline-none focus:ring-2 focus:ring-amber-200"
+      />
+    </label>
+  );
+}
+
+function ProductRowActions({ changeMode, onChange, onRemove }) {
+  return (
+    <details className="excel-row-actions relative shrink-0">
+      <summary
+        className="flex h-6 w-6 cursor-pointer list-none items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+        title="Más acciones"
+      >
+        <MoreHorizontal size={14} />
+      </summary>
+      <div className="absolute right-0 top-full z-40 mt-1 w-40 overflow-hidden rounded-lg border border-slate-200 bg-white p-1 shadow-xl">
+        <button
+          type="button"
+          onClick={(event) => {
+            event.currentTarget.closest('details')?.removeAttribute('open');
+            onChange();
+          }}
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[10px] font-black text-slate-700 hover:bg-slate-50"
+        >
+          <Search size={12} />
+          {changeMode ? 'Cancelar cambio' : 'Cambiar producto'}
+        </button>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.currentTarget.closest('details')?.removeAttribute('open');
+            onRemove();
+          }}
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[10px] font-black text-red-600 hover:bg-red-50"
+        >
+          <X size={12} />
+          Quitar vínculo
+        </button>
+      </div>
+    </details>
   );
 }
 
 function ReviewTargetButton({ active, label, title, subtitle, tone = 'slate', onClick, onRemove }) {
   const toneClass = {
-    slate: active ? 'border-slate-400 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
-    blue: active ? 'border-blue-500 bg-blue-600 text-white' : 'border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100',
-    fuchsia: active ? 'border-fuchsia-500 bg-fuchsia-600 text-white' : 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800 hover:bg-fuchsia-100',
-  }[tone] || 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50';
+    slate: active ? 'text-slate-950' : 'text-slate-600 hover:text-slate-900',
+    blue: active ? 'text-blue-800' : 'text-slate-600 hover:text-blue-700',
+    fuchsia: active ? 'text-fuchsia-800' : 'text-slate-600 hover:text-fuchsia-700',
+  }[tone] || 'text-slate-600 hover:text-slate-900';
+  const markerClass = {
+    slate: active ? 'bg-slate-700' : 'bg-slate-300',
+    blue: active ? 'bg-blue-500' : 'bg-slate-300',
+    fuchsia: active ? 'bg-fuchsia-500' : 'bg-slate-300',
+  }[tone] || 'bg-slate-300';
 
   return (
-    <div className={`grid grid-cols-[auto_1fr_auto] items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition-colors ${toneClass}`}>
+    <div className={`excel-target-row excel-target-${tone} ${active ? 'excel-target-active' : ''} grid grid-cols-[3px_88px_minmax(0,1fr)_auto] items-center gap-2 px-1 py-1.5 text-left transition-colors ${toneClass}`}>
+      <span className={`h-7 w-1 rounded-full ${markerClass}`} />
       <button type="button" onClick={onClick} className="contents text-left">
-        <span className={`rounded-md px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide ${active ? 'bg-white/15 text-white' : 'bg-white/70 text-current'}`}>
+        <span className="px-1 text-[9px] font-black uppercase tracking-wide text-slate-400">
           {label}
         </span>
         <span className="min-w-0">
-          <span className="block truncate text-[11px] font-black">{title}</span>
-          <span className={`block truncate text-[9px] font-bold ${active ? 'text-white/75' : 'text-slate-400'}`}>{subtitle}</span>
+          <span className="block truncate text-[12px] font-black">{title}</span>
+          <span className="block truncate text-[10px] font-bold text-slate-400">{subtitle}</span>
         </span>
       </button>
       {onRemove ? (
@@ -1367,11 +1923,7 @@ function ReviewTargetButton({ active, label, title, subtitle, tone = 'slate', on
             event.stopPropagation();
             onRemove();
           }}
-          className={`h-6 w-6 rounded-md border flex items-center justify-center transition-colors ${
-            active
-              ? 'border-white/25 bg-white/10 text-white hover:bg-white/20'
-              : 'border-red-200 bg-white/80 text-red-500 hover:bg-red-50'
-          }`}
+          className="h-6 w-6 rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600 flex items-center justify-center transition-colors"
           title="Quitar producto asociado"
         >
           <X size={12} />
@@ -1389,39 +1941,33 @@ function ArticleBreakdownPanel({ sourceRow, productRows, onQuantityChange, onSel
   const remainingQuantity = originalQuantity - assignedQuantity;
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-2">
+    <div className="excel-article-panel border-l border-slate-200 pl-4 pt-1">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[9px] font-black uppercase tracking-wider text-slate-500">Articulo del Excel</p>
-          <p className="mt-0.5 truncate text-[12px] font-black text-slate-900" title={sourceRow.entry.description}>
-            {sourceRow.entry.description || 'Sin descripcion'}
-          </p>
-          <p className="text-[9px] font-bold text-slate-400 font-mono">Codigo: {sourceRow.entry.code || '--'} / Fila {sourceRow.entry.rowNumber}</p>
-        </div>
-        <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-black ${remainingQuantity === 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
+        <p className="text-[9px] font-black uppercase tracking-wider text-slate-500">Cambios a aplicar</p>
+        <span className={`shrink-0 rounded-md px-2 py-0.5 text-[9px] font-black ${remainingQuantity === 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-sky-50 text-sky-700'}`}>
           Resta {remainingQuantity.toLocaleString('es-AR')}
         </span>
       </div>
 
-      <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-        <ImportChip label="Cantidad" value={originalQuantity.toLocaleString('es-AR')} />
-        <ImportChip label="Asignado" tone="stock" value={assignedQuantity.toLocaleString('es-AR')} />
-        <ImportChip label="Costo" tone="cost" value={<FancyPrice amount={sourceRow.entry.lotCost || sourceRow.entry.cost} />} />
-        <ImportChip label="Venta" tone="price" value={<FancyPrice amount={sourceRow.entry.lotSalePrice || sourceRow.entry.salePrice} />} />
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-6 gap-y-1 border-y border-slate-200 py-1.5">
+        <InlineMetric label="Cantidad" value={originalQuantity.toLocaleString('es-AR')} />
+        <InlineMetric label="Asignado" value={assignedQuantity.toLocaleString('es-AR')} tone="blue" />
+        <InlineMetric label="Costo" value={<FancyPrice amount={sourceRow.entry.lotCost || sourceRow.entry.cost} />} tone="violet" />
+        <InlineMetric label="Venta" value={<FancyPrice amount={sourceRow.entry.lotSalePrice || sourceRow.entry.salePrice} />} tone="green" />
       </div>
 
-      <div className="mt-2 space-y-1.5">
+      <div className="divide-y divide-slate-200">
         {productRows.map((row, index) => {
           const unit = getStockUnit(row.product);
           const stockDelta = getStockDelta(row.entry);
           return (
-            <div key={row.id} className="grid grid-cols-[1fr_86px_auto_auto] items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+            <div key={row.id} className="grid grid-cols-[1fr_78px_auto_auto] items-center gap-2 px-1 py-1.5">
               <button type="button" onClick={() => onSelectTarget(row.id)} className="min-w-0 text-left">
                 <span className="block truncate text-[11px] font-black text-slate-800">
-                  {row.isAssociated ? `Asociado ${index}: ` : 'Principal: '}
-                  {row.product?.title || (row.isAssociated ? 'Producto asociado' : 'Producto principal')}
+                  {row.isAssociated ? `Producto ${index + 1}: ` : ''}
+                  {row.product?.title || (row.isAssociated ? 'Producto asociado' : 'Producto Rebu')}
                 </span>
-                <span className="block truncate text-[9px] font-bold text-slate-400">
+                <span className="block truncate text-[10px] font-bold text-slate-400">
                   {Number(row.entry.quantity || 0).toLocaleString('es-AR')} x {Number(row.entry.multiplier || 0).toLocaleString('es-AR')} = {stockDelta.toLocaleString('es-AR')} {unit}
                 </span>
               </button>
@@ -1450,6 +1996,22 @@ function ArticleBreakdownPanel({ sourceRow, productRows, onQuantityChange, onSel
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function InlineMetric({ label, value, tone = 'slate' }) {
+  const valueClass = {
+    blue: 'text-sky-700',
+    violet: 'text-violet-700',
+    green: 'text-emerald-700',
+    slate: 'text-slate-900',
+  }[tone] || 'text-slate-900';
+
+  return (
+    <div className="min-w-[72px]">
+      <p className="text-[8px] font-black uppercase tracking-wider text-slate-400">{label}</p>
+      <div className={`mt-0.5 text-[12px] font-black tabular-nums ${valueClass}`}>{value}</div>
     </div>
   );
 }
@@ -1491,17 +2053,12 @@ function ImportChip({ label, value, tone = 'default' }) {
 }
 
 function QuantityMultiplierControl({ quantity, multiplier, unit, stockDelta, onChange, compact = false }) {
-  return (
-    <div className={`rounded-lg border border-sky-200 bg-sky-50 ${compact ? 'mt-1 px-1.5 py-1' : 'mt-1.5 px-2 py-1'}`}>
-      <div className="flex items-center justify-between gap-1.5">
-        <span className="text-[8px] font-black uppercase tracking-wider text-sky-600">Equiv.</span>
-        <span className={`${compact ? 'text-[9px]' : 'text-[10px]'} font-black text-sky-800`}>
-          {Number(quantity || 0).toLocaleString('es-AR')} x {Number(multiplier || 0).toLocaleString('es-AR')} = {Number(stockDelta || 0).toLocaleString('es-AR')} {unit}
-        </span>
-      </div>
-      <div className={`${compact ? 'mt-0.5' : 'mt-1'} flex items-center gap-1.5`}>
-        <span className={`${compact ? 'text-[8px]' : 'text-[9px]'} font-bold text-sky-600`}>
-          {compact ? '1 compra =' : 'Cada 1 un. de compra equivale a'}
+  if (compact) {
+    return (
+      <div className="excel-multiplier-compact flex min-w-0 items-center gap-2">
+        <span className="shrink-0 text-[9px] font-black uppercase tracking-wide text-sky-600">Equiv.</span>
+        <span className="min-w-0 truncate text-[9px] font-bold text-sky-700">
+          {Number(quantity || 0).toLocaleString('es-AR')} x
         </span>
         <input
           type="text"
@@ -1509,7 +2066,34 @@ function QuantityMultiplierControl({ quantity, multiplier, unit, stockDelta, onC
           min="0"
           value={multiplier ?? ''}
           onChange={(event) => onChange(event.target.value)}
-          className={`min-w-0 flex-1 rounded-md border border-sky-200 bg-white px-1.5 text-right font-black tabular-nums text-sky-900 outline-none focus:ring-2 focus:ring-sky-200 ${compact ? 'py-0.5 text-[10px]' : 'py-0.5 text-[11px]'}`}
+          className="w-16 rounded-md border border-sky-200 bg-white px-1.5 py-0.5 text-right text-[10px] font-black tabular-nums text-sky-900 outline-none focus:ring-2 focus:ring-sky-200"
+        />
+        <span className="shrink-0 text-[9px] font-bold text-sky-700">
+          = {Number(stockDelta || 0).toLocaleString('es-AR')} {unit}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-1.5 rounded-lg border border-sky-200 bg-sky-50 px-2 py-1">
+      <div className="flex items-center justify-between gap-1.5">
+        <span className="text-[8px] font-black uppercase tracking-wider text-sky-600">Equiv.</span>
+        <span className="text-[10px] font-black text-sky-800">
+          {Number(quantity || 0).toLocaleString('es-AR')} x {Number(multiplier || 0).toLocaleString('es-AR')} = {Number(stockDelta || 0).toLocaleString('es-AR')} {unit}
+        </span>
+      </div>
+      <div className="mt-1 flex items-center gap-1.5">
+        <span className="text-[9px] font-bold text-sky-600">
+          Cada 1 un. de compra equivale a
+        </span>
+        <input
+          type="text"
+          inputMode="decimal"
+          min="0"
+          value={multiplier ?? ''}
+          onChange={(event) => onChange(event.target.value)}
+          className="min-w-0 flex-1 rounded-md border border-sky-200 bg-white px-1.5 py-0.5 text-right text-[11px] font-black tabular-nums text-sky-900 outline-none focus:ring-2 focus:ring-sky-200"
         />
         <span className="text-[9px] font-black uppercase text-sky-600">{unit}</span>
       </div>
@@ -1517,41 +2101,24 @@ function QuantityMultiplierControl({ quantity, multiplier, unit, stockDelta, onC
   );
 }
 
-function CompareField({ label, before, after, delta, checked, disabled, onToggle, tone, editableValue, onAfterChange, multiplierControl, compact = false }) {
+function CompareField({ label, before, after, delta, checked, disabled, onToggle, tone, editableValue, onAfterChange, multiplierControl }) {
   const toneClass = {
-    blue: checked ? 'border-blue-300 bg-blue-50 shadow-sm' : 'border-slate-200 bg-white',
-    amber: checked ? 'border-violet-300 bg-violet-50 shadow-sm' : 'border-slate-200 bg-white',
-    violet: checked ? 'border-violet-300 bg-violet-50 shadow-sm' : 'border-slate-200 bg-white',
-    emerald: checked ? 'border-emerald-300 bg-emerald-50 shadow-sm' : 'border-slate-200 bg-white',
+    blue: checked ? 'excel-compare-blue' : '',
+    amber: checked ? 'excel-compare-violet' : '',
+    violet: checked ? 'excel-compare-violet' : '',
+    emerald: checked ? 'excel-compare-emerald' : '',
   }[tone];
 
   return (
-    <div className={`rounded-lg border min-w-0 transition-colors ${compact ? 'p-1.5' : 'p-1.5'} ${toneClass}`}>
-      <div className={`flex items-center justify-between gap-1.5 ${compact ? 'mb-1' : 'mb-1.5'}`}>
-        <span className={`${compact ? 'text-[9px]' : 'text-[10px]'} font-black uppercase tracking-wider text-slate-600`}>{label}</span>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={onToggle}
-          className={`rounded-full border font-black uppercase transition-colors ${compact ? 'px-1.5 py-0.5 text-[8px]' : 'px-1.5 py-0.5 text-[8px]'} ${
-            checked
-              ? 'border-emerald-500 bg-emerald-600 text-white'
-              : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-white'
-          } disabled:opacity-40 disabled:hover:bg-slate-50`}
-          title={`Aplicar ${label}`}
-        >
-          {checked ? 'Aplicar' : disabled ? 'Sin cambio' : 'Marcar'}
-        </button>
-      </div>
-      <div className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-1">
-        <div className={`min-w-0 rounded-md border border-slate-200 bg-slate-50 px-1.5 ${compact ? 'py-0.5' : 'py-0.5'}`}>
+    <div className={`excel-compare-row min-w-0 px-1 py-1.5 transition-colors ${toneClass}`}>
+      <div className="grid grid-cols-[54px_minmax(72px,0.8fr)_auto_minmax(92px,1fr)_auto] items-center gap-2">
+        <span className="text-[9px] font-black uppercase tracking-wider text-slate-600">{label}</span>
+        <div className="min-w-0">
           <p className="text-[8px] font-black uppercase tracking-wider text-slate-400">Actual</p>
-          <div className={`truncate font-black text-slate-600 ${compact ? 'text-[10px]' : 'text-[11px]'}`}>{before}</div>
+          <div className="truncate text-[11px] font-black text-slate-600">{before}</div>
         </div>
-        <div className="flex items-center text-slate-300">
-          <ArrowRight size={compact ? 11 : 12} />
-        </div>
-        <div className={`min-w-0 rounded-md border border-slate-200 bg-white px-1.5 ${compact ? 'py-0.5' : 'py-0.5'}`}>
+        <ArrowRight size={12} className="text-slate-300" />
+        <div className="min-w-0">
           <p className="text-[8px] font-black uppercase tracking-wider text-slate-400">Final</p>
           {onAfterChange ? (
             <div className="flex items-center gap-1">
@@ -1561,17 +2128,32 @@ function CompareField({ label, before, after, delta, checked, disabled, onToggle
                 inputMode="decimal"
                 value={editableValue ?? ''}
                 onChange={(event) => onAfterChange(event.target.value)}
-                className={`no-spinners min-w-0 flex-1 bg-transparent text-right font-black tabular-nums text-slate-900 outline-none ${compact ? 'text-[10px]' : 'text-[11px]'}`}
+                className="no-spinners min-w-0 flex-1 bg-transparent text-right text-[11px] font-black tabular-nums text-slate-900 outline-none"
                 title={`Editar ${label} final`}
               />
             </div>
           ) : (
-            <div className={`truncate text-right font-black text-slate-900 ${compact ? 'text-[10px]' : 'text-[11px]'}`}>{after}</div>
+            <div className="truncate text-right text-[11px] font-black text-slate-900">{after}</div>
           )}
         </div>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onToggle}
+          className={`min-w-[58px] rounded-md border px-1.5 py-1 text-[8px] font-black uppercase transition-colors ${
+            checked
+              ? 'border-emerald-500 bg-emerald-600 text-white'
+              : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-white'
+          } disabled:opacity-40 disabled:hover:bg-slate-50`}
+          title={`Aplicar ${label}`}
+        >
+          {checked ? 'Aplicar' : disabled ? 'Sin cambio' : 'Marcar'}
+        </button>
       </div>
-      <p className={`${compact ? 'mt-0.5 text-[8px]' : 'mt-1 text-[9px]'} font-bold text-slate-400 truncate`}>{delta}</p>
-      {multiplierControl}
+      <div className="mt-1 flex min-w-0 items-center justify-between gap-3 pl-[62px]">
+        <p className="min-w-0 truncate text-[9px] font-bold text-slate-400">{delta}</p>
+        {multiplierControl}
+      </div>
     </div>
   );
 }

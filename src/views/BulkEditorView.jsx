@@ -46,6 +46,7 @@ export default function BulkEditorView({
   setExportConfig,
   onCreateFixedProduct,
   onApplyExcelImport,
+  onCreateExcelProducts,
   onApplyProductImageImports,
   onImageImportTaskChange,
   imageImportOpenRequest = 0,
@@ -2366,7 +2367,12 @@ export default function BulkEditorView({
       </div>
 
       <div className={`${activeToolMode === 'excel' ? 'flex' : 'hidden'} min-h-0 flex-1`}>
-        <BulkExcelImportView inventory={sandboxInventory} onApplyImport={onApplyExcelImport} />
+        <BulkExcelImportView
+          inventory={sandboxInventory}
+          categories={categories}
+          onApplyImport={onApplyExcelImport}
+          onCreateProducts={onCreateExcelProducts}
+        />
       </div>
       <div className={`${activeToolMode === 'bulk' ? 'flex' : 'hidden'} min-h-0 flex-1`}>
         {renderEditorMasivo()}

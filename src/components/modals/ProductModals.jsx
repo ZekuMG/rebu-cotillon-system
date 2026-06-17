@@ -507,7 +507,7 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
           </div>
 
           {/* Imagen */}
-          <ImageSection image={newItem.image} isUploading={isUploadingImage} onFileUpload={(file) => onImageUpload(file, false)} onUrlChange={(e) => setNewItem({ ...newItem, image: e.target.value, image_thumb: '' })} onDelete={() => setNewItem({ ...newItem, image: '', image_thumb: '' })} />
+          <ImageSection image={newItem.image} isUploading={isUploadingImage} onFileUpload={(file) => onImageUpload(file, false)} onUrlChange={(e) => setNewItem({ ...newItem, image: e.target.value, image_thumb: '', imageThumb: '' })} onDelete={() => setNewItem({ ...newItem, image: '', image_thumb: '', imageThumb: '' })} />
 
           <AsyncActionButton type="submit" pending={isPending('add-product-submit')} disabled={isUploadingImage || isPending('add-product-submit')} loadingLabel="Guardando..." className={`w-full py-3 rounded-lg font-bold transition-colors ${isUploadingImage ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-slate-900 text-white hover:bg-slate-800'} disabled:opacity-60 disabled:cursor-wait`}>Agregar</AsyncActionButton>
         </form>
@@ -662,7 +662,7 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
           </div>
 
           {/* Imagen */}
-          <ImageSection image={product.image} isUploading={isUploadingImage} onFileUpload={(file) => onImageUpload(file, true)} onUrlChange={(e) => setEditingProduct({ ...product, image: e.target.value, image_thumb: '' })} onDelete={() => setEditingProduct({ ...product, image: '', image_thumb: '' })} />
+          <ImageSection image={product.image} isUploading={isUploadingImage} onFileUpload={(file) => onImageUpload(file, true)} onUrlChange={(e) => setEditingProduct({ ...product, image: e.target.value, image_thumb: '', imageThumb: '' })} onDelete={() => setEditingProduct({ ...product, image: '', image_thumb: '', imageThumb: '' })} />
 
           {/* Motivo */}
           <div>

@@ -216,6 +216,7 @@ const OFFLINE_BOOT_TIMEOUT_MS = 5500;
 const APP_USERS_BOOT_TIMEOUT_MS = 20000;
 const OFFLINE_LOGIN_TIMEOUT_MS = 6500;
 const CLOUD_RECONNECT_TIMEOUT_MS = 15000;
+const FORCE_RELOAD_TIMEOUT_MS = 45000;
 const REPORT_LOG_ACTIONS = ['Cierre de Caja', 'Cierre Automático'];
 
 let localDemoIdCounter = 0;
@@ -354,6 +355,8 @@ const withTimeout = (promise, timeoutMs, label = 'Operacion') =>
     const timeoutId = window.setTimeout(() => {
       const timeoutError = new Error(`${label} excedio el tiempo de espera.`);
       timeoutError.code = 'REBU_TIMEOUT';
+      timeoutError.timeoutMs = timeoutMs;
+      timeoutError.operationLabel = label;
       reject(timeoutError);
     }, timeoutMs);
 
@@ -403,7 +406,8 @@ const getCloudReconnectErrorMessage = (error) => {
   ].filter(Boolean).join(' ');
 
   if (error?.code === 'REBU_TIMEOUT' || /timeout|tiempo de espera/i.test(errorText)) {
-    return 'El servidor no respondio en 15 segundos. La conexion existe, pero no se pudo contactar Supabase. Revisa DNS o la red y volve a intentar.';
+    const timeoutSeconds = Math.max(1, Math.round(Number(error?.timeoutMs || CLOUD_RECONNECT_TIMEOUT_MS) / 1000));
+    return `La operacion "${error?.operationLabel || 'Conexion con Supabase'}" no respondio en ${timeoutSeconds} segundos. Revisa la red y volve a intentar.`;
   }
 
   if (/failed to fetch|network|load failed|fetch failed|name.*resolve|dns|enotfound/i.test(errorText)) {
@@ -2399,7 +2403,7 @@ export default function PartySupplyApp() {
 
     if (sharedUsersCache.promise) {
       const cachedResult = await sharedUsersCache.promise;
-      if (canServeSharedUsersScope(cachedResult.scope || 'active', requestedScope)) {
+      if (!force && canServeSharedUsersScope(cachedResult.scope || 'active', requestedScope)) {
         setAuthMode(cachedResult.authMode);
         setAppUsers(cachedResult.users);
         return cachedResult.users;
@@ -2648,7 +2652,7 @@ export default function PartySupplyApp() {
     applyOrdersPayload(payload);
   };
 
-  const loadCoreCloudData = async ({ showSpinner = false, force = false } = {}) => {
+  const loadCoreCloudData = async ({ showSpinner = false, force = false, requireCloud = false } = {}) => {
     if (isLocalDemoMode()) {
       applyLocalDemoSnapshot();
       setIsOfflineReadOnly(false);
@@ -2661,7 +2665,7 @@ export default function PartySupplyApp() {
       if (applyCoreSnapshot(cachedSnapshot)) {
         setIsOfflineReadOnly(true);
         setModuleState('core', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-        return true;
+        return !requireCloud;
       }
 
       setIsOfflineReadOnly(true);
@@ -2670,7 +2674,12 @@ export default function PartySupplyApp() {
     }
 
     if (moduleLoadPromisesRef.current.core) {
-      return moduleLoadPromisesRef.current.core;
+      if (!force) return moduleLoadPromisesRef.current.core;
+      await withTimeout(
+        moduleLoadPromisesRef.current.core,
+        FORCE_RELOAD_TIMEOUT_MS,
+        'Espera de carga base anterior',
+      );
     }
 
     const currentState = moduleLoadStateRef.current.core;
@@ -2695,7 +2704,7 @@ export default function PartySupplyApp() {
           if (applyCoreSnapshot(cachedSnapshot)) {
             setIsOfflineReadOnly(true);
             setModuleState('core', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-            return true;
+            return !requireCloud;
           }
 
           setModuleState('core', { status: 'error', dirty: true });
@@ -2726,7 +2735,7 @@ export default function PartySupplyApp() {
         if (applyCoreSnapshot(cachedSnapshot)) {
           setIsOfflineReadOnly(true);
           setModuleState('core', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-          return true;
+          return !requireCloud;
         }
 
         setModuleState('core', { status: 'error', dirty: true });
@@ -2742,13 +2751,14 @@ export default function PartySupplyApp() {
     return promise;
   };
 
-  const loadTransactionsCloudData = async ({ force = false } = {}) => {
+  const loadTransactionsCloudData = async ({ force = false, requireCloud = false } = {}) => {
     if (moduleLoadPromisesRef.current.transactions) {
       if (!force) return moduleLoadPromisesRef.current.transactions;
-      await moduleLoadPromisesRef.current.transactions.catch((error) => {
-        console.warn('La carga previa de transacciones fallo antes de forzar recarga:', error);
-        return false;
-      });
+      await withTimeout(
+        moduleLoadPromisesRef.current.transactions,
+        FORCE_RELOAD_TIMEOUT_MS,
+        'Espera de transacciones anterior',
+      );
     }
 
     const currentState = moduleLoadStateRef.current.transactions;
@@ -2783,7 +2793,7 @@ export default function PartySupplyApp() {
             loadOfflineTransactionsSnapshot() || loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
           if (applyTransactionsSnapshot(cachedSnapshot)) {
             setModuleState('transactions', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-            return true;
+            return !requireCloud;
           }
 
           setModuleState('transactions', { status: 'error', dirty: true });
@@ -2824,7 +2834,7 @@ export default function PartySupplyApp() {
           loadOfflineTransactionsSnapshot() || loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
         if (applyTransactionsSnapshot(cachedSnapshot)) {
           setModuleState('transactions', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-          return true;
+          return !requireCloud;
         }
 
         setModuleState('transactions', { status: 'error', dirty: true });
@@ -2839,9 +2849,14 @@ export default function PartySupplyApp() {
     return promise;
   };
 
-  const loadDashboardCloudData = async ({ force = false } = {}) => {
+  const loadDashboardCloudData = async ({ force = false, requireCloud = false } = {}) => {
     if (moduleLoadPromisesRef.current.dashboard) {
-      return moduleLoadPromisesRef.current.dashboard;
+      if (!force) return moduleLoadPromisesRef.current.dashboard;
+      await withTimeout(
+        moduleLoadPromisesRef.current.dashboard,
+        FORCE_RELOAD_TIMEOUT_MS,
+        'Espera de Dashboard anterior',
+      );
     }
 
     const currentState = moduleLoadStateRef.current.dashboard;
@@ -2864,7 +2879,11 @@ export default function PartySupplyApp() {
         );
 
       try {
-        await loadTransactionsCloudData({ force });
+        const transactionsLoaded = await loadTransactionsCloudData({ force, requireCloud });
+        if (!transactionsLoaded) {
+          setModuleState('dashboard', { status: 'error', dirty: true });
+          return false;
+        }
         const payload = useRecentSync
           ? latestDashboardLogCreatedAt || latestExpenseCreatedAt || latestClosureCreatedAt
             ? await fetchDashboardCloudPayloadSince({
@@ -2879,7 +2898,7 @@ export default function PartySupplyApp() {
           const cachedSnapshot = loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
           if (applyDashboardSnapshot(cachedSnapshot)) {
             setModuleState('dashboard', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-            return true;
+            return !requireCloud;
           }
 
           setModuleState('dashboard', { status: 'error', dirty: true });
@@ -2927,7 +2946,7 @@ export default function PartySupplyApp() {
         const cachedSnapshot = loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
         if (applyDashboardSnapshot(cachedSnapshot)) {
           setModuleState('dashboard', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-          return true;
+          return !requireCloud;
         }
 
         setModuleState('dashboard', { status: 'error', dirty: true });
@@ -2942,13 +2961,14 @@ export default function PartySupplyApp() {
     return promise;
   };
 
-  const loadHistoryCloudData = async ({ force = false } = {}) => {
+  const loadHistoryCloudData = async ({ force = false, requireCloud = false } = {}) => {
     if (moduleLoadPromisesRef.current.history) {
       if (!force) return moduleLoadPromisesRef.current.history;
-      await moduleLoadPromisesRef.current.history.catch((error) => {
-        console.warn('La carga previa de historial fallo antes de forzar recarga:', error);
-        return false;
-      });
+      await withTimeout(
+        moduleLoadPromisesRef.current.history,
+        FORCE_RELOAD_TIMEOUT_MS,
+        'Espera de Historial anterior',
+      );
     }
 
     const currentState = moduleLoadStateRef.current.history;
@@ -2976,7 +2996,7 @@ export default function PartySupplyApp() {
           const cachedSnapshot = loadOfflineHistorySnapshot() || loadOfflineSnapshot();
           if (applyHistorySnapshot(cachedSnapshot)) {
             setModuleState('history', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-            return true;
+            return !requireCloud;
           }
           setModuleState('history', { status: 'error', dirty: true });
           return false;
@@ -3000,7 +3020,7 @@ export default function PartySupplyApp() {
         const cachedSnapshot = loadOfflineHistorySnapshot() || loadOfflineSnapshot();
         if (applyHistorySnapshot(cachedSnapshot)) {
           setModuleState('history', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-          return true;
+          return !requireCloud;
         }
         setModuleState('history', { status: 'error', dirty: true });
         return false;
@@ -3014,9 +3034,14 @@ export default function PartySupplyApp() {
     return promise;
   };
 
-  const loadOrdersCloudData = async ({ force = false } = {}) => {
+  const loadOrdersCloudData = async ({ force = false, requireCloud = false } = {}) => {
     if (moduleLoadPromisesRef.current.orders) {
-      return moduleLoadPromisesRef.current.orders;
+      if (!force) return moduleLoadPromisesRef.current.orders;
+      await withTimeout(
+        moduleLoadPromisesRef.current.orders,
+        FORCE_RELOAD_TIMEOUT_MS,
+        'Espera de Pedidos anterior',
+      );
     }
 
     const currentState = moduleLoadStateRef.current.orders;
@@ -3050,7 +3075,7 @@ export default function PartySupplyApp() {
           const cachedSnapshot = loadOfflineOrdersSnapshot() || loadOfflineSnapshot();
           if (applyOrdersSnapshot(cachedSnapshot)) {
             setModuleState('orders', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-            return true;
+            return !requireCloud;
           }
 
           setModuleState('orders', { status: 'error', dirty: true });
@@ -3085,7 +3110,7 @@ export default function PartySupplyApp() {
         const cachedSnapshot = loadOfflineOrdersSnapshot() || loadOfflineSnapshot();
         if (applyOrdersSnapshot(cachedSnapshot)) {
           setModuleState('orders', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-          return true;
+          return !requireCloud;
         }
 
         setModuleState('orders', { status: 'error', dirty: true });
@@ -3100,9 +3125,14 @@ export default function PartySupplyApp() {
     return promise;
   };
 
-  const loadReportsCloudData = async ({ force = false } = {}) => {
+  const loadReportsCloudData = async ({ force = false, requireCloud = false } = {}) => {
     if (moduleLoadPromisesRef.current.reports) {
-      return moduleLoadPromisesRef.current.reports;
+      if (!force) return moduleLoadPromisesRef.current.reports;
+      await withTimeout(
+        moduleLoadPromisesRef.current.reports,
+        FORCE_RELOAD_TIMEOUT_MS,
+        'Espera de Reportes anterior',
+      );
     }
 
     const currentState = moduleLoadStateRef.current.reports;
@@ -3130,7 +3160,7 @@ export default function PartySupplyApp() {
           const cachedSnapshot = loadOfflineReportsSnapshot() || loadOfflineSnapshot();
           if (applyReportsSnapshot(cachedSnapshot)) {
             setModuleState('reports', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-            return true;
+            return !requireCloud;
           }
 
           setModuleState('reports', { status: 'error', dirty: true });
@@ -3158,7 +3188,7 @@ export default function PartySupplyApp() {
         const cachedSnapshot = loadOfflineReportsSnapshot() || loadOfflineSnapshot();
         if (applyReportsSnapshot(cachedSnapshot)) {
           setModuleState('reports', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-          return true;
+          return !requireCloud;
         }
 
         setModuleState('reports', { status: 'error', dirty: true });
@@ -3173,9 +3203,14 @@ export default function PartySupplyApp() {
     return promise;
   };
 
-  const loadMetricsCloudData = async ({ force = false, includeTransactions = true } = {}) => {
+  const loadMetricsCloudData = async ({ force = false, includeTransactions = true, requireCloud = false } = {}) => {
     if (moduleLoadPromisesRef.current.metrics) {
-      return moduleLoadPromisesRef.current.metrics;
+      if (!force) return moduleLoadPromisesRef.current.metrics;
+      await withTimeout(
+        moduleLoadPromisesRef.current.metrics,
+        FORCE_RELOAD_TIMEOUT_MS,
+        'Espera de Metricas anterior',
+      );
     }
 
     const currentState = moduleLoadStateRef.current.metrics;
@@ -3200,7 +3235,7 @@ export default function PartySupplyApp() {
 
           if (applyMetricsSnapshot(cachedSnapshot)) {
             setModuleState('metrics', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-            return true;
+            return !requireCloud;
           }
 
           setModuleState('metrics', { status: 'error', dirty: true });
@@ -3226,7 +3261,7 @@ export default function PartySupplyApp() {
 
         if (applyMetricsSnapshot(cachedSnapshot)) {
           setModuleState('metrics', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-          return true;
+          return !requireCloud;
         }
 
         setModuleState('metrics', { status: 'error', dirty: true });
@@ -3241,26 +3276,24 @@ export default function PartySupplyApp() {
     return promise;
   };
 
-  const loadModuleForTab = async (tab, { force = false } = {}) => {
+  const loadModuleForTab = async (tab, { force = false, requireCloud = false } = {}) => {
     switch (TAB_TO_DATA_MODULE[tab]) {
       case 'transactions':
-        return loadTransactionsCloudData({ force });
+        return loadTransactionsCloudData({ force, requireCloud });
       case 'dashboard':
         await loadCoreCloudData({ force: false });
-        return Promise.all([
-          loadTransactionsCloudData({ force }),
-          loadDashboardCloudData({ force }),
-        ]).then((results) => results.every(Boolean));
+        return loadDashboardCloudData({ force, requireCloud });
       case 'history':
-        return loadHistoryCloudData({ force });
+        return loadHistoryCloudData({ force, requireCloud });
       case 'orders':
-        return loadOrdersCloudData({ force });
+        return loadOrdersCloudData({ force, requireCloud });
       case 'reports':
-        return loadReportsCloudData({ force });
+        return loadReportsCloudData({ force, requireCloud });
       case 'metrics':
         await loadCoreCloudData({ force: false });
         return loadMetricsCloudData({
           force,
+          requireCloud,
           includeTransactions:
             force ||
             !isModuleStateFresh(moduleLoadStateRef.current.transactions, MODULE_FRESHNESS_MS.transactions) ||
@@ -4157,19 +4190,44 @@ export default function PartySupplyApp() {
 
     setIsForceReloading(true);
     try {
+      const isReachable = await verifyCloudConnection();
+      if (!isReachable) {
+        throw new Error('Windows informa que no hay conexion disponible.');
+      }
+
       void loadAppUsers({ force: true, includeInactive: activeTabRef.current === 'user-management' }).catch((error) => {
         console.warn('No se pudieron refrescar usuarios durante la recarga total. Seguimos con cache local.', error);
       });
-      await loadCoreCloudData({ showSpinner: false, force: true });
-      await loadModuleForTab(activeTabRef.current, { force: true });
+
+      const coreLoaded = await withTimeout(
+        loadCoreCloudData({ showSpinner: false, force: true, requireCloud: true }),
+        FORCE_RELOAD_TIMEOUT_MS,
+        'Recarga de datos base',
+      );
+      if (!coreLoaded) {
+        throw new Error('No se pudieron actualizar los datos base desde la nube.');
+      }
+
+      const moduleLoaded = await withTimeout(
+        loadModuleForTab(activeTabRef.current, { force: true, requireCloud: true }),
+        FORCE_RELOAD_TIMEOUT_MS,
+        'Recarga del modulo visible',
+      );
+      if (!moduleLoaded) {
+        throw new Error('Los datos base se actualizaron, pero fallo el modulo visible.');
+      }
+
       setIsOfflineReadOnly(false);
       showNotification('success', 'Base actualizada', 'Se recargaron datos base y el modulo visible. Usuarios se actualiza en segundo plano.');
     } catch (error) {
       console.error('No se pudo completar la recarga total:', error);
+      if (isRecoverableCloudError(error)) {
+        setIsOfflineReadOnly(true);
+      }
       showNotification(
         'error',
         'No se pudo recargar la base',
-        error?.message || 'La nube no respondio. Si la app quedo inconsistente, reinicia Electron.'
+        getCloudReconnectErrorMessage(error),
       );
     } finally {
       setIsForceReloading(false);
@@ -8962,10 +9020,16 @@ export default function PartySupplyApp() {
       const originalStock = Number(originalProduct?.stock ?? productData.stock ?? 0);
       const requestedStock = Number(productData.stock || 0);
       const stockDelta = originalProduct ? requestedStock - originalStock : 0;
-      if (originalProduct && originalProduct.image !== productData.image) {
-        await deleteProductImage(originalProduct.image).catch(() => {});
-        await deleteProductImage(originalProduct.image_thumb || originalProduct.imageThumb).catch(() => {});
-      }
+      const nextImage = String(productData.image || '').trim();
+      const nextImageThumb = nextImage
+        ? String(productData.image_thumb || productData.imageThumb || '').trim()
+        : '';
+      const previousImage = originalProduct?.image || '';
+      const previousImageThumb = originalProduct?.image_thumb || originalProduct?.imageThumb || '';
+      const imageChanged = Boolean(originalProduct) && (
+        previousImage !== nextImage ||
+        previousImageThumb !== nextImageThumb
+      );
 
       const payload = {
         title: productData.title,
@@ -8973,8 +9037,8 @@ export default function PartySupplyApp() {
         purchasePrice: Number(productData.purchasePrice) || 0,
         category: Array.isArray(productData.categories) ? productData.categories.join(', ') : productData.category,
         barcode: productData.barcode || null,
-        image: productData.image || '',
-        image_thumb: productData.image_thumb || productData.imageThumb || '',
+        image: nextImage,
+        image_thumb: nextImageThumb,
         product_type: productData.product_type || 'quantity',
         expiration_date: productData.expiration_date || null
       };
@@ -8991,8 +9055,41 @@ export default function PartySupplyApp() {
           : await applyProductStockDeltaCloud(originalProduct, stockDelta);
         formattedProduct = { ...formattedProduct, stock: nextStock };
       }
-      const effectiveProductData = { ...productData, stock: formattedProduct.stock };
-      setInventory(inventory.map(p => p.id === productData.id ? formattedProduct : p));
+      const effectiveProductData = {
+        ...productData,
+        stock: formattedProduct.stock,
+        image: nextImage,
+        image_thumb: nextImageThumb,
+        imageThumb: nextImageThumb,
+      };
+      setInventory((prev) => prev.map((product) => (
+        String(product.id) === String(productData.id)
+          ? {
+              ...formattedProduct,
+              image: nextImage,
+              image_thumb: nextImageThumb,
+              imageThumb: nextImageThumb,
+            }
+          : product
+      )));
+      productDetailRequestsRef.current.delete(String(productData.id));
+
+      if (imageChanged) {
+        if (previousImage && previousImage !== nextImage) {
+          await deleteProductImage(previousImage).catch((error) => {
+            console.warn('La foto se quito del producto, pero no se pudo borrar el archivo original:', error);
+          });
+        }
+        if (
+          previousImageThumb &&
+          previousImageThumb !== nextImageThumb &&
+          previousImageThumb !== previousImage
+        ) {
+          await deleteProductImage(previousImageThumb).catch((error) => {
+            console.warn('La foto se quito del producto, pero no se pudo borrar la miniatura:', error);
+          });
+        }
+      }
 
       const getCategoryLabel = (product) => {
         if (Array.isArray(product?.categories) && product.categories.length > 0) {
@@ -9091,6 +9188,95 @@ export default function PartySupplyApp() {
       setProductToDelete(hydratedProduct);
       setDeleteProductReason('');
     }
+  };
+
+  const handleCreateExcelProducts = async (draftsToCreate = []) => {
+    if (blockIfOfflineReadonly('crear productos desde Excel')) {
+      return { created: [], failed: [] };
+    }
+
+    const safeDrafts = Array.isArray(draftsToCreate) ? draftsToCreate : [];
+    if (safeDrafts.length === 0) return { created: [], failed: [] };
+
+    const created = [];
+    const failed = [];
+    const reservedBarcodes = new Set(
+      (inventory || []).map((product) => String(product.barcode || '').trim()).filter(Boolean),
+    );
+
+    for (const draft of safeDrafts) {
+      try {
+        const title = String(draft.title || '').trim();
+        const category = String(draft.category || '').trim();
+        const barcode = String(draft.barcode || '').trim();
+        const stockDelta = Number(draft.stock || 0);
+        const purchasePrice = Number(draft.purchasePrice || 0);
+        const price = Number(draft.price || 0);
+
+        if (!title) throw new Error('Falta el nombre del producto.');
+        if (!category) throw new Error('Falta seleccionar una categoria.');
+        if (!Number.isFinite(stockDelta) || stockDelta < 0) throw new Error('La cantidad asignada no es valida.');
+        if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) throw new Error('El costo debe ser mayor a cero.');
+        if (!Number.isFinite(price) || price <= 0) throw new Error('El precio debe ser mayor a cero.');
+        if (price < purchasePrice) throw new Error('El precio no puede ser menor al costo.');
+        if (barcode && reservedBarcodes.has(barcode)) {
+          throw new Error(`El codigo ${barcode} ya pertenece a otro producto.`);
+        }
+
+        const payload = {
+          title,
+          brand: '',
+          price,
+          purchasePrice,
+          stock: 0,
+          category,
+          barcode: barcode || null,
+          image: '',
+          image_thumb: '',
+          product_type: 'quantity',
+          expiration_date: null,
+        };
+        const { data } = await insertWithSchemaFallback('products', payload, CLOUD_SELECTS.products);
+        const product = mapInventoryRecords([data])[0];
+        if (!product) throw new Error('La nube no devolvio el producto creado.');
+
+        if (barcode) reservedBarcodes.add(barcode);
+        created.push({ rowId: draft.rowId, product });
+      } catch (error) {
+        console.error('Error creando producto desde Excel:', error);
+        failed.push({
+          rowId: draft.rowId,
+          error: getCloudErrorMessage(error, 'No se pudo crear el producto.'),
+        });
+      }
+    }
+
+    if (created.length > 0) {
+      const createdProducts = created.map((item) => item.product);
+      setInventory((prev) => [...prev, ...createdProducts]);
+      await Promise.all(createdProducts.map((product) =>
+        addLog('Alta de Producto', {
+          id: product.id,
+          title: product.title,
+          price: product.price,
+          purchasePrice: product.purchasePrice,
+          stock: product.stock,
+          category: product.category,
+          barcode: product.barcode || '',
+          product_type: product.product_type,
+          source: 'excel_import',
+        }, 'Creado desde importacion Excel')
+      ));
+      showNotification(
+        failed.length > 0 ? 'warning' : 'success',
+        failed.length > 0 ? 'Creacion parcial' : 'Productos agregados',
+        `${created.length} producto(s) creados${failed.length > 0 ? ` y ${failed.length} pendiente(s)` : ''}.`,
+      );
+    } else if (failed.length > 0) {
+      showNotification('error', 'No se crearon productos', 'Revisa los datos marcados en el importador.');
+    }
+
+    return { created, failed };
   };
 
   const handleExcelProductImport = async (rowsToApply = []) => {
@@ -11532,6 +11718,7 @@ export default function PartySupplyApp() {
                 setExportConfig={setBulkExportConfig}
                 onCreateFixedProduct={handleCreateFixedProduct}
                 onApplyExcelImport={handleExcelProductImport}
+                onCreateExcelProducts={handleCreateExcelProducts}
                 onApplyProductImageImports={handleApplyProductImageImports}
                 onImageImportTaskChange={setImageImportTask}
                 imageImportOpenRequest={imageImportOpenRequest}

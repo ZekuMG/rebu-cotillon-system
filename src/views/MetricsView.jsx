@@ -28,6 +28,7 @@ import {
   Pie,
   PieChart,
   ResponsiveContainer,
+  Sector,
   Tooltip,
   XAxis,
   YAxis,
@@ -39,6 +40,53 @@ import { formatCurrency, formatNumber } from '../utils/helpers';
 import { hasPermission } from '../utils/userPermissions';
 
 const COLORS = ['#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#f97316', '#64748b'];
+const PIE_SEMANTIC_COLORS = {
+  'mercado pago': '#38bdf8',
+  efectivo: '#34d399',
+  debito: '#fbbf24',
+  credito: '#fb7185',
+  'sin stock': '#fb7185',
+  'bajo stock': '#fbbf24',
+  'por vencer': '#c084fc',
+  'stock ok': '#34d399',
+  recurrentes: '#38bdf8',
+  'una compra': '#34d399',
+  manual: '#38bdf8',
+  automatico: '#34d399',
+  pendiente: '#fbbf24',
+  completado: '#34d399',
+  completada: '#34d399',
+  cancelado: '#fb7185',
+  cancelada: '#fb7185',
+  presupuesto: '#a78bfa',
+  'costo vendido': '#94a3b8',
+  gastos: '#fb7185',
+  ganancia: '#34d399',
+  'por peso': '#2dd4bf',
+  'por unidad': '#38bdf8',
+};
+
+const normalizePieName = (value) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toLowerCase();
+
+const getPieColor = (entry, index, nameKey = 'name') => {
+  if (entry?.color) return entry.color;
+  const normalizedName = normalizePieName(entry?.[nameKey]);
+  if (PIE_SEMANTIC_COLORS[normalizedName]) return PIE_SEMANTIC_COLORS[normalizedName];
+  const hash = [...normalizedName].reduce((sum, character) => ((sum * 31) + character.charCodeAt(0)) >>> 0, 0);
+  return COLORS[(hash || index) % COLORS.length];
+};
+
+const formatPieValue = (value, valueType) => (
+  valueType === 'currency' ? formatCurrency(value) : formatNumber(value)
+);
+
+const renderActivePieShape = (props) => (
+  <Sector {...props} outerRadius={Number(props.outerRadius || 0) + 5} />
+);
 
 const DEFAULT_FILTERS = {
   preset: '30d',
@@ -133,7 +181,7 @@ const BASE_SECTIONS = [
   { id: 'cash', label: 'Caja', icon: CalendarDays },
 ];
 
-const MODERN_SECTION_IDS = new Set(['summary', 'sales', 'products', 'clients', 'stock', 'users', 'cash']);
+const MODERN_SECTION_IDS = new Set(['summary', 'sales', 'products', 'payments', 'clients', 'stock', 'users', 'cash']);
 
 const SelectField = ({ label, value, onChange, children, className = '' }) => (
   <label className={`flex min-w-0 flex-col gap-0.5 ${className}`}>
@@ -268,15 +316,15 @@ const MetricCard = ({ label, value, sublabel, change, tone = 'slate', hidden = f
   const changeClass = isGoodChange ? 'text-emerald-600 bg-emerald-50' : 'text-rose-600 bg-rose-50';
 
   return (
-    <div className={`min-h-[88px] rounded-lg border p-3 ${toneClass}`}>
+    <div className={`min-h-[78px] rounded-lg border px-3 py-2.5 ${toneClass}`}>
       <div className="flex items-center justify-between gap-2">
         <p className="truncate text-[9px] font-black uppercase tracking-[0.12em] opacity-70">{label}</p>
         {hint && <HintIcon hint={hint} size={13} />}
       </div>
-      <div className="mt-2 min-w-0 truncate text-xl font-black tracking-normal 2xl:text-2xl">
+      <div className="mt-1.5 min-w-0 truncate text-xl font-black leading-none tracking-normal 2xl:text-2xl">
         {hidden ? <span className="text-slate-400">Restringido</span> : value}
       </div>
-      <div className="mt-2 flex min-h-[20px] items-center justify-between gap-2">
+      <div className="mt-1.5 flex min-h-[18px] items-center justify-between gap-2">
         <p className="truncate text-[10px] font-semibold opacity-70">{hidden ? 'Permiso requerido' : sublabel}</p>
         {!hidden && changeLabel && (
           <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-black ${changeClass}`}>
@@ -347,7 +395,7 @@ const EmptyState = ({ text = 'Sin datos para estos filtros.' }) => (
   </div>
 );
 
-const ChartFrame = ({ height = 300, children }) => {
+const useMeasuredWidth = () => {
   const frameRef = useRef(null);
   const [width, setWidth] = useState(0);
 
@@ -371,6 +419,12 @@ const ChartFrame = ({ height = 300, children }) => {
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
+
+  return [frameRef, width];
+};
+
+const ChartFrame = ({ height = 300, children }) => {
+  const [frameRef, width] = useMeasuredWidth();
 
   return (
     <div ref={frameRef} className="min-w-0 overflow-hidden" style={{ width: '100%', minWidth: 1, height, minHeight: height }}>
@@ -522,37 +576,152 @@ const AreaMetricPanel = ({ data = [], areas = [], height = 280, yFormatter = (va
   ) : <EmptyState />
 );
 
-const PieMetricPanel = ({ data = [], dataKey = 'value', nameKey = 'name', height = 260, onSliceClick, activeName }) => (
-  data.length ? (
-    <ChartFrame height={height}>
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Pie
-            data={data}
-            dataKey={dataKey}
-            nameKey={nameKey}
-            innerRadius={54}
-            outerRadius={92}
-            paddingAngle={3}
-            onClick={onSliceClick ? (entry) => onSliceClick(entry) : undefined}
-            className={onSliceClick ? 'cursor-pointer' : undefined}
-          >
-            {data.map((entry, index) => (
-              <Cell
-                key={index}
-                fill={COLORS[index % COLORS.length]}
-                stroke={activeName && entry?.[nameKey] === activeName ? '#0f172a' : '#fff'}
-                strokeWidth={activeName && entry?.[nameKey] === activeName ? 3 : 1}
-              />
-            ))}
-          </Pie>
-          <Tooltip content={<ChartTooltip />} />
-          <Legend />
-        </PieChart>
-      </ResponsiveContainer>
-    </ChartFrame>
-  ) : <EmptyState />
-);
+const PieMetricPanel = ({
+  data = [],
+  dataKey = 'value',
+  nameKey = 'name',
+  height = 260,
+  selectedName,
+  onSelectionChange,
+  valueType = 'number',
+  totalLabel = 'Total',
+  getSecondaryText,
+}) => {
+  const [internalSelectedName, setInternalSelectedName] = useState(null);
+  const [hoveredName, setHoveredName] = useState(null);
+  const [chartRef, chartWidth] = useMeasuredWidth();
+  const isControlled = selectedName !== undefined;
+  const activeName = isControlled ? selectedName : internalSelectedName;
+  const normalizedData = useMemo(() => data.map((entry, index) => ({
+    ...entry,
+    __pieColor: getPieColor(entry, index, nameKey),
+    __pieValue: Number(entry?.[dataKey] || 0),
+  })), [data, dataKey, nameKey]);
+  const total = normalizedData.reduce((sum, entry) => sum + entry.__pieValue, 0);
+  const focusName = hoveredName || activeName;
+  const focusIndex = normalizedData.findIndex((entry) => entry?.[nameKey] === focusName);
+  const focusEntry = focusIndex >= 0 ? normalizedData[focusIndex] : null;
+  const centerValue = focusEntry ? focusEntry.__pieValue : total;
+  const centerPercent = focusEntry && total > 0 ? (focusEntry.__pieValue / total) * 100 : 100;
+  const resolveEntry = (entry) => (
+    entry?.payload && entry.payload?.[nameKey] !== undefined ? entry.payload : entry
+  );
+
+  useEffect(() => {
+    if (!activeName || normalizedData.some((entry) => entry?.[nameKey] === activeName)) return;
+    if (isControlled) onSelectionChange?.(null);
+    else setInternalSelectedName(null);
+  }, [activeName, isControlled, nameKey, normalizedData, onSelectionChange]);
+
+  const selectEntry = (entry) => {
+    const resolvedEntry = resolveEntry(entry);
+    const nextName = resolvedEntry?.[nameKey] || null;
+    const nextSelection = activeName === nextName ? null : nextName;
+    if (isControlled) onSelectionChange?.(nextSelection, resolvedEntry);
+    else setInternalSelectedName(nextSelection);
+  };
+
+  const handleEntryKeyDown = (event, entry) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    selectEntry(entry);
+  };
+
+  if (!normalizedData.length) return <EmptyState />;
+
+  return (
+    <div className="metrics-pie-wheel" style={{ '--metrics-pie-height': `${height}px` }}>
+      <div ref={chartRef} className="metrics-pie-chart" onMouseLeave={() => setHoveredName(null)}>
+        {chartWidth > 8 ? (
+          <>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={normalizedData}
+                  dataKey={dataKey}
+                  nameKey={nameKey}
+                  innerRadius="52%"
+                  outerRadius="78%"
+                  paddingAngle={3}
+                  activeIndex={focusIndex >= 0 ? focusIndex : undefined}
+                  activeShape={renderActivePieShape}
+                  isAnimationActive
+                  animationDuration={150}
+                  onClick={selectEntry}
+                  onMouseEnter={(entry) => setHoveredName(resolveEntry(entry)?.[nameKey] || null)}
+                >
+                  {normalizedData.map((entry) => {
+                    const entryName = entry?.[nameKey];
+                    const isFocused = !focusName || entryName === focusName;
+                    return (
+                      <Cell
+                        key={entryName}
+                        fill={entry.__pieColor}
+                        opacity={isFocused ? 1 : 0.3}
+                        stroke="var(--rebu-surface-1)"
+                        strokeWidth={activeName === entryName ? 3 : 1}
+                        role="button"
+                        tabIndex={0}
+                        focusable="true"
+                        aria-label={`${entryName}: ${formatPieValue(entry.__pieValue, valueType)}`}
+                        aria-pressed={activeName === entryName}
+                        onFocus={() => setHoveredName(entryName)}
+                        onBlur={() => setHoveredName(null)}
+                        onKeyDown={(event) => handleEntryKeyDown(event, entry)}
+                        className="metrics-pie-sector"
+                      />
+                    );
+                  })}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="metrics-pie-center" aria-live="polite">
+              <span title={focusEntry?.[nameKey]}>{focusEntry?.[nameKey] || totalLabel}</span>
+              <strong>{formatPieValue(centerValue, valueType)}</strong>
+              <small>{focusEntry ? `${formatNumber(centerPercent, 1)}% del total` : `${formatNumber(normalizedData.length)} grupos`}</small>
+            </div>
+          </>
+        ) : (
+          <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-400">
+            Preparando gráfico...
+          </div>
+        )}
+      </div>
+
+      <div className="metrics-pie-legend custom-scrollbar" role="group" aria-label="Referencias del grafico">
+        {normalizedData.map((entry) => {
+          const entryName = entry?.[nameKey];
+          const percent = total > 0 ? (entry.__pieValue / total) * 100 : 0;
+          const isSelected = activeName === entryName;
+          const isDimmed = Boolean(focusName && focusName !== entryName);
+          return (
+            <button
+              key={entryName}
+              type="button"
+              aria-pressed={isSelected}
+              className={`metrics-pie-legend-row ${isSelected ? 'is-selected' : ''} ${isDimmed ? 'is-dimmed' : ''}`}
+              onClick={() => selectEntry(entry)}
+              onMouseEnter={() => setHoveredName(entryName)}
+              onMouseLeave={() => setHoveredName(null)}
+              onFocus={() => setHoveredName(entryName)}
+              onBlur={() => setHoveredName(null)}
+            >
+              <span className="metrics-pie-legend-dot" style={{ backgroundColor: entry.__pieColor }} />
+              <span className="metrics-pie-legend-copy">
+                <strong title={entryName}>{entryName}</strong>
+                <small>{getSecondaryText?.(entry) || `${formatNumber(percent, 1)}% del total`}</small>
+              </span>
+              <span className="metrics-pie-legend-value">
+                <strong>{formatPieValue(entry.__pieValue, valueType)}</strong>
+                <small>{formatNumber(percent, 1)}%</small>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
 const exportCsv = (filename, rows) => {
   const escape = (value) => {
@@ -634,7 +803,7 @@ export default function MetricsView({
   const [isModernControlOpen, setIsModernControlOpen] = useState(false);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [summaryEvolutionMetrics, setSummaryEvolutionMetrics] = useState(['revenue']);
-  const [selectedCategoryName, setSelectedCategoryName] = useState(null);
+  const [pieSelections, setPieSelections] = useState({});
 
   const canViewProfit = hasPermission(currentUser, 'metrics.viewProfit');
   const canViewUsers = hasPermission(currentUser, 'metrics.viewUsers');
@@ -715,6 +884,9 @@ export default function MetricsView({
 
   const updateFilter = (key, value) => setFilters((prev) => ({ ...prev, [key]: value }));
   const resetFilters = () => setFilters(DEFAULT_FILTERS);
+  const updatePieSelection = (chartKey, value) => {
+    setPieSelections((current) => ({ ...current, [chartKey]: value || null }));
+  };
   const hasAdvancedFilters =
     Boolean(filters.user || filters.client || filters.productType !== 'all' || filters.includeVoided || filters.includeTest);
 
@@ -1136,6 +1308,8 @@ export default function MetricsView({
     ), null);
     const topProduct = metrics.current.productStats[0] || null;
     const topPayment = metrics.current.paymentStats[0] || null;
+    const paymentTotal = metrics.current.paymentStats.reduce((sum, item) => sum + Number(item.value || 0), 0);
+    const visiblePayments = metrics.current.paymentStats.slice(0, 4);
     const topRecommendation = metrics.recommendations[0] || null;
 
     return (
@@ -1310,6 +1484,53 @@ export default function MetricsView({
                   <ModernLedgerRow label="Ticket promedio" value={<FancyPrice amount={stats.averageTicket} />} tone="amber" strong />
                 )}
               </div>
+            </section>
+
+            <section className="metrics-modern-panel">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <CreditCard size={16} className="shrink-0 text-sky-600" />
+                  <h3 className="truncate text-sm font-black text-slate-900">Metodos de pago</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveSection('payments')}
+                  className="metrics-modern-payment-detail"
+                >
+                  Ver detalle
+                </button>
+              </div>
+              {visiblePayments.length ? (
+                <div className="metrics-modern-payment-list">
+                  {visiblePayments.map((item, index) => {
+                    const share = paymentTotal > 0 ? (Number(item.value || 0) / paymentTotal) * 100 : 0;
+                    return (
+                      <div key={item.name} className="metrics-modern-payment-row">
+                        <div className="metrics-modern-payment-main">
+                          <span
+                            className="metrics-modern-payment-dot"
+                            style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                          />
+                          <span className="metrics-modern-payment-name" title={item.name}>{item.name}</span>
+                          <span className="metrics-modern-payment-uses">{formatNumber(item.salesCount)} usos</span>
+                          <strong><FancyPrice amount={item.value} /></strong>
+                        </div>
+                        <div className="metrics-modern-payment-track">
+                          <span
+                            style={{
+                              width: `${Math.max(2, Math.min(100, share))}%`,
+                              backgroundColor: COLORS[index % COLORS.length],
+                            }}
+                          />
+                        </div>
+                        <span className="metrics-modern-payment-share">{formatNumber(share, 1)}%</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="metrics-modern-payment-empty">Sin pagos para estos filtros.</div>
+              )}
             </section>
 
             <section className="metrics-modern-panel">
@@ -1513,7 +1734,31 @@ export default function MetricsView({
     </div>
   );
 
-  const renderProfit = () => (
+  const renderProfit = () => {
+    const financialPieData = [
+      { name: 'Costo vendido', value: Math.max(Number(metrics.current.stats.cost || 0), 0) },
+      { name: 'Gastos', value: Math.max(Number(metrics.current.stats.expenses || 0), 0) },
+      { name: 'Ganancia', value: Math.max(Number(metrics.current.stats.profit || 0), 0) },
+    ].filter((item) => item.value > 0);
+    const selectedFinancialName = pieSelections.profitBreakdown || null;
+    const financialColumns = selectedFinancialName === 'Costo vendido'
+      ? [{
+          key: 'cost',
+          label: 'Costo vendido',
+          align: 'right',
+          render: (row) => <FancyPrice amount={Math.max(Number(row.revenue || 0) - Number(row.expenses || 0) - Number(row.profit || 0), 0)} />,
+        }]
+      : selectedFinancialName === 'Gastos'
+        ? [{ key: 'expenses', label: 'Gastos', align: 'right', render: (row) => <FancyPrice amount={row.expenses} /> }]
+        : selectedFinancialName === 'Ganancia'
+          ? [{ key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }]
+          : [
+              { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
+              { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
+              { key: 'expenses', label: 'Gastos', align: 'right', render: (row) => <FancyPrice amount={row.expenses} /> },
+            ];
+
+    return (
     <div className="space-y-4">
       <StatStrip
         items={[
@@ -1550,20 +1795,17 @@ export default function MetricsView({
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Panel title={isHourlyMode ? 'Detalle financiero por horario' : 'Detalle financiero por periodo'} icon={TrendingUp} hint={`Ingreso bruto, ganancia neta y gastos por ${periodUnit}.`}>
           <PieMetricPanel
-            data={[
-              { name: 'Costo vendido', value: Math.max(Number(metrics.current.stats.cost || 0), 0) },
-              { name: 'Gastos', value: Math.max(Number(metrics.current.stats.expenses || 0), 0) },
-              { name: 'Ganancia', value: Math.max(Number(metrics.current.stats.profit || 0), 0) },
-            ].filter((item) => item.value > 0)}
+            data={financialPieData}
             height={250}
+            valueType="currency"
+            selectedName={selectedFinancialName}
+            onSelectionChange={(name) => updatePieSelection('profitBreakdown', name)}
           />
           <Table
             emptyText="Sin movimientos financieros."
             columns={[
               { key: 'label', label: isHourlyMode ? 'Horario' : 'Periodo' },
-              { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-              { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
-              { key: 'expenses', label: 'Gastos', align: 'right', render: (row) => <FancyPrice amount={row.expenses} /> },
+              ...financialColumns,
             ]}
             rows={metrics.current.dailySeries}
           />
@@ -1582,10 +1824,12 @@ export default function MetricsView({
         </Panel>
       </div>
     </div>
-  );
+    );
+  };
 
   const renderProducts = () => {
     const categoryPieData = metrics.current.categoryStats.slice(0, 10);
+    const selectedCategoryName = pieSelections.productCategories || null;
     const selectedCategory = selectedCategoryName
       ? metrics.current.categoryStats.find((category) => category.name === selectedCategoryName)
       : null;
@@ -1622,21 +1866,21 @@ export default function MetricsView({
                 data={categoryPieData}
                 dataKey="revenue"
                 height={300}
-                activeName={selectedCategory?.name}
-                onSliceClick={(entry) => setSelectedCategoryName(entry?.name || null)}
+                valueType="currency"
+                selectedName={selectedCategory?.name}
+                onSelectionChange={(name) => updatePieSelection('productCategories', name)}
+                getSecondaryText={(entry) => `${formatNumber(entry.qty)} unidades/items`}
               />
             ) : metrics.current.typeStats.length ? (
-              <ChartFrame height={300}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={metrics.current.typeStats} dataKey="revenue" nameKey="name" innerRadius={58} outerRadius={92} paddingAngle={4}>
-                      {metrics.current.typeStats.map((_, index) => <Cell key={index} fill={COLORS[index % COLORS.length]} />)}
-                    </Pie>
-                    <Tooltip content={<ChartTooltip />} />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              </ChartFrame>
+              <PieMetricPanel
+                data={metrics.current.typeStats}
+                dataKey="revenue"
+                height={300}
+                valueType="currency"
+                selectedName={pieSelections.productTypes || null}
+                onSelectionChange={(name) => updatePieSelection('productTypes', name)}
+                getSecondaryText={(entry) => `${formatNumber(entry.qty)} unidades/items`}
+              />
             ) : <EmptyState />}
           </Panel>
         </div>
@@ -1665,7 +1909,7 @@ export default function MetricsView({
               action={selectedCategory ? (
                 <button
                   type="button"
-                  onClick={() => setSelectedCategoryName(null)}
+                  onClick={() => updatePieSelection('productCategories', null)}
                   className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-500 hover:bg-slate-50"
                 >
                   Limpiar
@@ -1694,6 +1938,7 @@ export default function MetricsView({
 
   const renderCategories = () => {
     const categoryPieData = metrics.current.categoryStats.slice(0, 10);
+    const selectedCategoryName = pieSelections.categories || null;
     const selectedCategory = selectedCategoryName
       ? metrics.current.categoryStats.find((category) => category.name === selectedCategoryName)
       : null;
@@ -1718,8 +1963,10 @@ export default function MetricsView({
               data={categoryPieData}
               dataKey="revenue"
               height={320}
-              activeName={selectedCategory?.name}
-              onSliceClick={(entry) => setSelectedCategoryName(entry?.name || null)}
+              valueType="currency"
+              selectedName={selectedCategory?.name}
+              onSelectionChange={(name) => updatePieSelection('categories', name)}
+              getSecondaryText={(entry) => `${formatNumber(entry.qty)} unidades/items`}
             />
           </Panel>
           <Panel title="Detalle de categorias" icon={Boxes}>
@@ -1746,7 +1993,7 @@ export default function MetricsView({
             action={(
               <button
                 type="button"
-                onClick={() => setSelectedCategoryName(null)}
+                onClick={() => updatePieSelection('categories', null)}
                 className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-500 hover:bg-slate-50"
               >
                 Limpiar
@@ -1772,22 +2019,24 @@ export default function MetricsView({
     );
   };
 
-  const renderPayments = () => (
+  const renderPayments = () => {
+    const selectedPaymentName = pieSelections.payments || null;
+    const visiblePaymentRows = selectedPaymentName
+      ? metrics.current.paymentStats.filter((row) => row.name === selectedPaymentName)
+      : metrics.current.paymentStats;
+
+    return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1fr]">
       <Panel title="Distribución de pagos" icon={CreditCard}>
-        {metrics.current.paymentStats.length ? (
-          <ChartFrame height={320}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={metrics.current.paymentStats} dataKey="value" nameKey="name" innerRadius={62} outerRadius={100} paddingAngle={3}>
-                  {metrics.current.paymentStats.map((_, index) => <Cell key={index} fill={COLORS[index % COLORS.length]} />)}
-                </Pie>
-                <Tooltip content={<ChartTooltip />} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </ChartFrame>
-        ) : <EmptyState />}
+        <PieMetricPanel
+          data={metrics.current.paymentStats}
+          dataKey="value"
+          height={320}
+          valueType="currency"
+          selectedName={selectedPaymentName}
+          onSelectionChange={(name) => updatePieSelection('payments', name)}
+          getSecondaryText={(entry) => `${formatNumber(entry.salesCount)} usos`}
+        />
       </Panel>
       <Panel title="Medios de pago" icon={CreditCard}>
         <Table
@@ -1797,11 +2046,12 @@ export default function MetricsView({
             { key: 'salesCount', label: 'Usos', align: 'right', render: (row) => formatNumber(row.salesCount) },
             { key: 'value', label: 'Importe', align: 'right', render: (row) => <FancyPrice amount={row.value} /> },
           ]}
-          rows={metrics.current.paymentStats}
+          rows={visiblePaymentRows}
         />
       </Panel>
     </div>
-  );
+    );
+  };
 
   const renderClients = () => {
     const clients = metrics.current.clientStats;
@@ -1819,6 +2069,12 @@ export default function MetricsView({
     const previousClientSales = previousClients.reduce((sum, client) => sum + Number(client.salesCount || 0), 0);
     const clientAverageTicket = clientSales ? clientRevenue / clientSales : 0;
     const previousClientAverageTicket = previousClientSales ? previousClientRevenue / previousClientSales : 0;
+    const selectedClientType = pieSelections.clientTypes || null;
+    const visibleClients = selectedClientType === 'Recurrentes'
+      ? clients.filter((client) => Number(client.salesCount || 0) > 1)
+      : selectedClientType === 'Una compra'
+        ? clients.filter((client) => Number(client.salesCount || 0) === 1)
+        : clients;
     const getClientChange = (currentValue, previousValue) =>
       metrics.canComparePreviousRange ? calculatePercentageChange(currentValue, previousValue) : null;
 
@@ -1865,6 +2121,8 @@ export default function MetricsView({
                 { name: 'Una compra', value: Math.max(clients.length - recurringClients, 0) },
               ].filter((item) => item.value > 0)}
               height={220}
+              selectedName={selectedClientType}
+              onSelectionChange={(name) => updatePieSelection('clientTypes', name)}
             />
           </Panel>
         </div>
@@ -1879,14 +2137,33 @@ export default function MetricsView({
               { key: 'averageTicket', label: 'Ticket prom.', align: 'right', render: (row) => <FancyPrice amount={row.averageTicket} /> },
               { key: 'lastDateLabel', label: 'Ultima compra', align: 'right' },
             ]}
-            rows={clients}
+            rows={visibleClients}
           />
         </Panel>
       </div>
     );
   };
 
-  const renderStock = () => (
+  const renderStock = () => {
+    const selectedStockStatus = pieSelections.stock || null;
+    const stockPieData = [
+      { name: 'Sin stock', value: metrics.stockStats.outOfStock.length },
+      { name: 'Bajo stock', value: metrics.stockStats.lowStock.length },
+      { name: 'Por vencer', value: metrics.stockStats.expiring.length },
+      {
+        name: 'Stock OK',
+        value: Math.max(
+          metrics.stockStats.activeProducts
+            - metrics.stockStats.outOfStock.length
+            - metrics.stockStats.lowStock.length
+            - metrics.stockStats.expiring.length,
+          0,
+        ),
+      },
+    ].filter((item) => item.value > 0);
+    const showStockPanel = (name) => !selectedStockStatus || selectedStockStatus === name;
+
+    return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
         <MetricCard label="Productos activos" value={formatNumber(metrics.stockStats.activeProducts)} sublabel="Catálogo actual" />
@@ -1896,26 +2173,14 @@ export default function MetricsView({
       </div>
       <Panel title="Estado del stock" icon={PackageSearch}>
         <PieMetricPanel
-          data={[
-            { name: 'Sin stock', value: metrics.stockStats.outOfStock.length },
-            { name: 'Bajo stock', value: metrics.stockStats.lowStock.length },
-            { name: 'Por vencer', value: metrics.stockStats.expiring.length },
-            {
-              name: 'Stock OK',
-              value: Math.max(
-                metrics.stockStats.activeProducts
-                  - metrics.stockStats.outOfStock.length
-                  - metrics.stockStats.lowStock.length
-                  - metrics.stockStats.expiring.length,
-                0,
-              ),
-            },
-          ].filter((item) => item.value > 0)}
+          data={stockPieData}
           height={240}
+          selectedName={selectedStockStatus}
+          onSelectionChange={(name) => updatePieSelection('stock', name)}
         />
       </Panel>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <Panel title="Sin stock" icon={PackageSearch}>
+      <div className={`grid grid-cols-1 gap-4 ${selectedStockStatus ? '' : 'xl:grid-cols-3'}`}>
+        {showStockPanel('Sin stock') && <Panel title="Sin stock" icon={PackageSearch}>
           <Table
             emptyText="Sin productos agotados."
             columns={[
@@ -1924,8 +2189,8 @@ export default function MetricsView({
             ]}
             rows={metrics.stockStats.outOfStock.slice(0, 30)}
           />
-        </Panel>
-        <Panel title="Bajo stock" icon={PackageSearch}>
+        </Panel>}
+        {showStockPanel('Bajo stock') && <Panel title="Bajo stock" icon={PackageSearch}>
           <Table
             emptyText="Sin alertas de bajo stock."
             columns={[
@@ -1934,8 +2199,8 @@ export default function MetricsView({
             ]}
             rows={metrics.stockStats.lowStock.slice(0, 30)}
           />
-        </Panel>
-        <Panel title="Vencimientos" icon={AlertTriangle}>
+        </Panel>}
+        {showStockPanel('Por vencer') && <Panel title="Vencimientos" icon={AlertTriangle}>
           <Table
             emptyText="Sin vencimientos cercanos."
             columns={[
@@ -1944,12 +2209,28 @@ export default function MetricsView({
             ]}
             rows={metrics.stockStats.expiring.slice(0, 30)}
           />
-        </Panel>
+        </Panel>}
+        {selectedStockStatus === 'Stock OK' && (
+          <Panel title="Stock disponible" icon={PackageSearch}>
+            <div className="metrics-pie-local-summary">
+              <span>Productos sin alertas activas</span>
+              <strong>{formatNumber(stockPieData.find((item) => item.name === 'Stock OK')?.value || 0)}</strong>
+              <small>No se genera una lista adicional para productos en estado normal.</small>
+            </div>
+          </Panel>
+        )}
       </div>
     </div>
-  );
+    );
+  };
 
-  const renderOrders = () => (
+  const renderOrders = () => {
+    const selectedOrderStatus = pieSelections.orders || null;
+    const visibleOrderRows = selectedOrderStatus
+      ? metrics.orderStats.byStatus.filter((row) => row.name === selectedOrderStatus)
+      : metrics.orderStats.byStatus;
+
+    return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <MetricCard label="Pedidos" value={formatNumber(metrics.orderStats.ordersCount)} sublabel={<FancyPrice amount={metrics.orderStats.totalOrders} />} tone="sky" />
@@ -1958,7 +2239,15 @@ export default function MetricsView({
         <MetricCard label="Conversion" value={`${formatNumber(metrics.orderStats.conversionRate, 1)}%`} sublabel="Presupuesto a pedido" tone="emerald" />
       </div>
       <Panel title="Pedidos por estado" icon={FileText}>
-        <PieMetricPanel data={metrics.orderStats.byStatus.filter((row) => Number(row.total || 0) > 0)} dataKey="total" height={240} />
+        <PieMetricPanel
+          data={metrics.orderStats.byStatus.filter((row) => Number(row.total || 0) > 0)}
+          dataKey="total"
+          height={240}
+          valueType="currency"
+          selectedName={selectedOrderStatus}
+          onSelectionChange={(name) => updatePieSelection('orders', name)}
+          getSecondaryText={(entry) => `${formatNumber(entry.count)} pedidos`}
+        />
         <Table
           emptyText="Sin pedidos para estos filtros."
           columns={[
@@ -1967,13 +2256,20 @@ export default function MetricsView({
             { key: 'total', label: 'Total', align: 'right', render: (row) => <FancyPrice amount={row.total} /> },
             { key: 'pending', label: 'Pendiente', align: 'right', render: (row) => <FancyPrice amount={row.pending} /> },
           ]}
-          rows={metrics.orderStats.byStatus}
+          rows={visibleOrderRows}
         />
       </Panel>
     </div>
-  );
+    );
+  };
 
-  const renderUsers = () => (
+  const renderUsers = () => {
+    const selectedUserName = pieSelections.users || null;
+    const visibleUserRows = selectedUserName
+      ? metrics.current.userStats.filter((row) => row.name === selectedUserName)
+      : metrics.current.userStats;
+
+    return (
     <div className="space-y-4">
       <StatStrip
         items={[
@@ -1985,7 +2281,15 @@ export default function MetricsView({
       />
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1.2fr]">
         <Panel title="Participacion por usuario" icon={ShieldCheck}>
-          <PieMetricPanel data={metrics.current.userStats.filter((row) => Number(row.revenue || 0) > 0)} dataKey="revenue" height={260} />
+          <PieMetricPanel
+            data={metrics.current.userStats.filter((row) => Number(row.revenue || 0) > 0)}
+            dataKey="revenue"
+            height={260}
+            valueType="currency"
+            selectedName={selectedUserName}
+            onSelectionChange={(name) => updatePieSelection('users', name)}
+            getSecondaryText={(entry) => `${formatNumber(entry.salesCount)} ventas`}
+          />
         </Panel>
         <Panel title="Rendimiento por usuario" icon={ShieldCheck}>
           <Table
@@ -1997,14 +2301,25 @@ export default function MetricsView({
               { key: 'averageTicket', label: 'Ticket prom.', align: 'right', render: (row) => <FancyPrice amount={row.averageTicket} /> },
               ...(canViewProfit ? [{ key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }] : []),
             ]}
-            rows={metrics.current.userStats}
+            rows={visibleUserRows}
           />
         </Panel>
       </div>
     </div>
-  );
+    );
+  };
 
-  const renderCash = () => (
+  const renderCash = () => {
+    const selectedClosureType = pieSelections.cash || null;
+    const closureTypeData = [
+      { name: 'Manual', count: metrics.closureStats.manual },
+      { name: 'Automatico', count: metrics.closureStats.automatic },
+    ].filter((item) => item.count > 0);
+    const visibleClosureTypes = selectedClosureType
+      ? closureTypeData.filter((item) => item.name === selectedClosureType)
+      : closureTypeData;
+
+    return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1.2fr]">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <MetricCard label="Cierres" value={formatNumber(metrics.closureStats.count)} sublabel={`${metrics.closureStats.manual} manuales / ${metrics.closureStats.automatic} auto`} />
@@ -2014,18 +2329,14 @@ export default function MetricsView({
       </div>
       <Panel title="Actividad de caja" icon={CalendarDays}>
         <PieMetricPanel
-          data={[
-            { name: 'Manual', count: metrics.closureStats.manual },
-            { name: 'Automatico', count: metrics.closureStats.automatic },
-          ].filter((item) => item.count > 0)}
+          data={closureTypeData}
           dataKey="count"
           height={220}
+          selectedName={selectedClosureType}
+          onSelectionChange={(name) => updatePieSelection('cash', name)}
         />
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {[
-            { name: 'Manual', count: metrics.closureStats.manual },
-            { name: 'Automatico', count: metrics.closureStats.automatic },
-          ].map((item) => (
+          {visibleClosureTypes.map((item) => (
             <div key={item.name} className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
               <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">{item.name}</p>
               <p className="mt-1 text-2xl font-black text-slate-800">{formatNumber(item.count)}</p>
@@ -2034,7 +2345,8 @@ export default function MetricsView({
         </div>
       </Panel>
     </div>
-  );
+    );
+  };
 
   const renderActiveSection = () => {
     if (isModernMode && !MODERN_SECTION_IDS.has(activeSection)) return renderModernSummary();
