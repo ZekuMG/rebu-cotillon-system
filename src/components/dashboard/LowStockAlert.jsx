@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { AlertTriangle, Package, CalendarX, Info } from 'lucide-react';
 import { formatNumber } from '../../utils/helpers';
+import { getProductImageUrl } from '../../utils/productImages';
 import useIncrementalFeed from '../../hooks/useIncrementalFeed';
 
 // ✨ NUEVO: Agregamos la prop onAlertClick
@@ -89,12 +90,24 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
               <div className="space-y-1">
                 {stockFeed.visibleItems.length > 0 ? stockFeed.visibleItems.map((product) => {
                   const isWeight = product.product_type === 'weight';
+                  const productImage = getProductImageUrl(product);
                   return (
                     <button key={`stk-${product.id}`} type="button" onClick={() => onAlertClick && onAlertClick({ type: 'product', product, alertType: 'out_of_stock' })} className="flex w-full justify-between items-center px-2 py-1.5 rounded-md border bg-slate-50 border-slate-200 hover:border-red-300 hover:bg-white transition-colors text-left">
                       <div className="flex-1 min-w-0 pr-2 flex items-center gap-1.5">
-                        <div className="shrink-0 w-5 h-5 rounded-full flex items-center justify-center shadow-sm border bg-red-50 text-red-600 border-red-200">
-                          <Package size={11} />
-                        </div>
+                        {productImage ? (
+                          <img
+                            src={productImage}
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
+                            fetchPriority="low"
+                            className="h-8 w-8 shrink-0 rounded-md border border-slate-200 bg-white object-cover shadow-sm"
+                          />
+                        ) : (
+                          <div className="shrink-0 w-8 h-8 rounded-md flex items-center justify-center shadow-sm border bg-red-50 text-red-600 border-red-200">
+                            <Package size={13} />
+                          </div>
+                        )}
                         <div className="flex min-w-0 flex-col">
                           <p className="font-bold text-[11px] text-slate-700 truncate leading-tight">{product.title}</p>
                           <p className="text-[8px] font-medium text-slate-400 truncate leading-tight">Sin stock disponible</p>

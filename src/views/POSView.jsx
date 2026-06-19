@@ -42,6 +42,7 @@ import {
   getPaymentSummary,
   normalizePaymentBreakdown,
 } from '../utils/paymentBreakdown';
+import { getProductImageUrl } from '../utils/productImages';
 import {
   couponRequiresInstagramConnection,
   formatInstagramHandle,
@@ -109,7 +110,7 @@ const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
   const quickAmounts = [50, 100, 250, 500, 1000];
   
   const expired = isProductExpired(product.expiration_date);
-  const productImage = product.imageThumb || product.image_thumb || product.image;
+  const productImage = getProductImageUrl(product);
 
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
@@ -1831,15 +1832,27 @@ export default function POSView({
                 const effectiveStock = getEffectiveStock(product.id, product.stock);
                 const isOutOfStock = effectiveStock <= 0;
                 const isWeight = product.product_type === 'weight';
-                let stockBadgeClass = effectiveStock > (isWeight ? 500 : 10) ? 'bg-green-100 text-green-700' : effectiveStock > (isWeight ? 100 : 5) ? 'bg-amber-100 text-amber-700' : effectiveStock > 0 ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-500';
+                let stockBadgeClass = effectiveStock > (isWeight ? 500 : 10) ? 'bg-green-100 text-green-700' : effectiveStock > (isWeight ? 100 : 5) ? 'bg-amber-100 text-amber-700' : effectiveStock > 0 ? 'bg-red-100 text-red-700' : 'border border-slate-500 bg-slate-900 text-white';
                 
                 const expired = isProductExpired(product.expiration_date);
-                const productImage = product.imageThumb || product.image_thumb || product.image;
+                const productImage = getProductImageUrl(product);
 
                 return (
-                  <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`group relative flex flex-col overflow-hidden rounded-lg border bg-white text-left shadow-sm transition-all hover:shadow-md ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed' : 'hover:border-fuchsia-300 active:scale-[0.98]'}`}>
+                  <button
+                    key={product.id}
+                    type="button"
+                    onClick={() => {
+                      if (!isOutOfStock) handleProductClick(product);
+                    }}
+                    onMouseEnter={(event) => updateProductHoverPreview(event, product, productImage)}
+                    onMouseMove={(event) => updateProductHoverPreview(event, product, productImage)}
+                    onMouseLeave={clearProductHoverPreview}
+                    onBlur={clearProductHoverPreview}
+                    aria-disabled={isOutOfStock}
+                    className={`group relative flex flex-col overflow-hidden rounded-lg border text-left shadow-sm transition-all hover:shadow-md ${isOutOfStock ? 'cursor-not-allowed border-slate-300 bg-slate-100 ring-1 ring-inset ring-slate-200' : 'bg-white hover:border-fuchsia-300 active:scale-[0.98]'}`}
+                  >
                     <div className="aspect-[4/3] w-full overflow-hidden bg-slate-50 relative">
-                      {productImage ? (<img src={productImage} alt={product.title} loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-500" />) : (<div className="flex h-full w-full flex-col items-center justify-center bg-slate-200/50 p-2 text-center transition-colors group-hover:bg-slate-200"><span className={`line-clamp-3 font-bold uppercase leading-tight text-slate-500 ${gridColumns > 6 ? 'text-[9px]' : 'text-[11px] min-[1920px]:text-xs'}`}>{product.title}</span></div>)}
+                      {productImage ? (<img src={productImage} alt={product.title} loading="lazy" decoding="async" fetchpriority="low" className={`w-full h-full object-cover transition-transform group-hover:scale-105 duration-500 ${isOutOfStock ? 'opacity-75 saturate-50' : ''}`} />) : (<div className="flex h-full w-full flex-col items-center justify-center bg-slate-200/50 p-2 text-center transition-colors group-hover:bg-slate-200"><span className={`line-clamp-3 font-bold uppercase leading-tight text-slate-500 ${gridColumns > 6 ? 'text-[9px]' : 'text-[11px] min-[1920px]:text-xs'}`}>{product.title}</span></div>)}
                       
                       {expired && !isOutOfStock && (
                         <div className="absolute inset-0 bg-red-500/10 flex items-center justify-center z-10 pointer-events-none backdrop-blur-[0.5px]">
@@ -1859,8 +1872,8 @@ export default function POSView({
                         </div>
                       )}
                     </div>
-                    <div className={`z-20 flex w-full flex-1 flex-col bg-white ${gridColumns > 6 ? 'p-1.5' : 'p-2 min-[1920px]:p-2.5'}`}>
-                      <h3 className={`mb-0.5 line-clamp-2 font-bold leading-snug ${gridColumns > 6 ? 'text-[10px]' : 'text-[12px] min-[1920px]:text-[13px]'} ${expired ? 'text-red-700' : 'text-slate-800'}`} title={product.title}>
+                    <div className={`z-20 flex w-full flex-1 flex-col ${isOutOfStock ? 'bg-slate-100' : 'bg-white'} ${gridColumns > 6 ? 'p-1.5' : 'p-2 min-[1920px]:p-2.5'}`}>
+                      <h3 className={`mb-0.5 line-clamp-2 font-bold leading-snug ${gridColumns > 6 ? 'text-[10px]' : 'text-[12px] min-[1920px]:text-[13px]'} ${expired ? 'text-red-700' : isOutOfStock ? 'text-slate-600' : 'text-slate-800'}`} title={product.title}>
                         {product.title}
                       </h3>
                       <div className="mt-auto flex items-end justify-between pt-1">
@@ -1911,9 +1924,9 @@ export default function POSView({
                 const isOutOfStock = effectiveStock <= 0;
                 const isWeight = product.product_type === 'weight';
                 const expired = isProductExpired(product.expiration_date);
-                const productImage = product.imageThumb || product.image_thumb || product.image;
+                const productImage = getProductImageUrl(product);
                 const stockTone = isOutOfStock
-                  ? 'border-l-slate-300 bg-slate-50 text-slate-400'
+                  ? 'border-l-slate-500 bg-slate-100 text-slate-500'
                   : expired
                     ? 'border-l-red-500 bg-red-50/50'
                     : effectiveStock <= (isWeight ? 200 : 5)
@@ -1936,14 +1949,14 @@ export default function POSView({
                     onMouseLeave={clearProductHoverPreview}
                     onBlur={clearProductHoverPreview}
                     aria-disabled={isOutOfStock}
-                    className={`grid w-full grid-cols-[112px_minmax(0,1.7fr)_104px_96px_42px] items-center gap-2 border-b border-l-4 border-b-slate-100 px-3 py-1.5 text-left transition last:border-b-0 hover:bg-fuchsia-50/40 active:scale-[0.995] min-[1920px]:grid-cols-[136px_minmax(0,2.1fr)_128px_116px_48px] ${stockTone} ${isOutOfStock ? 'cursor-not-allowed opacity-70 grayscale' : 'hover:border-l-fuchsia-400'}`}
+                    className={`grid w-full grid-cols-[112px_minmax(0,1.7fr)_104px_96px_42px] items-center gap-2 border-b border-l-4 border-b-slate-100 px-3 py-1.5 text-left transition last:border-b-0 hover:bg-fuchsia-50/40 active:scale-[0.995] min-[1920px]:grid-cols-[136px_minmax(0,2.1fr)_128px_116px_48px] ${stockTone} ${isOutOfStock ? 'cursor-not-allowed shadow-[inset_0_0_0_1px_rgba(148,163,184,0.25)]' : 'hover:border-l-fuchsia-400'}`}
                   >
                     <span className="min-w-0 truncate text-[11px] font-semibold leading-tight text-slate-400" title={product.barcode || 'Sin codigo'}>
                       <ScanBarcode size={11} className="mr-1 inline text-slate-300" />
                       {product.barcode || '-'}
                     </span>
                     <span className="min-w-0">
-                      <span className={`block truncate text-[13px] font-black leading-tight ${expired ? 'text-red-700' : 'text-slate-800'}`} title={product.title}>
+                      <span className={`block truncate text-[13px] font-black leading-tight ${expired ? 'text-red-700' : isOutOfStock ? 'text-slate-600' : 'text-slate-800'}`} title={product.title}>
                         {product.title}
                       </span>
                       <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] font-bold text-slate-400">
@@ -2010,12 +2023,24 @@ export default function POSView({
                 const isWeight = product.product_type === 'weight';
                 
                 const expired = isProductExpired(product.expiration_date);
-                const productImage = product.imageThumb || product.image_thumb || product.image;
+                const productImage = getProductImageUrl(product);
 
                 return (
-                  <button key={product.id} onClick={() => handleProductClick(product)} disabled={isOutOfStock} className={`flex items-center gap-2.5 p-2.5 bg-white border rounded-xl shadow-sm hover:shadow-md transition-all text-left group ${isOutOfStock ? 'opacity-60 grayscale cursor-not-allowed bg-slate-50' : 'hover:border-fuchsia-300 active:scale-[0.99]'}`}>
+                  <button
+                    key={product.id}
+                    type="button"
+                    onClick={() => {
+                      if (!isOutOfStock) handleProductClick(product);
+                    }}
+                    onMouseEnter={(event) => updateProductHoverPreview(event, product, productImage)}
+                    onMouseMove={(event) => updateProductHoverPreview(event, product, productImage)}
+                    onMouseLeave={clearProductHoverPreview}
+                    onBlur={clearProductHoverPreview}
+                    aria-disabled={isOutOfStock}
+                    className={`flex items-center gap-2.5 p-2.5 border rounded-xl shadow-sm hover:shadow-md transition-all text-left group ${isOutOfStock ? 'cursor-not-allowed border-slate-300 bg-slate-100 ring-1 ring-inset ring-slate-200' : 'bg-white hover:border-fuchsia-300 active:scale-[0.99]'}`}
+                  >
                     <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border relative">
-                      {productImage ? (<img src={productImage} alt="" loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover" />) : (<div className="w-full h-full flex items-center justify-center bg-slate-200 text-[8px] font-bold text-slate-500 p-1 text-center leading-none">{product.title.slice(0, 8)}..</div>)}
+                      {productImage ? (<img src={productImage} alt="" loading="lazy" decoding="async" fetchpriority="low" className={`w-full h-full object-cover ${isOutOfStock ? 'opacity-75 saturate-50' : ''}`} />) : (<div className="w-full h-full flex items-center justify-center bg-slate-200 text-[8px] font-bold text-slate-500 p-1 text-center leading-none">{product.title.slice(0, 8)}..</div>)}
                       {isWeight && <div className="absolute bottom-0 right-0 bg-amber-500 rounded-tl px-1 py-0.5 z-20"><Scale size={8} className="text-white" /></div>}
                       
                       {expired && !isOutOfStock && (
@@ -2025,7 +2050,7 @@ export default function POSView({
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h4 className={`font-bold text-sm truncate ${expired ? 'text-red-700' : 'text-slate-800'}`}>
+                      <h4 className={`font-bold text-sm truncate ${expired ? 'text-red-700' : isOutOfStock ? 'text-slate-600' : 'text-slate-800'}`}>
                         {product.title}
                         {expired && <span className="ml-2 text-[8px] bg-red-100 text-red-700 border border-red-200 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider align-middle">Vencido</span>}
                       </h4>
@@ -2174,7 +2199,7 @@ export default function POSView({
 
               const expired = isProductExpired(item.expiration_date);
 
-              const cartItemImage = item.imageThumb || item.image_thumb || item.image;
+              const cartItemImage = getProductImageUrl(item);
               const comboIncludedItems = isCombo && Array.isArray(item.productsIncluded)
                 ? item.productsIncluded.map((includedItem) => {
                     const baseQuantity = Number(

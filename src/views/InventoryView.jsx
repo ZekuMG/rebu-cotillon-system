@@ -26,6 +26,7 @@ import {
 import { formatStock, formatNumber } from '../utils/helpers';
 import { hasPermission } from '../utils/userPermissions';
 import { FancyPrice } from '../components/FancyPrice';
+import { getProductImageUrl } from '../utils/productImages';
 
 const INVENTORY_BATCH_SIZE = 50;
 const REBU_WIDE_QUERY = '(min-width: 1920px)';
@@ -566,13 +567,13 @@ export default function InventoryView({
                     const expirationInfo = getExpirationInfo(product.expiration_date);
                     const hasExpirationAlert = Boolean(expirationInfo?.isAlert);
                     const isExpired = Boolean(expirationInfo?.isExpired);
-                    const productImage = product.imageThumb || product.image_thumb || product.image;
+                    const productImage = getProductImageUrl(product);
 
                     return (
-                      <div key={product.id} onClick={() => handleCardClick(product)} className={`bg-white rounded-lg border overflow-hidden flex flex-col cursor-pointer transition-all hover:shadow-md group relative ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 transform scale-[0.98]' : 'hover:border-fuchsia-200'} ${outOfStock ? 'grayscale opacity-75' : ''} ${hasExpirationAlert && !outOfStock ? (isExpired ? 'border-red-300 bg-red-50/30' : 'border-amber-200 bg-amber-50/30') : ''}`}>
+                      <div key={product.id} onClick={() => handleCardClick(product)} className={`rounded-lg border overflow-hidden flex flex-col cursor-pointer transition-all hover:shadow-md group relative ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 transform scale-[0.98]' : 'hover:border-fuchsia-200'} ${outOfStock ? 'border-slate-300 bg-slate-100 ring-1 ring-inset ring-slate-200' : 'bg-white'} ${hasExpirationAlert && !outOfStock ? (isExpired ? 'border-red-300 bg-red-50/30' : 'border-amber-200 bg-amber-50/30') : ''}`}>
                         <div className="aspect-[4/3] bg-slate-50 relative overflow-hidden">
                           {productImage ? (
-                            <img src={productImage} alt={product.title} loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover transition-transform group-hover:scale-110 duration-500" />
+                            <img src={productImage} alt={product.title} loading="lazy" decoding="async" fetchpriority="low" className={`w-full h-full object-cover transition-transform group-hover:scale-110 duration-500 ${outOfStock ? 'opacity-75 saturate-50' : ''}`} />
                           ) : (
                             <div className="w-full h-full flex flex-col items-center justify-center bg-slate-200/50 p-2 text-center group-hover:bg-slate-200 transition-colors">
                               <span className={`font-bold text-slate-500 uppercase leading-tight ${gridColumns > 6 ? 'text-[10px]' : 'text-xs'}`}>{product.title}</span>
@@ -587,8 +588,8 @@ export default function InventoryView({
                           )}
 
                           {outOfStock && (
-                            <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] flex items-center justify-center z-10">
-                                <span className="bg-slate-800 text-white text-[10px] font-bold px-2 py-1 rounded shadow-sm border border-slate-600">AGOTADO</span>
+                            <div className="absolute right-1 top-1 z-20 rounded-md border border-slate-500 bg-slate-900 px-1.5 py-0.5 text-[9px] font-black text-white shadow-sm">
+                              AGOTADO
                             </div>
                           )}
                           
@@ -607,7 +608,7 @@ export default function InventoryView({
                           )}
                         </div>
                         
-                        <div className={`flex-1 flex flex-col z-20 bg-white ${gridColumns > 7 ? 'p-1.5' : 'p-2'}`}>
+                        <div className={`flex-1 flex flex-col z-20 ${outOfStock ? 'bg-slate-100' : 'bg-white'} ${gridColumns > 7 ? 'p-1.5' : 'p-2'}`}>
                           {gridColumns <= 7 && (
                             <div className="mb-0.5">
                               <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider truncate block">
@@ -615,7 +616,7 @@ export default function InventoryView({
                               </span>
                             </div>
                           )}
-                          <h3 className={`font-bold leading-tight mb-1 flex-1 ${gridColumns > 7 ? 'text-[10px] line-clamp-1' : 'text-[12px] line-clamp-2'} ${isExpired ? 'text-red-700' : 'text-slate-800'}`}>{product.title}</h3>
+                          <h3 className={`font-bold leading-tight mb-1 flex-1 ${gridColumns > 7 ? 'text-[10px] line-clamp-1' : 'text-[12px] line-clamp-2'} ${isExpired ? 'text-red-700' : outOfStock ? 'text-slate-600' : 'text-slate-800'}`}>{product.title}</h3>
                           <div className={`flex justify-between items-end mt-auto ${gridColumns > 7 ? 'pt-1' : 'pt-1.5 border-t border-slate-100'}`}>
                             <div>
                               {gridColumns <= 6 && <p className="text-[9px] text-slate-400 leading-none">Precio</p>}
@@ -641,7 +642,8 @@ export default function InventoryView({
               ) : (
                 /* VISTA LISTA */
                 <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                  <div className="sticky top-0 z-10 grid grid-cols-[132px_minmax(180px,1.65fr)_minmax(136px,1fr)_76px_88px] items-center gap-2 border-b border-slate-200 bg-slate-100/95 px-3 py-2 text-[10px] font-black uppercase text-slate-500 backdrop-blur min-[1920px]:grid-cols-[142px_minmax(0,2.25fr)_126px_104px_118px]">
+                  <div className="sticky top-0 z-10 grid grid-cols-[46px_120px_minmax(180px,1.65fr)_minmax(120px,1fr)_76px_88px] items-center gap-2 border-b border-slate-200 bg-slate-100/95 px-3 py-2 text-[10px] font-black uppercase text-slate-500 backdrop-blur min-[1920px]:grid-cols-[52px_132px_minmax(0,2.25fr)_126px_104px_118px]">
+                    <span className="truncate">Foto</span>
                     <span className="truncate">Codigo</span>
                     <span className="truncate">Titulo</span>
                     <span className="truncate">Categoria</span>
@@ -659,6 +661,7 @@ export default function InventoryView({
                     const productCategories = (Array.isArray(product.categories) ? product.categories : [product.category])
                       .map((category) => String(category || '').trim())
                       .filter(Boolean);
+                    const productImage = getProductImageUrl(product);
                     const visibleCategories = productCategories.length > 0 ? productCategories : ['Gral'];
                     const hasMultipleCategories = visibleCategories.length > 1;
                     const isCategoriesExpanded = String(expandedCategoryProductId) === String(product.id);
@@ -669,13 +672,32 @@ export default function InventoryView({
                       <div
                         key={product.id}
                         onClick={() => handleCardClick(product)}
-                        className={`grid grid-cols-[132px_minmax(180px,1.65fr)_minmax(136px,1fr)_76px_88px] items-center gap-2 border-b border-l-4 border-b-slate-100 px-3 py-1.5 text-[13px] cursor-pointer transition-all last:border-b-0 hover:bg-fuchsia-50/40 min-[1920px]:grid-cols-[142px_minmax(0,2.25fr)_126px_104px_118px] ${isSelected ? 'border-l-fuchsia-500 bg-fuchsia-50 ring-1 ring-inset ring-fuchsia-200' : 'border-l-transparent bg-white'} ${outOfStock ? 'bg-slate-50 text-slate-400' : ''} ${hasExpirationAlert && !outOfStock ? (isExpired ? 'border-l-red-500 bg-red-50/40' : 'border-l-amber-400 bg-amber-50/45') : ''}`}
+                        className={`grid grid-cols-[46px_120px_minmax(180px,1.65fr)_minmax(120px,1fr)_76px_88px] items-center gap-2 border-b border-l-4 border-b-slate-100 px-3 py-1.5 text-[13px] cursor-pointer transition-all last:border-b-0 hover:bg-fuchsia-50/40 min-[1920px]:grid-cols-[52px_132px_minmax(0,2.25fr)_126px_104px_118px] ${isSelected ? 'border-l-fuchsia-500 bg-fuchsia-50 ring-1 ring-inset ring-fuchsia-200' : outOfStock ? 'border-l-slate-500 bg-slate-100 text-slate-500 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.22)]' : 'border-l-transparent bg-white'} ${hasExpirationAlert && !outOfStock ? (isExpired ? 'border-l-red-500 bg-red-50/40' : 'border-l-amber-400 bg-amber-50/45') : ''}`}
                       >
+                        <span className="relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                          {productImage ? (
+                            <img
+                              src={productImage}
+                              alt=""
+                              loading="lazy"
+                              decoding="async"
+                              fetchpriority="low"
+                              className={`h-full w-full object-cover ${outOfStock ? 'opacity-75 saturate-50' : ''}`}
+                            />
+                          ) : (
+                            <Package size={14} className="text-slate-300" />
+                          )}
+                          {outOfStock && (
+                            <span className="absolute bottom-0 right-0 rounded-tl bg-slate-900/85 px-1 text-[7px] font-black leading-3 text-white">
+                              0
+                            </span>
+                          )}
+                        </span>
                         <span className="min-w-0 truncate text-[11px] font-semibold leading-tight text-slate-400" title={product.barcode || 'Sin codigo'}>
                           <ScanBarcode size={11} className="mr-1 inline text-slate-300" />
                           {product.barcode || '-'}
                         </span>
-                        <h4 className={`min-w-0 truncate text-[13px] font-semibold leading-tight ${isExpired ? 'text-red-700' : 'text-slate-800'}`} title={product.title}>
+                        <h4 className={`min-w-0 truncate text-[13px] font-semibold leading-tight ${isExpired ? 'text-red-700' : outOfStock ? 'text-slate-600' : 'text-slate-800'}`} title={product.title}>
                           {product.title || 'Sin titulo'}
                         </h4>
                         <div className={`flex min-w-0 items-center gap-1 overflow-hidden ${isCategoriesExpanded ? 'flex-wrap whitespace-normal' : 'whitespace-nowrap'}`} title={categoryTitle}>
@@ -723,8 +745,7 @@ export default function InventoryView({
         const expirationInfo = getExpirationInfo(selectedProduct.expiration_date);
         const hasExpirationAlert = Boolean(expirationInfo?.isAlert);
         const isExpired = Boolean(expirationInfo?.isExpired);
-        const selectedProductPreviewImage =
-          selectedProduct.image || selectedProduct.imageThumb || selectedProduct.image_thumb;
+        const selectedProductPreviewImage = getProductImageUrl(selectedProduct, { preferOriginal: true });
 
         return (
         <div className="rebu-side-panel bg-white border-l shadow-2xl flex flex-col shrink-0 animate-in slide-in-from-right duration-300 relative z-20">
