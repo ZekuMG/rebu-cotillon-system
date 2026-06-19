@@ -5830,12 +5830,24 @@ code {
 }
 
 :root[data-theme='dark'] .bulk-excel-import .excel-create-inline {
-  background: rgba(103, 74, 38, 0.22) !important;
-  border-color: rgba(191, 135, 65, 0.42) !important;
+  background: rgba(16, 185, 129, 0.13) !important;
+  border-color: rgba(110, 231, 183, 0.34) !important;
 }
 
 :root[data-theme='dark'] .bulk-excel-import .excel-create-inline:hover {
-  background: rgba(113, 81, 40, 0.34) !important;
+  background: rgba(16, 185, 129, 0.2) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-create-inline .text-emerald-700 {
+  color: #86efac !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-create-inline .text-emerald-950 {
+  color: #d1fae5 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-create-inline .bg-emerald-600 {
+  background: #159a72 !important;
 }
 
 :root[data-theme='dark'] .bulk-excel-import .excel-associate-action {
@@ -5857,6 +5869,10 @@ code {
 :root[data-theme='dark'] .bulk-excel-import .excel-review-row .bg-blue-50,
 :root[data-theme='dark'] .bulk-excel-import .excel-review-row .bg-sky-50 {
   background: rgba(45, 75, 111, 0.5) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row .bg-amber-50 {
+  background: rgba(120, 73, 18, 0.48) !important;
 }
 
 :root[data-theme='dark'] .bulk-excel-import .excel-review-row .bg-emerald-50 {
@@ -5969,6 +5985,30 @@ code {
 /* Excel import review: compact but legible review bands. */
 .bulk-excel-import .excel-review-row {
   position: relative;
+}
+
+.bulk-excel-import .excel-review-row-amber {
+  background: linear-gradient(90deg, rgba(255, 251, 235, 0.72) 0%, rgba(255, 255, 255, 0.96) 38%, rgba(248, 250, 252, 0.92) 100%);
+}
+
+.bulk-excel-import .excel-review-row-red {
+  background: linear-gradient(90deg, rgba(254, 226, 226, 0.72) 0%, rgba(255, 255, 255, 0.96) 38%, rgba(248, 250, 252, 0.92) 100%);
+}
+
+.bulk-excel-import .excel-review-row-blue {
+  background: linear-gradient(90deg, rgba(219, 234, 254, 0.7) 0%, rgba(255, 255, 255, 0.96) 38%, rgba(248, 250, 252, 0.92) 100%);
+}
+
+.bulk-excel-import .excel-review-row-violet {
+  background: linear-gradient(90deg, rgba(237, 233, 254, 0.7) 0%, rgba(255, 255, 255, 0.96) 38%, rgba(248, 250, 252, 0.92) 100%);
+}
+
+.bulk-excel-import .excel-review-row-green {
+  background: linear-gradient(90deg, rgba(209, 250, 229, 0.7) 0%, rgba(255, 255, 255, 0.96) 38%, rgba(248, 250, 252, 0.92) 100%);
+}
+
+.bulk-excel-import .excel-review-row-slate {
+  background: linear-gradient(90deg, rgba(241, 245, 249, 0.78) 0%, rgba(255, 255, 255, 0.96) 38%, rgba(248, 250, 252, 0.92) 100%);
 }
 
 .bulk-excel-import .excel-review-row::before {
@@ -6106,6 +6146,15 @@ code {
 .bulk-excel-import .excel-target-apply {
   min-width: 62px;
   justify-content: center;
+}
+
+.bulk-excel-import .excel-target-apply:not(:disabled),
+.bulk-excel-import .excel-apply-all:not(:disabled) {
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.18), 0 6px 14px rgba(15, 118, 110, 0.12);
+}
+
+.bulk-excel-import .excel-undo-apply:not(:disabled) {
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.16), 0 6px 14px rgba(120, 53, 15, 0.12);
 }
 
 .bulk-excel-import .excel-target-active {
@@ -6387,6 +6436,21 @@ code {
   padding-right: 0.42rem;
 }
 
+.bulk-excel-import .excel-compact-change-toggleable {
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.bulk-excel-import .excel-compact-change-toggleable:hover {
+  border-color: rgba(59, 130, 246, 0.38);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.08);
+}
+
+.bulk-excel-import .excel-compact-change-toggleable:focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.55);
+  outline-offset: 2px;
+}
+
 .bulk-excel-import .excel-compact-change-invalid {
   border-color: rgba(245, 158, 11, 0.52);
   background: rgba(255, 251, 235, 0.78);
@@ -6397,26 +6461,31 @@ code {
   border: 0;
   border-radius: 999px;
   color: inherit;
-  cursor: pointer;
   display: inline-flex;
   flex-shrink: 0;
+  gap: 0.28rem;
   margin: -0.16rem 0 -0.16rem -0.18rem;
   padding: 0.18rem 0.34rem;
   transition: background 140ms ease, color 140ms ease;
-}
-
-.bulk-excel-import .excel-compact-mark:disabled {
-  cursor: default;
-}
-
-.bulk-excel-import .excel-compact-change-editable .excel-compact-mark:hover {
-  background: rgba(15, 23, 42, 0.06);
 }
 
 .bulk-excel-import .excel-compact-change-label {
   font-size: 9px;
   font-weight: 900;
   letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.bulk-excel-import .excel-compact-confirm-badge {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #475569;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  padding: 0.18rem 0.32rem;
   text-transform: uppercase;
 }
 
@@ -6522,6 +6591,13 @@ code {
 .bulk-excel-import .excel-compact-change-on {
   border-color: rgba(16, 185, 129, 0.38);
   background: rgba(209, 250, 229, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.18);
+}
+
+.bulk-excel-import .excel-compact-change-on .excel-compact-confirm-badge {
+  border-color: rgba(16, 185, 129, 0.3);
+  background: #10b981;
+  color: #ffffff;
 }
 
 .bulk-excel-import .excel-compact-change-blue {
@@ -6538,6 +6614,26 @@ code {
 
 :root[data-theme='dark'] .bulk-excel-import .excel-review-row-collapsed {
   background: linear-gradient(180deg, #142844 0%, #10233c 100%) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-collapsed.excel-review-row-amber {
+  background: linear-gradient(90deg, rgba(120, 73, 18, 0.32) 0%, #142844 34%, #10233c 100%) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-collapsed.excel-review-row-red {
+  background: linear-gradient(90deg, rgba(127, 29, 29, 0.36) 0%, #142844 34%, #10233c 100%) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-collapsed.excel-review-row-blue {
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.24) 0%, #142844 34%, #10233c 100%) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-collapsed.excel-review-row-violet {
+  background: linear-gradient(90deg, rgba(124, 58, 237, 0.24) 0%, #142844 34%, #10233c 100%) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-collapsed.excel-review-row-green {
+  background: linear-gradient(90deg, rgba(16, 185, 129, 0.22) 0%, #142844 34%, #10233c 100%) !important;
 }
 
 :root[data-theme='dark'] .bulk-excel-import .excel-review-row-collapsed .excel-target-list {
@@ -6568,6 +6664,23 @@ code {
   border-color: rgba(110, 231, 183, 0.38);
 }
 
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-change-toggleable:hover {
+  border-color: rgba(125, 211, 252, 0.4);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.08);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-confirm-badge {
+  background: rgba(7, 17, 31, 0.72);
+  border-color: rgba(112, 137, 165, 0.34);
+  color: #b8c6da;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-change-on .excel-compact-confirm-badge {
+  background: #16a37c;
+  border-color: rgba(134, 239, 172, 0.42);
+  color: #ecfdf5;
+}
+
 :root[data-theme='dark'] .bulk-excel-import .excel-row-issue,
 :root[data-theme='dark'] .bulk-excel-import .excel-compact-error-help {
   background: rgba(120, 73, 18, 0.22);
@@ -6582,10 +6695,6 @@ code {
 :root[data-theme='dark'] .bulk-excel-import .excel-compact-change-invalid {
   background: rgba(120, 73, 18, 0.22);
   border-color: rgba(251, 191, 36, 0.38);
-}
-
-:root[data-theme='dark'] .bulk-excel-import .excel-compact-change-editable .excel-compact-mark:hover {
-  background: rgba(219, 234, 254, 0.08);
 }
 
 :root[data-theme='dark'] .bulk-excel-import .excel-compact-input {

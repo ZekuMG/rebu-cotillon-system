@@ -46,6 +46,7 @@ export default function BulkEditorView({
   setExportConfig,
   onCreateFixedProduct,
   onApplyExcelImport,
+  onUndoExcelImport,
   onCreateExcelProducts,
   onApplyProductImageImports,
   onImageImportTaskChange,
@@ -2370,6 +2371,7 @@ export default function BulkEditorView({
           inventory={sandboxInventory}
           categories={categories}
           onApplyImport={onApplyExcelImport}
+          onUndoImport={onUndoExcelImport}
           onCreateProducts={onCreateExcelProducts}
         />
       </div>

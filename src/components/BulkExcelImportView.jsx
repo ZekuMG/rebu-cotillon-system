@@ -12,6 +12,7 @@ import {
   Package,
   PackagePlus,
   Plus,
+  RotateCcw,
   Search,
   ShieldAlert,
   Upload,
@@ -241,7 +242,7 @@ const buildReviewRow = ({ entry, product = null, duplicateOptions = null, duplic
 
 const getRowStatus = (row) => {
   if (!row.product) return { label: 'Sin asignar', tone: 'amber' };
-  if (row.errors.length > 0) return { label: 'Revisar', tone: 'amber' };
+  if (row.errors.length > 0) return { label: 'Revisar', tone: 'red' };
   const selectedCount = FIELD_KEYS.filter((field) => row.approvals[field]).length;
   if (selectedCount === 0 && row.applied) return { label: 'Aplicado', tone: 'green' };
   if (selectedCount === 0 && !row.hasChanges) return { label: 'Sin cambios', tone: 'slate' };
@@ -319,7 +320,7 @@ const getRowErrorHints = (errors = []) =>
   });
 
 const statusClass = {
-  amber: 'bg-sky-50 text-sky-800 border-sky-200',
+  amber: 'bg-amber-50 text-amber-800 border-amber-200',
   red: 'bg-red-50 text-red-700 border-red-200',
   blue: 'bg-blue-50 text-blue-700 border-blue-200',
   violet: 'bg-violet-50 text-violet-700 border-violet-200',
@@ -328,7 +329,7 @@ const statusClass = {
 };
 
 const statusAccentClass = {
-  amber: 'border-l-sky-400',
+  amber: 'border-l-amber-400',
   red: 'border-l-red-400',
   blue: 'border-l-blue-400',
   violet: 'border-l-violet-400',
@@ -340,6 +341,7 @@ export default function BulkExcelImportView({
   inventory = [],
   categories = [],
   onApplyImport,
+  onUndoImport,
   onCreateProducts,
 }) {
   const fileInputRef = useRef(null);
@@ -355,6 +357,8 @@ export default function BulkExcelImportView({
   const [createDrafts, setCreateDrafts] = useState([]);
   const [isCreatePanelOpen, setIsCreatePanelOpen] = useState(false);
   const [isCreatingProducts, setIsCreatingProducts] = useState(false);
+  const [lastApplyBatch, setLastApplyBatch] = useState(null);
+  const [isUndoingImport, setIsUndoingImport] = useState(false);
 
   const barcodeLookup = useMemo(() => {
     const map = new Map();
@@ -405,7 +409,7 @@ export default function BulkExcelImportView({
       title: searchedTitle || String(row.entry.description || '').trim(),
       barcode: row.isAssociated ? '' : normalizeCode(row.entry.code),
       category: matchedCategory || '',
-      stock: getStockDelta(row.entry),
+      stock: 0,
       purchasePrice: Number(row.entry.cost || 0),
       price: Number(row.entry.salePrice || 0),
       duplicate: getDuplicateCandidate({
@@ -418,11 +422,13 @@ export default function BulkExcelImportView({
 
   const getCreateDraftErrors = (draft) => {
     const errors = [];
+    const purchasePrice = parseNumber(draft.purchasePrice);
+    const price = parseNumber(draft.price);
     if (!String(draft.title || '').trim()) errors.push('Falta nombre');
     if (!String(draft.category || '').trim()) errors.push('Falta categoria');
-    if (!Number(draft.purchasePrice || 0) || Number(draft.purchasePrice) <= 0) errors.push('Falta costo');
-    if (!Number(draft.price || 0) || Number(draft.price) <= 0) errors.push('Falta precio');
-    if (Number(draft.price || 0) > 0 && Number(draft.purchasePrice || 0) > Number(draft.price || 0)) {
+    if (!purchasePrice || purchasePrice <= 0) errors.push('Falta costo');
+    if (!price || price <= 0) errors.push('Falta precio');
+    if (price > 0 && purchasePrice > price) {
       errors.push('Precio menor al costo');
     }
     if (draft.duplicate) errors.push('Posible duplicado');
@@ -535,6 +541,7 @@ export default function BulkExcelImportView({
       setCreateDrafts([]);
       setIsCreatePanelOpen(false);
       setResultFilter('all');
+      setLastApplyBatch(null);
     } catch (error) {
       setRows([]);
       setFileError(error?.message || 'No se pudo leer el archivo.');
@@ -770,6 +777,7 @@ export default function BulkExcelImportView({
     setCreateDrafts([]);
     setIsCreatePanelOpen(false);
     setResultFilter('all');
+    setLastApplyBatch(null);
   };
 
   const openCreatePanel = (rowIds) => {
@@ -802,6 +810,9 @@ export default function BulkExcelImportView({
 
   const handleCreateProducts = async () => {
     if (!onCreateProducts || validCreateDrafts.length === 0) return;
+    const submittedDraftByRowId = new Map(
+      validCreateDrafts.map((draft) => [String(draft.rowId), draft]),
+    );
     setIsCreatingProducts(true);
     setFileError('');
     try {
@@ -810,9 +821,9 @@ export default function BulkExcelImportView({
         title: String(draft.title || '').trim(),
         barcode: normalizeCode(draft.barcode) || null,
         category: draft.category,
-        stock: Number(draft.stock || 0),
-        purchasePrice: Number(draft.purchasePrice || 0),
-        price: Number(draft.price || 0),
+        stock: 0,
+        purchasePrice: parseNumber(draft.purchasePrice),
+        price: parseNumber(draft.price),
       })));
       const createdByRowId = new Map(
         (result?.created || []).map((item) => [String(item.rowId), item.product]),
@@ -825,14 +836,25 @@ export default function BulkExcelImportView({
         prev.map((row, index) => {
           const product = createdByRowId.get(String(row.id));
           if (!product) return row;
+          const submittedDraft = submittedDraftByRowId.get(String(row.id));
+          const draftCost = parseNumber(submittedDraft?.purchasePrice ?? row.entry.cost);
+          const draftPrice = parseNumber(submittedDraft?.price ?? row.entry.salePrice);
+          const syncedEntry = {
+            ...row.entry,
+            cost: draftCost,
+            costInput: draftCost ? String(draftCost) : '',
+            salePrice: draftPrice,
+            salePriceInput: draftPrice ? String(draftPrice) : '',
+          };
           return {
             ...buildReviewRow({
-              entry: row.entry,
+              entry: syncedEntry,
               product,
               duplicateOptions: row.duplicateOptions,
               duplicateResolved: row.duplicateResolved,
             }, index),
             id: row.id,
+            entry: syncedEntry,
             product,
             approvals: {
               stock: getStockDelta(row.entry) > 0,
@@ -921,6 +943,27 @@ export default function BulkExcelImportView({
       };
     });
 
+  const normalizeUndoItems = (items = []) =>
+    (items || []).map((item) => ({
+      rowId: item.rowId,
+      productId: item.productId,
+      productTitle: item.productTitle,
+      approvals: item.approvals || { stock: false, cost: false, price: false },
+      before: {
+        stock: Number(item.before?.stock || 0),
+        purchasePrice: Number(item.before?.purchasePrice ?? item.before?.cost ?? 0),
+        price: Number(item.before?.price || 0),
+        barcode: item.before?.barcode || '',
+      },
+      after: {
+        stock: Number(item.after?.stock || 0),
+        purchasePrice: Number(item.after?.purchasePrice ?? item.after?.cost ?? 0),
+        price: Number(item.after?.price || 0),
+        barcode: item.after?.barcode || '',
+      },
+      clearedBarcodeOwner: item.clearedBarcodeOwner || null,
+    }));
+
   const handleApplyRows = async (targetRows = applicableRows) => {
     const rowsToApply = targetRows.filter((row) => isRowApplicable(row));
     if (rowsToApply.length === 0 || !onApplyImport) return;
@@ -937,6 +980,7 @@ export default function BulkExcelImportView({
       const payload = buildApplyPayload(rowsToApply);
       const result = await onApplyImport(payload);
       const appliedIds = new Set(result?.appliedRowIds || payload.map((row) => row.rowId));
+      const undoItems = normalizeUndoItems(result?.undoItems || payload).filter((item) => appliedIds.has(item.rowId));
 
       setRows((prev) =>
         prev.map((row) => {
@@ -960,12 +1004,63 @@ export default function BulkExcelImportView({
           };
         }),
       );
+      if (undoItems.length > 0) {
+        setLastApplyBatch({
+          id: `${Date.now()}`,
+          items: undoItems,
+          count: undoItems.length,
+        });
+      }
     } finally {
       setIsApplying(false);
     }
   };
 
   const handleApply = async () => handleApplyRows(applicableRows);
+
+  const handleUndoLastApply = async () => {
+    if (!lastApplyBatch?.items?.length || !onUndoImport) return;
+    setIsUndoingImport(true);
+    try {
+      setFileError('');
+      const result = await onUndoImport(lastApplyBatch.items);
+      if (result?.cancelled) return;
+
+      const undoneIds = new Set(result?.undoneRowIds || lastApplyBatch.items.map((item) => item.rowId));
+      const itemByRowId = new Map(lastApplyBatch.items.map((item) => [item.rowId, item]));
+
+      setRows((prev) =>
+        prev.map((row) => {
+          if (!undoneIds.has(row.id)) return row;
+          const undoItem = itemByRowId.get(row.id);
+          if (!undoItem) return row;
+          return {
+            ...row,
+            product: row.product
+              ? {
+                  ...row.product,
+                  stock: undoItem.before.stock,
+                  purchasePrice: undoItem.before.purchasePrice,
+                  price: undoItem.before.price,
+                  barcode: undoItem.before.barcode,
+                }
+              : row.product,
+            approvals: {
+              stock: Boolean(undoItem.approvals?.stock),
+              cost: Boolean(undoItem.approvals?.cost),
+              price: Boolean(undoItem.approvals?.price),
+            },
+            applied: false,
+          };
+        }),
+      );
+      setLastApplyBatch(null);
+    } catch (error) {
+      setFileError(error?.message || 'No se pudo deshacer la ultima aplicacion.');
+    } finally {
+      setIsUndoingImport(false);
+    }
+  };
 
   return (
     <div className="bulk-excel-import flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[320px_minmax(0,1fr)] gap-3 overflow-hidden">
@@ -1127,12 +1222,25 @@ export default function BulkExcelImportView({
               </select>
               <span className="pointer-events-none absolute right-2 text-[9px] text-slate-400">▼</span>
             </label>
+            {lastApplyBatch?.items?.length > 0 && (
+              <AsyncActionButton
+                onAction={handleUndoLastApply}
+                pending={isUndoingImport}
+                disabled={isUndoingImport || isApplying}
+                loadingLabel="Deshaciendo..."
+                className="excel-undo-apply inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-amber-300/60 bg-amber-400/15 px-3 text-[9px] font-black uppercase tracking-wide text-amber-50 transition-colors hover:bg-amber-400/25 disabled:cursor-not-allowed disabled:opacity-35"
+                title={`Deshacer ${lastApplyBatch.count || lastApplyBatch.items.length} producto(s) aplicados`}
+              >
+                {isUndoingImport ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+                Deshacer {lastApplyBatch.count || lastApplyBatch.items.length}
+              </AsyncActionButton>
+            )}
             <AsyncActionButton
               onAction={handleApply}
               pending={isApplying}
               disabled={applicableRows.length === 0 || isApplying}
               loadingLabel="Aplicando..."
-              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-3 text-[9px] font-black text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-35"
+              className="excel-apply-all inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-emerald-300/40 bg-emerald-500 px-3 text-[9px] font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-950/20 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-35"
             >
               {isApplying ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
               Aplicar {applicableRows.length}
@@ -1327,7 +1435,7 @@ export default function BulkExcelImportView({
                                         handleApplyRows([targetRow]);
                                       }}
                                       disabled={!isRowApplicable(targetRow) || isApplying}
-                                      className="excel-target-apply inline-flex h-7 items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 text-[8px] font-black uppercase tracking-wide text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
+                                      className="excel-target-apply inline-flex h-7 items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2 text-[8px] font-black uppercase tracking-wide text-emerald-800 shadow-sm shadow-emerald-950/5 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
                                       title={isRowApplicable(targetRow) ? 'Aplicar solo esta fila' : 'Marca campos o cambia el producto asignado'}
                                     >
                                       <CheckCircle2 size={10} />
@@ -1410,17 +1518,17 @@ export default function BulkExcelImportView({
                                 <button
                                   type="button"
                                   onClick={() => openCreatePanel([activeReviewRow.id])}
-                                  className="excel-create-inline mt-1.5 flex w-full items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50/60 px-2 py-1.5 text-left transition-colors hover:bg-amber-50"
+                                  className="excel-create-inline mt-1.5 flex w-full items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50/60 px-2 py-1.5 text-left transition-colors hover:bg-emerald-50"
                                 >
                                   <span className="min-w-0">
-                                    <span className="block text-[9px] font-black uppercase tracking-wider text-amber-600">
+                                    <span className="block text-[9px] font-black uppercase tracking-wider text-emerald-700">
                                       Crear producto nuevo
                                     </span>
-                                    <span className="block truncate text-[11px] font-black text-amber-950">
+                                    <span className="block truncate text-[11px] font-black text-emerald-950">
                                       Crear “{activeReviewRow.assignmentQuery.trim()}”
                                     </span>
                                   </span>
-                                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-amber-600 text-white">
+                                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-emerald-600 text-white">
                                     <Plus size={14} />
                                   </span>
                                 </button>
@@ -1670,7 +1778,7 @@ export default function BulkExcelImportView({
                                             type="button"
                                             onClick={() => handleApplyRows([associatedRow])}
                                             disabled={!canApplyAssociatedRow || isApplying}
-                                            className="shrink-0 inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-white px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-white disabled:text-slate-400"
+                                            className="excel-target-apply shrink-0 inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-white disabled:text-slate-400"
                                             title={canApplyAssociatedRow ? 'Aplicar solo este asociado' : 'Marca Stock, Costo o Venta para aplicar'}
                                           >
                                             <CheckCircle2 size={10} />
@@ -1813,7 +1921,7 @@ export default function BulkExcelImportView({
                   <div>
                     <h3 className="text-sm font-black text-slate-900">Crear productos nuevos</h3>
                     <p className="text-[10px] font-bold text-slate-500">
-                      Completa los datos marcados para agregarlos al inventario.
+                      Ajusta nombre, categoria, costo y venta antes de agregarlos al inventario.
                     </p>
                   </div>
                 </div>
@@ -1851,8 +1959,8 @@ export default function BulkExcelImportView({
                   const errors = getCreateDraftErrors(draft);
                   const needsTitle = !String(draft.title || '').trim();
                   const needsCategory = !String(draft.category || '').trim();
-                  const needsCost = !Number(draft.purchasePrice || 0) || Number(draft.purchasePrice) <= 0;
-                  const needsPrice = !Number(draft.price || 0) || Number(draft.price) <= 0;
+                  const needsCost = !parseNumber(draft.purchasePrice) || parseNumber(draft.purchasePrice) <= 0;
+                  const needsPrice = !parseNumber(draft.price) || parseNumber(draft.price) <= 0;
 
                   return (
                     <article
@@ -1873,6 +1981,7 @@ export default function BulkExcelImportView({
                               value={draft.title}
                               onChange={(value) => updateCreateDraft(draft.rowId, 'title', value)}
                               placeholder="Nombre del producto"
+                              required
                             />
                           ) : (
                             <p className="truncate text-[12px] font-black text-slate-900" title={draft.title}>
@@ -1934,16 +2043,20 @@ export default function BulkExcelImportView({
                             label="Stock inicial"
                             value="0"
                           />
-                          {needsCost ? (
-                            <CreateField label="Costo" type="number" value={draft.purchasePrice} onChange={(value) => updateCreateDraft(draft.rowId, 'purchasePrice', value)} />
-                          ) : (
-                            <CreateValue label="Costo" value={`$${Number(draft.purchasePrice).toLocaleString('es-AR')}`} />
-                          )}
-                          {needsPrice ? (
-                            <CreateField label="Precio" type="number" value={draft.price} onChange={(value) => updateCreateDraft(draft.rowId, 'price', value)} />
-                          ) : (
-                            <CreateValue label="Precio" value={`$${Number(draft.price).toLocaleString('es-AR')}`} />
-                          )}
+                          <CreateField
+                            label="Costo final"
+                            value={draft.purchasePrice}
+                            onChange={(value) => updateCreateDraft(draft.rowId, 'purchasePrice', value)}
+                            required={needsCost}
+                            prefix="$"
+                          />
+                          <CreateField
+                            label="Venta final"
+                            value={draft.price}
+                            onChange={(value) => updateCreateDraft(draft.rowId, 'price', value)}
+                            required={needsPrice}
+                            prefix="$"
+                          />
                         </div>
                       )}
 
@@ -2002,19 +2115,29 @@ function CreateValue({ label, value, className = '' }) {
   );
 }
 
-function CreateField({ label, value, onChange, type = 'text', placeholder = '' }) {
+function CreateField({ label, value, onChange, type = 'text', placeholder = '', required = false, prefix = '' }) {
   return (
     <label>
-      <span className="mb-1 block text-[9px] font-black uppercase tracking-wider text-amber-700">{label} requerido</span>
-      <input
-        type={type}
-        min={type === 'number' ? 0 : undefined}
-        step={type === 'number' ? 'any' : undefined}
-        value={value ?? ''}
-        placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-9 w-full rounded-lg border border-amber-300 bg-amber-50 px-2 text-[11px] font-black text-slate-900 outline-none focus:ring-2 focus:ring-amber-200"
-      />
+      <span className={`mb-1 block text-[9px] font-black uppercase tracking-wider ${required ? 'text-amber-700' : 'text-slate-500'}`}>
+        {label}{required ? ' requerido' : ''}
+      </span>
+      <span className={`flex h-9 w-full items-center rounded-lg border px-2 ${
+        required
+          ? 'border-amber-300 bg-amber-50 focus-within:ring-2 focus-within:ring-amber-200'
+          : 'border-slate-300 bg-white focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100'
+      }`}>
+        {prefix && <span className="mr-1 text-[10px] font-black text-slate-400">{prefix}</span>}
+        <input
+          type={type}
+          inputMode={prefix ? 'decimal' : undefined}
+          min={type === 'number' ? 0 : undefined}
+          step={type === 'number' ? 'any' : undefined}
+          value={value ?? ''}
+          placeholder={placeholder}
+          onChange={(event) => onChange(event.target.value)}
+          className="min-w-0 flex-1 bg-transparent text-[11px] font-black tabular-nums text-slate-900 outline-none"
+        />
+      </span>
     </label>
   );
 }
@@ -2421,7 +2544,24 @@ function CompactErrorHelp({ errors }) {
 }
 
 function CompactChangeItem({ item, editable, onToggle, onUpdate }) {
+  const canToggle = Boolean(editable && onToggle);
+
+  const handleToggle = () => {
+    if (!canToggle) return;
+    onToggle();
+  };
+
+  const handleToggleKeyDown = (event) => {
+    if (!canToggle || (event.key !== 'Enter' && event.key !== ' ')) return;
+    event.preventDefault();
+    onToggle();
+  };
+
   const handleInputClick = (event) => {
+    event.stopPropagation();
+  };
+
+  const handleInputKeyDown = (event) => {
     event.stopPropagation();
   };
 
@@ -2439,6 +2579,7 @@ function CompactChangeItem({ item, editable, onToggle, onUpdate }) {
             inputMode="decimal"
             value={item.multiplier ?? ''}
             onClick={handleInputClick}
+            onKeyDown={handleInputKeyDown}
             onChange={(event) => onUpdate(item.editField, event.target.value)}
             className="excel-compact-input excel-compact-input-stock"
             title="Editar equivalencia de stock"
@@ -2456,6 +2597,7 @@ function CompactChangeItem({ item, editable, onToggle, onUpdate }) {
           inputMode="decimal"
           value={item.editValue ?? ''}
           onClick={handleInputClick}
+          onKeyDown={handleInputKeyDown}
           onChange={(event) => onUpdate(item.editField, event.target.value)}
           className="excel-compact-input"
           title={`Editar ${item.label}`}
@@ -2466,19 +2608,23 @@ function CompactChangeItem({ item, editable, onToggle, onUpdate }) {
 
   return (
     <span
-      className={`excel-compact-change excel-compact-change-${item.tone} ${item.checked ? 'excel-compact-change-on' : ''} ${editable ? 'excel-compact-change-editable' : ''} ${item.invalid ? 'excel-compact-change-invalid' : ''}`}
+      role={canToggle ? 'button' : undefined}
+      tabIndex={canToggle ? 0 : undefined}
+      aria-pressed={canToggle ? item.checked : undefined}
+      onClick={handleToggle}
+      onKeyDown={handleToggleKeyDown}
+      title={canToggle ? `${item.checked ? 'Quitar confirmacion de' : 'Confirmar'} ${item.label}` : item.label}
+      className={`excel-compact-change excel-compact-change-${item.tone} ${item.checked ? 'excel-compact-change-on' : ''} ${editable ? 'excel-compact-change-editable' : ''} ${canToggle ? 'excel-compact-change-toggleable' : ''} ${item.invalid ? 'excel-compact-change-invalid' : ''}`}
     >
       <span className="excel-compact-change-head">
-        <button
-          type="button"
-          disabled={!editable}
-          onClick={onToggle}
-          className="excel-compact-mark"
-          aria-pressed={item.checked}
-          title={editable ? `Marcar ${item.label} para aplicar` : item.label}
-        >
+        <span className="excel-compact-mark">
           <span className="excel-compact-change-label">{item.label}</span>
-        </button>
+          {canToggle && (
+            <span className="excel-compact-confirm-badge">
+              {item.checked ? 'Confirmado' : 'Confirmar'}
+            </span>
+          )}
+        </span>
         <span className="excel-compact-change-delta">{item.delta}</span>
       </span>
       <span className="excel-compact-change-flow">

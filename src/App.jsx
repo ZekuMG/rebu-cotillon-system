@@ -318,12 +318,22 @@ const localDemoUpdateRow = (table, id, payload) => {
   return tableRows[rowIndex];
 };
 
-const AppVersionBadge = () => (
-  <div className="pointer-events-none absolute bottom-4 right-4 hidden items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/70 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-slate-400 shadow-sm backdrop-blur sm:inline-flex">
-    <span>Version</span>
-    <span className="text-slate-500">v{APP_VERSION}</span>
-  </div>
-);
+const AppVersionBadge = ({ theme = 'light' }) => {
+  const isDarkTheme = theme === 'dark';
+
+  return (
+    <div
+      className={`pointer-events-none absolute bottom-4 right-4 hidden items-center gap-1.5 rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] shadow-sm backdrop-blur sm:inline-flex ${
+        isDarkTheme
+          ? 'border-slate-600/80 bg-slate-950/85 text-slate-300 shadow-black/20'
+          : 'border-slate-200/80 bg-white/70 text-slate-400'
+      }`}
+    >
+      <span>Version</span>
+      <span className={isDarkTheme ? 'text-amber-100' : 'text-slate-500'}>v{APP_VERSION}</span>
+    </div>
+  );
+};
 
 const LoginThemeToggle = ({ theme = 'light', onToggle }) => {
   const isDarkTheme = theme === 'dark';
@@ -9428,11 +9438,117 @@ export default function PartySupplyApp() {
 
       Swal.close();
       showNotification('success', 'Importacion aplicada', `Se actualizaron ${appliedUpdates.length} producto(s).`);
-      return { appliedRowIds: updates.map((update) => update.rowId) };
+      return {
+        appliedRowIds: updates.map((update) => update.rowId),
+        undoItems: appliedUpdates.map((update) => ({
+          rowId: update.rowId,
+          productId: update.product.id,
+          productTitle: update.product.title,
+          approvals: update.source.approvals,
+          before: update.before,
+          after: {
+            stock: update.product.stock,
+            purchasePrice: update.product.purchasePrice,
+            price: update.product.price,
+            barcode: update.product.barcode || '',
+          },
+          clearedBarcodeOwner: update.clearedProductBefore ? {
+            id: update.clearedProductBefore.id,
+            title: update.clearedProductBefore.title,
+            barcode: update.clearedProductBefore.barcode || update.source.importedCode || '',
+          } : null,
+        })),
+      };
     } catch (error) {
       console.error('Error importando productos desde Excel:', error);
       Swal.fire('Error', error?.message || 'No se pudo aplicar la importacion.', 'error');
       return { appliedRowIds: [] };
+    }
+  };
+
+  const handleUndoExcelProductImport = async (itemsToUndo = []) => {
+    if (blockIfOfflineReadonly('deshacer importacion desde Excel')) return { undoneRowIds: [] };
+    const safeItems = Array.isArray(itemsToUndo) ? itemsToUndo : [];
+    if (safeItems.length === 0) return { undoneRowIds: [] };
+
+    const confirmation = await Swal.fire({
+      title: 'Deshacer aplicacion',
+      text: `Se restauraran ${safeItems.length} producto(s) al estado anterior.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Deshacer',
+      cancelButtonText: 'Cancelar',
+      reverseButtons: true,
+    });
+
+    if (!confirmation.isConfirmed) return { undoneRowIds: [], cancelled: true };
+
+    try {
+      Swal.fire({
+        title: 'Deshaciendo cambios...',
+        text: `Restaurando ${safeItems.length} producto(s).`,
+        allowOutsideClick: false,
+        didOpen: () => Swal.showLoading(),
+      });
+
+      const restoredProducts = [];
+      const restoredBarcodeOwners = [];
+
+      for (const item of safeItems) {
+        const product = inventory.find((entry) => String(entry.id) === String(item.productId));
+        if (!product) {
+          throw new Error(`No se encontro el producto ${item.productTitle || item.productId}.`);
+        }
+
+        const before = item.before || {};
+        const restorePayload = {
+          stock: Number(before.stock || 0),
+          purchasePrice: Number(before.purchasePrice ?? before.cost ?? 0),
+          price: Number(before.price || 0),
+          barcode: before.barcode || null,
+        };
+
+        const { data } = await updateWithSchemaFallback('products', product.id, restorePayload, CLOUD_SELECTS.products);
+        restoredProducts.push(mapInventoryRecords([data || { ...product, ...restorePayload }])[0]);
+
+        if (item.clearedBarcodeOwner?.id) {
+          const owner = inventory.find((entry) => String(entry.id) === String(item.clearedBarcodeOwner.id));
+          const ownerPayload = { barcode: item.clearedBarcodeOwner.barcode || null };
+          const { data: ownerData } = await updateWithSchemaFallback(
+            'products',
+            item.clearedBarcodeOwner.id,
+            ownerPayload,
+            CLOUD_SELECTS.products,
+          );
+          restoredBarcodeOwners.push(mapInventoryRecords([ownerData || { ...(owner || {}), id: item.clearedBarcodeOwner.id, ...ownerPayload }])[0]);
+        }
+      }
+
+      const restoredById = new Map();
+      [...restoredProducts, ...restoredBarcodeOwners].filter(Boolean).forEach((product) => {
+        restoredById.set(String(product.id), product);
+      });
+      setInventory((prev) => prev.map((product) => restoredById.get(String(product.id)) || product));
+
+      addLog('Deshacer Importacion Excel', {
+        count: safeItems.length,
+        undoneRowIds: safeItems.map((item) => item.rowId),
+        items: safeItems.map((item) => ({
+          id: item.productId,
+          title: item.productTitle,
+          beforeUndo: item.after,
+          restored: item.before,
+          restoredBarcodeOwner: item.clearedBarcodeOwner || null,
+        })),
+      }, 'Productos Avanzado');
+
+      Swal.close();
+      showNotification('success', 'Importacion deshecha', `Se restauraron ${safeItems.length} producto(s).`);
+      return { undoneRowIds: safeItems.map((item) => item.rowId) };
+    } catch (error) {
+      console.error('Error deshaciendo importacion desde Excel:', error);
+      Swal.fire('Error', error?.message || 'No se pudo deshacer la importacion.', 'error');
+      return { undoneRowIds: [] };
     }
   };
 
@@ -11232,7 +11348,7 @@ export default function PartySupplyApp() {
       const user = selectedLoginUser;
       return (
         <div className="relative flex h-screen max-h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-4 py-4 sm:px-6">
-          <AppVersionBadge />
+          <AppVersionBadge theme={loginTheme} />
           <div className="relative max-h-[calc(100vh-32px)] w-full max-w-md overflow-y-auto rounded-[28px] border border-slate-200/80 bg-white/95 p-5 shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur sm:p-6">
             <div className="mb-5 flex items-center justify-between">
               <button
@@ -11312,7 +11428,7 @@ export default function PartySupplyApp() {
 
     return (
       <div className="relative flex h-screen max-h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top,rgba(244,114,182,0.14)_0%,rgba(255,255,255,0.94)_28%,rgba(241,245,249,1)_72%)] px-4 py-4 sm:px-6">
-        <AppVersionBadge />
+        <AppVersionBadge theme={loginTheme} />
         <div className="relative flex max-h-[calc(100vh-32px)] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-slate-200/80 bg-white/95 p-4 text-center shadow-[0_30px_80px_rgba(15,23,42,0.16)] backdrop-blur sm:p-6 lg:p-7">
           <LoginThemeToggle theme={loginTheme} onToggle={handleToggleLoginTheme} />
           <div className="shrink-0 -mb-4 sm:-mb-3 lg:mb-0">
@@ -11718,6 +11834,7 @@ export default function PartySupplyApp() {
                 setExportConfig={setBulkExportConfig}
                 onCreateFixedProduct={handleCreateFixedProduct}
                 onApplyExcelImport={handleExcelProductImport}
+                onUndoExcelImport={handleUndoExcelProductImport}
                 onCreateExcelProducts={handleCreateExcelProducts}
                 onApplyProductImageImports={handleApplyProductImageImports}
                 onImageImportTaskChange={setImageImportTask}
