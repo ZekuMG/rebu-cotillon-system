@@ -17,6 +17,8 @@ import { formatWeight } from '../../utils/helpers';
 import { TicketPrintLayout } from '../TicketPrintLayout';
 import { getPaymentBreakdownDisplayItems, getPaymentSummary } from '../../utils/paymentBreakdown';
 
+const SHOW_LEGACY_PAYMENT_DETAIL_BLOCK = false;
+
 export const ImageModal = ({ isOpen, image, onClose }) => {
   if (!isOpen || !image) return null;
   return (
@@ -289,7 +291,7 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
               </div>
             </div>
 
-            {false && (
+            {SHOW_LEGACY_PAYMENT_DETAIL_BLOCK && (
             <div className="hidden">
               {paymentItems.map((paymentItem) => {
                 const showCashDetail = paymentItem.method === 'Efectivo' && isCashOnlyPayment;

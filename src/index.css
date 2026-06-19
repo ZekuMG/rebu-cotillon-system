@@ -5742,8 +5742,50 @@ code {
   box-shadow: inset 3px 0 0 #9b5a9e;
 }
 
+:root[data-theme='dark'] .bulk-excel-import .excel-target-teal.excel-target-active {
+  box-shadow: inset 3px 0 0 #2aa89a;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-target-amber.excel-target-active {
+  box-shadow: inset 3px 0 0 #c8842f;
+}
+
 :root[data-theme='dark'] .bulk-excel-import .excel-target-row .text-slate-400 {
   color: #8295ad !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-split-quantity {
+  background: rgba(7, 17, 31, 0.58);
+  border-color: rgba(112, 137, 165, 0.34);
+  color: #d7e3f2;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-split-quantity span {
+  color: #8fa7c2;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-split-quantity input {
+  color: #f8fafc;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-split-quantity-warning {
+  background: rgba(245, 158, 11, 0.13);
+  border-color: rgba(245, 158, 11, 0.42);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-balance-green {
+  background: rgba(16, 185, 129, 0.16);
+  color: #86efac;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-balance-amber {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-balance-red {
+  background: rgba(239, 68, 68, 0.16);
+  color: #fca5a5;
 }
 
 :root[data-theme='dark'] .bulk-excel-import .excel-article-panel,
@@ -5922,4 +5964,654 @@ code {
   background: #1b3552 !important;
   border-color: rgba(126, 156, 187, 0.42) !important;
   color: #e0e9f3 !important;
+}
+
+/* Excel import review: compact but legible review bands. */
+.bulk-excel-import .excel-review-row {
+  position: relative;
+}
+
+.bulk-excel-import .excel-review-row::before {
+  content: '';
+  position: absolute;
+  bottom: 12px;
+  left: 0;
+  top: 12px;
+  width: 3px;
+  border-radius: 999px;
+  background: #94a3b8;
+  opacity: 0.9;
+}
+
+.bulk-excel-import .excel-review-row-emerald::before,
+.bulk-excel-import .excel-review-row-green::before {
+  background: #10b981;
+}
+
+.bulk-excel-import .excel-review-row-amber::before,
+.bulk-excel-import .excel-review-row-violet::before {
+  background: #f59e0b;
+}
+
+.bulk-excel-import .excel-review-row-blue::before,
+.bulk-excel-import .excel-review-row-sky::before {
+  background: #38bdf8;
+}
+
+.bulk-excel-import .excel-review-row-red::before {
+  background: #ef4444;
+}
+
+.bulk-excel-import .excel-row-heading {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  padding-bottom: 0.55rem;
+}
+
+.bulk-excel-import .excel-row-title-trigger {
+  cursor: pointer;
+}
+
+.bulk-excel-import .excel-row-title-trigger:hover .excel-row-icon {
+  border-color: rgba(56, 189, 248, 0.42);
+}
+
+.bulk-excel-import .excel-row-title-trigger:hover p:first-child {
+  color: #0f4d80;
+}
+
+.bulk-excel-import .excel-row-icon {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
+.bulk-excel-import .excel-target-list {
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22) !important;
+  overflow: visible;
+}
+
+.bulk-excel-import .excel-target-row {
+  min-height: 52px;
+  position: relative;
+}
+
+.bulk-excel-import .excel-target-actions {
+  justify-content: flex-end;
+  min-width: 98px;
+}
+
+.bulk-excel-import .excel-target-quantity-cell {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 78px;
+}
+
+.bulk-excel-import .excel-split-quantity {
+  align-items: center;
+  background: rgba(248, 250, 252, 0.86);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  color: #0f172a;
+  display: inline-grid;
+  grid-template-columns: auto minmax(34px, 44px);
+  height: 28px;
+  overflow: hidden;
+}
+
+.bulk-excel-import .excel-split-quantity span {
+  border-right: 1px solid rgba(148, 163, 184, 0.2);
+  color: #64748b;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  padding: 0 0.45rem;
+  text-transform: uppercase;
+}
+
+.bulk-excel-import .excel-split-quantity input {
+  background: transparent;
+  border: 0;
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 900;
+  height: 100%;
+  outline: 0;
+  padding: 0 0.45rem;
+  text-align: right;
+  width: 100%;
+}
+
+.bulk-excel-import .excel-split-quantity:focus-within {
+  border-color: rgba(59, 130, 246, 0.52);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.14);
+}
+
+.bulk-excel-import .excel-split-quantity-warning {
+  background: rgba(255, 251, 235, 0.88);
+  border-color: rgba(245, 158, 11, 0.46);
+}
+
+.bulk-excel-import .excel-target-actions .excel-row-actions summary {
+  height: 28px;
+  width: 24px;
+}
+
+.bulk-excel-import .excel-target-actions .excel-row-actions[open] {
+  z-index: 90;
+}
+
+.bulk-excel-import .excel-target-actions .excel-row-actions > div {
+  z-index: 100;
+}
+
+.bulk-excel-import .excel-target-apply {
+  min-width: 62px;
+  justify-content: center;
+}
+
+.bulk-excel-import .excel-target-active {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.bulk-excel-import .excel-balance-pill {
+  border-radius: 7px;
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 900;
+  padding: 0.18rem 0.5rem;
+}
+
+.bulk-excel-import .excel-balance-green {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.bulk-excel-import .excel-balance-amber {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.bulk-excel-import .excel-balance-red {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.bulk-excel-import .excel-article-panel,
+.bulk-excel-import .excel-assignment-panel,
+.bulk-excel-import .excel-comparison-panel {
+  min-height: 128px;
+}
+
+.bulk-excel-import .excel-panel-titlebar,
+.bulk-excel-import .excel-change-strip {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.62);
+  padding: 0.45rem 0.55rem;
+}
+
+.bulk-excel-import .excel-summary-strip {
+  padding-left: 0.25rem;
+  padding-right: 0.25rem;
+}
+
+.bulk-excel-import .excel-product-split > div {
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
+.bulk-excel-import .excel-change-chip {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0.35rem 0.55rem;
+  text-transform: uppercase;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.bulk-excel-import .excel-change-chip-on {
+  color: #0f172a;
+}
+
+.bulk-excel-import .excel-change-chip-blue.excel-change-chip-on {
+  background: rgba(224, 242, 254, 0.9);
+  border-color: #7dd3fc;
+}
+
+.bulk-excel-import .excel-change-chip-violet.excel-change-chip-on {
+  background: rgba(245, 243, 255, 0.95);
+  border-color: #c4b5fd;
+}
+
+.bulk-excel-import .excel-change-chip-emerald.excel-change-chip-on {
+  background: rgba(209, 250, 229, 0.95);
+  border-color: #6ee7b7;
+}
+
+.bulk-excel-import .excel-compare-row {
+  border-radius: 8px;
+}
+
+.bulk-excel-import .excel-compare-label {
+  border-radius: 8px;
+  display: inline-flex;
+  font-size: 9px;
+  font-weight: 900;
+  justify-content: center;
+  letter-spacing: 0.04em;
+  padding: 0.45rem 0.35rem;
+  text-transform: uppercase;
+}
+
+.bulk-excel-import .excel-compare-label-blue {
+  background: rgba(224, 242, 254, 0.75);
+  color: #0369a1;
+}
+
+.bulk-excel-import .excel-compare-label-violet {
+  background: rgba(245, 243, 255, 0.85);
+  color: #6d28d9;
+}
+
+.bulk-excel-import .excel-compare-label-emerald {
+  background: rgba(209, 250, 229, 0.76);
+  color: #047857;
+}
+
+.bulk-excel-import .excel-value-box {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.72);
+  padding: 0.32rem 0.45rem;
+}
+
+.bulk-excel-import .excel-value-final {
+  background: rgba(255, 255, 255, 0.88);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row {
+  background: linear-gradient(180deg, #132845 0%, #10233d 100%) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-alternate {
+  background: linear-gradient(180deg, #162d49 0%, #112640 100%) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row:hover {
+  background: linear-gradient(180deg, #18324f 0%, #142b49 100%) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-active {
+  background: linear-gradient(180deg, #1a3656 0%, #15304f 100%) !important;
+  box-shadow: inset 0 1px 0 rgba(125, 211, 252, 0.12), inset 0 -1px 0 rgba(15, 23, 42, 0.5) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-row-heading {
+  border-color: rgba(112, 137, 165, 0.22);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-row-title-trigger:hover .excel-row-icon {
+  border-color: rgba(125, 211, 252, 0.5);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-row-title-trigger:hover p:first-child {
+  color: #dbeafe;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-target-list {
+  background: rgba(12, 29, 50, 0.44) !important;
+  border-color: rgba(112, 137, 165, 0.26) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-target-active {
+  background: rgba(66, 112, 162, 0.24) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-panel-titlebar,
+:root[data-theme='dark'] .bulk-excel-import .excel-change-strip {
+  background: rgba(11, 27, 47, 0.58) !important;
+  border-color: rgba(112, 137, 165, 0.24) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-change-chip {
+  background: rgba(11, 27, 47, 0.58);
+  border-color: rgba(112, 137, 165, 0.28);
+  color: #8ca1b8;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-change-chip-on {
+  color: #e8f1fa;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-change-chip-blue.excel-change-chip-on {
+  background: rgba(47, 91, 132, 0.42);
+  border-color: rgba(125, 211, 252, 0.5);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-change-chip-violet.excel-change-chip-on {
+  background: rgba(104, 69, 126, 0.4);
+  border-color: rgba(196, 181, 253, 0.48);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-change-chip-emerald.excel-change-chip-on {
+  background: rgba(43, 102, 89, 0.42);
+  border-color: rgba(110, 231, 183, 0.48);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compare-label-blue {
+  background: rgba(47, 91, 132, 0.38);
+  color: #a9d6f5;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compare-label-violet {
+  background: rgba(104, 69, 126, 0.35);
+  color: #d5b6df;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compare-label-emerald {
+  background: rgba(43, 102, 89, 0.38);
+  color: #a7e2d5;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-value-box {
+  background: rgba(9, 23, 40, 0.52) !important;
+  border-color: rgba(112, 137, 165, 0.22) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-value-final {
+  background: rgba(10, 28, 49, 0.78) !important;
+}
+
+/* Compact review rows: the Excel importer keeps the same quick view while browsing. */
+.bulk-excel-import .excel-review-row-collapsed {
+  padding-bottom: 0.55rem !important;
+  padding-top: 0.55rem !important;
+}
+
+.bulk-excel-import .excel-review-row-collapsed .excel-row-heading {
+  padding-bottom: 0.42rem;
+}
+
+.bulk-excel-import .excel-review-row-collapsed .excel-target-list {
+  margin-top: 0.45rem;
+}
+
+.bulk-excel-import .excel-review-row-collapsed .excel-target-row {
+  min-height: 42px;
+  padding-bottom: 0.45rem;
+  padding-top: 0.45rem;
+}
+
+.bulk-excel-import .excel-review-row-collapsed .excel-associate-action {
+  margin-top: 0.35rem;
+}
+
+.bulk-excel-import .excel-compact-panel {
+  align-self: stretch;
+  width: 100%;
+  min-height: 82px;
+  padding-top: 0.25rem;
+}
+
+.bulk-excel-import .excel-compact-panel-empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.bulk-excel-import .excel-compact-changes {
+  align-items: stretch;
+  display: grid !important;
+  gap: 0.5rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+}
+
+.bulk-excel-import .excel-compact-change {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  color: #64748b;
+  display: flex;
+  flex-direction: column;
+  font-size: 10px;
+  font-weight: 800;
+  gap: 0.34rem;
+  max-width: 100%;
+  min-height: 58px;
+  padding: 0.45rem 0.55rem;
+}
+
+.bulk-excel-import .excel-compact-change-editable {
+  border-style: solid;
+  padding-right: 0.42rem;
+}
+
+.bulk-excel-import .excel-compact-change-invalid {
+  border-color: rgba(245, 158, 11, 0.52);
+  background: rgba(255, 251, 235, 0.78);
+}
+
+.bulk-excel-import .excel-compact-mark {
+  align-items: center;
+  border: 0;
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  flex-shrink: 0;
+  margin: -0.16rem 0 -0.16rem -0.18rem;
+  padding: 0.18rem 0.34rem;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.bulk-excel-import .excel-compact-mark:disabled {
+  cursor: default;
+}
+
+.bulk-excel-import .excel-compact-change-editable .excel-compact-mark:hover {
+  background: rgba(15, 23, 42, 0.06);
+}
+
+.bulk-excel-import .excel-compact-change-label {
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.bulk-excel-import .excel-compact-change-head,
+.bulk-excel-import .excel-compact-change-flow {
+  align-items: center;
+  display: flex;
+  min-width: 0;
+}
+
+.bulk-excel-import .excel-compact-change-head {
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.bulk-excel-import .excel-compact-change-flow {
+  gap: 0.4rem;
+}
+
+.bulk-excel-import .excel-compact-change-value {
+  color: #0f172a;
+  font-weight: 900;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bulk-excel-import .excel-compact-change-pair {
+  display: inline-flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  gap: 0.04rem;
+  line-height: 1;
+  min-width: 0;
+}
+
+.bulk-excel-import .excel-compact-change-meta {
+  color: #94a3b8;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.bulk-excel-import .excel-compact-change-delta {
+  border-left: 0;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  overflow: hidden;
+  padding-left: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bulk-excel-import .excel-compact-input {
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 6px;
+  color: #0f172a;
+  font-size: 10px;
+  font-weight: 900;
+  height: 24px;
+  min-width: 0;
+  outline: none;
+  padding: 0 0.38rem;
+  text-align: right;
+  width: 58px;
+}
+
+.bulk-excel-import .excel-compact-input:focus {
+  border-color: rgba(56, 189, 248, 0.72);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.16);
+}
+
+.bulk-excel-import .excel-compact-input-stock {
+  width: 42px;
+}
+
+.bulk-excel-import .excel-compact-price-editor,
+.bulk-excel-import .excel-compact-stock-editor {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+@media (max-width: 1120px) {
+  .bulk-excel-import .excel-compact-changes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.bulk-excel-import .excel-article-quick-grid > div {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.52);
+  padding: 0.42rem 0.5rem;
+}
+
+.bulk-excel-import .excel-compact-change-on {
+  border-color: rgba(16, 185, 129, 0.38);
+  background: rgba(209, 250, 229, 0.55);
+}
+
+.bulk-excel-import .excel-compact-change-blue {
+  background: rgba(224, 242, 254, 0.42);
+}
+
+.bulk-excel-import .excel-compact-change-violet {
+  background: rgba(245, 243, 255, 0.52);
+}
+
+.bulk-excel-import .excel-compact-change-emerald {
+  background: rgba(209, 250, 229, 0.42);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-collapsed {
+  background: linear-gradient(180deg, #142844 0%, #10233c 100%) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-collapsed .excel-target-list {
+  background: rgba(10, 25, 44, 0.36) !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-change {
+  background: rgba(9, 23, 40, 0.5);
+  border-color: rgba(112, 137, 165, 0.24);
+  color: #8ca1b8;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-change-value {
+  color: #e3edf7;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-change-meta {
+  color: #788da5;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-change-delta {
+  border-color: rgba(112, 137, 165, 0.28);
+  color: #a8b8cb;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-change-on {
+  background: rgba(43, 102, 89, 0.3);
+  border-color: rgba(110, 231, 183, 0.38);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-row-issue,
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-error-help {
+  background: rgba(120, 73, 18, 0.22);
+  border-color: rgba(251, 191, 36, 0.34);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-row-issue p,
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-error-help p {
+  color: #f8d995;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-change-invalid {
+  background: rgba(120, 73, 18, 0.22);
+  border-color: rgba(251, 191, 36, 0.38);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-change-editable .excel-compact-mark:hover {
+  background: rgba(219, 234, 254, 0.08);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-input {
+  background: rgba(7, 17, 31, 0.76);
+  border-color: rgba(112, 137, 165, 0.28);
+  color: #f8fafc;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-input:focus {
+  border-color: rgba(125, 211, 252, 0.7);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.12);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-article-quick-grid > div {
+  background: rgba(9, 23, 40, 0.48);
+  border-color: rgba(112, 137, 165, 0.2);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-change-blue {
+  background: rgba(47, 91, 132, 0.26);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-change-violet {
+  background: rgba(104, 69, 126, 0.26);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-compact-change-emerald {
+  background: rgba(43, 102, 89, 0.26);
 }

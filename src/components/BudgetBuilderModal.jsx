@@ -38,6 +38,7 @@ import {
   getPaymentMethodLabel,
   getPaymentSummary,
 } from '../utils/paymentBreakdown';
+import { getClientSearchTerms, memberMatchesSearchTerms } from '../utils/clientSearch';
 
 const ITEMS_STEP = 30;
 const BUDGET_PAYMENT_METHODS = [
@@ -256,20 +257,8 @@ export default function BudgetBuilderModal({
   );
 
   const filteredMembers = useMemo(() => {
-    const searchWords = memberSearch.toLowerCase().trim().split(/\s+/).filter(Boolean);
-    return (members || []).filter((member) => {
-      if (searchWords.length === 0) return true;
-      const haystack = [
-        member.name,
-        member.phone,
-        member.dni,
-        member.memberNumber,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return searchWords.every((word) => haystack.includes(word));
-    });
+    const searchTerms = getClientSearchTerms(memberSearch);
+    return (members || []).filter((member) => memberMatchesSearchTerms(member, searchTerms));
   }, [members, memberSearch]);
 
   const selectedMember =

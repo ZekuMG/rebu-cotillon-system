@@ -69,7 +69,7 @@ export const buildSocialConnectionsWithInstagram = (
       isConnected: Boolean(isConnected),
       source,
       notes: sanitizeInstagramNotes(notes),
-      connectedAt: Boolean(isConnected)
+      connectedAt: isConnected
         ? previousInstagram.connectedAt || previousInstagram.connected_at || (wasConnected ? null : now) || now
         : null,
       updatedAt: now,

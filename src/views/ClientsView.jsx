@@ -31,6 +31,7 @@ import { TransactionDetailModal } from '../components/modals/HistoryModals';
 import useIncrementalFeed from '../hooks/useIncrementalFeed';
 import usePendingAction from '../hooks/usePendingAction';
 import { buildPointExpirationReport, normalizeMemberName } from '../utils/memberPointsExpiration';
+import { getClientSearchTerms, memberMatchesSearchTerms, normalizeClientSearchValue } from '../utils/clientSearch';
 import {
   buildSocialConnectionsWithCouponUsageOverrides,
   buildSocialConnectionsWithInstagram,
@@ -42,6 +43,8 @@ import {
   hasInstagramConnection,
   normalizeInstagramHandle,
 } from '../utils/socialConnections';
+
+const SHOW_LEGACY_CLIENT_TRANSACTION_MODAL = false;
 
 const sanitizeOptionalMemberField = (value) => {
   if (value === undefined || value === null) return '';
@@ -319,7 +322,9 @@ export default function ClientsView({
 
   const sortedMembers = useMemo(() => {
     // ✨ 1. Evaluamos si el usuario busca test explícitamente
-    const isSearchTest = searchTerm.toLowerCase().includes('test');
+    const normalizedSearch = normalizeClientSearchValue(searchTerm);
+    const searchTerms = getClientSearchTerms(searchTerm);
+    const isSearchTest = normalizedSearch.includes('test');
 
     let result = (Array.isArray(members) ? members : []).filter((m) => {
       if (!m) return false;
@@ -328,15 +333,7 @@ export default function ClientsView({
       const isTest = isTestRecord(m);
       if (isTest && !isSearchTest) return false;
 
-      const term = searchTerm.toLowerCase();
-      const name = m.name ? String(m.name).toLowerCase() : '';
-      const number = m.memberNumber ? String(m.memberNumber) : '';
-      const dni = m.dni ? String(m.dni) : '';
-      const phone = m.phone ? String(m.phone) : '';
-      const email = m.email ? String(m.email).toLowerCase() : '';
-      const instagram = getInstagramConnection(m).handle;
-
-      return name.includes(term) || number.includes(term) || dni.includes(term) || phone.includes(term) || email.includes(term) || instagram.includes(term);
+      return memberMatchesSearchTerms(m, searchTerms);
     });
 
     const getMs = (dateStr) => {
@@ -368,7 +365,7 @@ export default function ClientsView({
   }, [getLastPurchaseDate, members, searchTerm, sortBy]);
 
   const visibleMembersCount = useMemo(() => {
-    const isSearchTest = searchTerm.toLowerCase().includes('test');
+    const isSearchTest = normalizeClientSearchValue(searchTerm).includes('test');
     return (Array.isArray(members) ? members : []).filter((member) => {
       if (!member) return false;
       const isTest = isTestRecord(member);
@@ -1112,7 +1109,7 @@ export default function ClientsView({
         onViewTicket={onViewTicket}
       />
 
-      {false && selectedTx && (
+      {SHOW_LEGACY_CLIENT_TRANSACTION_MODAL && selectedTx && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[80vh] overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="p-4 border-b bg-slate-50 flex justify-between items-center">

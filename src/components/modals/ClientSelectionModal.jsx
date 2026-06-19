@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 // ♻️ FIX: Importamos formatNumber
 import { formatNumber } from '../../utils/helpers';
+import { getClientSearchTerms, memberMatchesSearchTerms } from '../../utils/clientSearch';
 
 export const ClientSelectionModal = ({ isOpen, onClose, onSelectClient, clients = [], addClient, onCancelFlow }) => {
   // Pasos del flujo: 'check-is-member' -> 'search' | 'check-want-join' -> 'create'
@@ -31,17 +32,8 @@ export const ClientSelectionModal = ({ isOpen, onClose, onSelectClient, clients 
 
   // Lógica de visualización de miembros:
   // Si hay búsqueda, filtra. Si NO hay búsqueda, muestra los primeros 5 (lista por defecto).
-  const displayedMembers = searchTerm 
-    ? clients.filter(m => {
-        const term = searchTerm.toLowerCase();
-        return (
-          m.name.toLowerCase().includes(term) ||
-          String(m.memberNumber).includes(term) ||
-          (m.dni && m.dni.includes(term)) ||
-          (m.phone && m.phone.includes(term)) ||
-          (m.email && m.email.toLowerCase().includes(term))
-        );
-      }).slice(0, 5)
+  const displayedMembers = searchTerm
+    ? clients.filter((member) => memberMatchesSearchTerms(member, getClientSearchTerms(searchTerm))).slice(0, 5)
     : clients.slice(0, 5);
 
 const handleCreate = async (e) => {

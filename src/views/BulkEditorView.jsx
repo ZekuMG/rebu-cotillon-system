@@ -1021,7 +1021,6 @@ export default function BulkEditorView({
       }[row.status],
     ].some((value) => String(value || '').toLowerCase().includes(normalizedImageImportSearchTerm));
   });
-  const nextImageImportBatchLabel = hasImageImportSearchStarted ? 'Otros 10' : 'Probar 10';
   const imageCandidatePickerRow = imageImportRows.find((row) => row.rowId === imageCandidatePickerRowId) || null;
 
   useEffect(() => {

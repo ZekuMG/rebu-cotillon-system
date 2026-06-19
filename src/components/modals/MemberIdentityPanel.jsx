@@ -17,6 +17,7 @@ import {
   getInstagramConnection,
   normalizeInstagramHandle,
 } from '../../utils/socialConnections';
+import { getClientSearchTerms, memberMatchesSearchTerms } from '../../utils/clientSearch';
 
 const INITIAL_MEMBER_FORM = {
   name: '',
@@ -105,27 +106,11 @@ export const MemberIdentityPanel = ({
 
   const filteredMembersAll = useMemo(() => {
     const safeClients = Array.isArray(clients) ? clients : [];
-    const search = memberSearch.trim().toLowerCase();
+    const searchTerms = getClientSearchTerms(memberSearch);
 
-    if (!search) return safeClients;
+    if (searchTerms.length === 0) return safeClients;
 
-    return safeClients.filter((member) => {
-      const name = String(member?.name || '').toLowerCase();
-      const memberNumber = String(member?.memberNumber || '').toLowerCase();
-      const dni = String(member?.dni || '').toLowerCase();
-      const phone = String(member?.phone || '').toLowerCase();
-      const email = String(member?.email || '').toLowerCase();
-      const instagram = getInstagramConnection(member).handle;
-
-      return (
-        name.includes(search) ||
-        memberNumber.includes(search) ||
-        dni.includes(search) ||
-        phone.includes(search) ||
-        email.includes(search) ||
-        instagram.includes(search)
-      );
-    });
+    return safeClients.filter((member) => memberMatchesSearchTerms(member, searchTerms));
   }, [clients, memberSearch]);
 
   const displayedMembers = useMemo(() => {

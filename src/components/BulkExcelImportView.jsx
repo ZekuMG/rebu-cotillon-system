@@ -8,7 +8,7 @@ import {
   Filter,
   Link2,
   Loader2,
-  MoreHorizontal,
+  MoreVertical,
   Package,
   PackagePlus,
   Plus,
@@ -191,6 +191,26 @@ const getRowBaseErrors = (entry, _product) => {
 const getStockUnit = (product) => (product?.product_type === 'weight' ? 'g' : 'u.');
 const getStockDelta = (entry) => Number(entry.quantity || 0) * Number(entry.multiplier || 1);
 
+const getQuantityBalance = (sourceRow, productRows) => {
+  const originalQuantity = Number(sourceRow.entry.originalQuantity || sourceRow.entry.quantity || 0);
+  const assignedQuantity = productRows.reduce((sum, row) => sum + Number(row.entry.quantity || 0), 0);
+  return {
+    originalQuantity,
+    assignedQuantity,
+    remainingQuantity: originalQuantity - assignedQuantity,
+  };
+};
+
+const getQuantityBalanceMeta = (remainingQuantity) => {
+  if (remainingQuantity === 0) {
+    return { label: 'Completo', tone: 'green' };
+  }
+  if (remainingQuantity < 0) {
+    return { label: `Sobran ${Math.abs(remainingQuantity).toLocaleString('es-AR')}`, tone: 'red' };
+  }
+  return { label: `Faltan ${remainingQuantity.toLocaleString('es-AR')}`, tone: 'amber' };
+};
+
 const buildReviewRow = ({ entry, product = null, duplicateOptions = null, duplicateResolved = false }, index) => {
   const errors = getRowBaseErrors(entry, product);
   if (duplicateOptions && !duplicateResolved) errors.push('Duplicado sin resolver');
@@ -221,7 +241,7 @@ const buildReviewRow = ({ entry, product = null, duplicateOptions = null, duplic
 
 const getRowStatus = (row) => {
   if (!row.product) return { label: 'Sin asignar', tone: 'amber' };
-  if (row.errors.length > 0) return { label: 'Bloqueado', tone: 'red' };
+  if (row.errors.length > 0) return { label: 'Revisar', tone: 'amber' };
   const selectedCount = FIELD_KEYS.filter((field) => row.approvals[field]).length;
   if (selectedCount === 0 && row.applied) return { label: 'Aplicado', tone: 'green' };
   if (selectedCount === 0 && !row.hasChanges) return { label: 'Sin cambios', tone: 'slate' };
@@ -231,10 +251,10 @@ const getRowStatus = (row) => {
 };
 
 const isFieldEligible = (row, field) => {
-  if (!row.product || row.errors.length > 0) return false;
-  if (field === 'stock') return getStockDelta(row.entry) > 0;
-  if (field === 'cost') return Number(row.product.purchasePrice || 0) !== Number(row.entry.cost || 0);
-  if (field === 'price') return Number(row.product.price || 0) !== Number(row.entry.salePrice || 0);
+  if (!row.product) return false;
+  if (field === 'stock') return Number(row.entry.quantity || 0) > 0 && Number(row.entry.multiplier || 0) > 0 && getStockDelta(row.entry) > 0;
+  if (field === 'cost') return Number(row.entry.cost || 0) > 0 && Number(row.product.purchasePrice || 0) !== Number(row.entry.cost || 0);
+  if (field === 'price') return Number(row.entry.salePrice || 0) > 0 && Number(row.product.price || 0) !== Number(row.entry.salePrice || 0);
   return false;
 };
 
@@ -253,6 +273,50 @@ const hasBarcodeAssignmentChange = (row) =>
 
 const isRowApplicable = (row) =>
   Boolean(row.product && row.errors.length === 0 && (hasSelectedFieldChange(row) || hasBarcodeAssignmentChange(row)));
+
+const getRowErrorHints = (errors = []) =>
+  errors.map((error) => {
+    if (error === 'Cantidad vacia o cero') {
+      return {
+        title: 'Cantidad sin valor',
+        detail: 'Revisa la cantidad del Excel. Tiene que ser mayor a 0 para poder sumar stock.',
+      };
+    }
+    if (error === 'Multiplicador invalido') {
+      return {
+        title: 'Equivalencia sin valor',
+        detail: 'Edita Stock y coloca cuantas unidades reales suma cada unidad comprada. Ej: 1 compra = 6 u.',
+      };
+    }
+    if (error === 'Costo vacio o cero') {
+      return {
+        title: 'Costo sin valor',
+        detail: 'Completa el costo final por unidad en el bloque Costo.',
+      };
+    }
+    if (error === 'Venta vacia o cero') {
+      return {
+        title: 'Venta sin valor',
+        detail: 'Completa el precio de venta final por unidad en el bloque Venta.',
+      };
+    }
+    if (error === 'Venta menor al costo') {
+      return {
+        title: 'Venta menor al costo',
+        detail: 'Sube la venta o corrige el costo antes de aplicar cambios.',
+      };
+    }
+    if (error === 'Duplicado sin resolver') {
+      return {
+        title: 'Codigo repetido en el Excel',
+        detail: 'Elegí una fila o suma las cantidades antes de aplicar.',
+      };
+    }
+    return {
+      title: error,
+      detail: 'Revisa los datos recibidos del Excel y vuelve a intentar.',
+    };
+  });
 
 const statusClass = {
   amber: 'bg-sky-50 text-sky-800 border-sky-200',
@@ -561,10 +625,28 @@ export default function BulkExcelImportView({
     const associatedId = `${sourceRow.id}-assoc-${Date.now()}`;
     setRows((prev) => {
       const sourceIndex = prev.findIndex((row) => row.id === sourceRow.id);
+      const safeMultiplier = Number(sourceRow.entry.multiplier || 0) > 0 ? Number(sourceRow.entry.multiplier) : 1;
+      const safeCost = Number(sourceRow.entry.cost || 0) > 0
+        ? Number(sourceRow.entry.cost)
+        : divideLotValue(sourceRow.entry.lotCost ?? sourceRow.entry.cost, safeMultiplier);
+      const safeSalePrice = Number(sourceRow.entry.salePrice || 0) > 0
+        ? Number(sourceRow.entry.salePrice)
+        : divideLotValue(sourceRow.entry.lotSalePrice ?? sourceRow.entry.salePrice, safeMultiplier);
       const nextRow = {
         ...buildReviewRow(
           {
-            entry: { ...sourceRow.entry, quantity: 0, quantityInput: '0' },
+            entry: {
+              ...sourceRow.entry,
+              originalQuantity: sourceRow.entry.originalQuantity || sourceRow.entry.quantity || 0,
+              quantity: 0,
+              quantityInput: '0',
+              multiplier: safeMultiplier,
+              multiplierInput: String(safeMultiplier),
+              cost: safeCost,
+              costInput: safeCost ? String(safeCost) : '',
+              salePrice: safeSalePrice,
+              salePriceInput: safeSalePrice ? String(safeSalePrice) : '',
+            },
             product: null,
             duplicateOptions: null,
             duplicateResolved: true,
@@ -617,6 +699,9 @@ export default function BulkExcelImportView({
       prev.map((row, index) => {
         if (row.id !== rowId) return row;
         const nextEntry = { ...row.entry, [field]: numericValue, [inputKey]: value };
+        if (field === 'quantity' && row.entry.originalQuantity == null) {
+          nextEntry.originalQuantity = Number(row.entry.quantity || 0);
+        }
         if (field === 'multiplier') {
           nextEntry.cost = divideLotValue(row.entry.lotCost ?? row.entry.cost, numericValue);
           nextEntry.salePrice = divideLotValue(row.entry.lotSalePrice ?? row.entry.salePrice, numericValue);
@@ -1093,7 +1178,6 @@ export default function BulkExcelImportView({
                 const stockDelta = getStockDelta(row.entry);
                 const stockUnit = getStockUnit(row.product);
                 const stockAfter = row.product ? Number(row.product.stock || 0) + stockDelta : stockDelta;
-                const canApplyRow = isRowApplicable(row);
                 const activeCandidates = activeReviewRow ? getProductCandidates(activeReviewRow) : [];
                 const activeStockDelta = activeReviewRow ? getStockDelta(activeReviewRow.entry) : 0;
                 const activeStockUnit = activeReviewRow ? getStockUnit(activeReviewRow.product) : 'u.';
@@ -1101,65 +1185,71 @@ export default function BulkExcelImportView({
                   ? Number(activeReviewRow.product.stock || 0) + activeStockDelta
                   : activeStockDelta;
                 const activeShowAssignmentSearch = activeReviewRow && (!activeReviewRow.product || activeReviewRow.changeProductMode);
+                const activeChangeFields = activeReviewRow?.product
+                  ? [
+                      { key: 'stock', label: 'Stock', tone: 'blue' },
+                      { key: 'cost', label: 'Costo', tone: 'violet' },
+                      { key: 'price', label: 'Venta', tone: 'emerald' },
+                    ].filter(({ key }) => isFieldEligible(activeReviewRow, key))
+                  : [];
+                const activeApprovedCount = activeChangeFields.filter(({ key }) => activeReviewRow.approvals[key]).length;
                 const isActiveSource = activeSourceRowId === row.id;
 
                 return (
                   <article
                     key={row.id}
-                    onClick={(event) => {
+                    onClick={() => {
                       setActiveSourceRowId(row.id);
-                      if (!event.target.closest('button, input, select, textarea, label, a, summary, details')) {
-                        setActiveTarget(row.id, 'article');
-                      }
                     }}
-                    className={`excel-review-row ${rowIndex % 2 === 1 ? 'excel-review-row-alternate' : ''} ${isActiveSource ? 'excel-review-row-active' : ''} ${status.tone === 'amber' ? 'excel-review-row-attention' : ''} border-l-2 px-3 py-2 transition-colors ${statusAccentClass[status.tone] || 'border-l-slate-200'}`}
+                    className={`excel-review-row excel-review-row-${status.tone} excel-review-row-collapsed ${rowIndex % 2 === 1 ? 'excel-review-row-alternate' : ''} ${isActiveSource ? 'excel-review-row-active' : ''} ${status.tone === 'amber' ? 'excel-review-row-attention' : ''} border-l-2 px-3 py-2 transition-colors ${statusAccentClass[status.tone] || 'border-l-slate-200'}`}
                   >
-                    <div className="grid grid-cols-1 2xl:grid-cols-[minmax(390px,0.92fr)_minmax(560px,1.08fr)] gap-3">
-                      <div className="min-w-0">
-                        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-2">
-                          <div className={`h-7 w-7 rounded-lg border flex items-center justify-center shrink-0 ${
-                            row.product ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-sky-50 border-sky-200 text-sky-700'
-                          }`}>
-                            {row.product ? <Package size={14} /> : <Search size={14} />}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <p className="font-black text-slate-900 text-[13px] truncate" title={row.entry.description || row.entry.code || row.product?.title}>
-                                {row.entry.description || row.entry.code || 'Fila del Excel'}
+                    <div className="excel-review-content grid grid-cols-1 2xl:grid-cols-[minmax(390px,0.92fr)_minmax(560px,1.08fr)] gap-3">
+                      <div className="excel-review-left min-w-0">
+                        <div className="excel-row-heading grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-2">
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setActiveSourceRowId(row.id);
+                              setActiveTarget(row.id, 'article');
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setActiveSourceRowId(row.id);
+                                setActiveTarget(row.id, 'article');
+                              }
+                            }}
+                            className="excel-row-title-trigger contents text-left"
+                            title="Ver datos del Excel"
+                          >
+                            <span className={`excel-row-icon h-7 w-7 rounded-lg border flex items-center justify-center shrink-0 ${
+                              row.product ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-sky-50 border-sky-200 text-sky-700'
+                            }`}>
+                              {row.product ? <Package size={14} /> : <Search size={14} />}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <p className="font-black text-slate-900 text-[13px] truncate" title={row.entry.description || row.entry.code || row.product?.title}>
+                                  {row.entry.description || row.entry.code || 'Fila del Excel'}
+                                </p>
+                                {row.isAssociated && (
+                                  <span className="shrink-0 rounded-full border border-fuchsia-200 bg-fuchsia-50 px-2 py-0.5 text-[9px] font-black uppercase text-fuchsia-700">
+                                    sin codigo
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] font-bold text-slate-400 font-mono">
+                                {row.isAssociated ? 'Vinculado al codigo Excel' : 'Codigo Excel'}: {row.entry.code || '--'} / Fila {row.entry.rowNumber}
                               </p>
-                              {row.isAssociated && (
-                                <span className="shrink-0 rounded-full border border-fuchsia-200 bg-fuchsia-50 px-2 py-0.5 text-[9px] font-black uppercase text-fuchsia-700">
-                                  sin codigo
-                                </span>
-                              )}
                             </div>
-                            <p className="text-[10px] font-bold text-slate-400 font-mono">
-                              {row.isAssociated ? 'Vinculado al codigo Excel' : 'Codigo Excel'}: {row.entry.code || '--'} / Fila {row.entry.rowNumber}
-                            </p>
                           </div>
-                          <div className="excel-row-status flex min-w-[84px] flex-col items-end gap-1.5">
+                          <div className="excel-row-status flex min-w-[78px] flex-col items-end gap-1.5">
                             <span className={`rounded-md border px-2 py-0.5 text-[9px] font-black uppercase ${statusClass[status.tone]}`}>
                               {row.isAssociated ? 'Asociado' : status.label}
                             </span>
-                            {row.product && (
-                              <div className="flex items-center gap-1">
-                                <ProductRowActions
-                                  changeMode={row.changeProductMode}
-                                  onChange={() => toggleChangeProductMode(row.id)}
-                                  onRemove={() => clearProductFromRow(row.id)}
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => handleApplyRows([row])}
-                                  disabled={!canApplyRow || isApplying}
-                                  className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[8px] font-black uppercase tracking-wide text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
-                                  title={canApplyRow ? 'Aplicar solo esta fila' : 'Marca campos o cambia el producto asignado'}
-                                >
-                                  <CheckCircle2 size={10} />
-                                  Aplicar
-                                </button>
-                              </div>
-                            )}
                           </div>
                         </div>
 
@@ -1190,19 +1280,64 @@ export default function BulkExcelImportView({
                           </div>
                         )}
 
-                        <div className="excel-target-list mt-1.5 divide-y divide-slate-200/70 border-y border-slate-200/70">
-                          {productRows.map((targetRow, targetIndex) => (
-                            <ReviewTargetButton
-                              key={targetRow.id}
-                              active={activeTargetId === targetRow.id}
-                              label={targetRow.isAssociated ? `Producto ${targetIndex + 1}` : 'Producto Rebu'}
-                              title={targetRow.product?.title || (targetRow.isAssociated ? 'Elegir producto asociado' : 'Buscar producto Rebu')}
-                              subtitle={`${Number(targetRow.entry.quantity || 0).toLocaleString('es-AR')} x ${Number(targetRow.entry.multiplier || 0).toLocaleString('es-AR')} = ${getStockDelta(targetRow).toLocaleString('es-AR')} ${getStockUnit(targetRow.product)}`}
-                              tone={targetRow.isAssociated ? 'fuchsia' : 'blue'}
-                              onClick={() => setActiveTarget(row.id, targetRow.id)}
-                              onRemove={targetRow.isAssociated ? () => removeAssociatedProductRow(targetRow.id) : undefined}
-                            />
-                          ))}
+                        <div className="excel-target-list mt-2 divide-y divide-slate-200/70 border-y border-slate-200/70">
+                          {productRows.map((targetRow, targetIndex) => {
+                            const hasSplitControls = productRows.length > 1;
+                            const targetQuantity = Number(targetRow.entry.quantity || 0);
+                            const targetMultiplier = Number(targetRow.entry.multiplier || 0);
+                            const targetStockDelta = getStockDelta(targetRow.entry);
+                            const targetUnit = getStockUnit(targetRow.product);
+                            const targetLabel = targetRow.isAssociated
+                              ? `Rebu ${targetIndex + 1} asociado`
+                              : 'Rebu 1 principal';
+                            const targetSubtitle = targetRow.product
+                              ? `${targetQuantity.toLocaleString('es-AR')} compra x ${targetMultiplier.toLocaleString('es-AR')} equiv. = ${targetStockDelta.toLocaleString('es-AR')} ${targetUnit}`
+                              : targetRow.isAssociated
+                                ? 'Elegí producto y cantidad para repartir'
+                                : 'Elegí producto del inventario';
+
+                            return (
+                              <ReviewTargetButton
+                                key={targetRow.id}
+                                active={activeTargetId === targetRow.id}
+                                label={targetLabel}
+                                title={targetRow.product?.title || (targetRow.isAssociated ? 'Elegir producto asociado' : 'Buscar producto Rebu')}
+                                subtitle={targetSubtitle}
+                                tone={targetRow.isAssociated ? 'teal' : 'blue'}
+                                onClick={() => setActiveTarget(row.id, targetRow.id)}
+                                onRemove={targetRow.isAssociated ? () => removeAssociatedProductRow(targetRow.id) : undefined}
+                                quantitySlot={hasSplitControls ? (
+                                  <SplitQuantityControl
+                                    value={targetRow.entry.quantityInput ?? targetRow.entry.quantity ?? ''}
+                                    warning={targetQuantity <= 0}
+                                    onChange={(value) => updateRowEntryValue(targetRow.id, 'quantity', value)}
+                                  />
+                                ) : null}
+                                actionSlot={targetRow.product ? (
+                                  <div className="excel-target-actions flex items-center gap-1">
+                                    <ProductRowActions
+                                      changeMode={targetRow.changeProductMode}
+                                      onChange={() => toggleChangeProductMode(targetRow.id)}
+                                      onRemove={() => clearProductFromRow(targetRow.id)}
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        handleApplyRows([targetRow]);
+                                      }}
+                                      disabled={!isRowApplicable(targetRow) || isApplying}
+                                      className="excel-target-apply inline-flex h-7 items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 text-[8px] font-black uppercase tracking-wide text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
+                                      title={isRowApplicable(targetRow) ? 'Aplicar solo esta fila' : 'Marca campos o cambia el producto asignado'}
+                                    >
+                                      <CheckCircle2 size={10} />
+                                      Aplicar
+                                    </button>
+                                  </div>
+                                ) : null}
+                              />
+                            );
+                          })}
                         </div>
 
                         {!row.isAssociated && (
@@ -1217,30 +1352,29 @@ export default function BulkExcelImportView({
                         )}
 
                         {row.errors.length > 0 && (
-                          <div className="mt-3 flex flex-wrap gap-1.5">
-                            {row.errors.map((error) => (
-                              <span key={error} className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-black text-red-700">
-                                <ShieldAlert size={12} /> {error}
-                              </span>
-                            ))}
-                          </div>
+                          <RowIssueNotice errors={row.errors} />
                         )}
                       </div>
 
-                      {activeTargetId === 'article' ? (
-                        <ArticleBreakdownPanel
+                      {!isActiveSource ? (
+                        <CompactReviewSummary
                           sourceRow={row}
                           productRows={productRows}
-                          onQuantityChange={(targetRowId, value) => updateRowEntryValue(targetRowId, 'quantity', value)}
-                          onSelectTarget={(targetRowId) => setActiveTarget(row.id, targetRowId)}
-                          onRemoveAssociated={removeAssociatedProductRow}
+                          status={status}
                         />
-                      ) : !activeReviewRow?.product ? (
+                      ) : activeTargetId === 'article' ? (
+                        <CompactReviewSummary
+                          sourceRow={row}
+                          productRows={productRows}
+                          status={status}
+                          mode="article"
+                        />
+                      ) : activeShowAssignmentSearch ? (
                         <div className="excel-assignment-panel min-h-[112px] border-l border-slate-200 pl-4 pt-1">
                           <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0">
                               <p className="text-[9px] font-black uppercase tracking-wider text-slate-400">Producto Rebu</p>
-                              <p className="mt-0.5 truncate text-[12px] font-black text-slate-900">Buscar y asignar</p>
+                              <p className="mt-0.5 truncate text-[12px] font-black text-slate-900">Falta elegir producto Rebu</p>
                               <p className="text-[10px] font-bold text-slate-500">Selecciona una coincidencia o crea un artículo nuevo.</p>
                             </div>
                             <ArrowRight size={16} className="text-sky-500 shrink-0" />
@@ -1294,6 +1428,15 @@ export default function BulkExcelImportView({
                             </div>
                           )}
                         </div>
+                      ) : activeReviewRow?.product ? (
+                        <CompactReviewSummary
+                          sourceRow={row}
+                          productRows={productRows}
+                          status={status}
+                          activeRow={activeReviewRow}
+                          onToggleApproval={toggleApproval}
+                          onUpdateEntryValue={updateRowEntryValue}
+                        />
                       ) : (
                         <div className="excel-comparison-panel border-l border-slate-200 pl-4 pt-1">
                           <div className="flex items-center justify-between gap-3">
@@ -1303,7 +1446,28 @@ export default function BulkExcelImportView({
                             </div>
                             <span className="shrink-0 text-[9px] font-black uppercase text-slate-400">Actual → Final</span>
                           </div>
-                          <div className="excel-comparison-list mt-1 divide-y divide-slate-200">
+                          <div className="excel-change-strip mt-2 flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-[9px] font-black uppercase tracking-wider text-slate-400">
+                              {activeApprovedCount} de {activeChangeFields.length || 3} marcados
+                            </span>
+                            <div className="flex flex-wrap items-center gap-1">
+                              {activeChangeFields.map((field) => {
+                                const selected = Boolean(activeReviewRow.approvals[field.key]);
+                                return (
+                                  <button
+                                    key={field.key}
+                                    type="button"
+                                    onClick={() => toggleApproval(activeReviewRow.id, field.key)}
+                                    className={`excel-change-chip excel-change-chip-${field.tone} ${selected ? 'excel-change-chip-on' : ''}`}
+                                    aria-pressed={selected}
+                                  >
+                                    {field.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          <div className="excel-comparison-list mt-2 divide-y divide-slate-200">
                           <CompareField
                             label="Stock"
                             tone="blue"
@@ -1862,7 +2026,7 @@ function ProductRowActions({ changeMode, onChange, onRemove }) {
         className="flex h-6 w-6 cursor-pointer list-none items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
         title="Más acciones"
       >
-        <MoreHorizontal size={14} />
+        <MoreVertical size={14} />
       </summary>
       <div className="absolute right-0 top-full z-40 mt-1 w-40 overflow-hidden rounded-lg border border-slate-200 bg-white p-1 shadow-xl">
         <button
@@ -1892,20 +2056,45 @@ function ProductRowActions({ changeMode, onChange, onRemove }) {
   );
 }
 
-function ReviewTargetButton({ active, label, title, subtitle, tone = 'slate', onClick, onRemove }) {
+function SplitQuantityControl({ value, onChange, warning = false }) {
+  return (
+    <label
+      className={`excel-split-quantity ${warning ? 'excel-split-quantity-warning' : ''}`}
+      onClick={(event) => event.stopPropagation()}
+      title="Cantidad de compras del Excel para este producto Rebu"
+    >
+      <span>Compra</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function ReviewTargetButton({ active, label, title, subtitle, tone = 'slate', onClick, onRemove, actionSlot = null, quantitySlot = null }) {
   const toneClass = {
     slate: active ? 'text-slate-950' : 'text-slate-600 hover:text-slate-900',
     blue: active ? 'text-blue-800' : 'text-slate-600 hover:text-blue-700',
     fuchsia: active ? 'text-fuchsia-800' : 'text-slate-600 hover:text-fuchsia-700',
+    teal: active ? 'text-teal-800' : 'text-slate-600 hover:text-teal-700',
+    amber: active ? 'text-amber-800' : 'text-slate-600 hover:text-amber-700',
   }[tone] || 'text-slate-600 hover:text-slate-900';
   const markerClass = {
     slate: active ? 'bg-slate-700' : 'bg-slate-300',
     blue: active ? 'bg-blue-500' : 'bg-slate-300',
     fuchsia: active ? 'bg-fuchsia-500' : 'bg-slate-300',
+    teal: active ? 'bg-teal-500' : 'bg-slate-300',
+    amber: active ? 'bg-amber-500' : 'bg-slate-300',
   }[tone] || 'bg-slate-300';
+  const gridClass = quantitySlot
+    ? 'grid-cols-[3px_104px_minmax(0,1fr)_88px_auto]'
+    : 'grid-cols-[3px_104px_minmax(0,1fr)_auto]';
 
   return (
-    <div className={`excel-target-row excel-target-${tone} ${active ? 'excel-target-active' : ''} grid grid-cols-[3px_88px_minmax(0,1fr)_auto] items-center gap-2 px-1 py-1.5 text-left transition-colors ${toneClass}`}>
+    <div className={`excel-target-row excel-target-${tone} ${active ? 'excel-target-active' : ''} grid ${gridClass} items-center gap-2 px-1 py-1.5 text-left transition-colors ${toneClass}`}>
       <span className={`h-7 w-1 rounded-full ${markerClass}`} />
       <button type="button" onClick={onClick} className="contents text-left">
         <span className="px-1 text-[9px] font-black uppercase tracking-wide text-slate-400">
@@ -1916,7 +2105,8 @@ function ReviewTargetButton({ active, label, title, subtitle, tone = 'slate', on
           <span className="block truncate text-[10px] font-bold text-slate-400">{subtitle}</span>
         </span>
       </button>
-      {onRemove ? (
+      {quantitySlot && <span className="excel-target-quantity-cell">{quantitySlot}</span>}
+      {actionSlot || (onRemove ? (
         <button
           type="button"
           onClick={(event) => {
@@ -1930,33 +2120,35 @@ function ReviewTargetButton({ active, label, title, subtitle, tone = 'slate', on
         </button>
       ) : (
         <span aria-hidden="true" className="h-6 w-0" />
-      )}
+      ))}
     </div>
   );
 }
 
 function ArticleBreakdownPanel({ sourceRow, productRows, onQuantityChange, onSelectTarget, onRemoveAssociated }) {
-  const originalQuantity = Number(sourceRow.entry.originalQuantity || sourceRow.entry.quantity || 0);
-  const assignedQuantity = productRows.reduce((sum, row) => sum + Number(row.entry.quantity || 0), 0);
-  const remainingQuantity = originalQuantity - assignedQuantity;
+  const { originalQuantity, assignedQuantity, remainingQuantity } = getQuantityBalance(sourceRow, productRows);
+  const balanceMeta = getQuantityBalanceMeta(remainingQuantity);
 
   return (
     <div className="excel-article-panel border-l border-slate-200 pl-4 pt-1">
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-[9px] font-black uppercase tracking-wider text-slate-500">Cambios a aplicar</p>
-        <span className={`shrink-0 rounded-md px-2 py-0.5 text-[9px] font-black ${remainingQuantity === 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-sky-50 text-sky-700'}`}>
-          Resta {remainingQuantity.toLocaleString('es-AR')}
+      <div className="excel-panel-titlebar flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[9px] font-black uppercase tracking-wider text-slate-500">Resumen del Excel</p>
+          <p className="truncate text-[10px] font-bold text-slate-400">Cantidad y valores recibidos para este articulo.</p>
+        </div>
+        <span className={`excel-balance-pill excel-balance-${balanceMeta.tone}`}>
+          {balanceMeta.label}
         </span>
       </div>
 
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-6 gap-y-1 border-y border-slate-200 py-1.5">
+      <div className="excel-summary-strip mt-2 flex flex-wrap items-center gap-x-6 gap-y-1 border-y border-slate-200 py-1.5">
         <InlineMetric label="Cantidad" value={originalQuantity.toLocaleString('es-AR')} />
         <InlineMetric label="Asignado" value={assignedQuantity.toLocaleString('es-AR')} tone="blue" />
         <InlineMetric label="Costo" value={<FancyPrice amount={sourceRow.entry.lotCost || sourceRow.entry.cost} />} tone="violet" />
         <InlineMetric label="Venta" value={<FancyPrice amount={sourceRow.entry.lotSalePrice || sourceRow.entry.salePrice} />} tone="green" />
       </div>
 
-      <div className="divide-y divide-slate-200">
+      <div className="excel-product-split mt-1 divide-y divide-slate-200">
         {productRows.map((row, index) => {
           const unit = getStockUnit(row.product);
           const stockDelta = getStockDelta(row.entry);
@@ -1997,6 +2189,310 @@ function ArticleBreakdownPanel({ sourceRow, productRows, onQuantityChange, onSel
         })}
       </div>
     </div>
+  );
+}
+
+function CompactReviewSummary({
+  sourceRow,
+  productRows,
+  status,
+  mode = 'product',
+  activeRow = null,
+  onToggleApproval,
+  onUpdateEntryValue,
+}) {
+  const rowsWithProduct = productRows.filter((row) => row.product);
+  const missingCount = productRows.length - rowsWithProduct.length;
+  const editable = Boolean(activeRow?.product && onToggleApproval && onUpdateEntryValue);
+  const rowsForSummary = activeRow?.product ? [activeRow] : rowsWithProduct;
+  const summaries = rowsForSummary.flatMap((row) => buildCompactChangeSummaries(row));
+  const approvedCount = summaries.filter((item) => item.checked).length;
+  const { originalQuantity, assignedQuantity, remainingQuantity } = getQuantityBalance(sourceRow, productRows);
+  const balanceMeta = getQuantityBalanceMeta(remainingQuantity);
+  const productTitle = activeRow?.product?.title || rowsWithProduct[0]?.product?.title || 'Producto Rebu';
+  const extraProducts = activeRow?.product ? 0 : Math.max(rowsWithProduct.length - 1, 0);
+
+  if (mode === 'article') {
+    return (
+      <div className="excel-compact-panel excel-article-quick-panel border-l border-slate-200 pl-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[9px] font-black uppercase tracking-wider text-slate-400">Articulo del Excel</p>
+            <p className="truncate text-[12px] font-black text-slate-900" title={sourceRow.entry.description || sourceRow.entry.code}>
+              {sourceRow.entry.description || 'Fila del Excel'}
+            </p>
+            <p className="truncate text-[10px] font-bold text-slate-500">
+              Codigo {sourceRow.entry.code || 'sin codigo'} / Fila {sourceRow.entry.rowNumber}
+            </p>
+          </div>
+          <span className={`excel-balance-pill excel-balance-${balanceMeta.tone}`}>
+            {balanceMeta.label}
+          </span>
+        </div>
+        <div className="excel-article-quick-grid mt-2 grid grid-cols-2 gap-1.5 lg:grid-cols-4">
+          <InlineMetric label="Cantidad" value={originalQuantity.toLocaleString('es-AR')} />
+          <InlineMetric label="Asignado" value={assignedQuantity.toLocaleString('es-AR')} tone="blue" />
+          <InlineMetric label="Costo" value={<FancyPrice amount={sourceRow.entry.lotCost || sourceRow.entry.cost} />} tone="violet" />
+          <InlineMetric label="Venta" value={<FancyPrice amount={sourceRow.entry.lotSalePrice || sourceRow.entry.salePrice} />} tone="green" />
+        </div>
+      </div>
+    );
+  }
+
+  if (rowsWithProduct.length === 0) {
+    return (
+      <div className="excel-compact-panel excel-compact-panel-empty border-l border-slate-200 pl-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[9px] font-black uppercase tracking-wider text-slate-400">Producto Rebu</p>
+            <p className="truncate text-[12px] font-black text-slate-900">Falta elegir producto</p>
+            <p className="truncate text-[10px] font-bold text-slate-500">Toca la fila para buscar o crear el articulo.</p>
+          </div>
+          <span className={`shrink-0 rounded-md border px-2 py-1 text-[9px] font-black uppercase ${statusClass[status.tone]}`}>
+            {status.label}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="excel-compact-panel border-l border-slate-200 pl-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[9px] font-black uppercase tracking-wider text-slate-400">Cambios del producto Rebu</p>
+          <p className="truncate text-[12px] font-black text-slate-900" title={productTitle}>
+            {productTitle}{extraProducts > 0 ? ` + ${extraProducts} mas` : ''}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className="rounded-md border border-slate-200 bg-white/70 px-2 py-0.5 text-[9px] font-black uppercase text-slate-500">
+            {approvedCount}/{summaries.length || 3} marcados
+          </span>
+          <span className={`excel-balance-pill excel-balance-${balanceMeta.tone}`}>
+            {balanceMeta.label}
+          </span>
+        </div>
+      </div>
+
+      {summaries.length > 0 ? (
+        <div className="excel-compact-changes mt-2 flex flex-wrap gap-1.5">
+          {summaries.map((item) => (
+            <CompactChangeItem
+              key={`${item.rowId}-${item.key}`}
+              item={item}
+              editable={editable}
+              onToggle={() => onToggleApproval?.(item.rowId, item.key)}
+              onUpdate={(field, value) => onUpdateEntryValue?.(item.rowId, field, value)}
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-[10px] font-bold text-slate-500">Sin diferencias marcables para este producto.</p>
+      )}
+
+      {activeRow?.errors?.length > 0 && (
+        <CompactErrorHelp errors={activeRow.errors} />
+      )}
+
+      {missingCount > 0 && (
+        <p className="mt-1.5 text-[9px] font-black uppercase tracking-wide text-amber-600">
+          {missingCount} producto{missingCount > 1 ? 's' : ''} sin asignar
+        </p>
+      )}
+    </div>
+  );
+}
+
+function buildCompactChangeSummaries(row) {
+  if (!row.product) return [];
+  const summaries = [];
+  const unit = getStockUnit(row.product);
+  const stockDelta = getStockDelta(row.entry);
+  const hasError = (error) => row.errors.includes(error);
+  const hasQuantityError = hasError('Cantidad vacia o cero');
+  const hasMultiplierError = hasError('Multiplicador invalido');
+  const hasCostError = hasError('Costo vacio o cero');
+  const hasPriceError = hasError('Venta vacia o cero');
+  const hasProfitError = hasError('Venta menor al costo');
+
+  if (isFieldEligible(row, 'stock') || hasQuantityError || hasMultiplierError) {
+    summaries.push({
+      rowId: row.id,
+      row,
+      key: 'stock',
+      editField: 'multiplier',
+      label: 'Stock',
+      tone: 'blue',
+      checked: Boolean(row.approvals.stock),
+      invalid: hasQuantityError || hasMultiplierError,
+      quantity: row.entry.quantity,
+      multiplier: row.entry.multiplierInput ?? row.entry.multiplier,
+      unit,
+      stockDelta,
+      before: `${Number(row.product.stock || 0).toLocaleString('es-AR')} ${unit}`,
+      after: `${(Number(row.product.stock || 0) + stockDelta).toLocaleString('es-AR')} ${unit}`,
+      delta: `+${stockDelta.toLocaleString('es-AR')} ${unit}`,
+    });
+  }
+
+  if (isFieldEligible(row, 'cost') || hasCostError || hasProfitError) {
+    summaries.push({
+      rowId: row.id,
+      row,
+      key: 'cost',
+      editField: 'cost',
+      label: 'Costo',
+      tone: 'violet',
+      checked: Boolean(row.approvals.cost),
+      invalid: hasCostError || hasProfitError,
+      editValue: row.entry.costInput ?? row.entry.cost,
+      before: `$${Number(row.product.purchasePrice || 0).toLocaleString('es-AR')}`,
+      after: `$${Number(row.entry.cost || 0).toLocaleString('es-AR')}`,
+      delta: formatDiffPercent(row.product?.purchasePrice, row.entry.cost),
+    });
+  }
+
+  if (isFieldEligible(row, 'price') || hasPriceError || hasProfitError) {
+    summaries.push({
+      rowId: row.id,
+      row,
+      key: 'price',
+      editField: 'salePrice',
+      label: 'Venta',
+      tone: 'emerald',
+      checked: Boolean(row.approvals.price),
+      invalid: hasPriceError || hasProfitError,
+      editValue: row.entry.salePriceInput ?? row.entry.salePrice,
+      before: `$${Number(row.product.price || 0).toLocaleString('es-AR')}`,
+      after: `$${Number(row.entry.salePrice || 0).toLocaleString('es-AR')}`,
+      delta: formatDiffPercent(row.product?.price, row.entry.salePrice),
+    });
+  }
+
+  return summaries;
+}
+
+function RowIssueNotice({ errors }) {
+  const hints = getRowErrorHints(errors);
+  const firstHint = hints[0];
+
+  return (
+    <div className="excel-row-issue mt-2 rounded-lg border border-amber-300/70 bg-amber-50/70 px-2.5 py-2">
+      <div className="flex items-start gap-2">
+        <ShieldAlert size={13} className="mt-0.5 shrink-0 text-amber-600" />
+        <div className="min-w-0">
+          <p className="text-[10px] font-black uppercase tracking-wide text-amber-800">
+            {firstHint?.title || 'Datos a revisar'}
+          </p>
+          <p className="mt-0.5 text-[10px] font-bold leading-snug text-amber-900/80">
+            {firstHint?.detail || 'Corregi los datos marcados y vuelve a aplicar.'}
+          </p>
+          {hints.length > 1 && (
+            <p className="mt-1 text-[9px] font-black uppercase tracking-wide text-amber-700">
+              Tambien revisar: {hints.slice(1).map((hint) => hint.title).join(', ')}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CompactErrorHelp({ errors }) {
+  const hints = getRowErrorHints(errors);
+  if (hints.length === 0) return null;
+
+  return (
+    <div className="excel-compact-error-help mt-2 rounded-lg border border-amber-300/70 bg-amber-50/70 px-2.5 py-2">
+      <div className="flex items-start gap-2">
+        <ShieldAlert size={13} className="mt-0.5 shrink-0 text-amber-600" />
+        <div className="min-w-0">
+          <p className="text-[10px] font-black uppercase tracking-wide text-amber-800">
+            {hints[0].title}
+          </p>
+          <p className="mt-0.5 text-[10px] font-bold leading-snug text-amber-900/80">
+            {hints[0].detail}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CompactChangeItem({ item, editable, onToggle, onUpdate }) {
+  const handleInputClick = (event) => {
+    event.stopPropagation();
+  };
+
+  const renderFinalValue = () => {
+    if (!editable) {
+      return <span className="excel-compact-change-value">{item.after}</span>;
+    }
+
+    if (item.key === 'stock') {
+      return (
+        <span className="excel-compact-stock-editor">
+          <span className="text-[8px] font-black text-sky-500">{Number(item.quantity || 0).toLocaleString('es-AR')}x</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={item.multiplier ?? ''}
+            onClick={handleInputClick}
+            onChange={(event) => onUpdate(item.editField, event.target.value)}
+            className="excel-compact-input excel-compact-input-stock"
+            title="Editar equivalencia de stock"
+          />
+          <span className="text-[8px] font-black text-sky-500">= {Number(item.stockDelta || 0).toLocaleString('es-AR')} {item.unit}</span>
+        </span>
+      );
+    }
+
+    return (
+      <span className="excel-compact-price-editor">
+        <span className="text-[9px] font-black text-slate-400">$</span>
+        <input
+          type="text"
+          inputMode="decimal"
+          value={item.editValue ?? ''}
+          onClick={handleInputClick}
+          onChange={(event) => onUpdate(item.editField, event.target.value)}
+          className="excel-compact-input"
+          title={`Editar ${item.label}`}
+        />
+      </span>
+    );
+  };
+
+  return (
+    <span
+      className={`excel-compact-change excel-compact-change-${item.tone} ${item.checked ? 'excel-compact-change-on' : ''} ${editable ? 'excel-compact-change-editable' : ''} ${item.invalid ? 'excel-compact-change-invalid' : ''}`}
+    >
+      <span className="excel-compact-change-head">
+        <button
+          type="button"
+          disabled={!editable}
+          onClick={onToggle}
+          className="excel-compact-mark"
+          aria-pressed={item.checked}
+          title={editable ? `Marcar ${item.label} para aplicar` : item.label}
+        >
+          <span className="excel-compact-change-label">{item.label}</span>
+        </button>
+        <span className="excel-compact-change-delta">{item.delta}</span>
+      </span>
+      <span className="excel-compact-change-flow">
+        <span className="excel-compact-change-pair">
+          <span className="excel-compact-change-meta">Actual</span>
+          <span className="excel-compact-change-value">{item.before}</span>
+        </span>
+        <ArrowRight size={10} />
+        <span className="excel-compact-change-pair excel-compact-change-final">
+          <span className="excel-compact-change-meta">Final</span>
+          {renderFinalValue()}
+        </span>
+      </span>
+    </span>
   );
 }
 
@@ -2110,15 +2606,15 @@ function CompareField({ label, before, after, delta, checked, disabled, onToggle
   }[tone];
 
   return (
-    <div className={`excel-compare-row min-w-0 px-1 py-1.5 transition-colors ${toneClass}`}>
-      <div className="grid grid-cols-[54px_minmax(72px,0.8fr)_auto_minmax(92px,1fr)_auto] items-center gap-2">
-        <span className="text-[9px] font-black uppercase tracking-wider text-slate-600">{label}</span>
-        <div className="min-w-0">
+    <div className={`excel-compare-row min-w-0 px-1.5 py-2 transition-colors ${toneClass}`}>
+      <div className="grid grid-cols-[74px_minmax(92px,0.7fr)_18px_minmax(108px,0.8fr)_70px] items-center gap-2">
+        <span className={`excel-compare-label excel-compare-label-${tone}`}>{label}</span>
+        <div className="excel-value-box min-w-0">
           <p className="text-[8px] font-black uppercase tracking-wider text-slate-400">Actual</p>
           <div className="truncate text-[11px] font-black text-slate-600">{before}</div>
         </div>
         <ArrowRight size={12} className="text-slate-300" />
-        <div className="min-w-0">
+        <div className="excel-value-box excel-value-final min-w-0">
           <p className="text-[8px] font-black uppercase tracking-wider text-slate-400">Final</p>
           {onAfterChange ? (
             <div className="flex items-center gap-1">
@@ -2150,7 +2646,7 @@ function CompareField({ label, before, after, delta, checked, disabled, onToggle
           {checked ? 'Aplicar' : disabled ? 'Sin cambio' : 'Marcar'}
         </button>
       </div>
-      <div className="mt-1 flex min-w-0 items-center justify-between gap-3 pl-[62px]">
+      <div className="mt-1 flex min-w-0 items-center justify-between gap-3 pl-[82px]">
         <p className="min-w-0 truncate text-[9px] font-bold text-slate-400">{delta}</p>
         {multiplierControl}
       </div>

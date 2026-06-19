@@ -29,6 +29,7 @@ import {
   normalizePaymentBreakdown,
 } from '../../utils/paymentBreakdown';
 import { normalizeLegacyOffer } from '../../utils/offerHelpers';
+import { getClientSearchTerms, memberMatchesSearchTerms } from '../../utils/clientSearch';
 
 const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
@@ -349,18 +350,10 @@ export const EditTransactionModal = ({
   const selectedMemberLabel = selectedMember
     ? `${selectedMember.name || 'Socio'} #${selectedMember.memberNumber || selectedMember.member_number || '---'}`
     : 'Sin socio';
-  const visibleMemberOptions = (members || []).filter((member) => {
-    const search = memberFilterSearch.trim().toLowerCase();
-    if (!search) return true;
-    return [
-      member.name,
-      member.memberNumber,
-      member.member_number,
-      member.dni,
-      member.phone,
-      member.email,
-    ].some((value) => String(value || '').toLowerCase().includes(search));
-  });
+  const memberFilterTerms = getClientSearchTerms(memberFilterSearch);
+  const visibleMemberOptions = (members || []).filter((member) =>
+    memberMatchesSearchTerms(member, memberFilterTerms)
+  );
 
   const compactOffers = (offers || [])
     .map((offer) => ({ ...offer, canonical: offer.canonical || normalizeLegacyOffer(offer, {}, inventory) }))
