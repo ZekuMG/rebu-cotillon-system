@@ -43,6 +43,7 @@ import {
   normalizePaymentBreakdown,
 } from '../utils/paymentBreakdown';
 import { getProductImageUrl } from '../utils/productImages';
+import { getProductActiveState } from '../utils/productLifecycle';
 import {
   couponRequiresInstagramConnection,
   formatInstagramHandle,
@@ -1380,6 +1381,7 @@ export default function POSView({
     const searchWords = searchString ? searchString.split(/\s+/) : [];
 
     return (inventory || []).filter((product) => {
+      if (!getProductActiveState(product)) return false;
       const matchesSearch = searchWords.length === 0 || searchWords.every(word =>
         (product.title || '').toLowerCase().includes(word) ||
         String(product.id).toLowerCase().includes(word) ||
@@ -1452,9 +1454,10 @@ export default function POSView({
     () =>
       (categories || []).reduce((acc, categoryName) => {
         acc[categoryName] = (inventory || []).filter((product) =>
-          Array.isArray(product.categories)
+          getProductActiveState(product) &&
+          (Array.isArray(product.categories)
             ? product.categories.includes(categoryName)
-            : product.category === categoryName
+            : product.category === categoryName)
         );
         return acc;
       }, {}),

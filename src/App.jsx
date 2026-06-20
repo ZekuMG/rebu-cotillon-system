@@ -103,6 +103,13 @@ import {
   normalizePaymentBreakdown,
   normalizeOrderPaymentHistory,
 } from './utils/paymentBreakdown';
+import {
+  getProductActiveState,
+  getProductSupplierLinks,
+  shouldAutoDisableOutOfStockProduct,
+  updateStockLifecycleLinks,
+  upsertExcelImportAlias,
+} from './utils/productLifecycle';
 
 import {
   INITIAL_CATEGORIES,
@@ -2254,7 +2261,11 @@ export default function PartySupplyApp() {
         'registerState' in snapshot
       );
     if (!hasCoreData) return false;
-    setInventory(Array.isArray(snapshot.inventory) ? snapshot.inventory : []);
+    setInventory(
+      Array.isArray(snapshot.inventory)
+        ? snapshot.inventory.filter((product) => getProductActiveState(product))
+        : []
+    );
     setCategories(Array.isArray(snapshot.categories) ? snapshot.categories : []);
     setRewards(Array.isArray(snapshot.rewards) ? snapshot.rewards : []);
     setMembers(Array.isArray(snapshot.members) ? snapshot.members : []);
@@ -2569,7 +2580,10 @@ export default function PartySupplyApp() {
   };
 
   const applyCorePayload = (payload) => {
-    if (payload.inventory !== null) setInventory(payload.inventory);
+    if (payload.inventory !== null) {
+      setInventory((payload.inventory || []).filter((product) => getProductActiveState(product)));
+      void deactivateStaleOutOfStockProducts(payload.inventory || []);
+    }
     if (payload.members !== null) setMembers(payload.members);
     if (payload.agendaContacts !== null) setAgendaContacts(payload.agendaContacts);
     if (payload.categories !== null) setCategories(payload.categories);
@@ -4926,6 +4940,92 @@ export default function PartySupplyApp() {
     Number(orderRecord.remainingAmount || 0) > 0 &&
     !['Retirado', 'Cancelado'].includes(String(orderRecord.status || ''));
 
+  const buildStockLifecyclePayload = (product, delta, { trackDepletion = false, now = new Date().toISOString() } = {}) => {
+    const numericDelta = Number(delta || 0);
+    const stockBefore = Number(product?.stock || 0);
+    const stockAfter = stockBefore + numericDelta;
+    const supplierLinks = updateStockLifecycleLinks(
+      getProductSupplierLinks(product),
+      { stockBefore, stockAfter, delta: numericDelta, trackDepletion, now },
+    );
+    const payload = { supplier_links: supplierLinks };
+    const lifecycleProduct = {
+      ...product,
+      stock: stockAfter,
+      supplierLinks,
+      supplier_links: supplierLinks,
+    };
+
+    if (numericDelta > 0 || stockAfter > 0) {
+      payload.is_active = true;
+    }
+
+    if (shouldAutoDisableOutOfStockProduct(lifecycleProduct, new Date(now))) {
+      payload.is_active = false;
+    }
+
+    return { payload, supplierLinks, stockAfter };
+  };
+
+  const syncStockLifecycleForDeltas = async (deltaByProduct = {}, { trackDepletion = false } = {}) => {
+    const entries = Object.entries(deltaByProduct).filter(([, delta]) => Number(delta || 0) !== 0);
+    if (entries.length === 0) return [];
+
+    const now = new Date().toISOString();
+    const updatedProducts = [];
+
+    for (const [id, delta] of entries) {
+      const product = inventory.find((entry) => String(entry.id) === String(id));
+      if (!product) continue;
+
+      const { payload, supplierLinks, stockAfter } = buildStockLifecyclePayload(product, delta, { trackDepletion, now });
+
+      try {
+        if (isLocalDemoMode()) {
+          const localProduct = localDemoUpdateRow('products', product.id, {
+            supplier_links: supplierLinks,
+            ...(payload.is_active !== undefined ? { is_active: payload.is_active } : {}),
+          });
+          updatedProducts.push(mapInventoryRecords([{ ...(localProduct || product), stock: stockAfter }])[0]);
+        } else {
+          const { data } = await updateWithSchemaFallback('products', product.id, payload, CLOUD_SELECTS.products);
+          updatedProducts.push(mapInventoryRecords([data || { ...product, ...payload, stock: stockAfter }])[0]);
+        }
+      } catch (error) {
+        console.warn('No se pudo actualizar el ciclo de stock del producto:', product?.title || id, error);
+      }
+    }
+
+    const safeProducts = updatedProducts.filter(Boolean);
+    if (safeProducts.length > 0) {
+      const updatedById = new Map(safeProducts.map((product) => [String(product.id), product]));
+      setInventory((prev) =>
+        prev
+          .map((product) => updatedById.get(String(product.id)) || product)
+          .filter((product) => getProductActiveState(product))
+      );
+    }
+
+    return safeProducts;
+  };
+
+  const deactivateStaleOutOfStockProducts = async (productsToCheck = []) => {
+    const staleProducts = (productsToCheck || []).filter((product) => shouldAutoDisableOutOfStockProduct(product));
+    if (staleProducts.length === 0 || isLocalDemoMode()) return;
+
+    for (const product of staleProducts) {
+      try {
+        await updateWithSchemaFallback('products', product.id, { is_active: false }, CLOUD_SELECTS.products);
+      } catch (error) {
+        console.warn('No se pudo inhabilitar producto agotado antiguo:', product?.title || product?.id, error);
+      }
+    }
+
+    setInventory((prev) =>
+      prev.filter((product) => !staleProducts.some((stale) => String(stale.id) === String(product.id)))
+    );
+  };
+
   const applyProductStockDeltaCloud = async (product, delta) => {
     const numericDelta = Number(delta || 0);
     if (!product || !numericDelta) return Number(product?.stock || 0);
@@ -5373,7 +5473,7 @@ export default function PartySupplyApp() {
     return { stockChanges, stockIssues };
   };
 
-  const applySaleStockDelta = async (deltaByProduct = {}) => {
+  const applySaleStockDelta = async (deltaByProduct = {}, { trackDepletion = false } = {}) => {
     const entries = Object.entries(deltaByProduct).filter(([, delta]) => Number(delta || 0) !== 0);
     if (entries.length === 0) return { stockChanges: [], stockIssues: [] };
 
@@ -5400,6 +5500,8 @@ export default function PartySupplyApp() {
         return delta ? { ...product, stock: Number(product.stock || 0) + Number(delta || 0) } : product;
       })
     );
+
+    void syncStockLifecycleForDeltas(deltaByProduct, { trackDepletion });
 
     return { stockChanges: preview.stockChanges, stockIssues: [] };
   };
@@ -9064,6 +9166,7 @@ export default function PartySupplyApp() {
           ? Number(localDemoUpdateRow('products', productData.id, { stock: originalStock + stockDelta })?.stock || originalStock + stockDelta)
           : await applyProductStockDeltaCloud(originalProduct, stockDelta);
         formattedProduct = { ...formattedProduct, stock: nextStock };
+        void syncStockLifecycleForDeltas({ [productData.id]: stockDelta });
       }
       const effectiveProductData = {
         ...productData,
@@ -9219,6 +9322,8 @@ export default function PartySupplyApp() {
         const title = String(draft.title || '').trim();
         const category = String(draft.category || '').trim();
         const barcode = String(draft.barcode || '').trim();
+        const sourceCode = String(draft.sourceCode || barcode || '').trim();
+        const sourceDescription = String(draft.sourceDescription || title || '').trim();
         const stockDelta = Number(draft.stock || 0);
         const purchasePrice = Number(draft.purchasePrice || 0);
         const price = Number(draft.price || 0);
@@ -9245,6 +9350,14 @@ export default function PartySupplyApp() {
           image_thumb: '',
           product_type: 'quantity',
           expiration_date: null,
+          supplier_links: upsertExcelImportAlias(
+            {},
+            {
+              code: sourceCode,
+              description: sourceDescription,
+              rowNumber: draft.sourceRowNumber || null,
+            },
+          ),
         };
         const { data } = await insertWithSchemaFallback('products', payload, CLOUD_SELECTS.products);
         const product = mapInventoryRecords([data])[0];
@@ -9313,10 +9426,29 @@ export default function PartySupplyApp() {
         const currentCost = Number(product.purchasePrice || 0);
         const currentPrice = Number(product.price || 0);
         const stockDelta = row.approvals?.stock ? Number(row.quantity || 0) : 0;
+        const currentSupplierLinks = getProductSupplierLinks(product);
+        let nextSupplierLinks = currentSupplierLinks;
 
         if (row.approvals?.cost) payload.purchasePrice = Number(row.after?.cost || currentCost);
         if (row.approvals?.price) payload.price = Number(row.after?.price || currentPrice);
         if (row.shouldAssignBarcode && row.importedCode) payload.barcode = String(row.importedCode);
+
+        if (row.shouldSaveExcelLink && row.excelLink) {
+          nextSupplierLinks = upsertExcelImportAlias(nextSupplierLinks, row.excelLink);
+          payload.supplier_links = nextSupplierLinks;
+        }
+
+        if (stockDelta !== 0) {
+          const lifecycle = buildStockLifecyclePayload(
+            { ...product, supplierLinks: nextSupplierLinks, supplier_links: nextSupplierLinks },
+            stockDelta,
+          );
+          nextSupplierLinks = lifecycle.supplierLinks;
+          payload.supplier_links = nextSupplierLinks;
+          if (lifecycle.payload.is_active !== undefined) {
+            payload.is_active = lifecycle.payload.is_active;
+          }
+        }
 
         let clearedProduct = null;
         let clearedProductBefore = null;
@@ -9370,6 +9502,8 @@ export default function PartySupplyApp() {
             purchasePrice: currentCost,
             price: currentPrice,
             barcode: product.barcode || '',
+            supplierLinks: currentSupplierLinks,
+            isActive: getProductActiveState(product),
           },
           source: row,
         };
@@ -9394,6 +9528,7 @@ export default function PartySupplyApp() {
           manualAssigned: update.source.manualAssigned,
           isAssociated: update.source.isAssociated,
           shouldAssignBarcode: update.source.shouldAssignBarcode,
+          excelLinkSaved: Boolean(update.source.shouldSaveExcelLink),
           approvals: update.source.approvals,
           importedQuantity: update.source.importedQuantity,
           multiplier: update.source.multiplier,
@@ -9408,6 +9543,8 @@ export default function PartySupplyApp() {
             purchasePrice: update.product.purchasePrice,
             price: update.product.price,
             barcode: update.product.barcode || '',
+            supplierLinks: getProductSupplierLinks(update.product),
+            isActive: getProductActiveState(update.product),
           },
           changes: [
             update.source.approvals?.stock && {
@@ -9432,6 +9569,11 @@ export default function PartySupplyApp() {
               old: update.before.barcode || 'Sin codigo',
               new: update.product.barcode || 'Sin codigo',
             },
+            update.source.shouldSaveExcelLink && {
+              field: 'Vinculo Excel',
+              old: 'Sin referencia',
+              new: update.source.importedCode || update.source.importedDescription || 'Referencia guardada',
+            },
           ].filter(Boolean),
         })),
       }, 'Productos Avanzado');
@@ -9451,6 +9593,8 @@ export default function PartySupplyApp() {
             purchasePrice: update.product.purchasePrice,
             price: update.product.price,
             barcode: update.product.barcode || '',
+            supplierLinks: getProductSupplierLinks(update.product),
+            isActive: getProductActiveState(update.product),
           },
           clearedBarcodeOwner: update.clearedProductBefore ? {
             id: update.clearedProductBefore.id,
@@ -9507,6 +9651,8 @@ export default function PartySupplyApp() {
           price: Number(before.price || 0),
           barcode: before.barcode || null,
         };
+        if (before.supplierLinks) restorePayload.supplier_links = before.supplierLinks;
+        if (before.isActive !== undefined) restorePayload.is_active = before.isActive !== false;
 
         const { data } = await updateWithSchemaFallback('products', product.id, restorePayload, CLOUD_SELECTS.products);
         restoredProducts.push(mapInventoryRecords([data || { ...product, ...restorePayload }])[0]);
@@ -9549,6 +9695,41 @@ export default function PartySupplyApp() {
       console.error('Error deshaciendo importacion desde Excel:', error);
       Swal.fire('Error', error?.message || 'No se pudo deshacer la importacion.', 'error');
       return { undoneRowIds: [] };
+    }
+  };
+
+  const handleSearchInactiveInventoryProducts = async (query = '') => {
+    const search = String(query || '').trim().toLowerCase();
+    const words = search.split(/\s+/).filter(Boolean);
+    if (words.length === 0 || isLocalDemoMode()) return [];
+
+    try {
+      const result = await runSelectWithSchemaFallback(
+        (selectColumns) =>
+          supabase
+            .from('products')
+            .select(selectColumns)
+            .eq('is_active', false)
+            .order('title')
+            .limit(300),
+        CLOUD_SELECTS.products,
+      );
+
+      if (result.error) {
+        const missingColumn = extractSchemaMissingColumn(result.error);
+        if (missingColumn === 'is_active') return [];
+        throw result.error;
+      }
+
+      return mapInventoryRecords(result.data || []).filter((product) => {
+        const haystack = `${product.id} ${product.title || ''} ${product.barcode || ''} ${product.category || ''}`.toLowerCase();
+        return words.every((word) => haystack.includes(word));
+      });
+    } catch (error) {
+      const missingColumn = extractSchemaMissingColumn(error);
+      if (missingColumn === 'is_active') return [];
+      console.warn('No se pudieron buscar productos inhabilitados:', error);
+      return [];
     }
   };
 
@@ -9798,6 +9979,7 @@ export default function PartySupplyApp() {
       const finalStock = stockDelta !== 0
         ? await applyProductStockDeltaCloud(product, stockDelta)
         : before.stock;
+      if (stockDelta !== 0) void syncStockLifecycleForDeltas({ [product.id]: stockDelta });
 
       setInventory(inventory.map(p => p.id === product.id ? { ...p, price: finalPrice, purchasePrice: finalCost, stock: finalStock } : p));
       addLog('Edicion Rapida Productos Avanzado', {
@@ -9861,6 +10043,12 @@ export default function PartySupplyApp() {
       });
 
       const results = await Promise.all(promises);
+      const lifecycleDeltas = results.reduce((acc, result) => {
+        const delta = Number(result.after?.stock || 0) - Number(result.before?.stock || 0);
+        if (delta !== 0) acc[String(result.id)] = delta;
+        return acc;
+      }, {});
+      void syncStockLifecycleForDeltas(lifecycleDeltas);
 
       setInventory(prev => prev.map(p => {
         const updated = results.find(r => r.id === p.id);
@@ -10176,6 +10364,7 @@ export default function PartySupplyApp() {
             return delta ? { ...product, stock: Number(product.stock || 0) + Number(delta || 0) } : product;
           })
         );
+        void syncStockLifecycleForDeltas(checkoutStockDelta, { trackDepletion: true });
       } else {
         const { data: insertedSale, error: saleErr } = await insertWithSchemaFallback('sales', salePayload, 'id');
         if (saleErr) throw saleErr;
@@ -10185,7 +10374,7 @@ export default function PartySupplyApp() {
           throw new Error(`Supabase rechaz\u00f3 los productos de la venta: ${saleItemsErr.message}`);
         });
 
-        const stockPromise = applySaleStockDelta(checkoutStockDelta).then(({ stockChanges, stockIssues: stockApplyIssues }) => {
+        const stockPromise = applySaleStockDelta(checkoutStockDelta, { trackDepletion: true }).then(({ stockChanges, stockIssues: stockApplyIssues }) => {
           if (stockApplyIssues.length > 0) {
             throw new Error(`Stock insuficiente: ${stockApplyIssues.join(', ')}`);
           }
@@ -10414,6 +10603,7 @@ export default function PartySupplyApp() {
             return delta ? { ...product, stock: Number(product.stock || 0) + Number(delta || 0) } : product;
           })
         );
+        void syncStockLifecycleForDeltas(refundStockDelta);
       } else {
         const stockResult = await applySaleStockDelta(refundStockDelta);
         restoredStockChanges = stockResult.stockChanges;
@@ -10640,6 +10830,7 @@ export default function PartySupplyApp() {
             return delta ? { ...product, stock: Number(product.stock || 0) + Number(delta || 0) } : product;
           })
         );
+        void syncStockLifecycleForDeltas(restoreStockDelta, { trackDepletion: true });
       } else {
         const { data: insertedSale } = await insertWithSchemaFallback('sales', salePayload, 'id');
         newSale = insertedSale;
@@ -10649,7 +10840,7 @@ export default function PartySupplyApp() {
             await insertRowsWithSchemaFallback('sale_items', itemsPayload);
         }
 
-        const stockResult = await applySaleStockDelta(restoreStockDelta);
+        const stockResult = await applySaleStockDelta(restoreStockDelta, { trackDepletion: true });
         stockChanges = stockResult.stockChanges;
         if (stockResult.stockIssues.length > 0) {
           throw new Error(`Stock insuficiente: ${stockResult.stockIssues.join(', ')}`);
@@ -10988,6 +11179,7 @@ export default function PartySupplyApp() {
             return delta ? { ...product, stock: Number(product.stock || 0) + Number(delta || 0) } : product;
           })
         );
+        void syncStockLifecycleForDeltas(stockDeltaByProduct, { trackDepletion: true });
       } else {
         await updateWithSchemaFallback('sales', editingTransaction.id, salePatch, 'id');
 
@@ -11000,7 +11192,7 @@ export default function PartySupplyApp() {
           throw new Error("Supabase rechazó los productos: " + insertErr.message);
         }
 
-        const stockResult = await applySaleStockDelta(stockDeltaByProduct);
+        const stockResult = await applySaleStockDelta(stockDeltaByProduct, { trackDepletion: true });
         stockChanges = stockResult.stockChanges;
         if (stockResult.stockIssues.length > 0) {
           throw new Error(`Stock insuficiente para guardar la modificacion: ${stockResult.stockIssues.join(', ')}`);
@@ -11756,7 +11948,7 @@ export default function PartySupplyApp() {
                 />
               </PersistentTabPanel>
             )}
-            {canAccessTab(currentUser, 'inventory') && <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={handleEditProductRequest} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} closeDetailsToken={inventoryPanelCloseToken} navigationRequest={inventoryNavigationRequest} onProductDetailRequest={handleProductDetailRequest} /></PersistentTabPanel>}
+            {canAccessTab(currentUser, 'inventory') && <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={handleEditProductRequest} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} closeDetailsToken={inventoryPanelCloseToken} navigationRequest={inventoryNavigationRequest} onProductDetailRequest={handleProductDetailRequest} onSearchInactiveProducts={handleSearchInactiveInventoryProducts} /></PersistentTabPanel>}
             <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{canManageRegister ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">Necesitas permiso para abrir la caja y realizar ventas.</p>)}</div>) : (<POSView inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} onUpdateClient={handleUpdateMemberWithLog} offers={offers} currentUser={currentUser} userCatalog={userCatalog} />)}</PersistentTabPanel>
             <PersistentTabPanel tab="clients" activeTab={activeTab} className="h-full min-h-0"><ClientsView members={members} addMember={handleAddMemberWithLog} updateMember={handleUpdateMemberWithLog} deleteMember={handleDeleteMemberWithLog} currentUser={currentUser} userCatalog={userCatalog} onViewTicket={handleViewTicket} onEditTransaction={handleEditTransactionRequest} onDeleteTransaction={handleDeleteTransaction} transactions={transactions} checkExpirations={handleCheckMemberPointExpirations} /></PersistentTabPanel>
             {canViewAgenda && (

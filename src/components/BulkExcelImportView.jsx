@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import AsyncActionButton from './AsyncActionButton';
 import { FancyPrice } from './FancyPrice';
+import { getExcelImportAliases, productMatchesExcelAlias } from '../utils/productLifecycle';
 
 const REQUIRED_COLUMNS = ['codigo', 'descripcion', 'cantidad', 'precio', 'descuento', 'costo', 'venta'];
 const FIELD_KEYS = ['stock', 'cost', 'price'];
@@ -134,8 +135,12 @@ const buildImportEntry = (row, rowNumber) => {
     lotSalePrice,
     cost,
     costInput: cost ? String(cost) : '',
+    originalCost: cost,
+    costEdited: false,
     salePrice,
     salePriceInput: salePrice ? String(salePrice) : '',
+    originalSalePrice: salePrice,
+    salePriceEdited: false,
   };
 };
 
@@ -212,7 +217,13 @@ const getQuantityBalanceMeta = (remainingQuantity) => {
   return { label: `Faltan ${remainingQuantity.toLocaleString('es-AR')}`, tone: 'amber' };
 };
 
-const buildReviewRow = ({ entry, product = null, duplicateOptions = null, duplicateResolved = false }, index) => {
+const buildReviewRow = ({
+  entry,
+  product = null,
+  duplicateOptions = null,
+  duplicateResolved = false,
+  linkedByExcelAlias = false,
+}, index) => {
   const errors = getRowBaseErrors(entry, product);
   if (duplicateOptions && !duplicateResolved) errors.push('Duplicado sin resolver');
   const hasProduct = Boolean(product);
@@ -227,6 +238,8 @@ const buildReviewRow = ({ entry, product = null, duplicateOptions = null, duplic
     entry,
     product,
     manualAssigned: false,
+    linkedByExcelAlias,
+    createdFromExcel: false,
     isAssociated: false,
     sourceRowId: null,
     duplicateOptions,
@@ -242,9 +255,11 @@ const buildReviewRow = ({ entry, product = null, duplicateOptions = null, duplic
 
 const getRowStatus = (row) => {
   if (!row.product) return { label: 'Sin asignar', tone: 'amber' };
-  if (row.errors.length > 0) return { label: 'Revisar', tone: 'red' };
   const selectedCount = FIELD_KEYS.filter((field) => row.approvals[field]).length;
+  if (hasBlockingErrorsForApply(row)) return { label: 'Revisar', tone: 'red' };
   if (selectedCount === 0 && row.applied) return { label: 'Aplicado', tone: 'green' };
+  if (selectedCount === 0 && shouldSaveExcelLinkForRow(row)) return { label: 'Vincular', tone: 'blue' };
+  if (row.errors.length > 0 && selectedCount === 0) return { label: 'Con avisos', tone: 'amber' };
   if (selectedCount === 0 && !row.hasChanges) return { label: 'Sin cambios', tone: 'slate' };
   if (selectedCount === 0) return { label: 'Con cambios', tone: 'blue' };
   if (selectedCount < FIELD_KEYS.length) return { label: 'Parcial', tone: 'violet' };
@@ -261,10 +276,40 @@ const isFieldEligible = (row, field) => {
 
 const hasSelectedFieldChange = (row) => FIELD_KEYS.some((field) => row.approvals[field] && isFieldEligible(row, field));
 
+const isFieldInvalidForRow = (row, field) => {
+  const errors = row?.errors || [];
+  if (field === 'stock') {
+    return errors.includes('Cantidad vacia o cero') || errors.includes('Multiplicador invalido');
+  }
+  if (field === 'cost') {
+    return errors.includes('Costo vacio o cero') || errors.includes('Venta menor al costo');
+  }
+  if (field === 'price') {
+    return errors.includes('Venta vacia o cero') || errors.includes('Venta menor al costo');
+  }
+  return false;
+};
+
+const hasBlockingErrorsForApply = (row) => {
+  if (!row) return true;
+  if (row.duplicateOptions && !row.duplicateResolved) return true;
+  return FIELD_KEYS.some((field) => row.approvals[field] && isFieldInvalidForRow(row, field));
+};
+
+const hasExcelLinkData = (row) =>
+  Boolean(normalizeCode(row?.entry?.code) || String(row?.entry?.description || '').trim());
+
+const shouldSaveExcelLinkForRow = (row) =>
+  Boolean(
+      row?.product &&
+      hasExcelLinkData(row) &&
+      (row.manualAssigned || row.createdFromExcel || row.linkedByExcelAlias),
+  );
+
 const hasBarcodeAssignmentChange = (row) =>
   Boolean(
     row.product &&
-      row.errors.length === 0 &&
+      !hasBlockingErrorsForApply(row) &&
       row.manualAssigned &&
       !row.isAssociated &&
       normalizeCode(row.entry.code) &&
@@ -273,7 +318,11 @@ const hasBarcodeAssignmentChange = (row) =>
   );
 
 const isRowApplicable = (row) =>
-  Boolean(row.product && row.errors.length === 0 && (hasSelectedFieldChange(row) || hasBarcodeAssignmentChange(row)));
+  Boolean(
+    row.product &&
+      !hasBlockingErrorsForApply(row) &&
+      (hasSelectedFieldChange(row) || hasBarcodeAssignmentChange(row) || shouldSaveExcelLinkForRow(row)),
+  );
 
 const getRowErrorHints = (errors = []) =>
   errors.map((error) => {
@@ -369,6 +418,18 @@ export default function BulkExcelImportView({
     return map;
   }, [inventory]);
 
+  const findProductForEntry = (entry) => {
+    const code = normalizeCode(entry?.code);
+    if (code && barcodeLookup.has(code)) {
+      return { product: barcodeLookup.get(code), linkedByExcelAlias: false };
+    }
+
+    const linkedProduct = (inventory || []).find((product) => productMatchesExcelAlias(product, entry));
+    return linkedProduct
+      ? { product: linkedProduct, linkedByExcelAlias: true }
+      : { product: null, linkedByExcelAlias: false };
+  };
+
   const availableCategories = useMemo(
     () => [...new Set((categories || []).map((category) => String(category || '').trim()).filter(Boolean))],
     [categories],
@@ -404,18 +465,23 @@ export default function BulkExcelImportView({
       (category) => category.toLowerCase() === importedCategory.toLowerCase(),
     );
     const searchedTitle = String(row.assignmentQuery || '').trim();
+    const draftBarcode = row.isAssociated ? '' : normalizeCode(row.entry.code);
+    const draftTitle = searchedTitle || String(row.entry.description || '').trim();
     return {
       rowId: row.id,
-      title: searchedTitle || String(row.entry.description || '').trim(),
-      barcode: row.isAssociated ? '' : normalizeCode(row.entry.code),
+      title: draftTitle,
+      barcode: draftBarcode,
       category: matchedCategory || '',
       stock: 0,
       purchasePrice: Number(row.entry.cost || 0),
       price: Number(row.entry.salePrice || 0),
       duplicate: getDuplicateCandidate({
-        ...row.entry,
-        description: searchedTitle || row.entry.description,
+        code: draftBarcode,
+        description: draftTitle,
       }),
+      sourceCode: normalizeCode(row.entry.code),
+      sourceDescription: String(row.entry.description || '').trim(),
+      sourceRowNumber: row.entry.rowNumber,
       error: '',
     };
   };
@@ -436,7 +502,7 @@ export default function BulkExcelImportView({
   };
 
   const summary = useMemo(() => {
-    const blocked = rows.filter((row) => row.errors.length > 0).length;
+    const blocked = rows.filter((row) => hasBlockingErrorsForApply(row)).length;
     const unassigned = rows.filter((row) => !row.product).length;
     const approved = rows.filter((row) => isRowApplicable(row)).length;
     const duplicates = rows.filter((row) => row.duplicateOptions && !row.duplicateResolved).length;
@@ -472,13 +538,13 @@ export default function BulkExcelImportView({
   const resultFilterCounts = useMemo(() => ({
     all: primaryRows.length,
     unassigned: primaryRows.filter((row) => !row.product).length,
-    blocked: primaryRows.filter((row) => row.product && row.errors.length > 0).length,
+    blocked: primaryRows.filter((row) => row.product && hasBlockingErrorsForApply(row)).length,
     applied: primaryRows.filter((row) => row.applied).length,
   }), [primaryRows]);
 
   const visiblePrimaryRows = useMemo(() => {
     if (resultFilter === 'unassigned') return primaryRows.filter((row) => !row.product);
-    if (resultFilter === 'blocked') return primaryRows.filter((row) => row.product && row.errors.length > 0);
+    if (resultFilter === 'blocked') return primaryRows.filter((row) => row.product && hasBlockingErrorsForApply(row));
     if (resultFilter === 'applied') return primaryRows.filter((row) => row.applied);
     return primaryRows;
   }, [primaryRows, resultFilter]);
@@ -504,13 +570,14 @@ export default function BulkExcelImportView({
     return Object.values(groupedByCode).map((group, index) => {
       const isDuplicate = group.length > 1;
       const entry = group[0];
-      const product = entry.code ? barcodeLookup.get(entry.code) || null : null;
+      const { product, linkedByExcelAlias } = findProductForEntry(entry);
       return buildReviewRow(
         {
           entry,
           product,
           duplicateOptions: isDuplicate ? group : null,
           duplicateResolved: !isDuplicate,
+          linkedByExcelAlias,
         },
         index,
       );
@@ -555,7 +622,8 @@ export default function BulkExcelImportView({
     setRows((prev) =>
       prev.map((row, index) => {
         if (row.id !== rowId) return row;
-        const product = row.productCleared ? null : entry.code ? barcodeLookup.get(entry.code) || row.product : row.product;
+        const found = row.productCleared ? { product: null, linkedByExcelAlias: false } : findProductForEntry(entry);
+        const product = found.product || row.product;
         return {
           ...buildReviewRow(
             {
@@ -563,6 +631,7 @@ export default function BulkExcelImportView({
               product,
               duplicateOptions: row.duplicateOptions,
               duplicateResolved,
+              linkedByExcelAlias: found.linkedByExcelAlias || row.linkedByExcelAlias,
             },
             index,
           ),
@@ -570,6 +639,8 @@ export default function BulkExcelImportView({
           assignmentQuery: row.assignmentQuery,
           changeProductMode: row.changeProductMode,
           manualAssigned: row.manualAssigned,
+          linkedByExcelAlias: found.linkedByExcelAlias || row.linkedByExcelAlias,
+          createdFromExcel: row.createdFromExcel,
           productCleared: row.productCleared,
         };
       }),
@@ -586,6 +657,8 @@ export default function BulkExcelImportView({
           assignmentQuery: '',
           changeProductMode: false,
           manualAssigned: true,
+          linkedByExcelAlias: false,
+          createdFromExcel: row.createdFromExcel,
           productCleared: false,
           isAssociated: row.isAssociated,
           sourceRowId: row.sourceRowId,
@@ -616,6 +689,8 @@ export default function BulkExcelImportView({
           assignmentQuery: '',
           changeProductMode: true,
           manualAssigned: false,
+          linkedByExcelAlias: false,
+          createdFromExcel: false,
           productCleared: true,
           isAssociated: row.isAssociated,
           sourceRowId: row.sourceRowId,
@@ -651,8 +726,12 @@ export default function BulkExcelImportView({
               multiplierInput: String(safeMultiplier),
               cost: safeCost,
               costInput: safeCost ? String(safeCost) : '',
+              originalCost: sourceRow.entry.originalCost ?? safeCost,
+              costEdited: false,
               salePrice: safeSalePrice,
               salePriceInput: safeSalePrice ? String(safeSalePrice) : '',
+              originalSalePrice: sourceRow.entry.originalSalePrice ?? safeSalePrice,
+              salePriceEdited: false,
             },
             product: null,
             duplicateOptions: null,
@@ -709,11 +788,19 @@ export default function BulkExcelImportView({
         if (field === 'quantity' && row.entry.originalQuantity == null) {
           nextEntry.originalQuantity = Number(row.entry.quantity || 0);
         }
+        if (field === 'cost') {
+          nextEntry.costEdited = true;
+        }
+        if (field === 'salePrice') {
+          nextEntry.salePriceEdited = true;
+        }
         if (field === 'multiplier') {
           nextEntry.cost = divideLotValue(row.entry.lotCost ?? row.entry.cost, numericValue);
           nextEntry.salePrice = divideLotValue(row.entry.lotSalePrice ?? row.entry.salePrice, numericValue);
           nextEntry.costInput = nextEntry.cost ? String(nextEntry.cost) : '';
           nextEntry.salePriceInput = nextEntry.salePrice ? String(nextEntry.salePrice) : '';
+          nextEntry.costEdited = true;
+          nextEntry.salePriceEdited = true;
         }
         const nextRow = {
           ...buildReviewRow(
@@ -722,6 +809,7 @@ export default function BulkExcelImportView({
               product: row.product,
               duplicateOptions: row.duplicateOptions,
               duplicateResolved: row.duplicateResolved,
+              linkedByExcelAlias: row.linkedByExcelAlias,
             },
             index,
           ),
@@ -729,6 +817,8 @@ export default function BulkExcelImportView({
           assignmentQuery: row.assignmentQuery,
           changeProductMode: row.changeProductMode,
           manualAssigned: row.manualAssigned,
+          linkedByExcelAlias: row.linkedByExcelAlias,
+          createdFromExcel: row.createdFromExcel,
           productCleared: row.productCleared,
           isAssociated: row.isAssociated,
           sourceRowId: row.sourceRowId,
@@ -748,7 +838,7 @@ export default function BulkExcelImportView({
   const toggleApproval = (rowId, field) => {
     setRows((prev) =>
       prev.map((row) => {
-        if (row.id !== rowId || !isFieldEligible(row, field)) return row;
+        if (row.id !== rowId || !isFieldEligible(row, field) || isFieldInvalidForRow(row, field)) return row;
         return { ...row, approvals: { ...row.approvals, [field]: !row.approvals[field] } };
       }),
     );
@@ -757,7 +847,7 @@ export default function BulkExcelImportView({
   const setFieldForEligibleRows = (field, value) => {
     setRows((prev) =>
       prev.map((row) => {
-        if (!isFieldEligible(row, field)) return row;
+        if (!isFieldEligible(row, field) || isFieldInvalidForRow(row, field)) return row;
         return { ...row, approvals: { ...row.approvals, [field]: value } };
       }),
     );
@@ -824,6 +914,9 @@ export default function BulkExcelImportView({
         stock: 0,
         purchasePrice: parseNumber(draft.purchasePrice),
         price: parseNumber(draft.price),
+        sourceCode: draft.sourceCode,
+        sourceDescription: draft.sourceDescription,
+        sourceRowNumber: draft.sourceRowNumber,
       })));
       const createdByRowId = new Map(
         (result?.created || []).map((item) => [String(item.rowId), item.product]),
@@ -843,8 +936,10 @@ export default function BulkExcelImportView({
             ...row.entry,
             cost: draftCost,
             costInput: draftCost ? String(draftCost) : '',
+            originalCost: row.entry.originalCost ?? draftCost,
             salePrice: draftPrice,
             salePriceInput: draftPrice ? String(draftPrice) : '',
+            originalSalePrice: row.entry.originalSalePrice ?? draftPrice,
           };
           return {
             ...buildReviewRow({
@@ -863,6 +958,8 @@ export default function BulkExcelImportView({
             },
             applied: false,
             manualAssigned: false,
+            linkedByExcelAlias: false,
+            createdFromExcel: true,
             changeProductMode: false,
             productCleared: false,
             isAssociated: row.isAssociated,
@@ -904,7 +1001,10 @@ export default function BulkExcelImportView({
     const words = query.split(/\s+/);
     return (inventory || [])
       .filter((product) => {
-        const haystack = `${product.id} ${product.title || ''} ${product.barcode || ''} ${product.category || ''}`.toLowerCase();
+        const aliasText = getExcelImportAliases(product)
+          .map((alias) => `${alias.code || ''} ${alias.description || ''}`)
+          .join(' ');
+        const haystack = `${product.id} ${product.title || ''} ${product.barcode || ''} ${product.category || ''} ${aliasText}`.toLowerCase();
         return words.every((word) => haystack.includes(word));
       })
       .slice(0, 8);
@@ -934,6 +1034,12 @@ export default function BulkExcelImportView({
         manualAssigned: row.manualAssigned,
         isAssociated: row.isAssociated,
         shouldAssignBarcode: hasBarcodeAssignmentChange(row),
+        shouldSaveExcelLink: shouldSaveExcelLinkForRow(row),
+        excelLink: {
+          code: row.entry.code,
+          description: row.entry.description,
+          rowNumber: row.entry.rowNumber,
+        },
         approvals: row.approvals,
         quantity: getStockDelta(row.entry),
         importedQuantity: Number(row.entry.quantity || 0),
@@ -954,12 +1060,16 @@ export default function BulkExcelImportView({
         purchasePrice: Number(item.before?.purchasePrice ?? item.before?.cost ?? 0),
         price: Number(item.before?.price || 0),
         barcode: item.before?.barcode || '',
+        supplierLinks: item.before?.supplierLinks || {},
+        isActive: item.before?.isActive !== false,
       },
       after: {
         stock: Number(item.after?.stock || 0),
         purchasePrice: Number(item.after?.purchasePrice ?? item.after?.cost ?? 0),
         price: Number(item.after?.price || 0),
         barcode: item.after?.barcode || '',
+        supplierLinks: item.after?.supplierLinks || {},
+        isActive: item.after?.isActive !== false,
       },
       clearedBarcodeOwner: item.clearedBarcodeOwner || null,
     }));
@@ -998,6 +1108,8 @@ export default function BulkExcelImportView({
             approvals: { stock: false, cost: false, price: false },
             applied: true,
             manualAssigned: false,
+            linkedByExcelAlias: false,
+            createdFromExcel: false,
             changeProductMode: false,
             isAssociated: row.isAssociated,
             sourceRowId: row.sourceRowId,
@@ -1911,17 +2023,17 @@ export default function BulkExcelImportView({
 
       {isCreatePanelOpen && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
-          <div className="flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-300 bg-slate-50 shadow-2xl">
-            <header className="flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-3">
+          <div className="flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-600/70 bg-[#0f1e33] shadow-2xl">
+            <header className="flex items-center justify-between gap-4 border-b border-slate-600/60 bg-[#102139] px-4 py-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 text-amber-700">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-amber-300/30 bg-amber-400/10 text-amber-200">
                     <PackagePlus size={17} />
                   </span>
                   <div>
-                    <h3 className="text-sm font-black text-slate-900">Crear productos nuevos</h3>
-                    <p className="text-[10px] font-bold text-slate-500">
-                      Ajusta nombre, categoria, costo y venta antes de agregarlos al inventario.
+                    <h3 className="text-sm font-black text-slate-50">Crear productos nuevos</h3>
+                    <p className="text-[10px] font-bold text-slate-300">
+                      Completa solo lo necesario antes de agregarlos al inventario.
                     </p>
                   </div>
                 </div>
@@ -1929,23 +2041,23 @@ export default function BulkExcelImportView({
               <button
                 type="button"
                 onClick={() => setIsCreatePanelOpen(false)}
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-500/70 bg-slate-900/20 text-slate-300 transition hover:bg-slate-700/50 hover:text-white"
                 title="Cerrar"
               >
                 <X size={16} />
               </button>
             </header>
 
-            <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-900 px-4 py-2.5 text-white">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-600/60 bg-[#0b1728] px-4 py-2.5">
               <p className="text-[11px] font-bold text-slate-200">
                 {createDrafts.length === 1
                   ? 'Vas a crear 1 producto.'
                   : `Vas a crear ${createDrafts.length} productos.`}
               </p>
-              <span className={`rounded-md px-2 py-1 text-[9px] font-black uppercase ${
+              <span className={`rounded-md border px-2 py-1 text-[9px] font-black uppercase ${
                 validCreateDrafts.length === createDrafts.length
-                  ? 'bg-emerald-400/15 text-emerald-200'
-                  : 'bg-amber-400/15 text-amber-200'
+                  ? 'border-emerald-300/25 bg-emerald-400/12 text-emerald-200'
+                  : 'border-amber-300/25 bg-amber-400/12 text-amber-200'
               }`}>
                 {validCreateDrafts.length === createDrafts.length
                   ? 'Todo completo'
@@ -1961,19 +2073,20 @@ export default function BulkExcelImportView({
                   const needsCategory = !String(draft.category || '').trim();
                   const needsCost = !parseNumber(draft.purchasePrice) || parseNumber(draft.purchasePrice) <= 0;
                   const needsPrice = !parseNumber(draft.price) || parseNumber(draft.price) <= 0;
+                  const isComplete = errors.length === 0;
 
                   return (
                     <article
                       key={draft.rowId}
-                      className={`border-l-2 bg-white px-3 py-3 ${
+                      className={`rounded-lg border border-slate-600/60 border-l-2 bg-[#102139] px-3 py-3 ${
                         draft.duplicate || draft.error
-                          ? 'border-l-red-400'
+                          ? 'border-l-red-400/90'
                           : errors.length > 0
-                            ? 'border-l-amber-400'
-                            : 'border-l-emerald-400'
+                            ? 'border-l-amber-300/90'
+                            : 'border-l-emerald-300/90'
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           {needsTitle ? (
                             <CreateField
@@ -1984,34 +2097,37 @@ export default function BulkExcelImportView({
                               required
                             />
                           ) : (
-                            <p className="truncate text-[12px] font-black text-slate-900" title={draft.title}>
-                              {draft.title}
-                            </p>
+                            <div className="flex min-w-0 items-center gap-2">
+                              <p className="truncate text-[12px] font-black text-slate-50" title={draft.title}>
+                                {draft.title}
+                              </p>
+                              {isComplete && <CheckCircle2 size={13} className="shrink-0 text-emerald-300" />}
+                            </div>
                           )}
                           <p className="mt-0.5 text-[9px] font-bold text-slate-400">
                             Codigo: {draft.barcode || 'Sin codigo de barras'}
                           </p>
                         </div>
-                        <span className={`shrink-0 rounded-md px-2 py-1 text-[9px] font-black uppercase ${
-                          errors.length === 0
-                            ? 'bg-emerald-50 text-emerald-700'
-                            : 'bg-amber-50 text-amber-700'
+                        <span className={`shrink-0 rounded-md border px-2 py-1 text-[9px] font-black uppercase ${
+                          isComplete
+                            ? 'border-emerald-300/25 bg-emerald-400/12 text-emerald-200'
+                            : 'border-amber-300/25 bg-amber-400/12 text-amber-200'
                         }`}>
-                          {errors.length === 0 ? 'Completo' : 'Falta completar'}
+                          {isComplete ? 'Listo' : `${errors.length} pendiente${errors.length > 1 ? 's' : ''}`}
                         </span>
                       </div>
 
                       {draft.duplicate && (
-                        <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+                        <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-red-300/30 bg-red-400/10 px-3 py-2">
                           <div className="min-w-0">
-                            <p className="text-[9px] font-black uppercase tracking-wider text-red-600">{draft.duplicate.reason}</p>
-                            <p className="truncate text-[11px] font-black text-red-900">{draft.duplicate.product.title}</p>
-                            <p className="text-[9px] font-bold text-red-700">Codigo {draft.duplicate.product.barcode || 'sin codigo'}</p>
+                            <p className="text-[9px] font-black uppercase tracking-wider text-red-200">{draft.duplicate.reason}</p>
+                            <p className="truncate text-[11px] font-black text-red-50">{draft.duplicate.product.title}</p>
+                            <p className="text-[9px] font-bold text-red-200/80">Codigo {draft.duplicate.product.barcode || 'sin codigo'}</p>
                           </div>
                           <button
                             type="button"
                             onClick={() => linkDuplicateDraft(draft)}
-                            className="shrink-0 rounded-lg border border-red-300 bg-white px-3 py-2 text-[10px] font-black text-red-700 hover:bg-red-100"
+                            className="shrink-0 rounded-lg border border-red-300/40 bg-slate-950/25 px-3 py-2 text-[10px] font-black text-red-100 transition hover:bg-red-400/15"
                           >
                             Vincular existente
                           </button>
@@ -2019,39 +2135,28 @@ export default function BulkExcelImportView({
                       )}
 
                       {!draft.duplicate && (
-                        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(220px,1.5fr)_repeat(3,minmax(100px,0.7fr))]">
-                          {needsCategory ? (
-                            <label>
-                              <span className="mb-1 block text-[9px] font-black uppercase tracking-wider text-amber-700">
-                                Elegí una categoría para continuar
-                              </span>
-                              <select
-                                value={draft.category}
-                                onChange={(event) => updateCreateDraft(draft.rowId, 'category', event.target.value)}
-                                className="h-9 w-full rounded-lg border border-amber-300 bg-amber-50 px-2 text-[11px] font-black text-slate-900 outline-none focus:ring-2 focus:ring-amber-200"
-                              >
-                                <option value="">Elegir categoria...</option>
-                                {availableCategories.map((category) => (
-                                  <option key={category} value={category}>{category}</option>
-                                ))}
-                              </select>
-                            </label>
-                          ) : (
-                            <CreateValue label="Categoría" value={draft.category} />
-                          )}
+                        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(220px,1.45fr)_84px_minmax(112px,0.75fr)_minmax(112px,0.75fr)]">
+                          <CreateSelect
+                            label="Categoria"
+                            value={draft.category}
+                            onChange={(value) => updateCreateDraft(draft.rowId, 'category', value)}
+                            options={availableCategories}
+                            placeholder="Elegir categoria..."
+                            required={needsCategory}
+                          />
                           <CreateValue
-                            label="Stock inicial"
+                            label="Stock"
                             value="0"
                           />
                           <CreateField
-                            label="Costo final"
+                            label="Costo"
                             value={draft.purchasePrice}
                             onChange={(value) => updateCreateDraft(draft.rowId, 'purchasePrice', value)}
                             required={needsCost}
                             prefix="$"
                           />
                           <CreateField
-                            label="Venta final"
+                            label="Venta"
                             value={draft.price}
                             onChange={(value) => updateCreateDraft(draft.rowId, 'price', value)}
                             required={needsPrice}
@@ -2061,7 +2166,7 @@ export default function BulkExcelImportView({
                       )}
 
                       {(draft.error || (!draft.duplicate && errors.includes('Precio menor al costo'))) && (
-                        <p className="mt-2 rounded-md bg-red-50 px-2 py-1.5 text-[10px] font-bold text-red-700">
+                        <p className="mt-2 rounded-md border border-red-300/25 bg-red-400/10 px-2 py-1.5 text-[10px] font-bold text-red-100">
                           {draft.error || 'El precio de venta no puede ser menor al costo.'}
                         </p>
                       )}
@@ -2071,15 +2176,15 @@ export default function BulkExcelImportView({
               </div>
             </div>
 
-            <footer className="flex items-center justify-between gap-3 border-t border-slate-200 bg-white px-4 py-3">
-              <p className="text-[10px] font-bold text-slate-500">
-                Después de crearlos, podrás sumar la cantidad indicada en el Excel.
+            <footer className="flex items-center justify-between gap-3 border-t border-slate-600/60 bg-[#102139] px-4 py-3">
+              <p className="text-[10px] font-bold text-slate-300">
+                Se crean con stock 0. La cantidad del Excel se suma cuando apliques el lote.
               </p>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setIsCreatePanelOpen(false)}
-                  className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-[11px] font-black text-slate-600 hover:bg-slate-50"
+                  className="rounded-lg border border-slate-500/70 bg-slate-900/20 px-4 py-2 text-[11px] font-black text-slate-200 transition hover:bg-slate-700/50"
                 >
                   Cancelar
                 </button>
@@ -2088,7 +2193,7 @@ export default function BulkExcelImportView({
                   pending={isCreatingProducts}
                   disabled={validCreateDrafts.length === 0 || isCreatingProducts}
                   loadingLabel="Creando..."
-                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-[11px] font-black text-white hover:bg-emerald-700 disabled:opacity-40"
+                  className="inline-flex items-center gap-2 rounded-lg border border-emerald-300/25 bg-emerald-500/80 px-4 py-2 text-[11px] font-black text-white transition hover:bg-emerald-400 disabled:border-slate-600/40 disabled:bg-slate-700/45 disabled:text-slate-400"
                 >
                   <PackagePlus size={15} />
                   {validCreateDrafts.length === 0
@@ -2108,23 +2213,49 @@ export default function BulkExcelImportView({
 
 function CreateValue({ label, value, className = '' }) {
   return (
-    <div className={`rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 ${className}`}>
-      <p className="text-[8px] font-black uppercase tracking-wider text-slate-400">{label}</p>
-      <p className="mt-0.5 truncate text-[11px] font-black text-slate-800">{value}</p>
-    </div>
+    <label className={className}>
+      <span className="mb-1 block text-[9px] font-black uppercase tracking-wider text-slate-300">{label}</span>
+      <span className="flex h-9 w-full items-center rounded-lg border border-slate-500/45 bg-slate-950/20 px-2">
+        <span className="truncate text-[11px] font-black text-slate-100">{value}</span>
+      </span>
+    </label>
+  );
+}
+
+function CreateSelect({ label, value, onChange, options = [], placeholder = '', required = false }) {
+  return (
+    <label>
+      <span className={`mb-1 block text-[9px] font-black uppercase tracking-wider ${required ? 'text-amber-200' : 'text-slate-300'}`}>
+        {label}{required ? ' requerida' : ''}
+      </span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className={`h-9 w-full rounded-lg border px-2 text-[11px] font-black text-slate-50 outline-none transition [&>option]:bg-[#0f1e33] [&>option]:text-slate-50 ${
+          required
+            ? 'border-amber-300/35 bg-amber-400/10 focus:border-amber-200 focus:ring-2 focus:ring-amber-300/15'
+            : 'border-slate-500/45 bg-slate-950/20 focus:border-sky-300/70 focus:ring-2 focus:ring-sky-300/15'
+        }`}
+      >
+        <option value="">{placeholder}</option>
+        {options.map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+    </label>
   );
 }
 
 function CreateField({ label, value, onChange, type = 'text', placeholder = '', required = false, prefix = '' }) {
   return (
     <label>
-      <span className={`mb-1 block text-[9px] font-black uppercase tracking-wider ${required ? 'text-amber-700' : 'text-slate-500'}`}>
+      <span className={`mb-1 block text-[9px] font-black uppercase tracking-wider ${required ? 'text-amber-200' : 'text-slate-300'}`}>
         {label}{required ? ' requerido' : ''}
       </span>
       <span className={`flex h-9 w-full items-center rounded-lg border px-2 ${
         required
-          ? 'border-amber-300 bg-amber-50 focus-within:ring-2 focus-within:ring-amber-200'
-          : 'border-slate-300 bg-white focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100'
+          ? 'border-amber-300/35 bg-amber-400/10 focus-within:border-amber-200 focus-within:ring-2 focus-within:ring-amber-300/15'
+          : 'border-slate-500/45 bg-slate-950/20 focus-within:border-sky-300/70 focus-within:ring-2 focus-within:ring-sky-300/15'
       }`}>
         {prefix && <span className="mr-1 text-[10px] font-black text-slate-400">{prefix}</span>}
         <input
@@ -2135,7 +2266,7 @@ function CreateField({ label, value, onChange, type = 'text', placeholder = '', 
           value={value ?? ''}
           placeholder={placeholder}
           onChange={(event) => onChange(event.target.value)}
-          className="min-w-0 flex-1 bg-transparent text-[11px] font-black tabular-nums text-slate-900 outline-none"
+          className="min-w-0 flex-1 bg-transparent text-[11px] font-black tabular-nums text-slate-50 outline-none placeholder:text-slate-500"
         />
       </span>
     </label>
@@ -2438,8 +2569,14 @@ function buildCompactChangeSummaries(row) {
   const hasCostError = hasError('Costo vacio o cero');
   const hasPriceError = hasError('Venta vacia o cero');
   const hasProfitError = hasError('Venta menor al costo');
+  const stockEligible = isFieldEligible(row, 'stock');
+  const costEligible = isFieldEligible(row, 'cost');
+  const priceEligible = isFieldEligible(row, 'price');
+  const showStock = stockEligible || hasQuantityError || hasMultiplierError || Number(row.entry.originalQuantity || row.entry.quantity || 0) > 0;
+  const showCost = costEligible || hasCostError || hasProfitError || row.entry.costEdited || Number(row.entry.originalCost ?? row.entry.cost ?? 0) > 0;
+  const showPrice = priceEligible || hasPriceError || hasProfitError || row.entry.salePriceEdited || Number(row.entry.originalSalePrice ?? row.entry.salePrice ?? 0) > 0;
 
-  if (isFieldEligible(row, 'stock') || hasQuantityError || hasMultiplierError) {
+  if (showStock) {
     summaries.push({
       rowId: row.id,
       row,
@@ -2448,6 +2585,7 @@ function buildCompactChangeSummaries(row) {
       label: 'Stock',
       tone: 'blue',
       checked: Boolean(row.approvals.stock),
+      eligible: stockEligible,
       invalid: hasQuantityError || hasMultiplierError,
       quantity: row.entry.quantity,
       multiplier: row.entry.multiplierInput ?? row.entry.multiplier,
@@ -2455,11 +2593,11 @@ function buildCompactChangeSummaries(row) {
       stockDelta,
       before: `${Number(row.product.stock || 0).toLocaleString('es-AR')} ${unit}`,
       after: `${(Number(row.product.stock || 0) + stockDelta).toLocaleString('es-AR')} ${unit}`,
-      delta: `+${stockDelta.toLocaleString('es-AR')} ${unit}`,
+      delta: stockEligible ? `+${stockDelta.toLocaleString('es-AR')} ${unit}` : 'Sin cambio',
     });
   }
 
-  if (isFieldEligible(row, 'cost') || hasCostError || hasProfitError) {
+  if (showCost) {
     summaries.push({
       rowId: row.id,
       row,
@@ -2468,15 +2606,16 @@ function buildCompactChangeSummaries(row) {
       label: 'Costo',
       tone: 'violet',
       checked: Boolean(row.approvals.cost),
+      eligible: costEligible,
       invalid: hasCostError || hasProfitError,
       editValue: row.entry.costInput ?? row.entry.cost,
       before: `$${Number(row.product.purchasePrice || 0).toLocaleString('es-AR')}`,
       after: `$${Number(row.entry.cost || 0).toLocaleString('es-AR')}`,
-      delta: formatDiffPercent(row.product?.purchasePrice, row.entry.cost),
+      delta: costEligible ? formatDiffPercent(row.product?.purchasePrice, row.entry.cost) : 'Sin cambio',
     });
   }
 
-  if (isFieldEligible(row, 'price') || hasPriceError || hasProfitError) {
+  if (showPrice) {
     summaries.push({
       rowId: row.id,
       row,
@@ -2485,11 +2624,12 @@ function buildCompactChangeSummaries(row) {
       label: 'Venta',
       tone: 'emerald',
       checked: Boolean(row.approvals.price),
+      eligible: priceEligible,
       invalid: hasPriceError || hasProfitError,
       editValue: row.entry.salePriceInput ?? row.entry.salePrice,
       before: `$${Number(row.product.price || 0).toLocaleString('es-AR')}`,
       after: `$${Number(row.entry.salePrice || 0).toLocaleString('es-AR')}`,
-      delta: formatDiffPercent(row.product?.price, row.entry.salePrice),
+      delta: priceEligible ? formatDiffPercent(row.product?.price, row.entry.salePrice) : 'Sin cambio',
     });
   }
 
@@ -2544,7 +2684,14 @@ function CompactErrorHelp({ errors }) {
 }
 
 function CompactChangeItem({ item, editable, onToggle, onUpdate }) {
-  const canToggle = Boolean(editable && onToggle);
+  const canToggle = Boolean(editable && onToggle && item.eligible !== false && !item.invalid);
+  const confirmLabel = item.invalid
+    ? 'Revisar'
+    : item.eligible === false
+      ? 'Sin cambio'
+      : item.checked
+        ? 'Confirmado'
+        : 'Confirmar';
 
   const handleToggle = () => {
     if (!canToggle) return;
@@ -2613,15 +2760,15 @@ function CompactChangeItem({ item, editable, onToggle, onUpdate }) {
       aria-pressed={canToggle ? item.checked : undefined}
       onClick={handleToggle}
       onKeyDown={handleToggleKeyDown}
-      title={canToggle ? `${item.checked ? 'Quitar confirmacion de' : 'Confirmar'} ${item.label}` : item.label}
-      className={`excel-compact-change excel-compact-change-${item.tone} ${item.checked ? 'excel-compact-change-on' : ''} ${editable ? 'excel-compact-change-editable' : ''} ${canToggle ? 'excel-compact-change-toggleable' : ''} ${item.invalid ? 'excel-compact-change-invalid' : ''}`}
+      title={canToggle ? `${item.checked ? 'Quitar confirmacion de' : 'Confirmar'} ${item.label}` : `${item.label}: ${confirmLabel}`}
+      className={`excel-compact-change excel-compact-change-${item.tone} ${item.checked ? 'excel-compact-change-on' : ''} ${editable ? 'excel-compact-change-editable' : ''} ${canToggle ? 'excel-compact-change-toggleable' : ''} ${item.invalid ? 'excel-compact-change-invalid' : ''} ${item.eligible === false ? 'excel-compact-change-noop' : ''}`}
     >
       <span className="excel-compact-change-head">
         <span className="excel-compact-mark">
           <span className="excel-compact-change-label">{item.label}</span>
-          {canToggle && (
+          {editable && (
             <span className="excel-compact-confirm-badge">
-              {item.checked ? 'Confirmado' : 'Confirmar'}
+              {confirmLabel}
             </span>
           )}
         </span>

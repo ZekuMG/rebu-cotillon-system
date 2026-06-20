@@ -6456,6 +6456,10 @@ code {
   background: rgba(255, 251, 235, 0.78);
 }
 
+.bulk-excel-import .excel-compact-change-noop {
+  opacity: 0.78;
+}
+
 .bulk-excel-import .excel-compact-mark {
   align-items: center;
   border: 0;

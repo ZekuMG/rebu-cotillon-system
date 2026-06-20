@@ -4,6 +4,7 @@ import {
   getPrimaryPaymentInfo,
   normalizePaymentBreakdown,
 } from './paymentBreakdown';
+import { getProductActiveState } from './productLifecycle';
 
 const MODIFIED_SALE_ACTIONS = new Set([
   'Venta Modificada',
@@ -58,6 +59,7 @@ export const mapInventoryRecords = (products = []) =>
   products.map((product) => ({
     ...product,
     imageThumb: product.image_thumb || product.imageThumb || '',
+    isActive: getProductActiveState(product),
     supplierLinks: product.supplier_links && typeof product.supplier_links === 'object'
       ? product.supplier_links
       : product.supplierLinks && typeof product.supplierLinks === 'object'

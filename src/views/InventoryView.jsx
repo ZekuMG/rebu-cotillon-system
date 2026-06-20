@@ -27,6 +27,7 @@ import { formatStock, formatNumber } from '../utils/helpers';
 import { hasPermission } from '../utils/userPermissions';
 import { FancyPrice } from '../components/FancyPrice';
 import { getProductImageUrl } from '../utils/productImages';
+import { getProductActiveState } from '../utils/productLifecycle';
 
 const INVENTORY_BATCH_SIZE = 50;
 const REBU_WIDE_QUERY = '(min-width: 1920px)';
@@ -87,6 +88,7 @@ export default function InventoryView({
   closeDetailsToken,
   navigationRequest,
   onProductDetailRequest,
+  onSearchInactiveProducts,
 }) {
   const [selectedProduct, setSelectedProduct] = useState(null); 
   const lastNavigationTokenRef = useRef(null);
@@ -97,6 +99,8 @@ export default function InventoryView({
   const [sortFilterSearch, setSortFilterSearch] = useState('');
   const [expandedCategoryProductId, setExpandedCategoryProductId] = useState(null);
   const [isWideLayout, setIsWideLayout] = useState(isWideResolution);
+  const [inactiveSearchResults, setInactiveSearchResults] = useState([]);
+  const [inactiveSearchLoading, setInactiveSearchLoading] = useState(false);
   const maxGridColumns = isWideLayout ? 10 : 8;
   const canCreateProducts = hasPermission(currentUser, 'inventory.create');
   const canEditProducts = hasPermission(currentUser, 'inventory.edit');
@@ -115,6 +119,34 @@ export default function InventoryView({
   useEffect(() => {
     setVisibleCount(INVENTORY_BATCH_SIZE);
   }, [inventorySearch]);
+
+  useEffect(() => {
+    const query = String(inventorySearch || '').trim();
+    if (!onSearchInactiveProducts || query.length < 2) {
+      setInactiveSearchResults([]);
+      setInactiveSearchLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setInactiveSearchLoading(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const results = await onSearchInactiveProducts(query);
+        if (!cancelled) setInactiveSearchResults(Array.isArray(results) ? results : []);
+      } catch (error) {
+        console.warn('No se pudieron buscar productos inhabilitados:', error);
+        if (!cancelled) setInactiveSearchResults([]);
+      } finally {
+        if (!cancelled) setInactiveSearchLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [inventorySearch, onSearchInactiveProducts]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -172,10 +204,19 @@ export default function InventoryView({
     lastNavigationTokenRef.current = navigationRequest.token;
   }, [navigationRequest, inventory]);
 
-  const filteredInventory = (inventory || []).filter((item) => {
-    const searchString = (inventorySearch || '').toLowerCase().trim();
-    const searchWords = searchString ? searchString.split(/\s+/) : [];
+  const searchString = (inventorySearch || '').toLowerCase().trim();
+  const searchWords = searchString ? searchString.split(/\s+/) : [];
+  const activeInventory = (inventory || []).filter((item) => getProductActiveState(item));
+  const inactiveSearchInventory = searchWords.length > 0
+    ? (inactiveSearchResults || []).filter((item) => !getProductActiveState(item))
+    : [];
+  const inactiveIds = new Set(activeInventory.map((item) => String(item.id)));
+  const inventoryForSearch = [
+    ...activeInventory,
+    ...inactiveSearchInventory.filter((item) => !inactiveIds.has(String(item.id))),
+  ];
 
+  const filteredInventory = inventoryForSearch.filter((item) => {
     const matchesSearch = searchWords.length === 0 || searchWords.every(word =>
       (item.title || '').toLowerCase().includes(word) ||
       String(item.id).toLowerCase().includes(word) ||
@@ -239,7 +280,7 @@ export default function InventoryView({
   };
 
   const displayedInventory = sortedInventory.slice(0, visibleCount);
-  const totalInventoryCount = (inventory || []).length;
+  const totalInventoryCount = activeInventory.length;
   const visibleInventoryCount = filteredInventory.length;
   const sortOptions = [
     { value: 'title-asc', label: 'A-Z (Alfabetico)' },
@@ -536,6 +577,11 @@ export default function InventoryView({
 
         {/* Contenedor con onScroll */}
         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar" onScroll={handleScroll}>
+          {inactiveSearchLoading && (
+            <div className="mb-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-bold text-slate-500">
+              Buscando tambien productos inhabilitados...
+            </div>
+          )}
           {filteredInventory.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-400">
               {stockFilterMode !== FILTER_MODE.normal || expirationFilterMode !== FILTER_MODE.normal ? (
@@ -563,6 +609,7 @@ export default function InventoryView({
                     const isSelected = selectedProduct?.id === product.id;
                     const stockColor = getStockColorClass(product);
                     const outOfStock = isOutOfStock(product);
+                    const isInactive = !getProductActiveState(product);
                     const isWeight = product.product_type === 'weight';
                     const expirationInfo = getExpirationInfo(product.expiration_date);
                     const hasExpirationAlert = Boolean(expirationInfo?.isAlert);
@@ -580,16 +627,16 @@ export default function InventoryView({
                             </div>
                           )}
                           
-                          {hasExpirationAlert && !outOfStock && (
+                          {hasExpirationAlert && !outOfStock && !isInactive && (
                             <div className={`absolute top-1 right-1 max-w-[calc(100%-0.5rem)] rounded-md border px-1.5 py-0.5 text-[9px] font-black shadow-sm flex items-center gap-1 z-20 truncate ${isExpired ? 'bg-red-100 text-red-700 border-red-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`} title={expirationInfo.label}>
                               {isExpired ? <CalendarX size={9} /> : <CalendarClock size={9} />}
                               <span className="truncate">{expirationInfo.label}</span>
                             </div>
                           )}
 
-                          {outOfStock && (
+                          {(outOfStock || isInactive) && (
                             <div className="absolute right-1 top-1 z-20 rounded-md border border-slate-500 bg-slate-900 px-1.5 py-0.5 text-[9px] font-black text-white shadow-sm">
-                              AGOTADO
+                              {isInactive ? 'INHABILITADO' : 'AGOTADO'}
                             </div>
                           )}
                           
@@ -654,6 +701,7 @@ export default function InventoryView({
                     const isSelected = selectedProduct?.id === product.id;
                     const stockColor = getStockColorClass(product);
                     const outOfStock = isOutOfStock(product);
+                    const isInactive = !getProductActiveState(product);
                     const isWeight = product.product_type === 'weight';
                     const expirationInfo = getExpirationInfo(product.expiration_date);
                     const hasExpirationAlert = Boolean(expirationInfo?.isAlert);
@@ -672,7 +720,7 @@ export default function InventoryView({
                       <div
                         key={product.id}
                         onClick={() => handleCardClick(product)}
-                        className={`grid grid-cols-[46px_120px_minmax(180px,1.65fr)_minmax(120px,1fr)_76px_88px] items-center gap-2 border-b border-l-4 border-b-slate-100 px-3 py-1.5 text-[13px] cursor-pointer transition-all last:border-b-0 hover:bg-fuchsia-50/40 min-[1920px]:grid-cols-[52px_132px_minmax(0,2.25fr)_126px_104px_118px] ${isSelected ? 'border-l-fuchsia-500 bg-fuchsia-50 ring-1 ring-inset ring-fuchsia-200' : outOfStock ? 'border-l-slate-500 bg-slate-100 text-slate-500 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.22)]' : 'border-l-transparent bg-white'} ${hasExpirationAlert && !outOfStock ? (isExpired ? 'border-l-red-500 bg-red-50/40' : 'border-l-amber-400 bg-amber-50/45') : ''}`}
+                        className={`grid grid-cols-[46px_120px_minmax(180px,1.65fr)_minmax(120px,1fr)_76px_88px] items-center gap-2 border-b border-l-4 border-b-slate-100 px-3 py-1.5 text-[13px] cursor-pointer transition-all last:border-b-0 hover:bg-fuchsia-50/40 min-[1920px]:grid-cols-[52px_132px_minmax(0,2.25fr)_126px_104px_118px] ${isSelected ? 'border-l-fuchsia-500 bg-fuchsia-50 ring-1 ring-inset ring-fuchsia-200' : isInactive ? 'border-l-slate-600 bg-slate-200 text-slate-500 shadow-[inset_0_0_0_1px_rgba(71,85,105,0.2)]' : outOfStock ? 'border-l-slate-500 bg-slate-100 text-slate-500 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.22)]' : 'border-l-transparent bg-white'} ${hasExpirationAlert && !outOfStock && !isInactive ? (isExpired ? 'border-l-red-500 bg-red-50/40' : 'border-l-amber-400 bg-amber-50/45') : ''}`}
                       >
                         <span className="relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
                           {productImage ? (
@@ -687,9 +735,9 @@ export default function InventoryView({
                           ) : (
                             <Package size={14} className="text-slate-300" />
                           )}
-                          {outOfStock && (
+                          {(outOfStock || isInactive) && (
                             <span className="absolute bottom-0 right-0 rounded-tl bg-slate-900/85 px-1 text-[7px] font-black leading-3 text-white">
-                              0
+                              {isInactive ? 'OFF' : '0'}
                             </span>
                           )}
                         </span>
@@ -697,8 +745,9 @@ export default function InventoryView({
                           <ScanBarcode size={11} className="mr-1 inline text-slate-300" />
                           {product.barcode || '-'}
                         </span>
-                        <h4 className={`min-w-0 truncate text-[13px] font-semibold leading-tight ${isExpired ? 'text-red-700' : outOfStock ? 'text-slate-600' : 'text-slate-800'}`} title={product.title}>
+                        <h4 className={`min-w-0 truncate text-[13px] font-semibold leading-tight ${isInactive ? 'text-slate-500' : isExpired ? 'text-red-700' : outOfStock ? 'text-slate-600' : 'text-slate-800'}`} title={product.title}>
                           {product.title || 'Sin titulo'}
+                          {isInactive && <span className="ml-2 rounded bg-slate-700 px-1.5 py-0.5 text-[8px] font-black uppercase text-white">Inhabilitado</span>}
                         </h4>
                         <div className={`flex min-w-0 items-center gap-1 overflow-hidden ${isCategoriesExpanded ? 'flex-wrap whitespace-normal' : 'whitespace-nowrap'}`} title={categoryTitle}>
                           {categoriesToRender.map((category) => (
@@ -723,7 +772,7 @@ export default function InventoryView({
                           )}
                         </div>
                         <p className={`truncate text-right font-bold leading-tight ${stockColor}`}>
-                          {outOfStock ? 'Agotado' : formatStock(product)}
+                          {isInactive ? 'Inhabilitado' : outOfStock ? 'Agotado' : formatStock(product)}
                         </p>
                         <p className="truncate text-right font-extrabold leading-tight text-slate-900">
                           <FancyPrice amount={isWeight ? product.price * 1000 : product.price} />
