@@ -84,6 +84,40 @@ const formatPieValue = (value, valueType) => (
   valueType === 'currency' ? formatCurrency(value) : formatNumber(value)
 );
 
+const normalizeMetricText = (value) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toLowerCase();
+
+const parseMetricDate = (record = {}) => {
+  const rawDate = record.createdAt || record.created_at || record.sortDate || record.date || '';
+  const rawTime = record.time || record.timestamp || '';
+  const directDate = rawDate ? new Date(rawDate) : null;
+  if (directDate && !Number.isNaN(directDate.getTime())) return directDate;
+
+  const match = String(rawDate || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (match) {
+    const [, day, month, year] = match;
+    const fullYear = year.length === 2 ? `20${year}` : year;
+    const parsed = new Date(`${fullYear}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${rawTime || '00:00'}`);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+
+  return null;
+};
+
+const getMetricUserLabel = (record = {}) =>
+  record.user || record.user_name || record.userName || record.userId || record.user_id || 'Sistema';
+
+const getMetricTransactionTotal = (record = {}) =>
+  Number(record.revenue ?? record.total ?? record.totalAmount ?? record.amount ?? 0) || 0;
+
+const getMetricTransactionItemCount = (record = {}) =>
+  (record.metricItems || record.items || []).reduce((sum, item) => (
+    sum + (Number(item.qty ?? item.quantity ?? item.cantidad ?? 1) || 0)
+  ), 0);
+
 const renderActivePieShape = (props) => (
   <Sector {...props} outerRadius={Number(props.outerRadius || 0) + 5} />
 );
@@ -2268,6 +2302,13 @@ export default function MetricsView({
     const visibleUserRows = selectedUserName
       ? metrics.current.userStats.filter((row) => row.name === selectedUserName)
       : metrics.current.userStats;
+    const selectedUserRecentSales = selectedUserName
+      ? metrics.current.filteredTransactions
+        .filter((tx) => normalizeMetricText(getMetricUserLabel(tx)) === normalizeMetricText(selectedUserName))
+        .map((tx) => ({ ...tx, metricSortDate: parseMetricDate(tx) }))
+        .sort((a, b) => (b.metricSortDate?.getTime?.() || 0) - (a.metricSortDate?.getTime?.() || 0))
+        .slice(0, 8)
+      : [];
 
     return (
     <div className="space-y-4">
@@ -2305,6 +2346,33 @@ export default function MetricsView({
           />
         </Panel>
       </div>
+      {selectedUserName && (
+        <Panel
+          title={`Ultimas ventas de ${selectedUserName}`}
+          icon={ShoppingBag}
+          hint="Ventas ya filtradas por el rango activo y el usuario seleccionado."
+        >
+          <Table
+            emptyText="Sin ventas recientes para este usuario en el rango activo."
+            columns={[
+              {
+                key: 'date',
+                label: 'Fecha',
+                render: (row) => (
+                  row.metricSortDate
+                    ? `${row.metricSortDate.toLocaleDateString('es-AR')} ${row.metricSortDate.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}`
+                    : `${row.date || '-'} ${row.time || row.timestamp || ''}`.trim()
+                ),
+              },
+              { key: 'id', label: 'Ticket', render: (row) => `#${String(row.id || row.number || '-').padStart(4, '0')}` },
+              { key: 'paymentMethod', label: 'Pago', render: (row) => row.paymentMethod || row.payment || 'Sin dato' },
+              { key: 'items', label: 'Items', align: 'right', render: (row) => formatNumber(getMetricTransactionItemCount(row)) },
+              { key: 'total', label: 'Total', align: 'right', render: (row) => <FancyPrice amount={getMetricTransactionTotal(row)} /> },
+            ]}
+            rows={selectedUserRecentSales}
+          />
+        </Panel>
+      )}
     </div>
     );
   };

@@ -3,6 +3,7 @@ import { isImageAvatar } from './avatarUtils';
 import { CLOUD_SELECTS } from './cloudSelects';
 import {
   extractSchemaMissingColumn,
+  getSchemaMissingColumnName,
   runSelectWithSchemaFallback,
 } from './supabaseSchemaFallback';
 import {
@@ -286,7 +287,7 @@ const readAppUsersFromSource = async ({
     }
 
     lastError = result.error;
-    const missingColumn = extractSchemaMissingColumn(result.error);
+    const missingColumn = getSchemaMissingColumnName(extractSchemaMissingColumn(result.error));
 
     if (missingColumn === 'is_active' && useActiveFilter) {
       useActiveFilter = false;

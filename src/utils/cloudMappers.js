@@ -56,7 +56,9 @@ export const safeCloudData = (result, tableName) => {
 };
 
 export const mapInventoryRecords = (products = []) =>
-  products.map((product) => ({
+  (Array.isArray(products) ? products : [])
+    .filter((product) => product && typeof product === 'object')
+    .map((product) => ({
     ...product,
     imageThumb: product.image_thumb || product.imageThumb || '',
     isActive: getProductActiveState(product),

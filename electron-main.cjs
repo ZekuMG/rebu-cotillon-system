@@ -159,6 +159,18 @@ const getSupplierRestrictedUrl = () => {
   return `${SUPPLIER_DEFAULT_ORIGIN}${SUPPLIER_RESTRICTED_PATH}`;
 };
 
+const normalizeSupplierNavigationUrl = (targetUrl) => {
+  try {
+    const parsedUrl = new URL(String(targetUrl || '').trim(), SUPPLIER_DEFAULT_ORIGIN);
+    if (!parsedUrl.hostname.includes('cotilloncasaalberto.com.ar')) return '';
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) return '';
+    if (parsedUrl.protocol === 'https:') parsedUrl.protocol = 'http:';
+    return parsedUrl.href;
+  } catch {
+    return '';
+  }
+};
+
 const getSupplierLoginState = async () => {
   if (!supplierImageLoginWindow || supplierImageLoginWindow.isDestroyed()) {
     return { hasWindow: false, url: '', isLikelyLoggedIn: false };
@@ -1010,6 +1022,295 @@ const searchSupplierImageByBarcode = async ({ barcode, title, searchMode = '' })
   }
 };
 
+const buildSupplierPriceExtractScript = (request = {}) => `
+(function () {
+  try {
+    var expectedCode = ${JSON.stringify(String(request?.supplierCode || '').trim())};
+    var expectedTitle = ${JSON.stringify(String(request?.title || '').replace(/\s+/g, ' ').trim())};
+    var expectedId = ${JSON.stringify(String(request?.casaAlbertoId || '').trim())};
+    var normalize = function (value) {
+      return String(value || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
+    };
+    var compactDigits = function (value) {
+      var digits = String(value || '').replace(/\\D/g, '');
+      return digits.replace(/^0+/, '') || digits;
+    };
+    var cleanText = function (value) {
+      return String(value || '').replace(/\\s+/g, ' ').trim();
+    };
+    var parseMoney = function (value) {
+      var raw = String(value || '').replace(/\\$/g, '').replace(/\\s/g, '').replace(/[^\\d,.-]/g, '');
+      if (!raw) return null;
+      var lastComma = raw.lastIndexOf(',');
+      var lastDot = raw.lastIndexOf('.');
+      if (lastComma > lastDot) {
+        raw = raw.replace(/\\./g, '').replace(',', '.');
+      } else {
+        raw = raw.replace(/,/g, '');
+      }
+      var numberValue = Number(raw);
+      return Number.isFinite(numberValue) ? numberValue : null;
+    };
+    var bodyText = normalize((document.body && (document.body.innerText || document.body.textContent)) || '');
+    var passwordInputs = Array.prototype.slice.call(document.querySelectorAll('input[type="password"]'));
+    var hasVisiblePasswordInput = passwordInputs.some(function (input) {
+      var style = window.getComputedStyle(input);
+      var rect = input.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    });
+    var isLoginPage =
+      /login\\.php/i.test(location.href || '') ||
+      hasVisiblePasswordInput ||
+      (/login/i.test(document.title || '') && bodyText.includes('usuario'));
+    if (isLoginPage) {
+      return { status: 'login_required', message: 'La sesion del proveedor necesita login.', url: location.href };
+    }
+
+    var normalizeSupplierHref = function (href) {
+      try {
+        var parsedHref = new URL(href, location.href);
+        if (
+          parsedHref.hostname.includes('cotilloncasaalberto.com.ar') &&
+          location.protocol === 'http:' &&
+          parsedHref.protocol === 'https:'
+        ) {
+          parsedHref.protocol = 'http:';
+        }
+        return parsedHref.href;
+      } catch (hrefError) {
+        return '';
+      }
+    };
+    var isDetailUrl = function (href) {
+      return /\\/pedido\\/detalle(?:_mobile)?\\.php\\?[^#]*\\bidp=\\d+/i.test(String(href || ''));
+    };
+    var getSupplierProductId = function (href) {
+      try {
+        return new URL(href, location.href).searchParams.get('idp') || '';
+      } catch (urlError) {
+        return '';
+      }
+    };
+    var findDetailLink = function (container) {
+      if (isDetailUrl(location.href)) return normalizeSupplierHref(location.href);
+      var links = Array.prototype.slice.call((container || document).querySelectorAll('a[href]'));
+      var detailLink = links.map(function (link) {
+        return normalizeSupplierHref(link.href);
+      }).find(function (href) {
+        return href && isDetailUrl(href);
+      });
+      return detailLink || '';
+    };
+    var getCodeFromText = function (text) {
+      var match = cleanText(text).match(/c[oó]digo\\s*:?\\s*([0-9]+)/i);
+      return match ? match[1] : '';
+    };
+    var readCandidate = function (container) {
+      var detailLink = findDetailLink(container);
+      var titleNode =
+        (container && container.querySelector && container.querySelector('.producto_txt a[href], .producto_txt, h1, h2, [class*="titulo"], [class*="nombre"]')) ||
+        document.querySelector('h1, h2, .producto_txt a[href], .producto_txt, [class*="titulo"], [class*="nombre"]');
+      var priceNode =
+        (container && container.querySelector && container.querySelector('.producto_precio, [class*="precio"]')) ||
+        document.querySelector('.producto_precio, [class*="precio"]');
+      var codeNode =
+        (container && container.querySelector && container.querySelector('.producto_id, [class*="codigo"], [class*="code"]')) ||
+        document.querySelector('.producto_id, [class*="codigo"], [class*="code"]');
+      var containerText = cleanText((container && (container.innerText || container.textContent)) || document.body.innerText || '');
+      var priceText = cleanText(priceNode && (priceNode.innerText || priceNode.textContent) || '');
+      if (!priceText) {
+        var priceMatch = containerText.match(/\\$\\s*[0-9.]+(?:,[0-9]{1,2})?/);
+        priceText = priceMatch ? priceMatch[0] : '';
+      }
+      var supplierPrice = parseMoney(priceText);
+      var foundTitle = cleanText(titleNode && (titleNode.innerText || titleNode.textContent) || '');
+      var supplierCode = getCodeFromText(codeNode && (codeNode.innerText || codeNode.textContent) || '') || getCodeFromText(containerText);
+      var casaAlbertoId = getSupplierProductId(detailLink || location.href) || expectedId || '';
+
+      return {
+        foundTitle: foundTitle,
+        supplierCode: supplierCode,
+        supplierPrice: supplierPrice,
+        priceText: priceText,
+        productUrl: detailLink || normalizeSupplierHref(location.href),
+        casaAlbertoId: casaAlbertoId,
+        sourceUrl: normalizeSupplierHref(location.href),
+        text: containerText,
+      };
+    };
+
+    var containers = isDetailUrl(location.href)
+      ? [document.body]
+      : Array.prototype.slice.call(document.querySelectorAll('.producto, .caja_productos, [class*="producto"]'));
+    if (containers.length === 0) containers = [document.body];
+
+    var expectedDigits = compactDigits(expectedCode);
+    var expectedTitleNorm = normalize(expectedTitle);
+    var candidates = containers
+      .map(readCandidate)
+      .filter(function (candidate) {
+        return candidate && candidate.supplierPrice !== null && candidate.foundTitle;
+      })
+      .map(function (candidate) {
+        var codeDigits = compactDigits(candidate.supplierCode);
+        var titleNorm = normalize(candidate.foundTitle);
+        var score = 0;
+        if (expectedId && String(candidate.casaAlbertoId) === String(expectedId)) score += 100;
+        if (expectedDigits && codeDigits && (codeDigits === expectedDigits || codeDigits === expectedDigits.slice(0, -1) || expectedDigits === codeDigits.slice(0, -1))) score += 80;
+        if (expectedTitleNorm && titleNorm.includes(expectedTitleNorm.slice(0, 18))) score += 20;
+        return { candidate: candidate, score: score };
+      })
+      .sort(function (a, b) { return b.score - a.score; });
+
+    var best = candidates[0] && candidates[0].candidate;
+    if (!best) {
+      return {
+        status: 'not_found',
+        message: 'No se pudo leer el precio del proveedor.',
+        url: location.href,
+      };
+    }
+
+    return {
+      status: 'found',
+      supplierPrice: best.supplierPrice,
+      foundTitle: best.foundTitle,
+      supplierCode: best.supplierCode,
+      casaAlbertoId: best.casaAlbertoId,
+      productUrl: best.productUrl,
+      sourceUrl: best.sourceUrl,
+      priceText: best.priceText,
+      url: location.href,
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      message: error && error.message ? error.message : 'Error leyendo precio del proveedor.',
+      stack: error && error.stack ? error.stack : '',
+      url: location.href,
+    };
+  }
+})()
+`;
+
+const getSupplierPriceTargetUrl = ({ productUrl = '', casaAlbertoId = '' } = {}) => {
+  try {
+    const rawUrl = String(productUrl || '').trim();
+    if (rawUrl) {
+      const parsedUrl = new URL(rawUrl, SUPPLIER_DEFAULT_ORIGIN);
+      if (parsedUrl.hostname.includes('cotilloncasaalberto.com.ar')) {
+        if (parsedUrl.protocol === 'https:') parsedUrl.protocol = 'http:';
+        return parsedUrl.href;
+      }
+    }
+  } catch {
+    // Si el enlace guardado no es valido, se intenta por ID o buscador.
+  }
+
+  const safeId = String(casaAlbertoId || '').replace(/\D/g, '');
+  return safeId ? `${SUPPLIER_DEFAULT_ORIGIN}/pedido/detalle.php?idp=${safeId}` : '';
+};
+
+const searchSupplierPrice = async ({ productUrl = '', casaAlbertoId = '', supplierCode = '', title = '' } = {}) => {
+  const safeTitle = String(title || '').replace(/\s+/g, ' ').trim();
+  const safeCode = String(supplierCode || '').trim();
+  const targetUrl = getSupplierPriceTargetUrl({ productUrl, casaAlbertoId });
+
+  let workerWindow;
+  try {
+    workerWindow = createSupplierBrowserWindow({ show: false, width: 1000, height: 760 });
+
+    const extractCurrentPage = async () => {
+      try {
+        return await workerWindow.webContents.executeJavaScript(
+          buildSupplierPriceExtractScript({ productUrl, casaAlbertoId, supplierCode: safeCode, title: safeTitle }),
+          true
+        );
+      } catch (error) {
+        workerWindow.__rebuSupplierPushErrorEvent?.('price-extract-script-error', {
+          productUrl,
+          casaAlbertoId,
+          supplierCode: safeCode,
+          title: safeTitle,
+          message: error?.message || '',
+          stack: error?.stack || '',
+        });
+        return { status: 'error', message: error?.message || 'Script de precio fallo en proveedor.' };
+      }
+    };
+
+    if (targetUrl) {
+      const directLoad = await loadUrlAndWait(workerWindow, targetUrl, 10000);
+      if (!directLoad.success && !directLoad.timeout) {
+        workerWindow.__rebuSupplierPushErrorEvent?.('price-direct-load-error', {
+          targetUrl,
+          message: directLoad.error || '',
+        });
+      }
+      await delay(350);
+      const directResult = await extractCurrentPage();
+      if (directResult?.status === 'found' || directResult?.status === 'login_required') {
+        return { ...directResult, via: 'direct-url' };
+      }
+    }
+
+    const initialLoad = await loadUrlAndWait(workerWindow, getSupplierRestrictedUrl(), 10000);
+    if (!initialLoad.success && !initialLoad.timeout) {
+      return {
+        status: 'error',
+        message: initialLoad.error || 'No se pudo abrir el buscador del proveedor.',
+      };
+    }
+
+    const queries = [
+      safeCode,
+      safeCode.length > 5 ? safeCode.slice(0, -1) : '',
+      ...buildSupplierTitleSearchQueries(safeTitle),
+    ].filter(Boolean);
+
+    let lastResult = null;
+    for (const query of [...new Set(queries)]) {
+      const loadPromise = waitForWebContentsLoad(workerWindow.webContents, 6500);
+      const submitResult = await workerWindow.webContents.executeJavaScript(buildSupplierSearchScript(query), true);
+
+      if (submitResult?.isLoginPage || submitResult?.reason === 'login_required') {
+        return { status: 'login_required', message: 'Inicia sesion en el proveedor y volve a chequear precios.', via: 'search' };
+      }
+      if (!submitResult?.submitted) {
+        lastResult = {
+          status: 'error',
+          message: submitResult?.message || 'No se pudo iniciar la busqueda de precio.',
+          via: 'search',
+          searchedQuery: query,
+        };
+        continue;
+      }
+
+      await loadPromise;
+      await delay(350);
+      const result = await extractCurrentPage();
+      lastResult = { ...result, via: 'search', searchedQuery: query };
+      if (result?.status === 'found' || result?.status === 'login_required') return lastResult;
+    }
+
+    return lastResult || { status: 'not_found', message: 'No se encontro precio para este enlace.' };
+  } catch (error) {
+    workerWindow?.__rebuSupplierPushErrorEvent?.('price-search-error', {
+      productUrl,
+      casaAlbertoId,
+      supplierCode: safeCode,
+      title: safeTitle,
+      message: error?.message || '',
+      stack: error?.stack || '',
+    });
+    return { status: 'error', message: error?.message || 'Fallo el chequeo de precio en el proveedor.' };
+  } finally {
+    if (workerWindow && !workerWindow.isDestroyed()) {
+      workerWindow.close();
+    }
+  }
+};
+
 app.setName(APP_NAME);
 
 if (isDev) {
@@ -1155,6 +1456,36 @@ app.on('ready', () => {
     return getSupplierLoginState();
   });
 
+  ipcMain.handle('supplier-open-url', async (event, targetUrl) => {
+    if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+
+    try {
+      const safeUrl = normalizeSupplierNavigationUrl(targetUrl);
+      if (!safeUrl) {
+        return { success: false, error: 'El enlace no pertenece a Casa Alberto.' };
+      }
+
+      if (!supplierImageLoginWindow || supplierImageLoginWindow.isDestroyed()) {
+        supplierImageLoginWindow = createSupplierBrowserWindow({ show: true, width: 1120, height: 780 });
+        supplierImageLoginWindow.on('closed', () => {
+          supplierImageLoginWindow = null;
+        });
+      } else {
+        supplierImageLoginWindow.show();
+        supplierImageLoginWindow.focus();
+      }
+
+      await loadUrlAndWait(supplierImageLoginWindow, safeUrl, 18000);
+      return {
+        success: true,
+        url: supplierImageLoginWindow.webContents.getURL(),
+        loginState: await getSupplierLoginState(),
+      };
+    } catch (error) {
+      return { success: false, error: error?.message || 'No se pudo abrir Casa Alberto.' };
+    }
+  });
+
   ipcMain.handle('supplier-image-search', async (event, request) => {
     if (!isTrustedIpcSender(event)) {
       return { status: 'error', message: 'Origen IPC no autorizado' };
@@ -1164,6 +1495,19 @@ app.on('ready', () => {
     const title = String(request?.title || '').trim();
     const searchMode = String(request?.searchMode || '').trim();
     return searchSupplierImageByBarcode({ barcode, title, searchMode });
+  });
+
+  ipcMain.handle('supplier-price-search', async (event, request) => {
+    if (!isTrustedIpcSender(event)) {
+      return { status: 'error', message: 'Origen IPC no autorizado' };
+    }
+
+    return searchSupplierPrice({
+      productUrl: request?.productUrl,
+      casaAlbertoId: request?.casaAlbertoId,
+      supplierCode: request?.supplierCode || request?.providerCode,
+      title: request?.title,
+    });
   });
 
   createWindow();

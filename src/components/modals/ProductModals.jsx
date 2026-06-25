@@ -13,6 +13,7 @@ import {
   Loader2,
   Scale,
   Package,
+  PackageX,
   Copy,
   CalendarX // Icono para vencimiento
 } from 'lucide-react';
@@ -521,12 +522,14 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
 // v6: Agregado boton "Duplicar" segun permiso inventory.create
 // ==========================================
 
-export const EditProductModal = ({ product, onClose, setEditingProduct, categories, onImageUpload, editReason, setEditReason, onSave, inventory, onDuplicateBarcode, isUploadingImage, onDuplicate, currentUser }) => {
+export const EditProductModal = ({ product, onClose, setEditingProduct, categories, onImageUpload, editReason, setEditReason, onSave, inventory, onDuplicateBarcode, isUploadingImage, onDuplicate, onRetireDeletedProduct, currentUser }) => {
   const [stockUnit, setStockUnit] = useState('g');
+  const [deletedReason, setDeletedReason] = useState('');
   const { isPending, runAction } = usePendingAction();
   if (!product) return null;
   const productType = product.product_type || 'quantity';
   const canDuplicateProduct = hasPermission(currentUser, 'inventory.create');
+  const isProductActive = product.is_active !== false && product.isActive !== false;
 
   // ✅ Precio guardado en /g → lo mostramos en /kg
   const displayPrice = productType === 'weight' ? Math.round(Number(product.price) * 1000) : product.price;
@@ -571,6 +574,11 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
     if (onDuplicate) onDuplicate(product);
   };
 
+  const toggleProductActive = () => {
+    const nextActive = !isProductActive;
+    setEditingProduct({ ...product, is_active: nextActive, isActive: nextActive });
+  };
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
@@ -585,6 +593,30 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
             <span className="text-xs font-bold text-slate-600">
               Tipo: {productType === 'weight' ? 'Producto por PESO — Precio por kilo' : 'Producto por CANTIDAD — Precio por unidad'}
             </span>
+          </div>
+
+          <div className={`rounded-lg border px-3 py-2.5 ${isProductActive ? 'border-emerald-200 bg-emerald-50' : 'border-slate-300 bg-slate-100'}`}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className={`text-xs font-black uppercase tracking-wide ${isProductActive ? 'text-emerald-700' : 'text-slate-700'}`}>
+                  {isProductActive ? 'Producto habilitado' : 'Producto deshabilitado'}
+                </p>
+                <p className="mt-0.5 text-[11px] font-semibold text-slate-500">
+                  {isProductActive ? 'Visible en inventario normal y punto de venta.' : 'Oculto del catalogo normal. Puede verse desde Inhabilitados.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={toggleProductActive}
+                className={`shrink-0 rounded-lg border px-3 py-2 text-xs font-black transition ${
+                  isProductActive
+                    ? 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                    : 'border-emerald-200 bg-emerald-600 text-white hover:bg-emerald-700'
+                }`}
+              >
+                {isProductActive ? 'Deshabilitar' : 'Habilitar'}
+              </button>
+            </div>
           </div>
 
           {/* Nombre */}
@@ -669,6 +701,37 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
             <label className="text-xs font-bold text-amber-600 uppercase block mb-1 flex items-center gap-1"><FileText size={12} /> Motivo del cambio (Opcional)</label>
             <textarea className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-amber-50 focus:ring-2 focus:ring-amber-500 outline-none" rows="2" placeholder="¿Por qué realizas este cambio?" value={editReason} onChange={(e) => setEditReason(e.target.value)}></textarea>
           </div>
+
+          {!isProductActive && onRetireDeletedProduct && (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+              <div className="mb-2 flex items-start gap-2">
+                <PackageX size={16} className="mt-0.5 shrink-0 text-red-600" />
+                <div>
+                  <p className="text-xs font-black uppercase tracking-wide text-red-700">Eliminar ficha operativa</p>
+                  <p className="text-[11px] font-semibold text-red-600/80">Deja solo una referencia como Item Eliminado con motivo. Usalo para productos que no deben volver al catalogo.</p>
+                </div>
+              </div>
+              <input
+                type="text"
+                value={deletedReason}
+                onChange={(event) => setDeletedReason(event.target.value)}
+                placeholder="Razon: discontinuado, error de carga, duplicado..."
+                className="mb-2 w-full rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 outline-none transition focus:border-red-300 focus:ring-2 focus:ring-red-100"
+              />
+              <AsyncActionButton
+                onAction={() => runAction(`retire-product:${product.id}`, async () => {
+                  await onRetireDeletedProduct(product, deletedReason);
+                })}
+                pending={isPending(`retire-product:${product.id}`)}
+                disabled={!deletedReason.trim() || isPending(`retire-product:${product.id}`)}
+                loadingLabel="Eliminando..."
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-red-600 px-3 py-2.5 text-xs font-black text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-200"
+              >
+                <Trash2 size={14} />
+                Compactar como Item Eliminado
+              </AsyncActionButton>
+            </div>
+          )}
 
           {/* Botones: Duplicar segun permiso + Guardar */}
           <div className="flex gap-3">

@@ -27,7 +27,7 @@ import { formatStock, formatNumber } from '../utils/helpers';
 import { hasPermission } from '../utils/userPermissions';
 import { FancyPrice } from '../components/FancyPrice';
 import { getProductImageUrl } from '../utils/productImages';
-import { getProductActiveState } from '../utils/productLifecycle';
+import { getDeletedItemInfo, getProductActiveState, isDeletedProductRecord } from '../utils/productLifecycle';
 
 const INVENTORY_BATCH_SIZE = 50;
 const REBU_WIDE_QUERY = '(min-width: 1920px)';
@@ -101,6 +101,8 @@ export default function InventoryView({
   const [isWideLayout, setIsWideLayout] = useState(isWideResolution);
   const [inactiveSearchResults, setInactiveSearchResults] = useState([]);
   const [inactiveSearchLoading, setInactiveSearchLoading] = useState(false);
+  const [showInactiveOnly, setShowInactiveOnly] = useState(false);
+  const inactiveSearchHandlerRef = useRef(onSearchInactiveProducts);
   const maxGridColumns = isWideLayout ? 10 : 8;
   const canCreateProducts = hasPermission(currentUser, 'inventory.create');
   const canEditProducts = hasPermission(currentUser, 'inventory.edit');
@@ -115,14 +117,24 @@ export default function InventoryView({
 
   const [visibleCount, setVisibleCount] = useState(INVENTORY_BATCH_SIZE);
 
+  useEffect(() => {
+    inactiveSearchHandlerRef.current = onSearchInactiveProducts;
+  }, [onSearchInactiveProducts]);
+
   // âœ¨ EFECTO "PUENTE": Atrapa la orden del Dashboard y activa los botones
   useEffect(() => {
     setVisibleCount(INVENTORY_BATCH_SIZE);
   }, [inventorySearch]);
 
   useEffect(() => {
+    setVisibleCount(INVENTORY_BATCH_SIZE);
+  }, [stockFilterMode, expirationFilterMode, showInactiveOnly]);
+
+  useEffect(() => {
     const query = String(inventorySearch || '').trim();
-    if (!onSearchInactiveProducts || query.length < 2) {
+    const searchInactive = inactiveSearchHandlerRef.current;
+    const shouldFetchInactive = showInactiveOnly || query.length >= 2;
+    if (!searchInactive || !shouldFetchInactive) {
       setInactiveSearchResults([]);
       setInactiveSearchLoading(false);
       return undefined;
@@ -132,7 +144,7 @@ export default function InventoryView({
     setInactiveSearchLoading(true);
     const timer = window.setTimeout(async () => {
       try {
-        const results = await onSearchInactiveProducts(query);
+        const results = await searchInactive(query);
         if (!cancelled) setInactiveSearchResults(Array.isArray(results) ? results : []);
       } catch (error) {
         console.warn('No se pudieron buscar productos inhabilitados:', error);
@@ -146,7 +158,7 @@ export default function InventoryView({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [inventorySearch, onSearchInactiveProducts]);
+  }, [inventorySearch, showInactiveOnly]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -207,14 +219,17 @@ export default function InventoryView({
   const searchString = (inventorySearch || '').toLowerCase().trim();
   const searchWords = searchString ? searchString.split(/\s+/) : [];
   const activeInventory = (inventory || []).filter((item) => getProductActiveState(item));
-  const inactiveSearchInventory = searchWords.length > 0
+  const inactiveSearchInventory = (showInactiveOnly || searchWords.length > 0)
     ? (inactiveSearchResults || []).filter((item) => !getProductActiveState(item))
     : [];
+  const inactiveSearchResultIds = new Set(inactiveSearchInventory.map((item) => String(item.id)));
   const inactiveIds = new Set(activeInventory.map((item) => String(item.id)));
-  const inventoryForSearch = [
-    ...activeInventory,
-    ...inactiveSearchInventory.filter((item) => !inactiveIds.has(String(item.id))),
-  ];
+  const inventoryForSearch = showInactiveOnly
+    ? inactiveSearchInventory
+    : [
+        ...activeInventory,
+        ...inactiveSearchInventory.filter((item) => !inactiveIds.has(String(item.id))),
+      ];
 
   const filteredInventory = inventoryForSearch.filter((item) => {
     const matchesSearch = searchWords.length === 0 || searchWords.every(word =>
@@ -232,13 +247,17 @@ export default function InventoryView({
     // âœ¨ APLICAMOS LOS FILTROS DE BOTONES
     const isStockEmpty = Number(item.stock) <= 0;
     const hasExpirationAlert = isExpiringSoon(item.expiration_date);
-    const matchesStock =
+    const matchesStock = showInactiveOnly
+      ? true
+      :
       stockFilterMode === FILTER_MODE.only
         ? isStockEmpty
         : stockFilterMode === FILTER_MODE.exclude
           ? !isStockEmpty
           : true;
-    const matchesExpiration =
+    const matchesExpiration = showInactiveOnly
+      ? true
+      :
       expirationFilterMode === FILTER_MODE.only
         ? hasExpirationAlert
         : expirationFilterMode === FILTER_MODE.exclude
@@ -282,6 +301,19 @@ export default function InventoryView({
   const displayedInventory = sortedInventory.slice(0, visibleCount);
   const totalInventoryCount = activeInventory.length;
   const visibleInventoryCount = filteredInventory.length;
+  const inactiveButtonMeta = showInactiveOnly
+    ? {
+        label: inactiveSearchLoading ? 'Cargando...' : 'Inhabilitados',
+        title: 'Mostrando solo productos inhabilitados. Click para volver al catalogo normal.',
+        buttonClass: 'bg-slate-800 border-slate-700 text-white shadow-inner hover:bg-slate-700',
+        iconClass: 'text-amber-300',
+      }
+    : {
+        label: 'Inhabilitados',
+        title: 'Ver productos inhabilitados.',
+        buttonClass: 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700',
+        iconClass: 'text-slate-400',
+      };
   const sortOptions = [
     { value: 'title-asc', label: 'A-Z (Alfabetico)' },
     { value: 'recent', label: 'Mas Recientes' },
@@ -380,7 +412,7 @@ export default function InventoryView({
         
         {/* Header */}
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2 min-[1920px]:gap-3 min-[1920px]:p-2.5 bg-white border-b shrink-0 z-30 relative">
-          <div className="grid min-w-0 grid-cols-[132px_108px_168px_140px_140px] min-[1920px]:grid-cols-[180px_136px_208px_124px_140px] items-center gap-1.5 min-[1920px]:gap-2">
+          <div className="grid min-w-0 grid-cols-[132px_108px_minmax(136px,168px)_118px_118px_132px] min-[1920px]:grid-cols-[180px_136px_208px_124px_128px_150px] items-center gap-1.5 min-[1920px]:gap-2">
             <div className="relative min-w-0">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
               <input type="text" placeholder="Buscar..." className="h-8 min-[1920px]:h-9 w-full pl-8 pr-2 min-[1920px]:pr-3 border border-slate-200 rounded-lg bg-slate-50 text-xs min-[1920px]:text-sm font-semibold text-slate-700 focus:bg-white focus:ring-2 focus:ring-fuchsia-500 outline-none transition-all" value={inventorySearch} onChange={(e) => setInventorySearch(e.target.value)} />
@@ -539,6 +571,25 @@ export default function InventoryView({
               <span className="inline truncate">{expirationModeMeta.label}</span>
             </button>
 
+            <button
+              type="button"
+              onClick={() => {
+                setShowInactiveOnly((current) => {
+                  const next = !current;
+                  if (next) {
+                    setStockFilterMode(FILTER_MODE.normal);
+                    setExpirationFilterMode(FILTER_MODE.normal);
+                  }
+                  return next;
+                });
+              }}
+              title={inactiveButtonMeta.title}
+              className={`flex h-8 min-[1920px]:h-9 min-w-0 items-center justify-center gap-1.5 rounded-lg border px-1.5 text-xs font-semibold transition-all ${inactiveButtonMeta.buttonClass}`}
+            >
+              <PackageX size={14} className={inactiveButtonMeta.iconClass} />
+              <span className="inline truncate">{inactiveButtonMeta.label}</span>
+            </button>
+
           </div>
 
           <div className="flex shrink-0 items-center gap-1.5 self-center">
@@ -577,14 +628,15 @@ export default function InventoryView({
 
         {/* Contenedor con onScroll */}
         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar" onScroll={handleScroll}>
-          {inactiveSearchLoading && (
-            <div className="mb-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-bold text-slate-500">
-              Buscando tambien productos inhabilitados...
-            </div>
-          )}
           {filteredInventory.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-400">
-              {stockFilterMode !== FILTER_MODE.normal || expirationFilterMode !== FILTER_MODE.normal ? (
+              {showInactiveOnly ? (
+                <>
+                  <PackageX size={64} className="mb-4 text-slate-300" />
+                  <p className="text-lg font-bold text-slate-600">Sin inhabilitados</p>
+                  <p className="text-sm">No hay productos inhabilitados para esta busqueda.</p>
+                </>
+              ) : stockFilterMode !== FILTER_MODE.normal || expirationFilterMode !== FILTER_MODE.normal ? (
                 <>
                   <div className="w-16 h-16 rounded-full bg-green-50 flex items-center justify-center mb-4">
                     <CalendarX size={32} className="text-green-500" />
@@ -610,6 +662,13 @@ export default function InventoryView({
                     const stockColor = getStockColorClass(product);
                     const outOfStock = isOutOfStock(product);
                     const isInactive = !getProductActiveState(product);
+                    const showInactiveBadge = isInactive && inactiveSearchResultIds.has(String(product.id));
+                    const isDeletedProduct = isDeletedProductRecord(product);
+                    const deletedInfo = getDeletedItemInfo(product);
+                    const inactiveLabel = isDeletedProduct ? 'ELIMINADO' : 'INHABILITADO';
+                    const inactiveTitle = isDeletedProduct
+                      ? `Item eliminado${deletedInfo.reason ? `: ${deletedInfo.reason}` : ''}`
+                      : 'Producto inhabilitado';
                     const isWeight = product.product_type === 'weight';
                     const expirationInfo = getExpirationInfo(product.expiration_date);
                     const hasExpirationAlert = Boolean(expirationInfo?.isAlert);
@@ -634,9 +693,12 @@ export default function InventoryView({
                             </div>
                           )}
 
-                          {(outOfStock || isInactive) && (
-                            <div className="absolute right-1 top-1 z-20 rounded-md border border-slate-500 bg-slate-900 px-1.5 py-0.5 text-[9px] font-black text-white shadow-sm">
-                              {isInactive ? 'INHABILITADO' : 'AGOTADO'}
+                          {(outOfStock || showInactiveBadge) && (
+                            <div
+                              className={`absolute right-1 top-1 z-20 rounded-md border px-1.5 py-0.5 text-[9px] font-black text-white shadow-sm ${showInactiveBadge && isDeletedProduct ? 'border-red-500 bg-red-700' : 'border-slate-500 bg-slate-900'}`}
+                              title={showInactiveBadge ? inactiveTitle : 'Producto agotado'}
+                            >
+                              {showInactiveBadge ? inactiveLabel : 'AGOTADO'}
                             </div>
                           )}
                           
@@ -702,6 +764,13 @@ export default function InventoryView({
                     const stockColor = getStockColorClass(product);
                     const outOfStock = isOutOfStock(product);
                     const isInactive = !getProductActiveState(product);
+                    const showInactiveBadge = isInactive && inactiveSearchResultIds.has(String(product.id));
+                    const isDeletedProduct = isDeletedProductRecord(product);
+                    const deletedInfo = getDeletedItemInfo(product);
+                    const inactiveLabel = isDeletedProduct ? 'Eliminado' : 'Inhabilitado';
+                    const inactiveTitle = isDeletedProduct
+                      ? `Item eliminado${deletedInfo.reason ? `: ${deletedInfo.reason}` : ''}`
+                      : 'Producto inhabilitado';
                     const isWeight = product.product_type === 'weight';
                     const expirationInfo = getExpirationInfo(product.expiration_date);
                     const hasExpirationAlert = Boolean(expirationInfo?.isAlert);
@@ -735,9 +804,12 @@ export default function InventoryView({
                           ) : (
                             <Package size={14} className="text-slate-300" />
                           )}
-                          {(outOfStock || isInactive) && (
-                            <span className="absolute bottom-0 right-0 rounded-tl bg-slate-900/85 px-1 text-[7px] font-black leading-3 text-white">
-                              {isInactive ? 'OFF' : '0'}
+                          {(outOfStock || showInactiveBadge) && (
+                            <span
+                              className={`absolute bottom-0 right-0 rounded-tl px-1 text-[7px] font-black leading-3 text-white ${showInactiveBadge && isDeletedProduct ? 'bg-red-700' : 'bg-slate-900/85'}`}
+                              title={showInactiveBadge ? inactiveTitle : 'Producto agotado'}
+                            >
+                              {showInactiveBadge ? (isDeletedProduct ? 'DEL' : 'OFF') : '0'}
                             </span>
                           )}
                         </span>
@@ -747,7 +819,14 @@ export default function InventoryView({
                         </span>
                         <h4 className={`min-w-0 truncate text-[13px] font-semibold leading-tight ${isInactive ? 'text-slate-500' : isExpired ? 'text-red-700' : outOfStock ? 'text-slate-600' : 'text-slate-800'}`} title={product.title}>
                           {product.title || 'Sin titulo'}
-                          {isInactive && <span className="ml-2 rounded bg-slate-700 px-1.5 py-0.5 text-[8px] font-black uppercase text-white">Inhabilitado</span>}
+                          {showInactiveBadge && (
+                            <span
+                              className={`ml-2 rounded px-1.5 py-0.5 text-[8px] font-black uppercase text-white ${isDeletedProduct ? 'bg-red-700' : 'bg-slate-700'}`}
+                              title={inactiveTitle}
+                            >
+                              {inactiveLabel}
+                            </span>
+                          )}
                         </h4>
                         <div className={`flex min-w-0 items-center gap-1 overflow-hidden ${isCategoriesExpanded ? 'flex-wrap whitespace-normal' : 'whitespace-nowrap'}`} title={categoryTitle}>
                           {categoriesToRender.map((category) => (
@@ -772,7 +851,7 @@ export default function InventoryView({
                           )}
                         </div>
                         <p className={`truncate text-right font-bold leading-tight ${stockColor}`}>
-                          {isInactive ? 'Inhabilitado' : outOfStock ? 'Agotado' : formatStock(product)}
+                          {outOfStock ? 'Agotado' : formatStock(product)}
                         </p>
                         <p className="truncate text-right font-extrabold leading-tight text-slate-900">
                           <FancyPrice amount={isWeight ? product.price * 1000 : product.price} />

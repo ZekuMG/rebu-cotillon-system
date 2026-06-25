@@ -104,10 +104,14 @@ import {
   normalizeOrderPaymentHistory,
 } from './utils/paymentBreakdown';
 import {
+  buildSuggestedSalePriceFromMargin,
+  getCasaAlbertoLink,
   getProductActiveState,
   getProductSupplierLinks,
   shouldAutoDisableOutOfStockProduct,
   updateStockLifecycleLinks,
+  upsertCasaAlbertoLink,
+  upsertCasaAlbertoPriceTracking,
   upsertExcelImportAlias,
 } from './utils/productLifecycle';
 
@@ -888,7 +892,7 @@ const fetchRowsWithOptionalActiveFilter = async ({
 
     if (!result.error) return result;
 
-    const missingColumn = extractSchemaMissingColumn(result.error);
+    const missingColumn = getSchemaMissingColumnName(extractSchemaMissingColumn(result.error));
     if (missingColumn === 'is_active' && useActiveFilter) {
       useActiveFilter = false;
       continue;
@@ -2758,6 +2762,10 @@ export default function PartySupplyApp() {
         const cachedSnapshot = loadOfflineSnapshot();
         if (applyCoreSnapshot(cachedSnapshot)) {
           setIsOfflineReadOnly(true);
+          notifyCloudFallback(
+            'Trabajando con datos locales',
+            'Supabase no respondio a tiempo. Rebu cargo el ultimo snapshot local; reconecta antes de hacer cambios importantes.'
+          );
           setModuleState('core', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
           return !requireCloud;
         }
@@ -3343,7 +3351,14 @@ export default function PartySupplyApp() {
     try {
       if (showSpinner) setIsCloudLoading(true);
       await loadAppUsers({ force });
-      await loadCoreCloudData({ showSpinner: false, force });
+      const coreLoaded = await loadCoreCloudData({ showSpinner: false, force });
+      if (!coreLoaded) {
+        notifyCloudFallback(
+          'No se pudo completar la carga',
+          'La nube no devolvio los datos base. Rebu sigue con lo que tenga cargado localmente.'
+        );
+        return;
+      }
 
       const explicitModuleKeys = Array.isArray(moduleKeys) ? moduleKeys.filter(Boolean) : [];
       const nextModuleKeys = explicitModuleKeys.length
@@ -3599,6 +3614,7 @@ export default function PartySupplyApp() {
   const productThumbBackfillDisabledRef = useRef(false);
   const productThumbBackfillFailedIdsRef = useRef(new Set());
   const productDetailRequestsRef = useRef(new Map());
+  const lastCloudFallbackNoticeRef = useRef(0);
   activeTabRef.current = activeTab;
   dataStateRef.current = {
     inventory,
@@ -4068,6 +4084,13 @@ export default function PartySupplyApp() {
     setNotification({ isOpen: true, type, title, message });
   };
 
+  function notifyCloudFallback(title, message, type = 'warning') {
+    const now = Date.now();
+    if (now - Number(lastCloudFallbackNoticeRef.current || 0) < 15000) return;
+    lastCloudFallbackNoticeRef.current = now;
+    showNotificationRef.current?.(type, title, message);
+  }
+
   const closeNotification = () => {
     setNotification(prev => ({ ...prev, isOpen: false }));
   };
@@ -4126,8 +4149,8 @@ export default function PartySupplyApp() {
     if (!isOfflineReadOnly) return false;
     showNotification(
       'info',
-      'Modo sin conexión',
-      `Sin internet podés seguir consultando datos, pero no ${actionLabel}.`
+      'Modo sin conexion',
+      `Estas viendo datos locales. Reconecta la nube antes de ${actionLabel}.`
     );
     return true;
   };
@@ -9132,6 +9155,9 @@ export default function PartySupplyApp() {
       const originalStock = Number(originalProduct?.stock ?? productData.stock ?? 0);
       const requestedStock = Number(productData.stock || 0);
       const stockDelta = originalProduct ? requestedStock - originalStock : 0;
+      const requestedActive = productData.is_active !== undefined
+        ? productData.is_active !== false
+        : productData.isActive !== false;
       const nextImage = String(productData.image || '').trim();
       const nextImageThumb = nextImage
         ? String(productData.image_thumb || productData.imageThumb || '').trim()
@@ -9143,6 +9169,22 @@ export default function PartySupplyApp() {
         previousImageThumb !== nextImageThumb
       );
 
+      let nextSupplierLinks = getProductSupplierLinks(originalProduct || productData);
+      if (requestedActive) {
+        const previousLifecycle = nextSupplierLinks.stock_lifecycle && typeof nextSupplierLinks.stock_lifecycle === 'object'
+          ? nextSupplierLinks.stock_lifecycle
+          : {};
+        const nextLifecycle = { ...previousLifecycle };
+        delete nextLifecycle.outOfStockSince;
+        nextSupplierLinks = {
+          ...nextSupplierLinks,
+          stock_lifecycle: {
+            ...nextLifecycle,
+            lastManualEnabledAt: new Date().toISOString(),
+          },
+        };
+      }
+
       const payload = {
         title: productData.title,
         price: Number(productData.price),
@@ -9152,7 +9194,9 @@ export default function PartySupplyApp() {
         image: nextImage,
         image_thumb: nextImageThumb,
         product_type: productData.product_type || 'quantity',
-        expiration_date: productData.expiration_date || null
+        expiration_date: productData.expiration_date || null,
+        is_active: requestedActive,
+        supplier_links: nextSupplierLinks,
       };
 
       if (!originalProduct) {
@@ -9160,7 +9204,7 @@ export default function PartySupplyApp() {
       }
 
       const { data } = await updateWithSchemaFallback('products', productData.id, payload, CLOUD_SELECTS.products);
-      let formattedProduct = mapInventoryRecords([data])[0];
+      let formattedProduct = mapInventoryRecords([data || { ...productData, ...payload }])[0] || { ...productData, ...payload };
       if (originalProduct && stockDelta !== 0) {
         const nextStock = isLocalDemoMode()
           ? Number(localDemoUpdateRow('products', productData.id, { stock: originalStock + stockDelta })?.stock || originalStock + stockDelta)
@@ -9175,16 +9219,22 @@ export default function PartySupplyApp() {
         image_thumb: nextImageThumb,
         imageThumb: nextImageThumb,
       };
-      setInventory((prev) => prev.map((product) => (
-        String(product.id) === String(productData.id)
-          ? {
-              ...formattedProduct,
-              image: nextImage,
-              image_thumb: nextImageThumb,
-              imageThumb: nextImageThumb,
-            }
-          : product
-      )));
+      setInventory((prev) => {
+        const nextProduct = {
+          ...formattedProduct,
+          image: nextImage,
+          image_thumb: nextImageThumb,
+          imageThumb: nextImageThumb,
+        };
+        const exists = prev.some((product) => String(product.id) === String(productData.id));
+        const nextList = prev.map((product) => (
+          String(product.id) === String(productData.id) ? nextProduct : product
+        ));
+        if (!exists && getProductActiveState(nextProduct)) {
+          return [...nextList, nextProduct];
+        }
+        return nextList;
+      });
       productDetailRequestsRef.current.delete(String(productData.id));
 
       if (imageChanged) {
@@ -9237,6 +9287,7 @@ export default function PartySupplyApp() {
         barcode: normalizeTextValue(originalProduct?.barcode),
         expiration_date: normalizeTextValue(originalProduct?.expiration_date),
         imageState: originalProduct?.image ? 'Cargada' : 'Sin imagen',
+        isActive: getProductActiveState(originalProduct),
       };
 
       const updatedSnapshot = {
@@ -9251,6 +9302,7 @@ export default function PartySupplyApp() {
         barcode: normalizeTextValue(effectiveProductData.barcode),
         expiration_date: normalizeTextValue(effectiveProductData.expiration_date),
         imageState: effectiveProductData.image ? 'Cargada' : 'Sin imagen',
+        isActive: requestedActive,
       };
 
       const productChanges = [];
@@ -9268,6 +9320,7 @@ export default function PartySupplyApp() {
       pushProductChange('Código', originalSnapshot.barcode, updatedSnapshot.barcode);
       pushProductChange('Vencimiento', originalSnapshot.expiration_date, updatedSnapshot.expiration_date);
       pushProductChange('Imagen', originalSnapshot.imageState, updatedSnapshot.imageState);
+      pushProductChange('Estado', originalSnapshot.isActive ? 'Habilitado' : 'Deshabilitado', updatedSnapshot.isActive ? 'Habilitado' : 'Deshabilitado');
 
       addLog('Edición Producto', {
         id: effectiveProductData.id,
@@ -9300,6 +9353,75 @@ export default function PartySupplyApp() {
       const hydratedProduct = await hydrateProductCloudDetail(product);
       setProductToDelete(hydratedProduct);
       setDeleteProductReason('');
+    }
+  };
+
+  const handleRetireDeletedProduct = async (product, reason = '') => {
+    if (blockIfOfflineReadonly('eliminar ficha de producto')) return;
+    const safeReason = String(reason || '').trim();
+    if (!product?.id || !safeReason) {
+      showNotification('error', 'Motivo requerido', 'Escribi una razon para dejar el item eliminado.');
+      return;
+    }
+
+    const hydratedProduct = await hydrateProductCloudDetail(product).catch(() => product) || product;
+    if (getProductActiveState(hydratedProduct)) {
+      showNotification('warning', 'Primero deshabilitalo', 'Para compactar un producto como Item Eliminado, primero debe estar deshabilitado.');
+      return;
+    }
+
+    const previousSupplierLinks = getProductSupplierLinks(hydratedProduct);
+    const now = new Date().toISOString();
+    const payload = {
+      title: `Item Eliminado - ${safeReason}`.slice(0, 120),
+      brand: '',
+      price: 0,
+      purchasePrice: 0,
+      stock: 0,
+      category: 'Eliminados',
+      barcode: null,
+      image: '',
+      image_thumb: '',
+      product_type: 'quantity',
+      expiration_date: null,
+      is_active: false,
+      supplier_links: {
+        ...previousSupplierLinks,
+        deleted_item: {
+          reason: safeReason,
+          deletedAt: now,
+          deletedBy: currentUserRef.current?.name || currentUserRef.current?.username || 'Sistema',
+        },
+      },
+    };
+
+    try {
+      const { data } = await updateWithSchemaFallback('products', hydratedProduct.id, payload, CLOUD_SELECTS.products);
+      const formattedProduct = mapInventoryRecords([data || { ...hydratedProduct, ...payload }])[0] || { ...hydratedProduct, ...payload };
+
+      if (hydratedProduct.image) {
+        await deleteProductImage(hydratedProduct.image).catch(() => {});
+      }
+      if (hydratedProduct.image_thumb || hydratedProduct.imageThumb) {
+        await deleteProductImage(hydratedProduct.image_thumb || hydratedProduct.imageThumb).catch(() => {});
+      }
+
+      setInventory((prev) => prev.map((entry) =>
+        String(entry.id) === String(hydratedProduct.id) ? formattedProduct : entry
+      ));
+      productDetailRequestsRef.current.delete(String(hydratedProduct.id));
+      addLog('Baja Producto', {
+        id: hydratedProduct.id,
+        title: hydratedProduct.title,
+        finalTitle: `Item Eliminado - ${safeReason}`.slice(0, 120),
+        reason: safeReason,
+      }, safeReason);
+      setEditingProduct(null);
+      setInventoryPanelCloseToken((prev) => prev + 1);
+      showNotification('success', 'Item eliminado', 'Quedo solo la referencia con motivo.');
+    } catch (error) {
+      console.error('Error compactando producto eliminado:', error);
+      showNotification('error', 'No se pudo eliminar', error?.message || 'Fallo la baja del producto.');
     }
   };
 
@@ -9467,7 +9589,7 @@ export default function PartySupplyApp() {
               { barcode: null },
               CLOUD_SELECTS.products
             );
-            clearedProduct = mapInventoryRecords([clearedData])[0];
+            clearedProduct = mapInventoryRecords([clearedData || { ...currentBarcodeOwner, barcode: null }])[0] || null;
           }
         }
 
@@ -9478,7 +9600,7 @@ export default function PartySupplyApp() {
         let updatedProduct = product;
         if (Object.keys(payload).length > 0) {
           const { data } = await updateWithSchemaFallback('products', product.id, payload, CLOUD_SELECTS.products);
-          updatedProduct = mapInventoryRecords([data])[0];
+          updatedProduct = mapInventoryRecords([data || { ...product, ...payload }])[0] || { ...product, ...payload };
         }
 
         if (stockDelta !== 0) {
@@ -9701,32 +9823,33 @@ export default function PartySupplyApp() {
   const handleSearchInactiveInventoryProducts = async (query = '') => {
     const search = String(query || '').trim().toLowerCase();
     const words = search.split(/\s+/).filter(Boolean);
-    if (words.length === 0 || isLocalDemoMode()) return [];
+    if (isLocalDemoMode()) return [];
 
     try {
-      const result = await runSelectWithSchemaFallback(
+      const result = await fetchAllCloudRowsWithSelectFallback(
         (selectColumns) =>
           supabase
             .from('products')
             .select(selectColumns)
             .eq('is_active', false)
-            .order('title')
-            .limit(300),
+            .order('title'),
         CLOUD_SELECTS.products,
+        CLOUD_FETCH_BATCH_SIZE,
       );
 
       if (result.error) {
-        const missingColumn = extractSchemaMissingColumn(result.error);
+        const missingColumn = getSchemaMissingColumnName(extractSchemaMissingColumn(result.error));
         if (missingColumn === 'is_active') return [];
         throw result.error;
       }
 
       return mapInventoryRecords(result.data || []).filter((product) => {
+        if (words.length === 0) return true;
         const haystack = `${product.id} ${product.title || ''} ${product.barcode || ''} ${product.category || ''}`.toLowerCase();
         return words.every((word) => haystack.includes(word));
       });
     } catch (error) {
-      const missingColumn = extractSchemaMissingColumn(error);
+      const missingColumn = getSchemaMissingColumnName(extractSchemaMissingColumn(error));
       if (missingColumn === 'is_active') return [];
       console.warn('No se pudieron buscar productos inhabilitados:', error);
       return [];
@@ -9950,6 +10073,224 @@ export default function PartySupplyApp() {
       }));
       showNotification('error', 'Error', error?.message || 'No se pudieron importar las fotos.');
       return { appliedIds: [], failedRows: safeRows.map((row) => ({ ...row, error: 'Fallo general.' })) };
+    }
+  };
+
+  const handleSaveSupplierPriceChecks = async (checksToSave = []) => {
+    if (blockIfOfflineReadonly('guardar chequeo de Casa Alberto')) return { products: [] };
+    const safeChecks = Array.isArray(checksToSave) ? checksToSave : [];
+    if (safeChecks.length === 0) return { products: [] };
+
+    const updatedProducts = [];
+    const now = new Date().toISOString();
+
+    for (const check of safeChecks) {
+      const product = inventory.find((entry) => String(entry.id) === String(check.productId));
+      if (!product) continue;
+
+      const existingTracking = getCasaAlbertoLink(product).price_tracking || {};
+      const supplierPrice = Number(check.supplierPrice || 0);
+      const previousSupplierPrice = Number(
+        check.previousSupplierPrice ??
+        existingTracking.lastSupplierPrice ??
+        product.purchasePrice ??
+        0
+      ) || null;
+      const suggestedSalePrice = Number(check.suggestedSalePrice || 0) ||
+        buildSuggestedSalePriceFromMargin(product, supplierPrice);
+      const nextSupplierLinks = upsertCasaAlbertoPriceTracking(
+        getProductSupplierLinks(product),
+        {
+          providerCode: check.supplierCode,
+          casaAlbertoId: check.casaAlbertoId,
+          productUrl: check.productUrl,
+          foundTitle: check.foundTitle,
+          matchedBy: check.matchedBy,
+          inventoryBarcode: check.inventoryBarcode,
+          searchedQuery: check.searchedQuery,
+          titleSimilarity: check.titleSimilarity,
+          sourceUrl: check.sourceUrl,
+          priceText: check.priceText,
+          supplierPrice,
+          lastSupplierPrice: supplierPrice,
+          previousSupplierPrice,
+          suggestedSalePrice,
+          reviewStatus: check.reviewStatus || 'reviewed',
+          lastCheckedAt: check.lastCheckedAt || now,
+          lastChangedAt: check.lastChangedAt || existingTracking.lastChangedAt || null,
+          message: check.message || '',
+        },
+        now,
+      );
+
+      const { data } = await updateWithSchemaFallback(
+        'products',
+        product.id,
+        { supplier_links: nextSupplierLinks },
+        CLOUD_SELECTS.products,
+      );
+      updatedProducts.push(mapInventoryRecords([data || { ...product, supplier_links: nextSupplierLinks }])[0]);
+    }
+
+    const updatedById = new Map(updatedProducts.filter(Boolean).map((product) => [String(product.id), product]));
+    if (updatedById.size > 0) {
+      setInventory((prev) => prev.map((product) => updatedById.get(String(product.id)) || product));
+    }
+
+    return { products: updatedProducts.filter(Boolean) };
+  };
+
+  const handleApplySupplierPriceUpdates = async (updatesToApply = []) => {
+    if (blockIfOfflineReadonly('aprobar costos de Casa Alberto')) return { products: [] };
+    const safeUpdates = Array.isArray(updatesToApply) ? updatesToApply : [];
+    if (safeUpdates.length === 0) return { products: [] };
+
+    const updatedProducts = [];
+    const logItems = [];
+    const now = new Date().toISOString();
+
+    try {
+      for (const update of safeUpdates) {
+        const product = inventory.find((entry) => String(entry.id) === String(update.productId));
+        if (!product) continue;
+
+        const supplierPrice = Number(update.supplierPrice || 0);
+        if (!Number.isFinite(supplierPrice) || supplierPrice <= 0) continue;
+
+        const before = {
+          purchasePrice: Number(product.purchasePrice || 0),
+          price: Number(product.price || 0),
+          supplierLinks: getProductSupplierLinks(product),
+        };
+        const suggestedSalePrice = Number(update.suggestedSalePrice || 0) ||
+          buildSuggestedSalePriceFromMargin(product, supplierPrice);
+        const nextSupplierLinks = upsertCasaAlbertoPriceTracking(
+          before.supplierLinks,
+          {
+            providerCode: update.supplierCode,
+            casaAlbertoId: update.casaAlbertoId,
+            productUrl: update.productUrl,
+            foundTitle: update.foundTitle,
+            sourceUrl: update.sourceUrl,
+            priceText: update.priceText,
+            supplierPrice,
+            lastSupplierPrice: supplierPrice,
+            previousSupplierPrice: before.purchasePrice,
+            suggestedSalePrice,
+            reviewStatus: 'approved',
+            lastCheckedAt: now,
+            lastChangedAt: now,
+            approvedAt: now,
+            message: 'Costo aprobado desde Casa Alberto.',
+          },
+          now,
+        );
+
+        const { data } = await updateWithSchemaFallback(
+          'products',
+          product.id,
+          {
+            purchasePrice: supplierPrice,
+            supplier_links: nextSupplierLinks,
+          },
+          CLOUD_SELECTS.products,
+        );
+        const updatedProduct = mapInventoryRecords([
+          data || { ...product, purchasePrice: supplierPrice, supplier_links: nextSupplierLinks },
+        ])[0];
+        if (updatedProduct) updatedProducts.push(updatedProduct);
+        logItems.push({
+          id: product.id,
+          title: product.title,
+          provider: 'Cotillon Casa Alberto',
+          supplierCode: update.supplierCode || '',
+          casaAlbertoId: update.casaAlbertoId || '',
+          productUrl: update.productUrl || '',
+          before,
+          after: {
+            purchasePrice: supplierPrice,
+            price: product.price,
+            suggestedSalePrice,
+            supplierLinks: nextSupplierLinks,
+          },
+          changes: [{
+            field: 'Costo',
+            old: before.purchasePrice,
+            new: supplierPrice,
+            isPrice: true,
+          }],
+        });
+      }
+
+      const updatedById = new Map(updatedProducts.filter(Boolean).map((product) => [String(product.id), product]));
+      if (updatedById.size > 0) {
+        setInventory((prev) => prev.map((product) => updatedById.get(String(product.id)) || product));
+      }
+
+      if (logItems.length > 0) {
+        await addLog('Actualizacion Precio Proveedor', {
+          source: 'Productos Avanzado / Casa Alberto',
+          count: logItems.length,
+          items: logItems,
+        }, 'Casa Alberto');
+        showNotification('success', 'Costo actualizado', `${logItems.length} producto(s) con costo aprobado.`);
+      }
+
+      return { products: updatedProducts.filter(Boolean) };
+    } catch (error) {
+      console.error('Error aprobando precios de Casa Alberto:', error);
+      showNotification('error', 'Error', error?.message || 'No se pudieron aprobar los costos.');
+      return { products: [] };
+    }
+  };
+
+  const handleUpdateCasaAlbertoLinks = async ({ productIds = [], link = {} } = {}) => {
+    if (blockIfOfflineReadonly('actualizar enlace Casa Alberto')) return { products: [] };
+    const safeIds = Array.isArray(productIds) ? productIds : [];
+    if (safeIds.length === 0) return { products: [] };
+
+    const updatedProducts = [];
+    const now = new Date().toISOString();
+
+    try {
+      for (const productId of safeIds) {
+        const product = inventory.find((entry) => String(entry.id) === String(productId));
+        if (!product) continue;
+
+        const nextSupplierLinks = upsertCasaAlbertoLink(
+          getProductSupplierLinks(product),
+          {
+            ...link,
+            verifiedAt: now,
+          },
+          now,
+        );
+        const { data } = await updateWithSchemaFallback(
+          'products',
+          product.id,
+          { supplier_links: nextSupplierLinks },
+          CLOUD_SELECTS.products,
+        );
+        updatedProducts.push(mapInventoryRecords([data || { ...product, supplier_links: nextSupplierLinks }])[0]);
+      }
+
+      const updatedById = new Map(updatedProducts.filter(Boolean).map((product) => [String(product.id), product]));
+      if (updatedById.size > 0) {
+        setInventory((prev) => prev.map((product) => updatedById.get(String(product.id)) || product));
+        await addLog('Vinculo Casa Alberto Editado', {
+          source: 'Productos Avanzado / Casa Alberto',
+          count: updatedById.size,
+          link,
+          productIds: safeIds,
+        }, 'Casa Alberto');
+        showNotification('success', 'Enlace actualizado', `${updatedById.size} producto(s) vinculados.`);
+      }
+
+      return { products: updatedProducts.filter(Boolean) };
+    } catch (error) {
+      console.error('Error actualizando enlace Casa Alberto:', error);
+      showNotification('error', 'Error', error?.message || 'No se pudo guardar el enlace.');
+      return { products: [] };
     }
   };
 
@@ -11874,23 +12215,24 @@ export default function PartySupplyApp() {
             </div>
           )}
           {isOfflineReadOnly && (
-            <div className="flex flex-wrap items-center gap-2 border-b border-amber-200 bg-[linear-gradient(180deg,#fffbeb_0%,#fef3c7_100%)] px-5 py-2 text-[11px] font-semibold text-amber-900 shadow-sm">
-              <span className="font-black uppercase tracking-[0.08em]">Modo sin conexión</span>
+            <div className="flex flex-wrap items-center gap-2 border-b border-amber-300/50 bg-[linear-gradient(180deg,#451a03_0%,#78350f_100%)] px-5 py-2 text-[11px] font-semibold text-amber-50 shadow-sm">
+              <WifiOff size={14} className="text-amber-200" />
+              <span className="font-black uppercase tracking-[0.08em]">Modo sin conexion</span>
               <button
                 type="button"
                 onClick={handleReconnectCloud}
                 disabled={isReconnectAttempting}
-                className="inline-flex h-6 items-center gap-1.5 rounded-full border border-amber-300 bg-white/80 px-2.5 text-[10px] font-black uppercase tracking-[0.08em] text-amber-800 shadow-sm transition hover:border-amber-400 hover:bg-white disabled:cursor-wait disabled:opacity-70"
+                className="inline-flex h-6 items-center gap-1.5 rounded-md border border-amber-200/40 bg-amber-100/10 px-2.5 text-[10px] font-black uppercase tracking-[0.08em] text-amber-50 shadow-sm transition hover:bg-amber-100/20 disabled:cursor-wait disabled:opacity-70"
               >
                 <RefreshCw size={12} className={isReconnectAttempting ? 'animate-spin' : ''} />
                 {isReconnectAttempting ? 'Reconectando' : 'Reconectar'}
               </button>
-              <span className="text-amber-700">•</span>
-              <span>Podés seguir consultando datos, pero no hacer cambios.</span>
+              <span className="text-amber-200/80">-</span>
+              <span>Estas viendo datos locales. La nube no recibe cambios hasta reconectar.</span>
               {offlineSnapshotAt && (
                 <>
-                  <span className="text-amber-700">•</span>
-                  <span>Último snapshot: {formatDateAR(offlineSnapshotAt)} {formatTimeAR(offlineSnapshotAt)}</span>
+                  <span className="text-amber-200/80">-</span>
+                  <span>Ultimo snapshot: {formatDateAR(offlineSnapshotAt)} {formatTimeAR(offlineSnapshotAt)}</span>
                 </>
               )}
             </div>
@@ -12031,6 +12373,9 @@ export default function PartySupplyApp() {
                 onApplyProductImageImports={handleApplyProductImageImports}
                 onImageImportTaskChange={setImageImportTask}
                 imageImportOpenRequest={imageImportOpenRequest}
+                onSaveSupplierPriceChecks={handleSaveSupplierPriceChecks}
+                onApplySupplierPriceUpdates={handleApplySupplierPriceUpdates}
+                onUpdateCasaAlbertoLinks={handleUpdateCasaAlbertoLinks}
                 />
               </PersistentTabPanel>
             )}
@@ -12057,7 +12402,7 @@ export default function PartySupplyApp() {
         <OpeningBalanceModal isOpen={isOpeningBalanceModalOpen} onClose={() => setIsOpeningBalanceModalOpen(false)} tempOpeningBalance={tempOpeningBalance} setTempOpeningBalance={setTempOpeningBalance} tempClosingTime={tempClosingTime} setTempClosingTime={setTempClosingTime} onSave={handleSaveOpeningBalance} />
         <ClosingTimeModal isOpen={isClosingTimeModalOpen} onClose={() => setIsClosingTimeModalOpen(false)} closingTime={closingTime} setClosingTime={setClosingTime} onSave={handleSaveClosingTime} />
         <AddProductModal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); }} newItem={newItem} setNewItem={setNewItem} categories={categories} onImageUpload={handleImageUpload} onAdd={handleAddItem} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} />
-        <EditProductModal product={editingProduct} onClose={() => setEditingProduct(null)} setEditingProduct={setEditingProduct} categories={categories} onImageUpload={handleImageUpload} editReason={editReason} setEditReason={setEditReason} onSave={saveEditProduct} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} onDuplicate={handleDuplicateProduct} currentUser={currentUser} />
+        <EditProductModal product={editingProduct} onClose={() => setEditingProduct(null)} setEditingProduct={setEditingProduct} categories={categories} onImageUpload={handleImageUpload} editReason={editReason} setEditReason={setEditReason} onSave={saveEditProduct} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} onDuplicate={handleDuplicateProduct} onRetireDeletedProduct={handleRetireDeletedProduct} currentUser={currentUser} />
         <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} members={members} offers={offers} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} />
         <ImageModal isOpen={isImageModalOpen} image={selectedImage} onClose={() => setIsImageModalOpen(false)} />
         <RefundModal  transaction={transactionToRefund}  onClose={() => {   setTransactionToRefund(null);   setRefundReason('');  }}   refundReason={refundReason}  setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />

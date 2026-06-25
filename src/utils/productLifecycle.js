@@ -1,5 +1,6 @@
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const OUT_OF_STOCK_INACTIVE_DAYS = 90;
+export const CASA_ALBERTO_PROVIDER_NAME = 'Cotillon Casa Alberto';
 
 export const normalizeProductLinkText = (value = '') =>
   String(value ?? '')
@@ -20,8 +21,152 @@ export const getProductSupplierLinks = (product = {}) => {
   return links && typeof links === 'object' && !Array.isArray(links) ? links : {};
 };
 
+export const getCasaAlbertoLink = (product = {}) => {
+  const link = getProductSupplierLinks(product).casa_alberto;
+  return link && typeof link === 'object' && !Array.isArray(link) ? link : {};
+};
+
+export const getCasaAlbertoPriceTracking = (product = {}) => {
+  const tracking = getCasaAlbertoLink(product).price_tracking;
+  return tracking && typeof tracking === 'object' && !Array.isArray(tracking) ? tracking : {};
+};
+
+export const productHasCasaAlbertoLink = (product = {}) => {
+  const link = getCasaAlbertoLink(product);
+  return Boolean(
+    String(link.casaAlbertoId || '').trim() ||
+    String(link.productUrl || '').trim() ||
+    String(link.providerCode || '').trim()
+  );
+};
+
+export const buildCasaAlbertoGroupKey = (product = {}) => {
+  const link = getCasaAlbertoLink(product);
+  const id = String(link.casaAlbertoId || '').trim();
+  if (id) return `id:${id}`;
+  const url = String(link.productUrl || '').trim();
+  if (url) return `url:${url}`;
+  const code = String(link.providerCode || '').trim();
+  if (code) return `code:${code}`;
+  return `product:${product?.id || Math.random()}`;
+};
+
+const normalizeSupplierTrackingPrice = (value) => {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+};
+
+export const buildSuggestedSalePriceFromMargin = (product = {}, supplierPrice = 0) => {
+  const nextCost = Number(supplierPrice || 0);
+  const currentCost = Number(product.purchasePrice || 0);
+  const currentSale = Number(product.price || 0);
+
+  if (!Number.isFinite(nextCost) || nextCost <= 0) return currentSale || 0;
+  if (!Number.isFinite(currentCost) || currentCost <= 0 || !Number.isFinite(currentSale) || currentSale <= 0) {
+    return Math.round(nextCost);
+  }
+
+  const marginRatio = Math.max((currentSale - currentCost) / currentCost, 0);
+  return Math.round(nextCost * (1 + marginRatio));
+};
+
+export const upsertCasaAlbertoLink = (
+  supplierLinks = {},
+  link = {},
+  now = new Date().toISOString(),
+) => {
+  const safeLinks = supplierLinks && typeof supplierLinks === 'object' && !Array.isArray(supplierLinks)
+    ? supplierLinks
+    : {};
+  const previousCasaAlberto = safeLinks.casa_alberto && typeof safeLinks.casa_alberto === 'object'
+    ? safeLinks.casa_alberto
+    : {};
+
+  const casaAlbertoId = String(link.casaAlbertoId || link.externalProductId || previousCasaAlberto.casaAlbertoId || '').trim();
+  const providerCode = String(link.providerCode || link.supplierCode || previousCasaAlberto.providerCode || '').trim();
+  const productUrl = String(link.productUrl || previousCasaAlberto.productUrl || '').trim();
+  const foundTitle = String(link.foundTitle || link.supplierTitle || previousCasaAlberto.foundTitle || '').trim();
+
+  return {
+    ...safeLinks,
+    casa_alberto: {
+      ...previousCasaAlberto,
+      provider: CASA_ALBERTO_PROVIDER_NAME,
+      providerCode,
+      casaAlbertoId,
+      productUrl,
+      imageUrl: link.imageUrl ?? previousCasaAlberto.imageUrl ?? '',
+      foundTitle,
+      matchedBy: link.matchedBy || previousCasaAlberto.matchedBy || 'manual',
+      inventoryBarcode: link.inventoryBarcode ?? previousCasaAlberto.inventoryBarcode ?? '',
+      searchedQuery: link.searchedQuery ?? previousCasaAlberto.searchedQuery ?? '',
+      titleSimilarity: Number(link.titleSimilarity ?? previousCasaAlberto.titleSimilarity ?? 0) || 0,
+      verifiedAt: link.verifiedAt || previousCasaAlberto.verifiedAt || now,
+      updatedAt: now,
+    },
+  };
+};
+
+export const upsertCasaAlbertoPriceTracking = (
+  supplierLinks = {},
+  trackingPatch = {},
+  now = new Date().toISOString(),
+) => {
+  const nextLinks = upsertCasaAlbertoLink(supplierLinks, trackingPatch, now);
+  const previousCasaAlberto = nextLinks.casa_alberto || {};
+  const previousTracking = previousCasaAlberto.price_tracking && typeof previousCasaAlberto.price_tracking === 'object'
+    ? previousCasaAlberto.price_tracking
+    : {};
+
+  const lastSupplierPrice = normalizeSupplierTrackingPrice(
+    trackingPatch.lastSupplierPrice ?? trackingPatch.supplierPrice ?? previousTracking.lastSupplierPrice,
+  );
+  const previousSupplierPrice = normalizeSupplierTrackingPrice(
+    trackingPatch.previousSupplierPrice ?? previousTracking.lastSupplierPrice ?? previousTracking.previousSupplierPrice,
+  );
+  const suggestedSalePrice = normalizeSupplierTrackingPrice(
+    trackingPatch.suggestedSalePrice ?? previousTracking.suggestedSalePrice,
+  );
+
+  return {
+    ...nextLinks,
+    casa_alberto: {
+      ...previousCasaAlberto,
+      price_tracking: {
+        ...previousTracking,
+        ...trackingPatch,
+        lastSupplierPrice,
+        previousSupplierPrice,
+        suggestedSalePrice,
+        reviewStatus: trackingPatch.reviewStatus || previousTracking.reviewStatus || 'unchecked',
+        lastCheckedAt: trackingPatch.lastCheckedAt || previousTracking.lastCheckedAt || now,
+        lastChangedAt: trackingPatch.lastChangedAt || previousTracking.lastChangedAt || null,
+        approvedAt: trackingPatch.approvedAt || previousTracking.approvedAt || null,
+        sourceUrl: trackingPatch.sourceUrl || previousTracking.sourceUrl || previousCasaAlberto.productUrl || '',
+        priceText: trackingPatch.priceText || previousTracking.priceText || '',
+      },
+    },
+  };
+};
+
 export const getProductActiveState = (product = {}) =>
   product?.isActive !== false && product?.is_active !== false;
+
+export const getDeletedItemInfo = (product = {}) => {
+  const deletedItem = getProductSupplierLinks(product).deleted_item;
+  return deletedItem && typeof deletedItem === 'object' && !Array.isArray(deletedItem)
+    ? deletedItem
+    : {};
+};
+
+export const isDeletedProductRecord = (product = {}) => {
+  const deletedItem = getDeletedItemInfo(product);
+  return Boolean(
+    deletedItem.deletedAt ||
+    deletedItem.reason ||
+    String(product?.title || '').trim().toLowerCase().startsWith('item eliminado')
+  );
+};
 
 const normalizeAlias = (alias = {}) => {
   const code = normalizeProductLinkCode(alias.code || alias.excelCode || alias.importedCode);

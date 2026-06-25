@@ -1,10 +1,10 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Search, Save, CheckSquare, Square, 
   Scale, Package, ArrowRight, Loader2, RotateCcw,
   FileText, X, User, Edit3, ChevronDown, Plus, Trash2, PackageX,
   Camera, Image as ImageIcon, LogIn, CheckCircle, AlertTriangle, ExternalLink,
-  Pause, Play, StopCircle, Crosshair
+  Pause, Play, StopCircle, Crosshair, RefreshCw, Link2
 } from 'lucide-react';
 import AsyncActionButton from '../components/AsyncActionButton';
 import { FancyPrice } from '../components/FancyPrice';
@@ -13,6 +13,13 @@ import { ImageModal } from '../components/modals/SaleModals';
 import Swal from 'sweetalert2';
 import usePendingAction from '../hooks/usePendingAction';
 import { getProductImageUrl, hasProductImage } from '../utils/productImages';
+import {
+  buildCasaAlbertoGroupKey,
+  buildSuggestedSalePriceFromMargin,
+  getCasaAlbertoLink,
+  getCasaAlbertoPriceTracking,
+  productHasCasaAlbertoLink,
+} from '../utils/productLifecycle';
 
 const BULK_EDITOR_TOOL_MODE_STORAGE_KEY = 'rebu_bulk_editor_tool_mode_v1';
 const IMAGE_IMPORT_LIMIT_OPTIONS = [
@@ -22,7 +29,7 @@ const IMAGE_IMPORT_LIMIT_OPTIONS = [
   { value: 'all', label: 'Todas' },
 ];
 
-const normalizeToolMode = (mode) => (mode === 'bulk' ? 'bulk' : 'excel');
+const normalizeToolMode = (mode) => (mode === 'bulk' || mode === 'supplier' ? mode : 'excel');
 
 const getInitialToolMode = () => {
   try {
@@ -51,6 +58,9 @@ export default function BulkEditorView({
   onApplyProductImageImports,
   onImageImportTaskChange,
   imageImportOpenRequest = 0,
+  onSaveSupplierPriceChecks,
+  onApplySupplierPriceUpdates,
+  onUpdateCasaAlbertoLinks,
 }) {
   const buildEditStateFromInventory = (inventory) => {
     const nextEdits = {};
@@ -100,6 +110,22 @@ export default function BulkEditorView({
   const [productImagePreview, setProductImagePreview] = useState('');
   const imageImportPausedRef = useRef(false);
   const imageImportStopRef = useRef(false);
+  const [supplierPriceFilter, setSupplierPriceFilter] = useState('all');
+  const [supplierPriceRows, setSupplierPriceRows] = useState({});
+  const [isCheckingSupplierPrices, setIsCheckingSupplierPrices] = useState(false);
+  const [checkingSupplierGroupKey, setCheckingSupplierGroupKey] = useState('');
+  const [supplierLinkEditKey, setSupplierLinkEditKey] = useState('');
+  const [supplierLinkDrafts, setSupplierLinkDrafts] = useState({});
+  const [isDetectingSupplierLinks, setIsDetectingSupplierLinks] = useState(false);
+  const [supplierLinkDetectionLimit, setSupplierLinkDetectionLimit] = useState('10');
+  const [supplierLinkDetectionProgress, setSupplierLinkDetectionProgress] = useState({
+    total: 0,
+    processed: 0,
+    found: 0,
+    errors: 0,
+  });
+  const supplierAutoCheckedRef = useRef(false);
+  const supplierLinkDetectionStopRef = useRef(false);
 
   // --- Estado para el autocompletado de productos extra ---
   const [focusedTempId, setFocusedTempId] = useState(null);
@@ -754,12 +780,25 @@ export default function BulkEditorView({
   };
 
   const handleOpenImageSource = async (url) => {
-    if (!url) return;
-    if (window.electronAPI?.openExternalUrl) {
-      await window.electronAPI.openExternalUrl(url);
+    const targetUrl = String(url || '').trim();
+    if (!targetUrl) return;
+    if (window.electronAPI?.supplierOpenUrl && /cotilloncasaalberto\.com\.ar/i.test(targetUrl)) {
+      const result = await window.electronAPI.supplierOpenUrl(targetUrl);
+      if (!result?.success) {
+        await Swal.fire({
+          icon: 'warning',
+          title: 'No se pudo abrir Casa Alberto',
+          text: result?.error || 'Revisa la sesion del proveedor y volve a intentar.',
+          confirmButtonText: 'Entendido',
+        });
+      }
       return;
     }
-    window.open(url, '_blank', 'noopener,noreferrer');
+    if (window.electronAPI?.openExternalUrl) {
+      await window.electronAPI.openExternalUrl(targetUrl);
+      return;
+    }
+    window.open(targetUrl, '_blank', 'noopener,noreferrer');
   };
 
   const centerProductImageDataUrl = (dataUrl) => new Promise((resolve, reject) => {
@@ -970,6 +1009,515 @@ export default function BulkEditorView({
     return diff > 0 ? `+${diff.toFixed(1)}%` : `${diff.toFixed(1)}%`;
   };
 
+  const formatSupplierMoney = (value) => {
+    const numberValue = Number(value || 0);
+    if (!Number.isFinite(numberValue)) return '$0';
+    return numberValue.toLocaleString('es-AR', {
+      style: 'currency',
+      currency: 'ARS',
+      maximumFractionDigits: numberValue % 1 === 0 ? 0 : 2,
+    });
+  };
+
+  const formatSupplierDate = (value) => {
+    if (!value) return 'Sin chequear';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Sin chequear';
+    return date.toLocaleString('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const getSupplierPriceStatusMeta = (status) => {
+    if (status === 'changed') {
+      return {
+        label: 'Con cambio',
+        className: 'border-amber-400/40 bg-amber-400/12 text-amber-200',
+        railClassName: 'bg-amber-400',
+      };
+    }
+    if (status === 'reviewed') {
+      return {
+        label: 'Revisado',
+        className: 'border-emerald-400/35 bg-emerald-400/12 text-emerald-200',
+        railClassName: 'bg-emerald-400',
+      };
+    }
+    if (status === 'approved') {
+      return {
+        label: 'Aprobado',
+        className: 'border-cyan-400/35 bg-cyan-400/12 text-cyan-200',
+        railClassName: 'bg-cyan-400',
+      };
+    }
+    if (status === 'error' || status === 'login_required') {
+      return {
+        label: status === 'login_required' ? 'Login requerido' : 'Error',
+        className: 'border-rose-400/35 bg-rose-400/12 text-rose-200',
+        railClassName: 'bg-rose-400',
+      };
+    }
+    return {
+      label: 'Sin revisar',
+      className: 'border-slate-500/40 bg-slate-800/70 text-slate-300',
+      railClassName: 'bg-slate-500',
+    };
+  };
+
+  const getSupplierGroupComputedStatus = useCallback((group) => {
+    const localStatus = supplierPriceRows[group.key]?.status;
+    if (localStatus === 'error' || localStatus === 'login_required') return localStatus;
+
+    const supplierPrice = Number(group.supplierPrice || 0);
+    const hasSupplierPrice = Number.isFinite(supplierPrice) && supplierPrice > 0;
+    const hasCostDelta = hasSupplierPrice && group.products.some((product) =>
+      Math.abs(Number(product.purchasePrice || 0) - supplierPrice) >= 0.01
+    );
+
+    if (hasCostDelta) return 'changed';
+    if (localStatus === 'approved' || group.tracking.reviewStatus === 'approved') return 'approved';
+    if (group.tracking.lastCheckedAt || localStatus === 'reviewed') return 'reviewed';
+    return 'unchecked';
+  }, [supplierPriceRows]);
+
+  const casaAlbertoGroups = useMemo(() => {
+    const groups = new Map();
+
+    sandboxInventory
+      .filter(productHasCasaAlbertoLink)
+      .forEach((product) => {
+        const key = buildCasaAlbertoGroupKey(product);
+        const link = getCasaAlbertoLink(product);
+        const tracking = getCasaAlbertoPriceTracking(product);
+        const localRow = supplierPriceRows[key] || {};
+        const existing = groups.get(key);
+        const base = existing || {
+          key,
+          products: [],
+          link,
+          tracking,
+          supplierTitle: localRow.foundTitle || link.foundTitle || product.title || 'Producto Casa Alberto',
+          supplierCode: localRow.supplierCode || link.providerCode || '',
+          casaAlbertoId: localRow.casaAlbertoId || link.casaAlbertoId || '',
+          productUrl: localRow.productUrl || link.productUrl || '',
+          supplierPrice: localRow.supplierPrice ?? tracking.lastSupplierPrice ?? null,
+          previousSupplierPrice: localRow.previousSupplierPrice ?? tracking.previousSupplierPrice ?? null,
+          lastCheckedAt: localRow.lastCheckedAt || tracking.lastCheckedAt || '',
+          message: localRow.message || tracking.message || '',
+          sourceUrl: localRow.sourceUrl || tracking.sourceUrl || link.productUrl || '',
+          priceText: localRow.priceText || tracking.priceText || '',
+        };
+
+        base.products.push(product);
+        groups.set(key, base);
+      });
+
+    return Array.from(groups.values())
+      .map((group) => {
+        const status = getSupplierGroupComputedStatus(group);
+        const supplierPrice = Number(group.supplierPrice || 0);
+        return {
+          ...group,
+          status,
+          suggestedSalePrice: supplierPrice > 0
+            ? buildSuggestedSalePriceFromMargin(group.products[0], supplierPrice)
+            : 0,
+        };
+      })
+      .sort((a, b) => {
+        const statusWeight = { changed: 0, login_required: 1, error: 2, unchecked: 3, reviewed: 4, approved: 5 };
+        return (statusWeight[a.status] ?? 9) - (statusWeight[b.status] ?? 9) ||
+          String(a.supplierTitle || '').localeCompare(String(b.supplierTitle || ''));
+      });
+  }, [sandboxInventory, supplierPriceRows, getSupplierGroupComputedStatus]);
+
+  const supplierPricePendingCount = casaAlbertoGroups.filter((group) => group.status === 'changed').length;
+  const visibleCasaAlbertoGroups = casaAlbertoGroups.filter((group) => {
+    if (supplierPriceFilter === 'all') return true;
+    if (supplierPriceFilter === 'error') return group.status === 'error' || group.status === 'login_required';
+    if (supplierPriceFilter === 'reviewed') return group.status === 'reviewed' || group.status === 'approved';
+    return group.status === supplierPriceFilter;
+  });
+  const casaAlbertoLinkCandidates = useMemo(() => (
+    sandboxInventory
+      .filter((product) => !productHasCasaAlbertoLink(product) && String(product.title || '').trim())
+      .sort((a, b) => {
+        const aHasCode = String(a.barcode || '').trim() ? 0 : 1;
+        const bHasCode = String(b.barcode || '').trim() ? 0 : 1;
+        return aHasCode - bHasCode || String(a.title || '').localeCompare(String(b.title || ''));
+      })
+  ), [sandboxInventory]);
+
+  const normalizeSupplierDigits = (value) => {
+    const digits = String(value || '').replace(/\D/g, '');
+    return digits.replace(/^0+/, '') || digits;
+  };
+
+  const getDetectedSupplierMatchMode = (product, result) => {
+    const productCode = normalizeSupplierDigits(product?.barcode);
+    const supplierCode = normalizeSupplierDigits(result?.supplierCode);
+    if (productCode && supplierCode) {
+      if (productCode === supplierCode) return 'barcode_exact';
+      if (productCode.slice(0, -1) === supplierCode || supplierCode.slice(0, -1) === productCode) {
+        return 'trimmed_barcode';
+      }
+    }
+    return 'title_search';
+  };
+
+  const getCasaAlbertoIdFromUrl = (url) => {
+    try {
+      return new URL(String(url || '')).searchParams.get('idp') || '';
+    } catch {
+      return '';
+    }
+  };
+
+  const updateSandboxProducts = (products = []) => {
+    const safeProducts = Array.isArray(products) ? products.filter(Boolean) : [];
+    if (safeProducts.length === 0) return;
+    const updatedById = new Map(safeProducts.map((product) => [String(product.id), product]));
+    setSandboxInventory((prev) => prev.map((product) => updatedById.get(String(product.id)) || product));
+  };
+
+  const handleCheckSupplierPriceGroup = async (group) => {
+    if (!window.electronAPI?.supplierPriceSearch) {
+      Swal.fire('Electron requerido', 'El chequeo de Casa Alberto necesita la app de escritorio.', 'info');
+      return null;
+    }
+
+    setCheckingSupplierGroupKey(group.key);
+    try {
+      const result = await window.electronAPI.supplierPriceSearch({
+        productUrl: group.productUrl,
+        casaAlbertoId: group.casaAlbertoId,
+        supplierCode: group.supplierCode,
+        title: group.supplierTitle || group.products[0]?.title || '',
+      });
+      const checkedAt = new Date().toISOString();
+
+      if (result?.status === 'found' && Number(result.supplierPrice) > 0) {
+        const supplierPrice = Number(result.supplierPrice);
+        const previousSupplierPrice = Number(group.supplierPrice || group.previousSupplierPrice || 0) || null;
+        const hasCostDelta = group.products.some((product) =>
+          Math.abs(Number(product.purchasePrice || 0) - supplierPrice) >= 0.01
+        );
+        const status = hasCostDelta ? 'changed' : 'reviewed';
+        const rowState = {
+          status,
+          supplierPrice,
+          previousSupplierPrice,
+          foundTitle: result.foundTitle || group.supplierTitle,
+          supplierCode: result.supplierCode || group.supplierCode,
+          casaAlbertoId: result.casaAlbertoId || group.casaAlbertoId,
+          productUrl: result.productUrl || group.productUrl,
+          sourceUrl: result.sourceUrl || result.productUrl || group.productUrl,
+          priceText: result.priceText || '',
+          lastCheckedAt: checkedAt,
+          lastChangedAt: hasCostDelta ? checkedAt : group.tracking.lastChangedAt || null,
+          message: hasCostDelta ? 'Precio distinto al costo Rebu.' : 'Costo Rebu alineado con Casa Alberto.',
+        };
+
+        setSupplierPriceRows((prev) => ({ ...prev, [group.key]: rowState }));
+        const saveResult = await onSaveSupplierPriceChecks?.(group.products.map((product) => ({
+          productId: product.id,
+          supplierPrice,
+          previousSupplierPrice,
+          suggestedSalePrice: buildSuggestedSalePriceFromMargin(product, supplierPrice),
+          reviewStatus: status,
+          lastCheckedAt: checkedAt,
+          lastChangedAt: hasCostDelta ? checkedAt : group.tracking.lastChangedAt || null,
+          supplierCode: rowState.supplierCode,
+          casaAlbertoId: rowState.casaAlbertoId,
+          productUrl: rowState.productUrl,
+          foundTitle: rowState.foundTitle,
+          sourceUrl: rowState.sourceUrl,
+          priceText: rowState.priceText,
+        })));
+        updateSandboxProducts(saveResult?.products);
+        return { ...rowState, groupKey: group.key };
+      }
+
+      const status = result?.status === 'login_required' ? 'login_required' : 'error';
+      const rowState = {
+        status,
+        message: result?.message || 'No se pudo chequear el precio.',
+        lastCheckedAt: checkedAt,
+      };
+      setSupplierPriceRows((prev) => ({ ...prev, [group.key]: rowState }));
+      return { ...rowState, groupKey: group.key };
+    } finally {
+      setCheckingSupplierGroupKey('');
+    }
+  };
+
+  const handleCheckAllSupplierPrices = async () => {
+    if (isCheckingSupplierPrices) return;
+    const groupsToCheck = visibleCasaAlbertoGroups.length > 0 ? visibleCasaAlbertoGroups : casaAlbertoGroups;
+    if (groupsToCheck.length === 0) return;
+
+    setIsCheckingSupplierPrices(true);
+    const summary = { changed: 0, reviewed: 0, error: 0, login_required: 0 };
+    try {
+      for (const group of groupsToCheck) {
+        const result = await handleCheckSupplierPriceGroup(group);
+        if (result?.status === 'changed') summary.changed += 1;
+        else if (result?.status === 'reviewed') summary.reviewed += 1;
+        else if (result?.status === 'login_required') {
+          summary.login_required += 1;
+          break;
+        } else if (result?.status) {
+          summary.error += 1;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      Swal.fire({
+        title: 'Chequeo terminado',
+        text: `${summary.changed} con cambio, ${summary.reviewed} sin cambio, ${summary.error + summary.login_required} con aviso.`,
+        icon: summary.changed > 0 ? 'warning' : 'success',
+        confirmButtonColor: '#0f172a',
+      });
+    } finally {
+      setIsCheckingSupplierPrices(false);
+    }
+  };
+
+  const handleApproveSupplierGroup = async (group) => {
+    const supplierPrice = Number(group.supplierPrice || 0);
+    if (!Number.isFinite(supplierPrice) || supplierPrice <= 0) {
+      Swal.fire('Falta precio', 'Chequea el proveedor antes de aprobar el costo.', 'info');
+      return;
+    }
+
+    const result = await onApplySupplierPriceUpdates?.(group.products.map((product) => ({
+      productId: product.id,
+      supplierPrice,
+      previousSupplierPrice: Number(product.purchasePrice || 0),
+      suggestedSalePrice: buildSuggestedSalePriceFromMargin(product, supplierPrice),
+      supplierCode: group.supplierCode,
+      casaAlbertoId: group.casaAlbertoId,
+      productUrl: group.productUrl,
+      foundTitle: group.supplierTitle,
+      sourceUrl: group.sourceUrl || group.productUrl,
+      priceText: group.priceText || '',
+    })));
+
+    updateSandboxProducts(result?.products);
+    setSupplierPriceRows((prev) => ({
+      ...prev,
+      [group.key]: {
+        ...(prev[group.key] || {}),
+        status: 'approved',
+        supplierPrice,
+        lastCheckedAt: new Date().toISOString(),
+      },
+    }));
+  };
+
+  const handleDetectCasaAlbertoLinks = async () => {
+    if (!window.electronAPI?.supplierPriceSearch) {
+      Swal.fire('Electron requerido', 'La deteccion de enlaces necesita la app de escritorio.', 'info');
+      return;
+    }
+
+    const limit = supplierLinkDetectionLimit === 'all'
+      ? casaAlbertoLinkCandidates.length
+      : Number(supplierLinkDetectionLimit || 10);
+    const productsToDetect = casaAlbertoLinkCandidates.slice(0, Math.max(limit, 0));
+    if (productsToDetect.length === 0) return;
+
+    if (supplierLinkDetectionLimit === 'all' && productsToDetect.length > 80) {
+      const result = await Swal.fire({
+        title: 'Detectar todo el lote',
+        text: `Se van a consultar ${productsToDetect.length} productos. Puede tardar varios minutos.`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: 'Detectar todo',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        confirmButtonColor: '#0f172a',
+      });
+      if (!result.isConfirmed) return;
+    }
+
+    supplierLinkDetectionStopRef.current = false;
+    setIsDetectingSupplierLinks(true);
+    setSupplierLinkDetectionProgress({
+      total: productsToDetect.length,
+      processed: 0,
+      found: 0,
+      errors: 0,
+    });
+
+    const summary = {
+      found: 0,
+      reviewed: 0,
+      changed: 0,
+      errors: 0,
+      login_required: 0,
+      not_found: 0,
+    };
+
+    try {
+      for (const [index, product] of productsToDetect.entries()) {
+        if (supplierLinkDetectionStopRef.current) break;
+
+        const result = await window.electronAPI.supplierPriceSearch({
+          supplierCode: product.barcode || '',
+          title: product.title || '',
+        });
+
+        if (result?.status === 'login_required') {
+          summary.login_required += 1;
+          setSupplierLinkDetectionProgress((current) => ({
+            ...current,
+            processed: index + 1,
+            errors: current.errors + 1,
+          }));
+          break;
+        }
+
+        const detectedProductUrl = result?.productUrl || result?.sourceUrl || '';
+        const detectedCasaAlbertoId = result?.casaAlbertoId || getCasaAlbertoIdFromUrl(detectedProductUrl);
+
+        if (result?.status === 'found' && detectedProductUrl && detectedCasaAlbertoId) {
+          const supplierPrice = Number(result.supplierPrice || 0);
+          const hasCostDelta = supplierPrice > 0 && Math.abs(Number(product.purchasePrice || 0) - supplierPrice) >= 0.01;
+          const matchedBy = getDetectedSupplierMatchMode(product, result);
+          const saveResult = await onSaveSupplierPriceChecks?.([{
+            productId: product.id,
+            supplierPrice,
+            previousSupplierPrice: Number(product.purchasePrice || 0),
+            suggestedSalePrice: buildSuggestedSalePriceFromMargin(product, supplierPrice),
+            reviewStatus: hasCostDelta ? 'changed' : 'reviewed',
+            lastCheckedAt: new Date().toISOString(),
+            lastChangedAt: hasCostDelta ? new Date().toISOString() : null,
+            supplierCode: result.supplierCode || '',
+            casaAlbertoId: detectedCasaAlbertoId,
+            productUrl: detectedProductUrl,
+            foundTitle: result.foundTitle || '',
+            sourceUrl: result.sourceUrl || detectedProductUrl,
+            priceText: result.priceText || '',
+            matchedBy,
+            inventoryBarcode: product.barcode || '',
+            searchedQuery: result.searchedQuery || product.barcode || product.title || '',
+            message: matchedBy === 'title_search'
+              ? 'Enlace detectado por nombre.'
+              : matchedBy === 'trimmed_barcode'
+                ? 'Enlace detectado con codigo corregido.'
+                : 'Enlace detectado por codigo.',
+          }]);
+          updateSandboxProducts(saveResult?.products);
+          summary.found += 1;
+          if (hasCostDelta) summary.changed += 1;
+          else summary.reviewed += 1;
+        } else if (result?.status === 'not_found') {
+          summary.not_found += 1;
+        } else {
+          summary.errors += 1;
+        }
+
+        setSupplierLinkDetectionProgress((current) => ({
+          ...current,
+          processed: index + 1,
+          found: summary.found,
+          errors: summary.errors + summary.login_required,
+        }));
+
+        await new Promise((resolve) => setTimeout(resolve, 320));
+      }
+
+      Swal.fire({
+        title: supplierLinkDetectionStopRef.current ? 'Deteccion detenida' : 'Deteccion terminada',
+        text: `${summary.found} enlazados, ${summary.changed} con cambio de costo, ${summary.not_found} sin resultado, ${summary.errors + summary.login_required} con aviso.`,
+        icon: summary.found > 0 ? 'success' : 'info',
+        confirmButtonColor: '#0f172a',
+      });
+    } finally {
+      setIsDetectingSupplierLinks(false);
+      supplierLinkDetectionStopRef.current = false;
+    }
+  };
+
+  const stopCasaAlbertoLinkDetection = () => {
+    supplierLinkDetectionStopRef.current = true;
+  };
+
+  const openSupplierLinkEditor = (group) => {
+    setSupplierLinkEditKey((current) => (current === group.key ? '' : group.key));
+    setSupplierLinkDrafts((prev) => ({
+      ...prev,
+      [group.key]: prev[group.key] || {
+        foundTitle: group.supplierTitle || '',
+        supplierCode: group.supplierCode || '',
+        casaAlbertoId: group.casaAlbertoId || '',
+        productUrl: group.productUrl || '',
+      },
+    }));
+  };
+
+  const updateSupplierLinkDraft = (groupKey, field, value) => {
+    setSupplierLinkDrafts((prev) => ({
+      ...prev,
+      [groupKey]: {
+        ...(prev[groupKey] || {}),
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleSaveSupplierLink = async (group) => {
+    const draft = supplierLinkDrafts[group.key] || {};
+    const result = await onUpdateCasaAlbertoLinks?.({
+      productIds: group.products.map((product) => product.id),
+      link: {
+        foundTitle: draft.foundTitle,
+        providerCode: draft.supplierCode,
+        casaAlbertoId: draft.casaAlbertoId,
+        productUrl: draft.productUrl,
+        matchedBy: 'manual_price_tracking',
+      },
+    });
+
+    updateSandboxProducts(result?.products);
+    setSupplierLinkEditKey('');
+  };
+
+  const openSupplierExternalUrl = async (url) => {
+    const targetUrl = String(url || '').trim();
+    if (!targetUrl) return;
+    if (window.electronAPI?.supplierOpenUrl) {
+      const result = await window.electronAPI.supplierOpenUrl(targetUrl);
+      if (!result?.success) {
+        await Swal.fire({
+          icon: 'warning',
+          title: 'No se pudo abrir Casa Alberto',
+          text: result?.error || 'Revisa la sesion del proveedor y volve a intentar.',
+          confirmButtonText: 'Entendido',
+        });
+      }
+      return;
+    }
+    if (window.electronAPI?.openExternalUrl) {
+      await window.electronAPI.openExternalUrl(targetUrl);
+      return;
+    }
+    window.open(targetUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const openSupplierPriceMode = () => {
+    setActiveToolMode('supplier');
+    if (supplierAutoCheckedRef.current || casaAlbertoGroups.length === 0) return;
+
+    supplierAutoCheckedRef.current = true;
+    window.setTimeout(() => {
+      handleCheckAllSupplierPrices();
+    }, 0);
+  };
+
   const imageImportStats = imageImportRows.reduce((acc, row) => {
     acc[row.status] = (acc[row.status] || 0) + 1;
     if (row.status === 'found') {
@@ -1075,6 +1623,374 @@ export default function BulkEditorView({
     if (status === 'login_required') return { label: 'Login', className: 'border-amber-200 bg-amber-50 text-amber-700' };
     if (status === 'error') return { label: 'Error', className: 'border-red-200 bg-red-50 text-red-700' };
     return { label: 'Pendiente', className: 'border-slate-200 bg-white text-slate-500' };
+  };
+
+  const renderCasaAlbertoPanel = () => {
+    const filterOptions = [
+      { value: 'all', label: 'Todos', count: casaAlbertoGroups.length },
+      { value: 'changed', label: 'Con cambio', count: casaAlbertoGroups.filter((group) => group.status === 'changed').length },
+      { value: 'unchecked', label: 'Sin revisar', count: casaAlbertoGroups.filter((group) => group.status === 'unchecked').length },
+      { value: 'reviewed', label: 'Revisados', count: casaAlbertoGroups.filter((group) => group.status === 'reviewed' || group.status === 'approved').length },
+      { value: 'error', label: 'Avisos', count: casaAlbertoGroups.filter((group) => group.status === 'error' || group.status === 'login_required').length },
+    ];
+
+    return (
+      <div className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-700/70 bg-[#07111f] text-slate-100">
+        <aside className="flex w-[292px] shrink-0 flex-col border-r border-slate-700/70 bg-[#0b1728]">
+          <div className="border-b border-slate-700/70 p-4">
+            <div className="flex items-center gap-2">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-emerald-400/30 bg-emerald-400/12 text-emerald-200">
+                <Link2 size={16} />
+              </span>
+              <div>
+                <h2 className="text-base font-black leading-tight">Casa Alberto</h2>
+                <p className="mt-0.5 text-[11px] font-bold text-slate-400">Costos del proveedor enlazado</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 custom-scrollbar">
+            <section className="rounded-lg border border-slate-700/80 bg-slate-900/35 p-3">
+              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Resumen</p>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="rounded-lg border border-slate-700/80 bg-[#0f1e33] p-2">
+                  <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Enlaces</p>
+                  <p className="mt-1 text-xl font-black text-white">{casaAlbertoGroups.length}</p>
+                </div>
+                <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-2">
+                  <p className="text-[9px] font-black uppercase tracking-[0.12em] text-amber-200/80">Pendientes</p>
+                  <p className="mt-1 text-xl font-black text-amber-100">{supplierPricePendingCount}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleOpenSupplierLogin}
+                className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-md border border-slate-600/80 bg-slate-900/60 text-xs font-black text-slate-100 transition-colors hover:bg-slate-800"
+              >
+                <LogIn size={14} />
+                Abrir login proveedor
+              </button>
+            </section>
+
+            <section className="rounded-lg border border-emerald-400/25 bg-emerald-400/10 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-200">Detectar enlaces</p>
+                <span className="rounded-md border border-emerald-400/25 bg-slate-950/25 px-2 py-0.5 text-[10px] font-black text-emerald-100">
+                  {casaAlbertoLinkCandidates.length}
+                </span>
+              </div>
+              <p className="mt-1.5 text-[10px] font-bold leading-snug text-emerald-100/70">
+                Busca productos sin enlace por codigo, codigo corregido o nombre.
+              </p>
+
+              <div className="mt-3 grid grid-cols-3 gap-1.5 rounded-md border border-emerald-400/20 bg-slate-950/20 p-1">
+                {[
+                  { value: '10', label: '10' },
+                  { value: '50', label: '50' },
+                  { value: 'all', label: 'Todo' },
+                ].map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setSupplierLinkDetectionLimit(option.value)}
+                    disabled={isDetectingSupplierLinks}
+                    className={`h-7 rounded text-[10px] font-black transition-colors ${
+                      supplierLinkDetectionLimit === option.value
+                        ? 'bg-emerald-400 text-slate-950'
+                        : 'text-emerald-100/70 hover:bg-emerald-400/12'
+                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleDetectCasaAlbertoLinks}
+                  disabled={isDetectingSupplierLinks || casaAlbertoLinkCandidates.length === 0}
+                  className="flex h-9 min-w-0 flex-1 items-center justify-center gap-2 rounded-md border border-emerald-400/30 bg-emerald-500/70 text-xs font-black text-white transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {isDetectingSupplierLinks ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+                  {isDetectingSupplierLinks ? 'Detectando...' : 'Detectar'}
+                </button>
+                {isDetectingSupplierLinks ? (
+                  <button
+                    type="button"
+                    onClick={stopCasaAlbertoLinkDetection}
+                    className="flex h-9 w-10 items-center justify-center rounded-md border border-rose-400/30 bg-rose-400/12 text-rose-100 transition-colors hover:bg-rose-400/20"
+                    title="Detener deteccion"
+                  >
+                    <StopCircle size={15} />
+                  </button>
+                ) : null}
+              </div>
+
+              {(isDetectingSupplierLinks || supplierLinkDetectionProgress.total > 0) ? (
+                <div className="mt-2 rounded-md border border-emerald-400/20 bg-slate-950/20 px-2 py-1.5 text-[10px] font-black text-emerald-100/80">
+                  {supplierLinkDetectionProgress.processed}/{supplierLinkDetectionProgress.total} revisados · {supplierLinkDetectionProgress.found} enlazados · {supplierLinkDetectionProgress.errors} avisos
+                </div>
+              ) : null}
+            </section>
+
+            <section className="rounded-lg border border-slate-700/80 bg-slate-900/35 p-3">
+              <p className="mb-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Mostrar</p>
+              <div className="space-y-1.5">
+                {filterOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setSupplierPriceFilter(option.value)}
+                    className={`flex h-8 w-full items-center justify-between rounded-md border px-2.5 text-[11px] font-black transition-colors ${
+                      supplierPriceFilter === option.value
+                        ? 'border-sky-400/50 bg-sky-400/14 text-sky-100'
+                        : 'border-slate-700/70 bg-[#0f1e33] text-slate-300 hover:border-slate-500'
+                    }`}
+                  >
+                    <span>{option.label}</span>
+                    <span className="rounded bg-slate-950/40 px-1.5 py-0.5 text-[9px]">{option.count}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <p className="rounded-lg border border-slate-700/80 bg-[#0f1e33] p-3 text-[11px] font-bold leading-relaxed text-slate-400">
+              Se compara el precio del proveedor contra el costo Rebu. Al aprobar se actualiza el costo; la venta queda como sugerencia.
+            </p>
+          </div>
+        </aside>
+
+        <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-700/70 bg-[#0f1e33] px-4 py-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Seguimiento de precios</p>
+              <p className="mt-1 text-xs font-bold text-slate-300">
+                {visibleCasaAlbertoGroups.length} grupo(s) visibles. Chequeo manual, sin cambios automáticos.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleCheckAllSupplierPrices}
+              disabled={isCheckingSupplierPrices || casaAlbertoGroups.length === 0}
+              className="flex h-10 items-center justify-center gap-2 rounded-md border border-emerald-400/35 bg-emerald-400/14 px-4 text-xs font-black text-emerald-100 transition-colors hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {isCheckingSupplierPrices ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+              {isCheckingSupplierPrices ? 'Chequeando...' : 'Chequear visibles'}
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
+            {casaAlbertoGroups.length === 0 ? (
+              <div className="flex h-full min-h-[320px] items-center justify-center rounded-xl border border-dashed border-slate-700/80 bg-[#0f1e33]/70">
+                <div className="max-w-md text-center">
+                  <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl border border-slate-600 bg-slate-900/70 text-slate-300">
+                    <Package size={20} />
+                  </span>
+                  <h3 className="mt-3 text-base font-black">Todavia no hay enlaces Casa Alberto</h3>
+                  <p className="mt-1 text-sm font-bold text-slate-400">
+                    Usa Detectar enlaces para buscar por codigo o nombre y guardar la referencia del proveedor.
+                  </p>
+                </div>
+              </div>
+            ) : visibleCasaAlbertoGroups.length === 0 ? (
+              <div className="flex h-full min-h-[320px] items-center justify-center rounded-xl border border-dashed border-slate-700/80 bg-[#0f1e33]/70">
+                <p className="text-sm font-black text-slate-400">No hay enlaces en este filtro.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {visibleCasaAlbertoGroups.map((group) => {
+                  const meta = getSupplierPriceStatusMeta(group.status);
+                  const draft = supplierLinkDrafts[group.key] || {};
+                  const isEditingLink = supplierLinkEditKey === group.key;
+                  const supplierPrice = Number(group.supplierPrice || 0);
+                  const hasSupplierPrice = supplierPrice > 0;
+                  const priceDeltaLabel = hasSupplierPrice && group.previousSupplierPrice
+                    ? calculateDiffPercent(Number(group.previousSupplierPrice), supplierPrice)
+                    : null;
+
+                  return (
+                    <article
+                      key={group.key}
+                      className="overflow-hidden rounded-xl border border-slate-700/80 bg-[#0f1e33]"
+                    >
+                      <div className={`h-1 ${meta.railClassName}`} />
+                      <div className="grid gap-3 p-3 min-[1500px]:grid-cols-[minmax(280px,0.95fr)_minmax(420px,1.35fr)_220px]">
+                        <div className="min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-black text-white" title={group.supplierTitle}>
+                                {group.supplierTitle}
+                              </p>
+                              <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] font-black uppercase tracking-[0.08em] text-slate-400">
+                                {group.casaAlbertoId && <span>ID Casa Alberto {group.casaAlbertoId}</span>}
+                                {group.supplierCode && <span>Codigo {group.supplierCode}</span>}
+                              </div>
+                            </div>
+                            <span className={`shrink-0 rounded-md border px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] ${meta.className}`}>
+                              {meta.label}
+                            </span>
+                          </div>
+
+                          <div className="mt-3 grid grid-cols-3 gap-2">
+                            <div className="rounded-lg border border-slate-700/75 bg-slate-950/25 p-2">
+                              <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Proveedor</p>
+                              <p className="mt-1 text-sm font-black text-slate-100">{hasSupplierPrice ? formatSupplierMoney(supplierPrice) : '-'}</p>
+                            </div>
+                            <div className="rounded-lg border border-slate-700/75 bg-slate-950/25 p-2">
+                              <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Anterior</p>
+                              <p className="mt-1 text-sm font-black text-slate-100">
+                                {group.previousSupplierPrice ? formatSupplierMoney(group.previousSupplierPrice) : '-'}
+                              </p>
+                            </div>
+                            <div className="rounded-lg border border-slate-700/75 bg-slate-950/25 p-2">
+                              <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Chequeo</p>
+                              <p className="mt-1 truncate text-[11px] font-black text-slate-200">{formatSupplierDate(group.lastCheckedAt)}</p>
+                            </div>
+                          </div>
+
+                          {group.message ? (
+                            <p className="mt-2 text-[11px] font-bold text-slate-400">{group.message}</p>
+                          ) : null}
+                        </div>
+
+                        <div className="min-w-0 rounded-lg border border-slate-700/75 bg-slate-950/20 p-2.5">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">
+                              Productos Rebu asociados
+                            </p>
+                            <span className="rounded-md border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-black text-slate-300">
+                              {group.products.length}
+                            </span>
+                          </div>
+                          <div className="space-y-1.5">
+                            {group.products.map((product) => {
+                              const suggestedSale = hasSupplierPrice
+                                ? buildSuggestedSalePriceFromMargin(product, supplierPrice)
+                                : 0;
+                              const costDelta = hasSupplierPrice
+                                ? calculateDiffPercent(Number(product.purchasePrice || 0), supplierPrice)
+                                : null;
+
+                              return (
+                                <div
+                                  key={product.id}
+                                  className="grid min-w-0 grid-cols-[minmax(0,1fr)_92px_92px_92px] items-center gap-2 rounded-md border border-slate-700/60 bg-[#0b1728] px-2.5 py-2"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="truncate text-xs font-black text-white" title={product.title}>{product.title}</p>
+                                    <p className="mt-0.5 truncate text-[10px] font-bold text-slate-500">{product.barcode || 'Sin codigo'}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-[8px] font-black uppercase tracking-[0.12em] text-slate-500">Costo</p>
+                                    <p className="text-[12px] font-black text-slate-100">{formatSupplierMoney(product.purchasePrice)}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-[8px] font-black uppercase tracking-[0.12em] text-slate-500">Venta</p>
+                                    <p className="text-[12px] font-black text-slate-100">{formatSupplierMoney(product.price)}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-[8px] font-black uppercase tracking-[0.12em] text-slate-500">Sugerida</p>
+                                    <p className="text-[12px] font-black text-emerald-200">{hasSupplierPrice ? formatSupplierMoney(suggestedSale) : '-'}</p>
+                                    {costDelta ? <p className="text-[9px] font-black text-amber-200">{costDelta}</p> : null}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleCheckSupplierPriceGroup(group)}
+                            disabled={checkingSupplierGroupKey === group.key || isCheckingSupplierPrices}
+                            className="flex h-9 items-center justify-center gap-2 rounded-md border border-sky-400/35 bg-sky-400/12 text-xs font-black text-sky-100 transition-colors hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-45"
+                          >
+                            {checkingSupplierGroupKey === group.key ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                            Chequear
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleApproveSupplierGroup(group)}
+                            disabled={!hasSupplierPrice || group.status === 'reviewed' || group.status === 'approved'}
+                            className="flex h-9 items-center justify-center gap-2 rounded-md border border-emerald-400/35 bg-emerald-400/14 text-xs font-black text-emerald-100 transition-colors hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-45"
+                          >
+                            <CheckCircle size={14} />
+                            Aprobar costo
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openSupplierLinkEditor(group)}
+                            className="flex h-9 items-center justify-center gap-2 rounded-md border border-slate-600 bg-slate-900/60 text-xs font-black text-slate-200 transition-colors hover:bg-slate-800"
+                          >
+                            <Edit3 size={14} />
+                            Revisar enlace
+                          </button>
+                          {group.productUrl || group.sourceUrl ? (
+                            <button
+                              type="button"
+                              onClick={() => openSupplierExternalUrl(group.productUrl || group.sourceUrl)}
+                              className="flex h-9 items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-950/30 text-xs font-black text-slate-300 transition-colors hover:border-slate-500"
+                            >
+                              <ExternalLink size={14} />
+                              Fuente
+                            </button>
+                          ) : null}
+                          {priceDeltaLabel ? (
+                            <span className="rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1.5 text-center text-[10px] font-black text-amber-100">
+                              Proveedor {priceDeltaLabel}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      {isEditingLink ? (
+                        <div className="border-t border-slate-700/70 bg-slate-950/20 p-3">
+                          <div className="grid gap-2 min-[1500px]:grid-cols-[minmax(180px,1fr)_140px_140px_minmax(260px,1.3fr)_auto]">
+                            <input
+                              value={draft.foundTitle || ''}
+                              onChange={(event) => updateSupplierLinkDraft(group.key, 'foundTitle', event.target.value)}
+                              placeholder="Nombre Casa Alberto"
+                              className="h-9 rounded-md border border-slate-700 bg-[#07111f] px-3 text-xs font-bold text-slate-100 outline-none focus:border-sky-400"
+                            />
+                            <input
+                              value={draft.supplierCode || ''}
+                              onChange={(event) => updateSupplierLinkDraft(group.key, 'supplierCode', event.target.value)}
+                              placeholder="Codigo proveedor"
+                              className="h-9 rounded-md border border-slate-700 bg-[#07111f] px-3 text-xs font-bold text-slate-100 outline-none focus:border-sky-400"
+                            />
+                            <input
+                              value={draft.casaAlbertoId || ''}
+                              onChange={(event) => updateSupplierLinkDraft(group.key, 'casaAlbertoId', event.target.value)}
+                              placeholder="ID Casa Alberto"
+                              className="h-9 rounded-md border border-slate-700 bg-[#07111f] px-3 text-xs font-bold text-slate-100 outline-none focus:border-sky-400"
+                            />
+                            <input
+                              value={draft.productUrl || ''}
+                              onChange={(event) => updateSupplierLinkDraft(group.key, 'productUrl', event.target.value)}
+                              placeholder="URL del producto"
+                              className="h-9 rounded-md border border-slate-700 bg-[#07111f] px-3 text-xs font-bold text-slate-100 outline-none focus:border-sky-400"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleSaveSupplierLink(group)}
+                              className="h-9 rounded-md border border-emerald-400/35 bg-emerald-400/14 px-4 text-xs font-black text-emerald-100 transition-colors hover:bg-emerald-400/20"
+                            >
+                              Guardar
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    );
   };
 
   const renderEditorMasivo = () => (
@@ -2358,11 +3274,26 @@ export default function BulkEditorView({
             <Edit3 size={14} />
             Editor masivo
           </button>
+          <button
+            type="button"
+            onClick={openSupplierPriceMode}
+            className={modeButtonClass('supplier')}
+          >
+            <Link2 size={14} />
+            Casa Alberto
+            {supplierPricePendingCount > 0 ? (
+              <span className="ml-1 rounded-md bg-amber-400 px-1.5 py-0.5 text-[9px] font-black text-slate-950">
+                {supplierPricePendingCount}
+              </span>
+            ) : null}
+          </button>
         </div>
         <p className="hidden lg:block text-[11px] font-bold text-slate-400 truncate">
           {activeToolMode === 'excel'
             ? 'Revisa cada campo antes de aplicar cambios al inventario.'
-            : 'Herramientas clasicas de porcentaje, seleccion y PDF.'}
+            : activeToolMode === 'supplier'
+              ? 'Chequea costos de Casa Alberto y aproba cambios manualmente.'
+              : 'Herramientas clasicas de porcentaje, seleccion y PDF.'}
         </p>
       </div>
 
@@ -2377,6 +3308,9 @@ export default function BulkEditorView({
       </div>
       <div className={`${activeToolMode === 'bulk' ? 'flex' : 'hidden'} min-h-0 flex-1`}>
         {renderEditorMasivo()}
+      </div>
+      <div className={`${activeToolMode === 'supplier' ? 'flex' : 'hidden'} min-h-0 flex-1`}>
+        {renderCasaAlbertoPanel()}
       </div>
     </div>
   );

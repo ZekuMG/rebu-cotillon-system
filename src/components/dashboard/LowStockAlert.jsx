@@ -100,7 +100,7 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
                             alt=""
                             loading="lazy"
                             decoding="async"
-                            fetchPriority="low"
+                            fetchpriority="low"
                             className="h-8 w-8 shrink-0 rounded-md border border-slate-200 bg-white object-cover shadow-sm"
                           />
                         ) : (

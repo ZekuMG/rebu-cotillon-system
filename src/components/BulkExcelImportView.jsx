@@ -185,7 +185,9 @@ const getEntryInputKey = (field) => {
 const getRowBaseErrors = (entry, _product) => {
   const errors = [];
   if (!entry.quantity || entry.quantity <= 0) errors.push('Cantidad vacia o cero');
-  if (!entry.multiplier || entry.multiplier <= 0) errors.push('Multiplicador invalido');
+  if (entry.multiplier === '' || entry.multiplier === null || entry.multiplier === undefined || Number(entry.multiplier) < 0) {
+    errors.push('Multiplicador invalido');
+  }
   if (!entry.cost || entry.cost <= 0) errors.push('Costo vacio o cero');
   if (!entry.salePrice || entry.salePrice <= 0) errors.push('Venta vacia o cero');
   if (entry.salePrice > 0 && entry.cost > 0 && entry.salePrice < entry.cost) {
@@ -268,7 +270,7 @@ const getRowStatus = (row) => {
 
 const isFieldEligible = (row, field) => {
   if (!row.product) return false;
-  if (field === 'stock') return Number(row.entry.quantity || 0) > 0 && Number(row.entry.multiplier || 0) > 0 && getStockDelta(row.entry) > 0;
+  if (field === 'stock') return Number(row.entry.quantity || 0) > 0 && Number(row.entry.multiplier || 0) >= 0;
   if (field === 'cost') return Number(row.entry.cost || 0) > 0 && Number(row.product.purchasePrice || 0) !== Number(row.entry.cost || 0);
   if (field === 'price') return Number(row.entry.salePrice || 0) > 0 && Number(row.product.price || 0) !== Number(row.entry.salePrice || 0);
   return false;
@@ -335,7 +337,7 @@ const getRowErrorHints = (errors = []) =>
     if (error === 'Multiplicador invalido') {
       return {
         title: 'Equivalencia sin valor',
-        detail: 'Edita Stock y coloca cuantas unidades reales suma cada unidad comprada. Ej: 1 compra = 6 u.',
+        detail: 'Edita Stock y coloca cuantas unidades reales suma cada unidad comprada. Puede ser 0 si no queres sumar stock.',
       };
     }
     if (error === 'Costo vacio o cero') {
@@ -795,12 +797,14 @@ export default function BulkExcelImportView({
           nextEntry.salePriceEdited = true;
         }
         if (field === 'multiplier') {
-          nextEntry.cost = divideLotValue(row.entry.lotCost ?? row.entry.cost, numericValue);
-          nextEntry.salePrice = divideLotValue(row.entry.lotSalePrice ?? row.entry.salePrice, numericValue);
-          nextEntry.costInput = nextEntry.cost ? String(nextEntry.cost) : '';
-          nextEntry.salePriceInput = nextEntry.salePrice ? String(nextEntry.salePrice) : '';
-          nextEntry.costEdited = true;
-          nextEntry.salePriceEdited = true;
+          if (numericValue > 0) {
+            nextEntry.cost = divideLotValue(row.entry.lotCost ?? row.entry.cost, numericValue);
+            nextEntry.salePrice = divideLotValue(row.entry.lotSalePrice ?? row.entry.salePrice, numericValue);
+            nextEntry.costInput = nextEntry.cost ? String(nextEntry.cost) : '';
+            nextEntry.salePriceInput = nextEntry.salePrice ? String(nextEntry.salePrice) : '';
+            nextEntry.costEdited = true;
+            nextEntry.salePriceEdited = true;
+          }
         }
         const nextRow = {
           ...buildReviewRow(
@@ -2593,7 +2597,11 @@ function buildCompactChangeSummaries(row) {
       stockDelta,
       before: `${Number(row.product.stock || 0).toLocaleString('es-AR')} ${unit}`,
       after: `${(Number(row.product.stock || 0) + stockDelta).toLocaleString('es-AR')} ${unit}`,
-      delta: stockEligible ? `+${stockDelta.toLocaleString('es-AR')} ${unit}` : 'Sin cambio',
+      delta: stockEligible
+        ? stockDelta === 0
+          ? `0 ${unit} (sin sumar)`
+          : `+${stockDelta.toLocaleString('es-AR')} ${unit}`
+        : 'Sin cambio',
     });
   }
 
@@ -2698,12 +2706,6 @@ function CompactChangeItem({ item, editable, onToggle, onUpdate }) {
     onToggle();
   };
 
-  const handleToggleKeyDown = (event) => {
-    if (!canToggle || (event.key !== 'Enter' && event.key !== ' ')) return;
-    event.preventDefault();
-    onToggle();
-  };
-
   const handleInputClick = (event) => {
     event.stopPropagation();
   };
@@ -2755,11 +2757,6 @@ function CompactChangeItem({ item, editable, onToggle, onUpdate }) {
 
   return (
     <span
-      role={canToggle ? 'button' : undefined}
-      tabIndex={canToggle ? 0 : undefined}
-      aria-pressed={canToggle ? item.checked : undefined}
-      onClick={handleToggle}
-      onKeyDown={handleToggleKeyDown}
       title={canToggle ? `${item.checked ? 'Quitar confirmacion de' : 'Confirmar'} ${item.label}` : `${item.label}: ${confirmLabel}`}
       className={`excel-compact-change excel-compact-change-${item.tone} ${item.checked ? 'excel-compact-change-on' : ''} ${editable ? 'excel-compact-change-editable' : ''} ${canToggle ? 'excel-compact-change-toggleable' : ''} ${item.invalid ? 'excel-compact-change-invalid' : ''} ${item.eligible === false ? 'excel-compact-change-noop' : ''}`}
     >
@@ -2767,9 +2764,18 @@ function CompactChangeItem({ item, editable, onToggle, onUpdate }) {
         <span className="excel-compact-mark">
           <span className="excel-compact-change-label">{item.label}</span>
           {editable && (
-            <span className="excel-compact-confirm-badge">
+            <button
+              type="button"
+              disabled={!canToggle}
+              aria-pressed={canToggle ? item.checked : undefined}
+              onClick={(event) => {
+                event.stopPropagation();
+                handleToggle();
+              }}
+              className="excel-compact-confirm-badge"
+            >
               {confirmLabel}
-            </span>
+            </button>
           )}
         </span>
         <span className="excel-compact-change-delta">{item.delta}</span>
