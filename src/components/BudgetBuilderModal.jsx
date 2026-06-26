@@ -355,18 +355,18 @@ export default function BudgetBuilderModal({
     draftItems.filter((item) => Number(item.newPrice || 0) >= 0)
   );
   const fieldShellClass =
-    'rounded-[16px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(241,245,249,0.94)_0%,rgba(236,242,248,0.96)_100%)] px-2 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.68)]';
-  const panelShellClass = 'rounded-[18px] border border-slate-200 bg-slate-50/85 p-1.5';
+    'rounded-[16px] border border-slate-700/80 bg-[#0b1728] px-2 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]';
+  const panelShellClass = 'rounded-[18px] border border-slate-700/80 bg-[#0f1e33] p-1.5';
   const fieldInputClass =
-    'w-full rounded-[11px] border border-white/65 bg-white/55 px-2 py-1 text-[12px] font-medium text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)] outline-none placeholder:text-slate-400';
+    'w-full rounded-[11px] border border-slate-600/80 bg-[#07111f] px-2 py-1 text-[12px] font-medium text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40';
   const fieldSelectClass =
-    'w-full rounded-[11px] border border-white/65 bg-white/55 px-2 py-1 text-[12px] font-semibold text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)] outline-none';
+    'w-full rounded-[11px] border border-slate-600/80 bg-[#07111f] px-2 py-1 text-[12px] font-semibold text-slate-100 outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40';
   const fieldNumberClass =
-    'w-full rounded-[11px] border border-white/65 bg-white/55 px-2 py-1 text-center text-[12px] font-black text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
+    'w-full rounded-[11px] border border-slate-600/80 bg-[#07111f] px-2 py-1 text-center text-[12px] font-black text-slate-100 outline-none [appearance:textfield] focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
   const quantityInputClass =
-    'w-full rounded-[11px] border border-indigo-100/80 bg-white/70 px-2 py-1 text-center text-[12px] font-black text-indigo-700 outline-none [appearance:textfield] ring-1 ring-indigo-100/60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
+    'w-full rounded-[11px] border border-sky-500/45 bg-[#07111f] px-2 py-1 text-center text-[12px] font-black text-sky-100 outline-none [appearance:textfield] ring-1 ring-sky-500/20 focus:border-sky-300 focus:ring-sky-400/40 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
   const lockedFieldClass =
-    'flex min-h-[30px] items-center rounded-[11px] border border-slate-200/70 bg-slate-100/80 px-2 py-1 text-[12px] font-semibold text-slate-500';
+    'flex min-h-[30px] items-center rounded-[11px] border border-slate-700/90 bg-slate-900/70 px-2 py-1 text-[12px] font-semibold text-slate-200';
 
   const handleCatalogScroll = (e) => {
     const { scrollTop, clientHeight, scrollHeight } = e.target;
@@ -748,17 +748,17 @@ export default function BudgetBuilderModal({
 
   return (
     <div className="fixed inset-0 z-[80] bg-slate-950/70 backdrop-blur-sm p-2.5 sm:p-3">
-      <div className="mx-auto flex h-full max-h-[94vh] w-full max-w-[94rem] flex-col overflow-hidden rounded-[22px] border border-slate-200 bg-slate-50 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2">
+      <div className="mx-auto flex h-full max-h-[94vh] w-full max-w-[94rem] flex-col overflow-hidden rounded-[22px] border border-slate-700 bg-[#0b1728] shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-700 bg-[#0f1e33] px-3 py-2">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-[12px] bg-indigo-100 text-indigo-700">
+            <div className="flex h-8 w-8 items-center justify-center rounded-[12px] border border-sky-400/30 bg-sky-500/15 text-sky-200">
               <FileText size={15} />
             </div>
             <div>
-              <h2 className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-800">
+              <h2 className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-100">
                 {initialRecord ? (initialRecord.type === 'order' ? 'Editar pedido' : 'Editar presupuesto') : 'Crear presupuesto'}
               </h2>
-              <p className="text-[10px] font-medium text-slate-500">
+              <p className="text-[10px] font-medium text-slate-400">
                 Armá el presupuesto, definí el cliente y congelá el detalle del pedido.
               </p>
             </div>
@@ -766,16 +766,16 @@ export default function BudgetBuilderModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-[14px] border border-slate-200 bg-white p-1.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+            className="rounded-[14px] border border-slate-700 bg-[#07111f] p-1.5 text-slate-400 transition hover:border-slate-500 hover:bg-slate-800 hover:text-slate-100"
           >
             <X size={16} />
           </button>
         </div>
 
         <div className="grid min-h-0 flex-1 gap-0 overflow-x-hidden lg:grid-cols-[0.8fr_1.2fr]">
-          <div className="min-h-0 border-b border-slate-200 bg-white lg:border-b-0 lg:border-r">
+          <div className="min-h-0 border-b border-slate-700 bg-[#0b1728] lg:border-b-0 lg:border-r">
             <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-slate-200 px-2.5 py-1.5">
+              <div className="border-b border-slate-700 px-2.5 py-1.5">
                 <div className={`flex items-center gap-2 ${fieldShellClass}`}>
                   <Search size={14} className="text-slate-400" />
                   <input
@@ -799,10 +799,10 @@ export default function BudgetBuilderModal({
                   ))}
                 </select>
 
-                <div className="mt-2 rounded-[16px] border border-slate-200 bg-white/80 px-2.5 py-2">
+                <div className="mt-2 rounded-[16px] border border-slate-700 bg-[#0f1e33] px-2.5 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-200">
                         Combos y descuentos
                       </p>
                       <p className="text-[10px] font-medium text-slate-400">
@@ -821,7 +821,7 @@ export default function BudgetBuilderModal({
 
                   {showOffersPanel && (
                     <div className="mt-2 rounded-[14px] border border-emerald-200 bg-emerald-50/70 p-1.5">
-                      <div className="mb-1.5 flex items-center gap-1 rounded-[12px] border border-emerald-200/70 bg-white/75 p-1">
+                      <div className="mb-1.5 flex items-center gap-1 rounded-[12px] border border-emerald-400/25 bg-[#07111f] p-1">
                         <button
                           type="button"
                           onClick={() => setOfferView('combo')}
@@ -847,7 +847,7 @@ export default function BudgetBuilderModal({
                       </div>
 
                       {visibleBudgetOffers.length === 0 ? (
-                        <div className="rounded-[12px] border border-dashed border-emerald-200 bg-white/80 px-3 py-3 text-center">
+                        <div className="rounded-[12px] border border-dashed border-emerald-400/25 bg-[#07111f] px-3 py-3 text-center">
                           <p className="text-[12px] font-bold text-emerald-700">
                             {offerView === 'combo'
                               ? 'No hay combos manuales disponibles.'
@@ -877,12 +877,12 @@ export default function BudgetBuilderModal({
                                 key={`budget-offer-${offer.id}`}
                                 type="button"
                                 onClick={() => applyOfferToDraft(offer)}
-                                className="rounded-[14px] border border-emerald-200 bg-white px-3 py-2 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50"
+                                className="rounded-[14px] border border-emerald-400/25 bg-[#07111f] px-3 py-2 text-left transition hover:border-emerald-300/50 hover:bg-emerald-500/10"
                               >
                                 <div className="flex items-start justify-between gap-2">
                                   <div className="min-w-0">
-                                    <p className="truncate text-[12px] font-black text-slate-800">{offer.name}</p>
-                                    <p className="mt-1 text-[10px] font-semibold text-slate-500">{label}</p>
+                                    <p className="truncate text-[12px] font-black text-slate-100">{offer.name}</p>
+                                    <p className="mt-1 text-[10px] font-semibold text-slate-400">{label}</p>
                                   </div>
                                   <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">
                                     {detail}
@@ -894,7 +894,7 @@ export default function BudgetBuilderModal({
                                     {comboProducts.map((product) => (
                                       <span
                                         key={`${offer.id}-${product.id ?? product.title}`}
-                                        className="rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500"
+                                        className="rounded-full border border-slate-700 bg-[#0f1e33] px-1.5 py-0.5 text-[9px] font-semibold text-slate-300"
                                       >
                                         {product.title}
                                       </span>
@@ -923,7 +923,7 @@ export default function BudgetBuilderModal({
                       key={`${product.id}-catalog`}
                       type="button"
                       onClick={() => addProductToDraft(product)}
-                      className="group overflow-hidden rounded-[18px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(241,245,249,0.96)_100%)] text-left shadow-[0_10px_24px_rgba(148,163,184,0.12)] transition hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-[0_16px_30px_rgba(99,102,241,0.18)]"
+                      className="group overflow-hidden rounded-[18px] border border-slate-700/80 bg-[#0f1e33] text-left transition hover:-translate-y-0.5 hover:border-sky-400/60 hover:bg-[#102139]"
                     >
                       <div className="relative aspect-[4/3] overflow-hidden border-b border-slate-200/80 bg-slate-100">
                         {getProductImageUrl(product) ? (
@@ -956,10 +956,10 @@ export default function BudgetBuilderModal({
                       </div>
                       <div className="space-y-2 p-2.5">
                         <div className="min-w-0">
-                          <p className="min-h-[34px] text-[13px] font-black leading-tight text-slate-800">
+                          <p className="min-h-[34px] text-[13px] font-black leading-tight text-slate-100">
                             {product.title}
                           </p>
-                          <p className="mt-1 text-[10px] font-semibold text-slate-500">
+                          <p className="mt-1 text-[10px] font-semibold text-slate-400">
                             {product.product_type === 'weight' ? 'Venta por peso' : 'Venta por unidad'}
                           </p>
                         </div>
@@ -968,7 +968,7 @@ export default function BudgetBuilderModal({
                             <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">
                               {product.product_type === 'weight' ? 'Precio/Kg' : 'Precio/u'}
                             </p>
-                            <span className="mt-0.5 block text-[16px] font-black leading-none text-indigo-700">
+                            <span className="mt-0.5 block text-[16px] font-black leading-none text-sky-200">
                               <FancyPrice
                                 amount={
                                   product.product_type === 'weight'
@@ -990,9 +990,9 @@ export default function BudgetBuilderModal({
             </div>
           </div>
 
-          <div className="min-h-0 bg-slate-50">
+          <div className="min-h-0 bg-[#07111f]">
             <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-slate-200 bg-slate-50 px-2.5 py-1.5">
+              <div className="border-b border-slate-700 bg-[#0b1728] px-2.5 py-1.5">
                 <div className="grid gap-1.5 xl:grid-cols-[0.9fr_1.1fr]">
                   <div className={panelShellClass}>
                     <div className="flex items-center gap-1.5">
@@ -1002,7 +1002,7 @@ export default function BudgetBuilderModal({
                         className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.1em] transition ${
                           draftConfig.customerMode === 'member'
                             ? 'bg-indigo-600 text-white'
-                            : 'border border-slate-200 bg-white text-slate-500'
+                            : 'border border-slate-700 bg-[#07111f] text-slate-300'
                         }`}
                       >
                         <Users size={12} />
@@ -1014,7 +1014,7 @@ export default function BudgetBuilderModal({
                         className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.1em] transition ${
                           draftConfig.customerMode === 'guest'
                             ? 'bg-slate-900 text-white'
-                            : 'border border-slate-200 bg-white text-slate-500'
+                            : 'border border-slate-700 bg-[#07111f] text-slate-300'
                         }`}
                       >
                         <User size={12} />
@@ -1034,7 +1034,7 @@ export default function BudgetBuilderModal({
                             className={fieldInputClass}
                           />
                         </div>
-                        <div className="mt-1.5 max-h-32 overflow-y-auto overflow-x-hidden rounded-[16px] border border-slate-200/80 bg-slate-100/80 p-1 scrollbar-hide">
+                        <div className="mt-1.5 max-h-32 overflow-y-auto overflow-x-hidden rounded-[16px] border border-slate-700/80 bg-[#07111f] p-1 scrollbar-hide">
                           {filteredMembers.slice(0, 8).map((member) => (
                             <button
                               key={member.id}
@@ -1043,7 +1043,7 @@ export default function BudgetBuilderModal({
                               className={`mb-0.5 w-full rounded-[12px] px-2 py-1 text-left transition ${
                                 String(draftConfig.memberId) === String(member.id)
                                   ? 'bg-indigo-600 text-white'
-                                  : 'bg-white text-slate-700 hover:bg-indigo-50'
+                                  : 'bg-[#0f1e33] text-slate-200 hover:bg-sky-500/15'
                               }`}
                             >
                               <p className="text-[12px] font-black">{member.name}</p>
@@ -1054,7 +1054,7 @@ export default function BudgetBuilderModal({
                           ))}
                         </div>
                         {selectedMember && (
-                          <div className="mt-1.5 rounded-[14px] border border-indigo-200 bg-indigo-50/90 px-2 py-1 text-[10px] font-semibold text-indigo-700">
+                          <div className="mt-1.5 rounded-[14px] border border-sky-400/30 bg-sky-500/15 px-2 py-1 text-[10px] font-semibold text-sky-100">
                             Socio vinculado: {selectedMember.name}
                           </div>
                         )}
@@ -1130,13 +1130,13 @@ export default function BudgetBuilderModal({
                     </div>
 
                     {initialRecord?.type !== 'order' && (
-                      <div className="mt-1.5 rounded-[16px] border border-fuchsia-200 bg-white/90 p-2">
+                      <div className="mt-1.5 rounded-[16px] border border-fuchsia-400/25 bg-fuchsia-500/10 p-2">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
-                            <p className="text-[10px] font-black uppercase tracking-[0.12em] text-fuchsia-700">
+                            <p className="text-[10px] font-black uppercase tracking-[0.12em] text-fuchsia-200">
                               Pago previsto
                             </p>
-                            <p className="mt-0.5 text-[11px] font-semibold text-slate-500">
+                            <p className="mt-0.5 text-[11px] font-semibold text-slate-300">
                               {budgetPaymentSummary}
                             </p>
                           </div>
@@ -1146,7 +1146,7 @@ export default function BudgetBuilderModal({
                             className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] transition ${
                               draftConfig.isSplitPayment
                                 ? 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700'
-                                : 'border-slate-200 bg-white text-slate-500 hover:border-fuchsia-200 hover:bg-fuchsia-50 hover:text-fuchsia-700'
+                                : 'border-slate-600 bg-[#07111f] text-slate-300 hover:border-fuchsia-300/50 hover:bg-fuchsia-500/10 hover:text-fuchsia-100'
                             }`}
                           >
                             <Plus size={11} />
@@ -1166,7 +1166,7 @@ export default function BudgetBuilderModal({
                                 className={`rounded-[12px] border px-2 py-1.5 text-center transition ${
                                   isActive
                                     ? 'border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700 shadow-sm'
-                                    : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'
+                                    : 'border-slate-600 bg-[#07111f] text-slate-300 hover:border-fuchsia-300/50 hover:bg-fuchsia-500/10'
                                 }`}
                               >
                                 <Icon size={12} className="mx-auto mb-1" />
@@ -1193,7 +1193,7 @@ export default function BudgetBuilderModal({
                                   className={`rounded-[14px] border p-2 text-left transition ${
                                     activePaymentLineIndex === index
                                       ? 'border-fuchsia-300 bg-fuchsia-50/60 ring-1 ring-fuchsia-200'
-                                      : 'border-slate-200 bg-slate-50'
+                                      : 'border-slate-700 bg-[#0b1728]'
                                   }`}
                                 >
                                   <div className="flex items-center justify-between gap-2">
@@ -1204,7 +1204,7 @@ export default function BudgetBuilderModal({
                                       {index === 0 ? 'Principal' : 'Restante'}
                                     </span>
                                   </div>
-                                  <div className="mt-1.5 rounded-[12px] border border-slate-200 bg-white/80 px-2 py-1.5">
+                                  <div className="mt-1.5 rounded-[12px] border border-slate-700 bg-[#07111f] px-2 py-1.5">
                                     <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Monto</p>
                                     <input
                                       type="number"
@@ -1214,7 +1214,7 @@ export default function BudgetBuilderModal({
                                       onChange={editable ? (e) => handlePrimaryPaymentAmountChange(e.target.value) : undefined}
                                       readOnly={!editable}
                                       disabled={!editable}
-                                      className={`${fieldNumberClass} mt-1 border-0 bg-transparent px-0 py-0 text-left text-[13px] text-slate-800 shadow-none ${
+                                      className={`${fieldNumberClass} mt-1 border-0 bg-transparent px-0 py-0 text-left text-[13px] text-slate-100 shadow-none ${
                                         editable ? '' : 'cursor-not-allowed text-slate-500'
                                       }`}
                                     />
@@ -1236,12 +1236,12 @@ export default function BudgetBuilderModal({
                             </div>
                           </>
                         ) : (
-                          <div className="mt-2 rounded-[14px] border border-slate-200 bg-slate-50 p-2">
+                          <div className="mt-2 rounded-[14px] border border-slate-700 bg-[#0b1728] p-2">
                             <div className="flex items-center justify-between gap-2">
                               <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
                                 {getPaymentMethodLabel(draftConfig.paymentMethod)}
                               </span>
-                              <span className="text-[12px] font-black text-slate-800">
+                              <span className="text-[12px] font-black text-slate-100">
                                 <FancyPrice amount={budgetTotal} />
                               </span>
                             </div>
@@ -1275,11 +1275,11 @@ export default function BudgetBuilderModal({
                       </div>
                     )}
 
-                    <div className="mt-1.5 rounded-[16px] border border-emerald-200 bg-emerald-50 px-2 py-1">
-                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">
+                    <div className="mt-1.5 rounded-[16px] border border-emerald-400/25 bg-emerald-500/12 px-2 py-1">
+                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-200">
                         Total congelado
                       </p>
-                      <p className="mt-0.5 text-[18px] font-black leading-none text-emerald-700">
+                      <p className="mt-0.5 text-[18px] font-black leading-none text-emerald-100">
                         <FancyPrice amount={budgetTotal} />
                       </p>
                     </div>
@@ -1290,17 +1290,17 @@ export default function BudgetBuilderModal({
               <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-1.5 scrollbar-hide">
                 <div className="mb-1.5 flex items-center justify-between">
                   <div>
-                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-300">
                       Detalle del presupuesto
                     </p>
-                    <p className="text-[10px] font-medium text-slate-400">
+                    <p className="text-[10px] font-medium text-slate-500">
                       {draftItems.length} item(s) preparados para el documento.
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={addManualItem}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100/90 px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-slate-600 transition hover:border-slate-300 hover:bg-slate-200/80 hover:text-slate-800"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-[#0f1e33] px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-slate-300 transition hover:border-sky-400/40 hover:bg-sky-500/10 hover:text-slate-100"
                   >
                     <Plus size={12} />
                     Item manual
@@ -1334,7 +1334,7 @@ export default function BudgetBuilderModal({
                     return (
                       <div
                         key={item.id}
-                        className="overflow-hidden rounded-[13px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(241,245,249,0.94)_0%,rgba(236,242,248,0.96)_100%)] px-1.5 py-[3px] shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]"
+                        className="overflow-hidden rounded-[13px] border border-slate-700/80 bg-[#0f1e33] px-1.5 py-[3px] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
                       >
                         <div className="grid min-w-0 gap-1 sm:grid-cols-[minmax(0,1.52fr)_90px_94px_94px_120px_30px]">
                           <label className={fieldShellClass}>
@@ -1414,15 +1414,15 @@ export default function BudgetBuilderModal({
                             />
                           </label>
 
-                          <div className="rounded-[13px] border border-emerald-200 bg-emerald-50 px-2 py-[3px]">
-                            <span className="mb-0.5 block text-[10px] font-black uppercase tracking-[0.1em] text-emerald-500">
+                          <div className="rounded-[13px] border border-emerald-400/25 bg-emerald-500/12 px-2 py-[3px]">
+                            <span className="mb-0.5 block text-[10px] font-black uppercase tracking-[0.1em] text-emerald-200">
                               Subtotal
                             </span>
                             <div className="flex items-center justify-center gap-1.5 whitespace-nowrap">
-                              <span className="text-center text-[12px] font-black text-emerald-700">
+                              <span className="text-center text-[12px] font-black text-emerald-100">
                                 {formatCurrency(subtotal)}
                               </span>
-                              <span className="text-center text-[9px] font-semibold text-emerald-600">
+                              <span className="text-center text-[9px] font-semibold text-emerald-200/80">
                                 {formatBudgetItemQuantity(item)}
                               </span>
                             </div>
@@ -1441,8 +1441,8 @@ export default function BudgetBuilderModal({
                   })}
 
                   {draftItems.length === 0 && (
-                    <div className="rounded-[18px] border border-dashed border-slate-300 bg-slate-100/80 px-4 py-8 text-center">
-                      <p className="text-[13px] font-bold text-slate-500">
+                    <div className="rounded-[18px] border border-dashed border-slate-700 bg-[#0f1e33] px-4 py-8 text-center">
+                      <p className="text-[13px] font-bold text-slate-400">
                         Agregá productos desde el catálogo para empezar el presupuesto.
                       </p>
                     </div>
@@ -1450,13 +1450,13 @@ export default function BudgetBuilderModal({
                 </div>
               </div>
 
-              <div className="border-t border-slate-200 bg-white px-3 py-2">
+              <div className="border-t border-slate-700 bg-[#0f1e33] px-3 py-2">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
                       Total del documento
                     </p>
-                    <p className="text-[22px] font-black leading-none text-slate-800">
+                    <p className="text-[22px] font-black leading-none text-slate-100">
                       <FancyPrice amount={budgetTotal} />
                     </p>
                   </div>
@@ -1473,7 +1473,7 @@ export default function BudgetBuilderModal({
                     <button
                       type="button"
                       onClick={onClose}
-                      className="rounded-[16px] border border-slate-200 bg-slate-100/90 px-3.5 py-1.5 text-[12px] font-bold text-slate-600 transition hover:bg-slate-200/80"
+                      className="rounded-[16px] border border-slate-700 bg-[#07111f] px-3.5 py-1.5 text-[12px] font-bold text-slate-300 transition hover:bg-slate-800 hover:text-slate-100"
                     >
                       Cancelar
                     </button>

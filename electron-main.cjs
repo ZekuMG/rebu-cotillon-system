@@ -440,6 +440,7 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
     };
     var normalizeSupplierHref = function (href) {
       try {
+        if (!href) return '';
         var parsedHref = new URL(href, location.href);
         if (
           parsedHref.hostname.includes('cotilloncasaalberto.com.ar') &&
@@ -1116,6 +1117,9 @@ const buildSupplierPriceExtractScript = (request = {}) => `
       var codeNode =
         (container && container.querySelector && container.querySelector('.producto_id, [class*="codigo"], [class*="code"]')) ||
         document.querySelector('.producto_id, [class*="codigo"], [class*="code"]');
+      var imageNode =
+        (container && container.querySelector && container.querySelector('.producto_imagen, img[src*="/imagen/producto/"]')) ||
+        document.querySelector('.producto_imagen, img[src*="/imagen/producto/"]');
       var containerText = cleanText((container && (container.innerText || container.textContent)) || document.body.innerText || '');
       var priceText = cleanText(priceNode && (priceNode.innerText || priceNode.textContent) || '');
       if (!priceText) {
@@ -1126,6 +1130,7 @@ const buildSupplierPriceExtractScript = (request = {}) => `
       var foundTitle = cleanText(titleNode && (titleNode.innerText || titleNode.textContent) || '');
       var supplierCode = getCodeFromText(codeNode && (codeNode.innerText || codeNode.textContent) || '') || getCodeFromText(containerText);
       var casaAlbertoId = getSupplierProductId(detailLink || location.href) || expectedId || '';
+      var imageUrl = normalizeSupplierHref(imageNode && (imageNode.currentSrc || imageNode.src || imageNode.getAttribute('src'))) || '';
 
       return {
         foundTitle: foundTitle,
@@ -1134,6 +1139,7 @@ const buildSupplierPriceExtractScript = (request = {}) => `
         priceText: priceText,
         productUrl: detailLink || normalizeSupplierHref(location.href),
         casaAlbertoId: casaAlbertoId,
+        imageUrl: imageUrl,
         sourceUrl: normalizeSupplierHref(location.href),
         text: containerText,
       };
@@ -1179,6 +1185,7 @@ const buildSupplierPriceExtractScript = (request = {}) => `
       casaAlbertoId: best.casaAlbertoId,
       productUrl: best.productUrl,
       sourceUrl: best.sourceUrl,
+      imageUrl: best.imageUrl,
       priceText: best.priceText,
       url: location.href,
     };

@@ -1,6 +1,8 @@
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const OUT_OF_STOCK_INACTIVE_DAYS = 90;
 export const CASA_ALBERTO_PROVIDER_NAME = 'Cotillon Casa Alberto';
+export const CASA_ALBERTO_COST_EXTRA_RATE = 0.15;
+export const CASA_ALBERTO_SALE_MARKUP_RATE = 0.5;
 
 export const normalizeProductLinkText = (value = '') =>
   String(value ?? '')
@@ -56,18 +58,36 @@ const normalizeSupplierTrackingPrice = (value) => {
   return Number.isFinite(numberValue) ? numberValue : null;
 };
 
-export const buildSuggestedSalePriceFromMargin = (product = {}, supplierPrice = 0) => {
+const hasOwn = (source, key) => Object.prototype.hasOwnProperty.call(source, key);
+
+const pickLinkString = (link = {}, keys = [], fallback = '') => {
+  const key = keys.find((entry) => hasOwn(link, entry) && link[entry] !== undefined && link[entry] !== null);
+  const value = key ? link[key] : fallback;
+  return String(value ?? '').trim();
+};
+
+export const buildCasaAlbertoEstimatedCost = (supplierPrice = 0, options = {}) => {
   const nextCost = Number(supplierPrice || 0);
-  const currentCost = Number(product.purchasePrice || 0);
-  const currentSale = Number(product.price || 0);
+  if (!Number.isFinite(nextCost) || nextCost <= 0) return 0;
+  const costExtraRate = Number.isFinite(Number(options.costExtraRate))
+    ? Number(options.costExtraRate)
+    : CASA_ALBERTO_COST_EXTRA_RATE;
+  return Number((nextCost * (1 + costExtraRate)).toFixed(2));
+};
 
-  if (!Number.isFinite(nextCost) || nextCost <= 0) return currentSale || 0;
-  if (!Number.isFinite(currentCost) || currentCost <= 0 || !Number.isFinite(currentSale) || currentSale <= 0) {
-    return Math.round(nextCost);
-  }
+export const roundUpToNextTen = (value = 0) => {
+  const numberValue = Number(value || 0);
+  if (!Number.isFinite(numberValue) || numberValue <= 0) return 0;
+  return Math.ceil(numberValue / 10) * 10;
+};
 
-  const marginRatio = Math.max((currentSale - currentCost) / currentCost, 0);
-  return Math.round(nextCost * (1 + marginRatio));
+export const buildSuggestedSalePriceFromMargin = (product = {}, supplierPrice = 0, options = {}) => {
+  const estimatedCost = buildCasaAlbertoEstimatedCost(supplierPrice, options);
+  if (!estimatedCost) return Number(product.price || 0) || 0;
+  const saleMarkupRate = Number.isFinite(Number(options.saleMarkupRate))
+    ? Number(options.saleMarkupRate)
+    : CASA_ALBERTO_SALE_MARKUP_RATE;
+  return roundUpToNextTen(estimatedCost * (1 + saleMarkupRate));
 };
 
 export const upsertCasaAlbertoLink = (
@@ -82,10 +102,10 @@ export const upsertCasaAlbertoLink = (
     ? safeLinks.casa_alberto
     : {};
 
-  const casaAlbertoId = String(link.casaAlbertoId || link.externalProductId || previousCasaAlberto.casaAlbertoId || '').trim();
-  const providerCode = String(link.providerCode || link.supplierCode || previousCasaAlberto.providerCode || '').trim();
-  const productUrl = String(link.productUrl || previousCasaAlberto.productUrl || '').trim();
-  const foundTitle = String(link.foundTitle || link.supplierTitle || previousCasaAlberto.foundTitle || '').trim();
+  const casaAlbertoId = pickLinkString(link, ['casaAlbertoId', 'externalProductId'], previousCasaAlberto.casaAlbertoId);
+  const providerCode = pickLinkString(link, ['providerCode', 'supplierCode'], previousCasaAlberto.providerCode);
+  const productUrl = pickLinkString(link, ['productUrl'], previousCasaAlberto.productUrl);
+  const foundTitle = pickLinkString(link, ['foundTitle', 'supplierTitle'], previousCasaAlberto.foundTitle);
 
   return {
     ...safeLinks,
@@ -107,6 +127,14 @@ export const upsertCasaAlbertoLink = (
   };
 };
 
+export const removeCasaAlbertoLink = (supplierLinks = {}) => {
+  const safeLinks = supplierLinks && typeof supplierLinks === 'object' && !Array.isArray(supplierLinks)
+    ? { ...supplierLinks }
+    : {};
+  delete safeLinks.casa_alberto;
+  return safeLinks;
+};
+
 export const upsertCasaAlbertoPriceTracking = (
   supplierLinks = {},
   trackingPatch = {},
@@ -119,13 +147,26 @@ export const upsertCasaAlbertoPriceTracking = (
     : {};
 
   const lastSupplierPrice = normalizeSupplierTrackingPrice(
-    trackingPatch.lastSupplierPrice ?? trackingPatch.supplierPrice ?? previousTracking.lastSupplierPrice,
+    hasOwn(trackingPatch, 'lastSupplierPrice')
+      ? trackingPatch.lastSupplierPrice
+      : hasOwn(trackingPatch, 'supplierPrice')
+        ? trackingPatch.supplierPrice
+        : previousTracking.lastSupplierPrice,
   );
   const previousSupplierPrice = normalizeSupplierTrackingPrice(
-    trackingPatch.previousSupplierPrice ?? previousTracking.lastSupplierPrice ?? previousTracking.previousSupplierPrice,
+    hasOwn(trackingPatch, 'previousSupplierPrice')
+      ? trackingPatch.previousSupplierPrice
+      : previousTracking.previousSupplierPrice ?? previousTracking.lastSupplierPrice,
+  );
+  const previousPurchasePrice = normalizeSupplierTrackingPrice(
+    hasOwn(trackingPatch, 'previousPurchasePrice')
+      ? trackingPatch.previousPurchasePrice
+      : previousTracking.previousPurchasePrice,
   );
   const suggestedSalePrice = normalizeSupplierTrackingPrice(
-    trackingPatch.suggestedSalePrice ?? previousTracking.suggestedSalePrice,
+    hasOwn(trackingPatch, 'suggestedSalePrice')
+      ? trackingPatch.suggestedSalePrice
+      : previousTracking.suggestedSalePrice,
   );
 
   return {
@@ -137,11 +178,14 @@ export const upsertCasaAlbertoPriceTracking = (
         ...trackingPatch,
         lastSupplierPrice,
         previousSupplierPrice,
+        previousPurchasePrice,
         suggestedSalePrice,
         reviewStatus: trackingPatch.reviewStatus || previousTracking.reviewStatus || 'unchecked',
         lastCheckedAt: trackingPatch.lastCheckedAt || previousTracking.lastCheckedAt || now,
         lastChangedAt: trackingPatch.lastChangedAt || previousTracking.lastChangedAt || null,
-        approvedAt: trackingPatch.approvedAt || previousTracking.approvedAt || null,
+        approvedAt: Object.prototype.hasOwnProperty.call(trackingPatch, 'approvedAt')
+          ? trackingPatch.approvedAt
+          : previousTracking.approvedAt || null,
         sourceUrl: trackingPatch.sourceUrl || previousTracking.sourceUrl || previousCasaAlberto.productUrl || '',
         priceText: trackingPatch.priceText || previousTracking.priceText || '',
       },

@@ -104,10 +104,12 @@ import {
   normalizeOrderPaymentHistory,
 } from './utils/paymentBreakdown';
 import {
+  buildCasaAlbertoEstimatedCost,
   buildSuggestedSalePriceFromMargin,
   getCasaAlbertoLink,
   getProductActiveState,
   getProductSupplierLinks,
+  removeCasaAlbertoLink,
   shouldAutoDisableOutOfStockProduct,
   updateStockLifecycleLinks,
   upsertCasaAlbertoLink,
@@ -3587,6 +3589,8 @@ export default function PartySupplyApp() {
   const [imageImportTask, setImageImportTask] = useState(null);
   const [isImageImportTaskOpen, setIsImageImportTaskOpen] = useState(false);
   const [imageImportOpenRequest, setImageImportOpenRequest] = useState(0);
+  const [supplierOpenRequest, setSupplierOpenRequest] = useState(0);
+  const [dismissedSupplierNoticeKey, setDismissedSupplierNoticeKey] = useState('');
   const [userSettings, setUserSettings] = useState(() => loadUserSettings());
   const [loginTheme, setLoginTheme] = useState(() => loadLoginThemePreference());
   const [isThemeSaving, setIsThemeSaving] = useState(false);
@@ -10098,6 +10102,8 @@ export default function PartySupplyApp() {
       ) || null;
       const suggestedSalePrice = Number(check.suggestedSalePrice || 0) ||
         buildSuggestedSalePriceFromMargin(product, supplierPrice);
+      const estimatedCost = Number(check.estimatedCost || check.approvedCost || 0) ||
+        buildCasaAlbertoEstimatedCost(supplierPrice);
       const nextSupplierLinks = upsertCasaAlbertoPriceTracking(
         getProductSupplierLinks(product),
         {
@@ -10110,8 +10116,15 @@ export default function PartySupplyApp() {
           searchedQuery: check.searchedQuery,
           titleSimilarity: check.titleSimilarity,
           sourceUrl: check.sourceUrl,
+          imageUrl: check.imageUrl || existingTracking.imageUrl || '',
           priceText: check.priceText,
           supplierPrice,
+          approvedCost: estimatedCost,
+          estimatedCost,
+          costExtraPercent: check.costExtraPercent,
+          saleMarkupPercent: check.saleMarkupPercent,
+          costExtraRate: check.costExtraRate,
+          saleMarkupRate: check.saleMarkupRate,
           lastSupplierPrice: supplierPrice,
           previousSupplierPrice,
           suggestedSalePrice,
@@ -10156,12 +10169,16 @@ export default function PartySupplyApp() {
 
         const supplierPrice = Number(update.supplierPrice || 0);
         if (!Number.isFinite(supplierPrice) || supplierPrice <= 0) continue;
+        const approvedCost = Number(update.approvedCost || update.estimatedCost || 0) ||
+          buildCasaAlbertoEstimatedCost(supplierPrice);
+        if (!Number.isFinite(approvedCost) || approvedCost <= 0) continue;
 
         const before = {
           purchasePrice: Number(product.purchasePrice || 0),
           price: Number(product.price || 0),
           supplierLinks: getProductSupplierLinks(product),
         };
+        const existingTracking = getCasaAlbertoLink(product).price_tracking || {};
         const suggestedSalePrice = Number(update.suggestedSalePrice || 0) ||
           buildSuggestedSalePriceFromMargin(product, supplierPrice);
         const nextSupplierLinks = upsertCasaAlbertoPriceTracking(
@@ -10172,10 +10189,18 @@ export default function PartySupplyApp() {
             productUrl: update.productUrl,
             foundTitle: update.foundTitle,
             sourceUrl: update.sourceUrl,
+            imageUrl: update.imageUrl || '',
             priceText: update.priceText,
             supplierPrice,
+            approvedCost,
+            estimatedCost: approvedCost,
+            costExtraPercent: update.costExtraPercent,
+            saleMarkupPercent: update.saleMarkupPercent,
+            costExtraRate: update.costExtraRate,
+            saleMarkupRate: update.saleMarkupRate,
             lastSupplierPrice: supplierPrice,
-            previousSupplierPrice: before.purchasePrice,
+            previousSupplierPrice: existingTracking.previousSupplierPrice ?? null,
+            previousPurchasePrice: before.purchasePrice,
             suggestedSalePrice,
             reviewStatus: 'approved',
             lastCheckedAt: now,
@@ -10190,13 +10215,13 @@ export default function PartySupplyApp() {
           'products',
           product.id,
           {
-            purchasePrice: supplierPrice,
+            purchasePrice: approvedCost,
             supplier_links: nextSupplierLinks,
           },
           CLOUD_SELECTS.products,
         );
         const updatedProduct = mapInventoryRecords([
-          data || { ...product, purchasePrice: supplierPrice, supplier_links: nextSupplierLinks },
+          data || { ...product, purchasePrice: approvedCost, supplier_links: nextSupplierLinks },
         ])[0];
         if (updatedProduct) updatedProducts.push(updatedProduct);
         logItems.push({
@@ -10208,7 +10233,7 @@ export default function PartySupplyApp() {
           productUrl: update.productUrl || '',
           before,
           after: {
-            purchasePrice: supplierPrice,
+            purchasePrice: approvedCost,
             price: product.price,
             suggestedSalePrice,
             supplierLinks: nextSupplierLinks,
@@ -10216,7 +10241,7 @@ export default function PartySupplyApp() {
           changes: [{
             field: 'Costo',
             old: before.purchasePrice,
-            new: supplierPrice,
+            new: approvedCost,
             isPrice: true,
           }],
         });
@@ -10244,6 +10269,111 @@ export default function PartySupplyApp() {
     }
   };
 
+  const handleUndoSupplierPriceUpdates = async (updatesToUndo = []) => {
+    if (blockIfOfflineReadonly('deshacer costos de Casa Alberto')) return { products: [] };
+    const safeUpdates = Array.isArray(updatesToUndo) ? updatesToUndo : [];
+    if (safeUpdates.length === 0) return { products: [] };
+
+    const updatedProducts = [];
+    const logItems = [];
+    const now = new Date().toISOString();
+
+    try {
+      for (const update of safeUpdates) {
+        const product = inventory.find((entry) => String(entry.id) === String(update.productId));
+        if (!product) continue;
+
+        const previousPurchasePrice = Number(update.previousPurchasePrice || 0);
+        if (!Number.isFinite(previousPurchasePrice) || previousPurchasePrice <= 0) continue;
+
+        const before = {
+          purchasePrice: Number(product.purchasePrice || 0),
+          price: Number(product.price || 0),
+          supplierLinks: getProductSupplierLinks(product),
+        };
+        const tracking = getCasaAlbertoLink(product).price_tracking || {};
+        const supplierPrice = Number(update.supplierPrice || tracking.lastSupplierPrice || 0);
+        const nextSupplierLinks = upsertCasaAlbertoPriceTracking(
+          before.supplierLinks,
+          {
+            providerCode: update.supplierCode,
+            casaAlbertoId: update.casaAlbertoId,
+            productUrl: update.productUrl,
+            foundTitle: update.foundTitle,
+            sourceUrl: update.sourceUrl,
+            supplierPrice,
+            lastSupplierPrice: supplierPrice,
+            previousSupplierPrice: tracking.previousSupplierPrice ?? null,
+            previousPurchasePrice: null,
+            approvedCost: previousPurchasePrice,
+            estimatedCost: buildCasaAlbertoEstimatedCost(supplierPrice),
+            suggestedSalePrice: Number(tracking.suggestedSalePrice || 0),
+            reviewStatus: 'reviewed',
+            lastCheckedAt: now,
+            lastChangedAt: now,
+            approvedAt: null,
+            message: 'Aprobacion deshecha. Costo anterior restaurado.',
+          },
+          now,
+        );
+
+        const { data } = await updateWithSchemaFallback(
+          'products',
+          product.id,
+          {
+            purchasePrice: previousPurchasePrice,
+            supplier_links: nextSupplierLinks,
+          },
+          CLOUD_SELECTS.products,
+        );
+        const updatedProduct = mapInventoryRecords([
+          data || { ...product, purchasePrice: previousPurchasePrice, supplier_links: nextSupplierLinks },
+        ])[0];
+        if (updatedProduct) updatedProducts.push(updatedProduct);
+        logItems.push({
+          id: product.id,
+          title: product.title,
+          provider: 'Cotillon Casa Alberto',
+          supplierCode: update.supplierCode || '',
+          casaAlbertoId: update.casaAlbertoId || '',
+          productUrl: update.productUrl || '',
+          before,
+          after: {
+            purchasePrice: previousPurchasePrice,
+            price: product.price,
+            supplierLinks: nextSupplierLinks,
+          },
+          changes: [{
+            field: 'Costo',
+            old: before.purchasePrice,
+            new: previousPurchasePrice,
+            isPrice: true,
+          }],
+        });
+      }
+
+      const updatedById = new Map(updatedProducts.filter(Boolean).map((product) => [String(product.id), product]));
+      if (updatedById.size > 0) {
+        setInventory((prev) => prev.map((product) => updatedById.get(String(product.id)) || product));
+      }
+
+      if (logItems.length > 0) {
+        await addLog('Deshacer Precio Proveedor', {
+          source: 'Productos Avanzado / Casa Alberto',
+          count: logItems.length,
+          items: logItems,
+        }, 'Casa Alberto');
+        showNotification('success', 'Costo restaurado', `${logItems.length} producto(s) restaurados.`);
+      }
+
+      return { products: updatedProducts.filter(Boolean) };
+    } catch (error) {
+      console.error('Error deshaciendo precios de Casa Alberto:', error);
+      showNotification('error', 'Error', error?.message || 'No se pudo deshacer la aprobacion.');
+      return { products: [] };
+    }
+  };
+
   const handleUpdateCasaAlbertoLinks = async ({ productIds = [], link = {} } = {}) => {
     if (blockIfOfflineReadonly('actualizar enlace Casa Alberto')) return { products: [] };
     const safeIds = Array.isArray(productIds) ? productIds : [];
@@ -10257,14 +10387,17 @@ export default function PartySupplyApp() {
         const product = inventory.find((entry) => String(entry.id) === String(productId));
         if (!product) continue;
 
-        const nextSupplierLinks = upsertCasaAlbertoLink(
-          getProductSupplierLinks(product),
-          {
-            ...link,
-            verifiedAt: now,
-          },
-          now,
-        );
+        const currentSupplierLinks = getProductSupplierLinks(product);
+        const nextSupplierLinks = link.unlink
+          ? removeCasaAlbertoLink(currentSupplierLinks)
+          : upsertCasaAlbertoLink(
+              currentSupplierLinks,
+              {
+                ...link,
+                verifiedAt: now,
+              },
+              now,
+            );
         const { data } = await updateWithSchemaFallback(
           'products',
           product.id,
@@ -11722,6 +11855,33 @@ export default function PartySupplyApp() {
     'bg-slate-100',
     'relative',
   ].join(' ');
+  const supplierGlobalNotice = useMemo(() => {
+    const summary = inventory
+      .filter(getProductActiveState)
+      .reduce((acc, product) => {
+        const link = getCasaAlbertoLink(product);
+        const hasLink = Boolean(link.casaAlbertoId || link.providerCode || link.productUrl);
+        if (!hasLink) return acc;
+        acc.linked += 1;
+        const tracking = link.price_tracking || {};
+        const supplierPrice = Number(tracking.lastSupplierPrice || 0);
+        const estimatedCost = Number(tracking.estimatedCost || tracking.approvedCost || 0) ||
+          buildCasaAlbertoEstimatedCost(supplierPrice);
+        const status = String(tracking.reviewStatus || '').toLowerCase();
+        if (status === 'error' || status === 'login_required') acc.errors += 1;
+        if (supplierPrice > 0 && estimatedCost - Number(product.purchasePrice || 0) >= 0.01) {
+          acc.changes += 1;
+        }
+        return acc;
+      }, { linked: 0, changes: 0, errors: 0 });
+    const key = `${summary.changes}-${summary.errors}-${summary.linked}`;
+    return { ...summary, key };
+  }, [inventory]);
+  const shouldShowSupplierGlobalNotice =
+    currentUser &&
+    activeTab !== 'bulk-editor' &&
+    (supplierGlobalNotice.changes > 0 || supplierGlobalNotice.errors > 0) &&
+    dismissedSupplierNoticeKey !== supplierGlobalNotice.key;
   const fallbackLoginUsers = useMemo(
     () => buildLegacyUsers(USERS, userSettings),
     [userSettings],
@@ -12237,6 +12397,53 @@ export default function PartySupplyApp() {
               )}
             </div>
           )}
+          {shouldShowSupplierGlobalNotice && (
+            <div className="pointer-events-none fixed right-4 top-20 z-[70] w-[320px] max-w-[calc(100vw-2rem)]">
+              <div className="pointer-events-auto overflow-hidden rounded-xl border border-amber-300/35 bg-[#0f1e33] text-slate-100 shadow-2xl">
+                <div className="h-1 bg-amber-300" />
+                <div className="p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-200">Casa Alberto</p>
+                      <p className="mt-1 text-sm font-black text-white">
+                        {supplierGlobalNotice.changes} cambios - {supplierGlobalNotice.errors} errores
+                      </p>
+                      <p className="mt-1 text-[11px] font-bold text-slate-400">
+                        Hay costos del proveedor para revisar manualmente.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setDismissedSupplierNoticeKey(supplierGlobalNotice.key)}
+                      className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 bg-slate-950/30 text-slate-400 hover:text-white"
+                      title="Descartar"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('bulk-editor');
+                        setSupplierOpenRequest((current) => current + 1);
+                      }}
+                      className="h-8 flex-1 rounded-md border border-emerald-400/35 bg-emerald-400/14 text-[11px] font-black text-emerald-100 hover:bg-emerald-400/20"
+                    >
+                      Ver revision
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDismissedSupplierNoticeKey(supplierGlobalNotice.key)}
+                      className="h-8 rounded-md border border-slate-700 bg-slate-950/30 px-3 text-[11px] font-black text-slate-300 hover:bg-slate-800"
+                    >
+                      Descartar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           
           <main className={mainContentClass}>
             {isCoreHydratingForSession ? (
@@ -12375,7 +12582,10 @@ export default function PartySupplyApp() {
                 imageImportOpenRequest={imageImportOpenRequest}
                 onSaveSupplierPriceChecks={handleSaveSupplierPriceChecks}
                 onApplySupplierPriceUpdates={handleApplySupplierPriceUpdates}
+                onUndoSupplierPriceUpdates={handleUndoSupplierPriceUpdates}
                 onUpdateCasaAlbertoLinks={handleUpdateCasaAlbertoLinks}
+                isOfflineReadOnly={isOfflineReadOnly}
+                supplierOpenRequest={supplierOpenRequest}
                 />
               </PersistentTabPanel>
             )}

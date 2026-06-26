@@ -4,7 +4,8 @@ import {
   Scale, Package, ArrowRight, Loader2, RotateCcw,
   FileText, X, User, Edit3, ChevronDown, Plus, Trash2, PackageX,
   Camera, Image as ImageIcon, LogIn, CheckCircle, AlertTriangle, ExternalLink,
-  Pause, Play, StopCircle, Crosshair, RefreshCw, Link2
+  Pause, Play, StopCircle, Crosshair, RefreshCw, Link2, LayoutGrid, List,
+  Eye, Undo2, Bell, Check
 } from 'lucide-react';
 import AsyncActionButton from '../components/AsyncActionButton';
 import { FancyPrice } from '../components/FancyPrice';
@@ -14,14 +15,19 @@ import Swal from 'sweetalert2';
 import usePendingAction from '../hooks/usePendingAction';
 import { getProductImageUrl, hasProductImage } from '../utils/productImages';
 import {
+  CASA_ALBERTO_COST_EXTRA_RATE,
+  CASA_ALBERTO_SALE_MARKUP_RATE,
   buildCasaAlbertoGroupKey,
+  buildCasaAlbertoEstimatedCost,
   buildSuggestedSalePriceFromMargin,
   getCasaAlbertoLink,
   getCasaAlbertoPriceTracking,
+  getProductActiveState,
   productHasCasaAlbertoLink,
 } from '../utils/productLifecycle';
 
 const BULK_EDITOR_TOOL_MODE_STORAGE_KEY = 'rebu_bulk_editor_tool_mode_v1';
+const SUPPLIER_PRICE_VIEW_MODE_STORAGE_KEY = 'rebu_supplier_price_view_mode_v1';
 const IMAGE_IMPORT_LIMIT_OPTIONS = [
   { value: '1', label: '1 foto' },
   { value: '5', label: '5 fotos' },
@@ -30,6 +36,12 @@ const IMAGE_IMPORT_LIMIT_OPTIONS = [
 ];
 
 const normalizeToolMode = (mode) => (mode === 'bulk' || mode === 'supplier' ? mode : 'excel');
+const normalizeSupplierPriceViewMode = (mode) => (mode === 'list' ? 'list' : 'cards');
+const clampSupplierPercent = (value, fallback) => {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return fallback;
+  return Math.max(0, Math.min(300, numberValue));
+};
 
 const getInitialToolMode = () => {
   try {
@@ -37,6 +49,15 @@ const getInitialToolMode = () => {
     return normalizeToolMode(window.localStorage.getItem(BULK_EDITOR_TOOL_MODE_STORAGE_KEY));
   } catch {
     return 'excel';
+  }
+};
+
+const getInitialSupplierPriceViewMode = () => {
+  try {
+    if (typeof window === 'undefined') return 'cards';
+    return normalizeSupplierPriceViewMode(window.localStorage.getItem(SUPPLIER_PRICE_VIEW_MODE_STORAGE_KEY));
+  } catch {
+    return 'cards';
   }
 };
 
@@ -60,7 +81,10 @@ export default function BulkEditorView({
   imageImportOpenRequest = 0,
   onSaveSupplierPriceChecks,
   onApplySupplierPriceUpdates,
+  onUndoSupplierPriceUpdates,
   onUpdateCasaAlbertoLinks,
+  isOfflineReadOnly = false,
+  supplierOpenRequest = 0,
 }) {
   const buildEditStateFromInventory = (inventory) => {
     const nextEdits = {};
@@ -111,11 +135,19 @@ export default function BulkEditorView({
   const imageImportPausedRef = useRef(false);
   const imageImportStopRef = useRef(false);
   const [supplierPriceFilter, setSupplierPriceFilter] = useState('all');
+  const [supplierPriceViewMode, setSupplierPriceViewMode] = useState(getInitialSupplierPriceViewMode);
   const [supplierPriceRows, setSupplierPriceRows] = useState({});
+  const [supplierCostExtraPercent, setSupplierCostExtraPercent] = useState(Math.round(CASA_ALBERTO_COST_EXTRA_RATE * 100));
+  const [supplierSaleMarkupPercent, setSupplierSaleMarkupPercent] = useState(Math.round(CASA_ALBERTO_SALE_MARKUP_RATE * 100));
   const [isCheckingSupplierPrices, setIsCheckingSupplierPrices] = useState(false);
   const [checkingSupplierGroupKey, setCheckingSupplierGroupKey] = useState('');
+  const [isSupplierPriceCheckPaused, setIsSupplierPriceCheckPaused] = useState(false);
+  const [selectedSupplierGroupKeys, setSelectedSupplierGroupKeys] = useState([]);
+  const [supplierDetailGroupKey, setSupplierDetailGroupKey] = useState('');
   const [supplierLinkEditKey, setSupplierLinkEditKey] = useState('');
   const [supplierLinkDrafts, setSupplierLinkDrafts] = useState({});
+  const [supplierLinkSuggestions, setSupplierLinkSuggestions] = useState([]);
+  const [supplierProductSelectionByGroup, setSupplierProductSelectionByGroup] = useState({});
   const [isDetectingSupplierLinks, setIsDetectingSupplierLinks] = useState(false);
   const [supplierLinkDetectionLimit, setSupplierLinkDetectionLimit] = useState('10');
   const [supplierLinkDetectionProgress, setSupplierLinkDetectionProgress] = useState({
@@ -126,6 +158,8 @@ export default function BulkEditorView({
   });
   const supplierAutoCheckedRef = useRef(false);
   const supplierLinkDetectionStopRef = useRef(false);
+  const supplierPriceCheckStopRef = useRef(false);
+  const supplierPriceCheckPausedRef = useRef(false);
 
   // --- Estado para el autocompletado de productos extra ---
   const [focusedTempId, setFocusedTempId] = useState(null);
@@ -148,6 +182,14 @@ export default function BulkEditorView({
       // La preferencia es solo comodidad local; si falla, la vista sigue funcionando.
     }
   }, [activeToolMode]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SUPPLIER_PRICE_VIEW_MODE_STORAGE_KEY, normalizeSupplierPriceViewMode(supplierPriceViewMode));
+    } catch {
+      // Preferencia visual local solamente.
+    }
+  }, [supplierPriceViewMode]);
 
   useEffect(() => {
     if (!imageImportOpenRequest || imageImportRows.length === 0) return;
@@ -1031,12 +1073,81 @@ export default function BulkEditorView({
     });
   };
 
+  const getSupplierPreviewImage = (group) => (
+    group?.supplierImageUrl ||
+    group?.products?.map((product) => getProductImageUrl(product)).find(Boolean) ||
+    ''
+  );
+
+  const getSupplierSelectedCount = (group) => getSelectedProductsForGroup(group).length;
+  const supplierPriceRules = {
+    costExtraRate: clampSupplierPercent(supplierCostExtraPercent, Math.round(CASA_ALBERTO_COST_EXTRA_RATE * 100)) / 100,
+    saleMarkupRate: clampSupplierPercent(supplierSaleMarkupPercent, Math.round(CASA_ALBERTO_SALE_MARKUP_RATE * 100)) / 100,
+  };
+  const supplierPriceRulePayload = {
+    costExtraPercent: supplierCostExtraPercent,
+    saleMarkupPercent: supplierSaleMarkupPercent,
+    costExtraRate: supplierPriceRules.costExtraRate,
+    saleMarkupRate: supplierPriceRules.saleMarkupRate,
+  };
+  const getSupplierEstimatedCost = (supplierPrice) =>
+    buildCasaAlbertoEstimatedCost(supplierPrice, supplierPriceRules);
+  const getSupplierSuggestedSale = (product, supplierPrice) =>
+    buildSuggestedSalePriceFromMargin(product, supplierPrice, supplierPriceRules);
+
+  const getSupplierCardMath = (group) => {
+    const supplierPrice = Number(group?.supplierPrice || 0);
+    const hasSupplierPrice = Number.isFinite(supplierPrice) && supplierPrice > 0;
+    const estimatedCost = hasSupplierPrice
+      ? getSupplierEstimatedCost(supplierPrice)
+      : 0;
+    const firstProduct = group?.products?.[0] || {};
+    const suggestedSale = hasSupplierPrice
+      ? getSupplierSuggestedSale(firstProduct, supplierPrice)
+      : 0;
+    const costValues = group?.products?.length
+      ? group.products.map((product) => Number(product.purchasePrice || 0)).filter((value) => Number.isFinite(value))
+      : [];
+    const saleValues = group?.products?.length
+      ? group.products.map((product) => Number(product.price || 0)).filter((value) => Number.isFinite(value))
+      : [];
+    const currentCost = costValues.length ? Math.min(...costValues) : 0;
+    const currentSale = saleValues.length ? Math.min(...saleValues) : 0;
+    const currentCostMax = costValues.length ? Math.max(...costValues) : 0;
+    const currentSaleMax = saleValues.length ? Math.max(...saleValues) : 0;
+
+    return {
+      supplierPrice,
+      hasSupplierPrice,
+      estimatedCost,
+      suggestedSale,
+      currentCost: Number.isFinite(currentCost) ? currentCost : 0,
+      currentSale: Number.isFinite(currentSale) ? currentSale : 0,
+      currentCostMax: Number.isFinite(currentCostMax) ? currentCostMax : 0,
+      currentSaleMax: Number.isFinite(currentSaleMax) ? currentSaleMax : 0,
+    };
+  };
+
   const getSupplierPriceStatusMeta = (status) => {
     if (status === 'changed') {
       return {
         label: 'Con cambio',
         className: 'border-amber-400/40 bg-amber-400/12 text-amber-200',
         railClassName: 'bg-amber-400',
+      };
+    }
+    if (status === 'price_down') {
+      return {
+        label: 'Bajo precio',
+        className: 'border-sky-400/35 bg-sky-400/12 text-sky-200',
+        railClassName: 'bg-sky-400',
+      };
+    }
+    if (status === 'review_required' || status === 'suggested_link' || status === 'dubious_link') {
+      return {
+        label: status === 'dubious_link' ? 'Enlace dudoso' : 'Requiere revision',
+        className: 'border-amber-300/35 bg-amber-300/12 text-amber-100',
+        railClassName: 'bg-amber-300',
       };
     }
     if (status === 'reviewed') {
@@ -1046,9 +1157,9 @@ export default function BulkEditorView({
         railClassName: 'bg-emerald-400',
       };
     }
-    if (status === 'approved') {
+    if (status === 'approved' || status === 'ignored') {
       return {
-        label: 'Aprobado',
+        label: status === 'ignored' ? 'Ignorado' : 'Revisado',
         className: 'border-cyan-400/35 bg-cyan-400/12 text-cyan-200',
         railClassName: 'bg-cyan-400',
       };
@@ -1070,24 +1181,35 @@ export default function BulkEditorView({
   const getSupplierGroupComputedStatus = useCallback((group) => {
     const localStatus = supplierPriceRows[group.key]?.status;
     if (localStatus === 'error' || localStatus === 'login_required') return localStatus;
+    if (localStatus === 'ignored') return 'ignored';
 
     const supplierPrice = Number(group.supplierPrice || 0);
     const hasSupplierPrice = Number.isFinite(supplierPrice) && supplierPrice > 0;
-    const hasCostDelta = hasSupplierPrice && group.products.some((product) =>
-      Math.abs(Number(product.purchasePrice || 0) - supplierPrice) >= 0.01
+    const estimatedCost = getSupplierEstimatedCost(supplierPrice);
+    const reviewedStatus = localStatus || group.tracking.reviewStatus;
+
+    if (reviewedStatus === 'ignored') return 'ignored';
+    if (reviewedStatus === 'approved') return 'reviewed';
+
+    const hasCostIncrease = hasSupplierPrice && group.products.some((product) =>
+      estimatedCost - Number(product.purchasePrice || 0) >= 0.01
+    );
+    const hasCostDecrease = hasSupplierPrice && !hasCostIncrease && group.products.some((product) =>
+      Number(product.purchasePrice || 0) - estimatedCost >= 0.01
     );
 
-    if (hasCostDelta) return 'changed';
-    if (localStatus === 'approved' || group.tracking.reviewStatus === 'approved') return 'approved';
+    if (hasCostIncrease) return 'changed';
+    if (hasCostDecrease) return 'price_down';
     if (group.tracking.lastCheckedAt || localStatus === 'reviewed') return 'reviewed';
     return 'unchecked';
-  }, [supplierPriceRows]);
+  }, [supplierPriceRows, supplierCostExtraPercent]);
 
   const casaAlbertoGroups = useMemo(() => {
     const groups = new Map();
 
     sandboxInventory
       .filter(productHasCasaAlbertoLink)
+      .filter(getProductActiveState)
       .forEach((product) => {
         const key = buildCasaAlbertoGroupKey(product);
         const link = getCasaAlbertoLink(product);
@@ -1109,6 +1231,7 @@ export default function BulkEditorView({
           message: localRow.message || tracking.message || '',
           sourceUrl: localRow.sourceUrl || tracking.sourceUrl || link.productUrl || '',
           priceText: localRow.priceText || tracking.priceText || '',
+          supplierImageUrl: localRow.imageUrl || link.imageUrl || tracking.imageUrl || '',
         };
 
         base.products.push(product);
@@ -1119,37 +1242,54 @@ export default function BulkEditorView({
       .map((group) => {
         const status = getSupplierGroupComputedStatus(group);
         const supplierPrice = Number(group.supplierPrice || 0);
+        const estimatedCost = getSupplierEstimatedCost(supplierPrice);
         return {
           ...group,
           status,
+          estimatedCost,
           suggestedSalePrice: supplierPrice > 0
-            ? buildSuggestedSalePriceFromMargin(group.products[0], supplierPrice)
+            ? getSupplierSuggestedSale(group.products[0], supplierPrice)
             : 0,
         };
       })
       .sort((a, b) => {
-        const statusWeight = { changed: 0, login_required: 1, error: 2, unchecked: 3, reviewed: 4, approved: 5 };
+        const statusWeight = { changed: 0, login_required: 1, error: 2, review_required: 3, dubious_link: 4, price_down: 5, unchecked: 6, reviewed: 7, approved: 8, ignored: 9 };
         return (statusWeight[a.status] ?? 9) - (statusWeight[b.status] ?? 9) ||
           String(a.supplierTitle || '').localeCompare(String(b.supplierTitle || ''));
       });
-  }, [sandboxInventory, supplierPriceRows, getSupplierGroupComputedStatus]);
+  }, [sandboxInventory, supplierPriceRows, getSupplierGroupComputedStatus, supplierCostExtraPercent, supplierSaleMarkupPercent]);
 
   const supplierPricePendingCount = casaAlbertoGroups.filter((group) => group.status === 'changed').length;
+  const supplierPriceErrorCount = casaAlbertoGroups.filter((group) => group.status === 'error' || group.status === 'login_required').length;
+  const supplierPriceNoticeCount = casaAlbertoGroups.filter((group) => group.status === 'price_down' || group.status === 'dubious_link' || group.status === 'review_required').length;
+  const supplierPriceBadgeCount = supplierPricePendingCount + supplierPriceErrorCount + supplierLinkSuggestions.length;
   const visibleCasaAlbertoGroups = casaAlbertoGroups.filter((group) => {
     if (supplierPriceFilter === 'all') return true;
     if (supplierPriceFilter === 'error') return group.status === 'error' || group.status === 'login_required';
-    if (supplierPriceFilter === 'reviewed') return group.status === 'reviewed' || group.status === 'approved';
+    if (supplierPriceFilter === 'reviewed') return group.status === 'reviewed' || group.status === 'approved' || group.status === 'ignored';
+    if (supplierPriceFilter === 'notice') return group.status === 'price_down' || group.status === 'dubious_link' || group.status === 'review_required';
     return group.status === supplierPriceFilter;
   });
   const casaAlbertoLinkCandidates = useMemo(() => (
     sandboxInventory
       .filter((product) => !productHasCasaAlbertoLink(product) && String(product.title || '').trim())
+      .filter(getProductActiveState)
       .sort((a, b) => {
         const aHasCode = String(a.barcode || '').trim() ? 0 : 1;
         const bHasCode = String(b.barcode || '').trim() ? 0 : 1;
         return aHasCode - bHasCode || String(a.title || '').localeCompare(String(b.title || ''));
       })
   ), [sandboxInventory]);
+
+  const selectedSupplierGroups = useMemo(() => {
+    const selected = new Set(selectedSupplierGroupKeys.map(String));
+    return casaAlbertoGroups.filter((group) => selected.has(String(group.key)));
+  }, [casaAlbertoGroups, selectedSupplierGroupKeys]);
+
+  const supplierDetailGroup = useMemo(
+    () => casaAlbertoGroups.find((group) => group.key === supplierDetailGroupKey) || null,
+    [casaAlbertoGroups, supplierDetailGroupKey],
+  );
 
   const normalizeSupplierDigits = (value) => {
     const digits = String(value || '').replace(/\D/g, '');
@@ -1183,7 +1323,63 @@ export default function BulkEditorView({
     setSandboxInventory((prev) => prev.map((product) => updatedById.get(String(product.id)) || product));
   };
 
+  const getSupplierStatusForPrice = (products = [], supplierPrice = 0, fallback = 'reviewed') => {
+    const estimatedCost = getSupplierEstimatedCost(supplierPrice);
+    if (!estimatedCost) return fallback;
+    const hasIncrease = products.some((product) => estimatedCost - Number(product.purchasePrice || 0) >= 0.01);
+    if (hasIncrease) return 'changed';
+    const hasDecrease = products.some((product) => Number(product.purchasePrice || 0) - estimatedCost >= 0.01);
+    if (hasDecrease) return 'price_down';
+    return 'reviewed';
+  };
+
+  const getSelectedProductsForGroup = (group) => {
+    const storedIds = supplierProductSelectionByGroup[group.key];
+    if (!Array.isArray(storedIds) || storedIds.length === 0) return group.products;
+    const selected = new Set(storedIds.map(String));
+    return group.products.filter((product) => selected.has(String(product.id)));
+  };
+
+  const toggleSupplierGroupSelection = (groupKey) => {
+    setSelectedSupplierGroupKeys((prev) => (
+      prev.includes(groupKey)
+        ? prev.filter((key) => key !== groupKey)
+        : [...prev, groupKey]
+    ));
+  };
+
+  const toggleSupplierProductSelection = (group, productId) => {
+    if (!group || group.products.length <= 1) return;
+    setSupplierProductSelectionByGroup((prev) => {
+      const current = Array.isArray(prev[group.key])
+        ? prev[group.key].map(String)
+        : group.products.map((product) => String(product.id));
+      const productKey = String(productId);
+      const next = current.includes(productKey)
+        ? current.filter((id) => id !== productKey)
+        : [...current, productKey];
+      return {
+        ...prev,
+        [group.key]: next.length > 0 ? next : current,
+      };
+    });
+  };
+
+  const waitIfSupplierPricePaused = async () => {
+    while (supplierPriceCheckPausedRef.current && !supplierPriceCheckStopRef.current) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  };
+
+  const showSupplierOfflineNotice = () => {
+    Swal.fire('Modo sin conexion', 'Reconecta la nube antes de chequear o aprobar costos de Casa Alberto.', 'info');
+  };
+
   const handleCheckSupplierPriceGroup = async (group) => {
+    if (isOfflineReadOnly) {
+      showSupplierOfflineNotice();
+      return null;
+    }
     if (!window.electronAPI?.supplierPriceSearch) {
       Swal.fire('Electron requerido', 'El chequeo de Casa Alberto necesita la app de escritorio.', 'info');
       return null;
@@ -1202,23 +1398,28 @@ export default function BulkEditorView({
       if (result?.status === 'found' && Number(result.supplierPrice) > 0) {
         const supplierPrice = Number(result.supplierPrice);
         const previousSupplierPrice = Number(group.supplierPrice || group.previousSupplierPrice || 0) || null;
-        const hasCostDelta = group.products.some((product) =>
-          Math.abs(Number(product.purchasePrice || 0) - supplierPrice) >= 0.01
-        );
-        const status = hasCostDelta ? 'changed' : 'reviewed';
+        const estimatedCost = getSupplierEstimatedCost(supplierPrice);
+        const status = getSupplierStatusForPrice(group.products, supplierPrice);
+        const hasCostDelta = status === 'changed' || status === 'price_down';
         const rowState = {
           status,
           supplierPrice,
+          estimatedCost,
           previousSupplierPrice,
           foundTitle: result.foundTitle || group.supplierTitle,
           supplierCode: result.supplierCode || group.supplierCode,
           casaAlbertoId: result.casaAlbertoId || group.casaAlbertoId,
           productUrl: result.productUrl || group.productUrl,
           sourceUrl: result.sourceUrl || result.productUrl || group.productUrl,
+          imageUrl: result.imageUrl || group.supplierImageUrl || '',
           priceText: result.priceText || '',
           lastCheckedAt: checkedAt,
           lastChangedAt: hasCostDelta ? checkedAt : group.tracking.lastChangedAt || null,
-          message: hasCostDelta ? 'Precio distinto al costo Rebu.' : 'Costo Rebu alineado con Casa Alberto.',
+          message: status === 'changed'
+            ? 'Costo estimado distinto al costo Rebu.'
+            : status === 'price_down'
+              ? 'Casa Alberto bajo el costo estimado. Revisar sin urgencia.'
+              : 'Costo Rebu alineado con Casa Alberto.',
         };
 
         setSupplierPriceRows((prev) => ({ ...prev, [group.key]: rowState }));
@@ -1226,7 +1427,10 @@ export default function BulkEditorView({
           productId: product.id,
           supplierPrice,
           previousSupplierPrice,
-          suggestedSalePrice: buildSuggestedSalePriceFromMargin(product, supplierPrice),
+          approvedCost: estimatedCost,
+          estimatedCost,
+          suggestedSalePrice: getSupplierSuggestedSale(product, supplierPrice),
+          ...supplierPriceRulePayload,
           reviewStatus: status,
           lastCheckedAt: checkedAt,
           lastChangedAt: hasCostDelta ? checkedAt : group.tracking.lastChangedAt || null,
@@ -1235,7 +1439,9 @@ export default function BulkEditorView({
           productUrl: rowState.productUrl,
           foundTitle: rowState.foundTitle,
           sourceUrl: rowState.sourceUrl,
+          imageUrl: rowState.imageUrl,
           priceText: rowState.priceText,
+          message: rowState.message,
         })));
         updateSandboxProducts(saveResult?.products);
         return { ...rowState, groupKey: group.key };
@@ -1254,20 +1460,40 @@ export default function BulkEditorView({
     }
   };
 
-  const handleCheckAllSupplierPrices = async () => {
+  const handleCheckAllSupplierPrices = async (scope = 'visible') => {
+    if (isOfflineReadOnly) {
+      showSupplierOfflineNotice();
+      return;
+    }
     if (isCheckingSupplierPrices) return;
-    const groupsToCheck = visibleCasaAlbertoGroups.length > 0 ? visibleCasaAlbertoGroups : casaAlbertoGroups;
+    const groupsToCheck = scope === 'all'
+      ? casaAlbertoGroups
+      : visibleCasaAlbertoGroups;
     if (groupsToCheck.length === 0) return;
 
+    supplierPriceCheckStopRef.current = false;
+    supplierPriceCheckPausedRef.current = false;
+    setIsSupplierPriceCheckPaused(false);
     setIsCheckingSupplierPrices(true);
-    const summary = { changed: 0, reviewed: 0, error: 0, login_required: 0 };
+    const summary = { changed: 0, reviewed: 0, price_down: 0, error: 0, login_required: 0, stopped: false };
     try {
       for (const group of groupsToCheck) {
+        if (supplierPriceCheckStopRef.current) {
+          summary.stopped = true;
+          break;
+        }
+        await waitIfSupplierPricePaused();
+        if (supplierPriceCheckStopRef.current) {
+          summary.stopped = true;
+          break;
+        }
         const result = await handleCheckSupplierPriceGroup(group);
         if (result?.status === 'changed') summary.changed += 1;
+        else if (result?.status === 'price_down') summary.price_down += 1;
         else if (result?.status === 'reviewed') summary.reviewed += 1;
         else if (result?.status === 'login_required') {
           summary.login_required += 1;
+          summary.stopped = true;
           break;
         } else if (result?.status) {
           summary.error += 1;
@@ -1275,33 +1501,65 @@ export default function BulkEditorView({
         await new Promise((resolve) => setTimeout(resolve, 300));
       }
       Swal.fire({
-        title: 'Chequeo terminado',
-        text: `${summary.changed} con cambio, ${summary.reviewed} sin cambio, ${summary.error + summary.login_required} con aviso.`,
+        title: summary.stopped ? 'Chequeo detenido' : 'Chequeo terminado',
+        text: `${summary.changed} subas, ${summary.price_down} bajas, ${summary.reviewed} sin cambio, ${summary.error + summary.login_required} avisos.`,
         icon: summary.changed > 0 ? 'warning' : 'success',
         confirmButtonColor: '#0f172a',
       });
     } finally {
       setIsCheckingSupplierPrices(false);
+      supplierPriceCheckStopRef.current = false;
     }
   };
 
+  const pauseSupplierPriceCheck = () => {
+    supplierPriceCheckPausedRef.current = true;
+    setIsSupplierPriceCheckPaused(true);
+  };
+
+  const resumeSupplierPriceCheck = () => {
+    supplierPriceCheckPausedRef.current = false;
+    setIsSupplierPriceCheckPaused(false);
+  };
+
+  const stopSupplierPriceCheck = () => {
+    supplierPriceCheckStopRef.current = true;
+    supplierPriceCheckPausedRef.current = false;
+    setIsSupplierPriceCheckPaused(false);
+  };
+
   const handleApproveSupplierGroup = async (group) => {
+    if (isOfflineReadOnly) {
+      showSupplierOfflineNotice();
+      return;
+    }
     const supplierPrice = Number(group.supplierPrice || 0);
     if (!Number.isFinite(supplierPrice) || supplierPrice <= 0) {
       Swal.fire('Falta precio', 'Chequea el proveedor antes de aprobar el costo.', 'info');
       return;
     }
 
-    const result = await onApplySupplierPriceUpdates?.(group.products.map((product) => ({
+    const productsToApply = getSelectedProductsForGroup(group);
+    if (productsToApply.length === 0) {
+      Swal.fire('Sin productos', 'Selecciona al menos un producto Rebu asociado.', 'info');
+      return;
+    }
+
+    const approvedCost = getSupplierEstimatedCost(supplierPrice);
+    const result = await onApplySupplierPriceUpdates?.(productsToApply.map((product) => ({
       productId: product.id,
       supplierPrice,
       previousSupplierPrice: Number(product.purchasePrice || 0),
-      suggestedSalePrice: buildSuggestedSalePriceFromMargin(product, supplierPrice),
+      approvedCost,
+      estimatedCost: approvedCost,
+      suggestedSalePrice: getSupplierSuggestedSale(product, supplierPrice),
+      ...supplierPriceRulePayload,
       supplierCode: group.supplierCode,
       casaAlbertoId: group.casaAlbertoId,
       productUrl: group.productUrl,
       foundTitle: group.supplierTitle,
       sourceUrl: group.sourceUrl || group.productUrl,
+      imageUrl: group.supplierImageUrl || '',
       priceText: group.priceText || '',
     })));
 
@@ -1310,11 +1568,108 @@ export default function BulkEditorView({
       ...prev,
       [group.key]: {
         ...(prev[group.key] || {}),
-        status: 'approved',
+        status: 'reviewed',
         supplierPrice,
+        estimatedCost: approvedCost,
         lastCheckedAt: new Date().toISOString(),
       },
     }));
+  };
+
+  const handleIgnoreSupplierGroup = async (group) => {
+    if (isOfflineReadOnly) {
+      showSupplierOfflineNotice();
+      return;
+    }
+    const supplierPrice = Number(group.supplierPrice || 0);
+    if (!Number.isFinite(supplierPrice) || supplierPrice <= 0) return;
+    const productsToSave = getSelectedProductsForGroup(group);
+    const estimatedCost = getSupplierEstimatedCost(supplierPrice);
+    const result = await onSaveSupplierPriceChecks?.(productsToSave.map((product) => ({
+      productId: product.id,
+      supplierPrice,
+      previousSupplierPrice: Number(product.purchasePrice || 0),
+      approvedCost: estimatedCost,
+      estimatedCost,
+      suggestedSalePrice: getSupplierSuggestedSale(product, supplierPrice),
+      ...supplierPriceRulePayload,
+      supplierCode: group.supplierCode,
+      casaAlbertoId: group.casaAlbertoId,
+      productUrl: group.productUrl,
+      foundTitle: group.supplierTitle,
+      sourceUrl: group.sourceUrl || group.productUrl,
+      imageUrl: group.supplierImageUrl || '',
+      priceText: group.priceText || '',
+      reviewStatus: 'ignored',
+      lastCheckedAt: new Date().toISOString(),
+      message: 'Cambio revisado e ignorado manualmente.',
+    })));
+    updateSandboxProducts(result?.products);
+    setSupplierPriceRows((prev) => ({
+      ...prev,
+      [group.key]: {
+        ...(prev[group.key] || {}),
+        status: 'ignored',
+        supplierPrice,
+        estimatedCost,
+        lastCheckedAt: new Date().toISOString(),
+        message: 'Cambio revisado e ignorado manualmente.',
+      },
+    }));
+  };
+
+  const handleUndoSupplierGroup = async (group) => {
+    if (isOfflineReadOnly) {
+      showSupplierOfflineNotice();
+      return;
+    }
+    const productsToUndo = getSelectedProductsForGroup(group);
+    const result = await onUndoSupplierPriceUpdates?.(productsToUndo.map((product) => {
+      const tracking = getCasaAlbertoPriceTracking(product);
+      const previousPurchasePrice = Number(
+        tracking.previousPurchasePrice ??
+        tracking.previousSupplierPrice ??
+        group.previousPurchasePrice ??
+        group.previousSupplierPrice ??
+        0
+      );
+      return {
+        productId: product.id,
+        previousPurchasePrice,
+        supplierPrice: Number(group.supplierPrice || tracking.lastSupplierPrice || 0),
+        supplierCode: group.supplierCode,
+        casaAlbertoId: group.casaAlbertoId,
+        productUrl: group.productUrl,
+        foundTitle: group.supplierTitle,
+        sourceUrl: group.sourceUrl || group.productUrl,
+      };
+    }));
+    updateSandboxProducts(result?.products);
+    setSupplierPriceRows((prev) => ({
+      ...prev,
+      [group.key]: {
+        ...(prev[group.key] || {}),
+        status: 'changed',
+        lastCheckedAt: new Date().toISOString(),
+        message: 'Aprobacion deshecha. Revisa nuevamente antes de aprobar.',
+      },
+    }));
+  };
+
+  const handleApproveSelectedSupplierGroups = async () => {
+    const targetGroups = selectedSupplierGroups.filter((group) => Number(group.supplierPrice || 0) > 0);
+    for (const group of targetGroups) {
+      await handleApproveSupplierGroup(group);
+    }
+    setSelectedSupplierGroupKeys([]);
+  };
+
+  const handleIgnoreSelectedSupplierGroups = async () => {
+    const targetGroups = selectedSupplierGroups.filter((group) => Number(group.supplierPrice || 0) > 0);
+    for (const group of targetGroups) {
+      await handleIgnoreSupplierGroup(group);
+    }
+    setSelectedSupplierGroupKeys([]);
   };
 
   const handleDetectCasaAlbertoLinks = async () => {
@@ -1385,14 +1740,49 @@ export default function BulkEditorView({
 
         if (result?.status === 'found' && detectedProductUrl && detectedCasaAlbertoId) {
           const supplierPrice = Number(result.supplierPrice || 0);
-          const hasCostDelta = supplierPrice > 0 && Math.abs(Number(product.purchasePrice || 0) - supplierPrice) >= 0.01;
+          const estimatedCost = getSupplierEstimatedCost(supplierPrice);
+          const detectedStatus = getSupplierStatusForPrice([product], supplierPrice);
+          const hasCostDelta = detectedStatus === 'changed' || detectedStatus === 'price_down';
           const matchedBy = getDetectedSupplierMatchMode(product, result);
+          const suggestion = {
+            product,
+            result: {
+              ...result,
+              productUrl: detectedProductUrl,
+              casaAlbertoId: detectedCasaAlbertoId,
+              supplierPrice,
+              estimatedCost,
+            },
+            matchedBy,
+            createdAt: Date.now(),
+          };
+
+          if (matchedBy !== 'barcode_exact') {
+            setSupplierLinkSuggestions((prev) => {
+              const key = `${product.id}-${detectedCasaAlbertoId}`;
+              const withoutDuplicate = prev.filter((entry) => `${entry.product.id}-${entry.result.casaAlbertoId}` !== key);
+              return [suggestion, ...withoutDuplicate].slice(0, 20);
+            });
+            summary.errors += 1;
+            setSupplierLinkDetectionProgress((current) => ({
+              ...current,
+              processed: index + 1,
+              found: summary.found,
+              errors: summary.errors + summary.login_required,
+            }));
+            await new Promise((resolve) => setTimeout(resolve, 320));
+            continue;
+          }
+
           const saveResult = await onSaveSupplierPriceChecks?.([{
             productId: product.id,
             supplierPrice,
             previousSupplierPrice: Number(product.purchasePrice || 0),
-            suggestedSalePrice: buildSuggestedSalePriceFromMargin(product, supplierPrice),
-            reviewStatus: hasCostDelta ? 'changed' : 'reviewed',
+            approvedCost: estimatedCost,
+            estimatedCost,
+            suggestedSalePrice: getSupplierSuggestedSale(product, supplierPrice),
+            ...supplierPriceRulePayload,
+            reviewStatus: detectedStatus,
             lastCheckedAt: new Date().toISOString(),
             lastChangedAt: hasCostDelta ? new Date().toISOString() : null,
             supplierCode: result.supplierCode || '',
@@ -1400,6 +1790,7 @@ export default function BulkEditorView({
             productUrl: detectedProductUrl,
             foundTitle: result.foundTitle || '',
             sourceUrl: result.sourceUrl || detectedProductUrl,
+            imageUrl: result.imageUrl || '',
             priceText: result.priceText || '',
             matchedBy,
             inventoryBarcode: product.barcode || '',
@@ -1412,7 +1803,7 @@ export default function BulkEditorView({
           }]);
           updateSandboxProducts(saveResult?.products);
           summary.found += 1;
-          if (hasCostDelta) summary.changed += 1;
+          if (detectedStatus === 'changed') summary.changed += 1;
           else summary.reviewed += 1;
         } else if (result?.status === 'not_found') {
           summary.not_found += 1;
@@ -1470,20 +1861,100 @@ export default function BulkEditorView({
   };
 
   const handleSaveSupplierLink = async (group) => {
+    if (isOfflineReadOnly) {
+      showSupplierOfflineNotice();
+      return;
+    }
     const draft = supplierLinkDrafts[group.key] || {};
+    const cleanLink = {
+      foundTitle: String(draft.foundTitle || '').trim(),
+      providerCode: String(draft.supplierCode || '').trim(),
+      casaAlbertoId: String(draft.casaAlbertoId || '').trim(),
+      productUrl: String(draft.productUrl || '').trim(),
+      matchedBy: 'manual_price_tracking',
+    };
+    if (!cleanLink.providerCode && !cleanLink.casaAlbertoId && !cleanLink.productUrl) {
+      Swal.fire('Falta referencia', 'Agrega ID Casa Alberto, codigo proveedor o URL del producto antes de guardar.', 'info');
+      return;
+    }
+    const productsToUpdate = getSelectedProductsForGroup(group);
     const result = await onUpdateCasaAlbertoLinks?.({
-      productIds: group.products.map((product) => product.id),
-      link: {
-        foundTitle: draft.foundTitle,
-        providerCode: draft.supplierCode,
-        casaAlbertoId: draft.casaAlbertoId,
-        productUrl: draft.productUrl,
-        matchedBy: 'manual_price_tracking',
-      },
+      productIds: productsToUpdate.map((product) => product.id),
+      link: cleanLink,
     });
 
     updateSandboxProducts(result?.products);
     setSupplierLinkEditKey('');
+  };
+
+  const handleUnlinkSupplierGroup = async (group) => {
+    if (isOfflineReadOnly) {
+      showSupplierOfflineNotice();
+      return;
+    }
+    const result = await Swal.fire({
+      title: 'Desvincular Casa Alberto',
+      text: 'El producto queda en Rebu, pero deja de seguir este proveedor.',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Desvincular',
+      cancelButtonText: 'Cancelar',
+      reverseButtons: true,
+      confirmButtonColor: '#be123c',
+    });
+    if (!result.isConfirmed) return;
+
+    const productsToUnlink = getSelectedProductsForGroup(group);
+    const updateResult = await onUpdateCasaAlbertoLinks?.({
+      productIds: productsToUnlink.map((product) => product.id),
+      link: { unlink: true },
+    });
+    updateSandboxProducts(updateResult?.products);
+    setSupplierDetailGroupKey('');
+    setSupplierLinkEditKey('');
+  };
+
+  const handleApproveSupplierLinkSuggestion = async (suggestion) => {
+    if (!suggestion?.product || !suggestion?.result) return;
+    if (isOfflineReadOnly) {
+      showSupplierOfflineNotice();
+      return;
+    }
+    const { product, result, matchedBy } = suggestion;
+    const supplierPrice = Number(result.supplierPrice || 0);
+    const estimatedCost = getSupplierEstimatedCost(supplierPrice);
+    const status = getSupplierStatusForPrice([product], supplierPrice);
+    const saveResult = await onSaveSupplierPriceChecks?.([{
+      productId: product.id,
+      supplierPrice,
+      previousSupplierPrice: Number(product.purchasePrice || 0),
+      approvedCost: estimatedCost,
+      estimatedCost,
+      suggestedSalePrice: getSupplierSuggestedSale(product, supplierPrice),
+      ...supplierPriceRulePayload,
+      reviewStatus: status,
+      lastCheckedAt: new Date().toISOString(),
+      lastChangedAt: status === 'changed' || status === 'price_down' ? new Date().toISOString() : null,
+      supplierCode: result.supplierCode || '',
+      casaAlbertoId: result.casaAlbertoId || '',
+      productUrl: result.productUrl || result.sourceUrl || '',
+      foundTitle: result.foundTitle || '',
+      sourceUrl: result.sourceUrl || result.productUrl || '',
+      imageUrl: result.imageUrl || '',
+      priceText: result.priceText || '',
+      matchedBy,
+      inventoryBarcode: product.barcode || '',
+      searchedQuery: result.searchedQuery || product.title || product.barcode || '',
+      message: matchedBy === 'trimmed_barcode'
+        ? 'Enlace revisado con codigo corregido.'
+        : 'Enlace revisado por nombre.',
+    }]);
+    updateSandboxProducts(saveResult?.products);
+    setSupplierLinkSuggestions((prev) => prev.filter((entry) => entry !== suggestion));
+  };
+
+  const dismissSupplierLinkSuggestion = (suggestion) => {
+    setSupplierLinkSuggestions((prev) => prev.filter((entry) => entry !== suggestion));
   };
 
   const openSupplierExternalUrl = async (url) => {
@@ -1517,6 +1988,11 @@ export default function BulkEditorView({
       handleCheckAllSupplierPrices();
     }, 0);
   };
+
+  useEffect(() => {
+    if (!supplierOpenRequest) return;
+    openSupplierPriceMode();
+  }, [supplierOpenRequest]);
 
   const imageImportStats = imageImportRows.reduce((acc, row) => {
     acc[row.status] = (acc[row.status] || 0) + 1;
@@ -1628,11 +2104,238 @@ export default function BulkEditorView({
   const renderCasaAlbertoPanel = () => {
     const filterOptions = [
       { value: 'all', label: 'Todos', count: casaAlbertoGroups.length },
-      { value: 'changed', label: 'Con cambio', count: casaAlbertoGroups.filter((group) => group.status === 'changed').length },
+      { value: 'changed', label: 'Con cambio', count: supplierPricePendingCount },
+      { value: 'price_down', label: 'Bajo precio', count: casaAlbertoGroups.filter((group) => group.status === 'price_down').length },
       { value: 'unchecked', label: 'Sin revisar', count: casaAlbertoGroups.filter((group) => group.status === 'unchecked').length },
-      { value: 'reviewed', label: 'Revisados', count: casaAlbertoGroups.filter((group) => group.status === 'reviewed' || group.status === 'approved').length },
-      { value: 'error', label: 'Avisos', count: casaAlbertoGroups.filter((group) => group.status === 'error' || group.status === 'login_required').length },
+      { value: 'reviewed', label: 'Revisados', count: casaAlbertoGroups.filter((group) => group.status === 'reviewed' || group.status === 'approved' || group.status === 'ignored').length },
+      { value: 'notice', label: 'Avisos', count: supplierPriceNoticeCount },
+      { value: 'error', label: 'Errores', count: supplierPriceErrorCount },
     ];
+    const supplierExtraPercent = supplierCostExtraPercent;
+    const supplierMarkupPercent = supplierSaleMarkupPercent;
+    const renderSupplierImage = (group, className = 'h-16 w-16') => {
+      const imageUrl = getSupplierPreviewImage(group);
+      return (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            if (imageUrl) setProductImagePreview(imageUrl);
+          }}
+          disabled={!imageUrl}
+          className={`${className} shrink-0 overflow-hidden rounded-lg border border-slate-700 bg-slate-950/35 text-slate-500 transition-colors ${imageUrl ? 'hover:border-sky-400/60' : ''}`}
+          title={imageUrl ? 'Ver imagen grande' : 'Sin imagen'}
+        >
+          {imageUrl ? (
+            <img src={imageUrl} alt={group.supplierTitle} className="h-full w-full object-cover" />
+          ) : (
+            <ImageIcon size={18} className="mx-auto" />
+          )}
+        </button>
+      );
+    };
+
+    const renderSupplierActions = (group, { compact = false } = {}) => {
+      const { hasSupplierPrice } = getSupplierCardMath(group);
+      const canUndo = group.products.some((product) => {
+        const tracking = getCasaAlbertoPriceTracking(product);
+        const previousPurchasePrice = Number(tracking.previousPurchasePrice ?? tracking.previousSupplierPrice ?? 0);
+        return previousPurchasePrice > 0 && tracking.approvedAt;
+      });
+      const buttonClass = compact
+        ? 'h-8 px-2 text-[10px]'
+        : 'h-9 px-3 text-xs';
+      return (
+        <div className={`flex ${compact ? 'flex-row flex-wrap' : 'flex-col'} gap-2`}>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              handleCheckSupplierPriceGroup(group);
+            }}
+            disabled={isOfflineReadOnly || checkingSupplierGroupKey === group.key || isCheckingSupplierPrices}
+            className={`flex items-center justify-center gap-2 rounded-md border border-sky-400/35 bg-sky-400/12 font-black text-sky-100 transition-colors hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-45 ${buttonClass}`}
+          >
+            {checkingSupplierGroupKey === group.key ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            Chequear
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              handleApproveSupplierGroup(group);
+            }}
+            disabled={isOfflineReadOnly || !hasSupplierPrice || group.status === 'reviewed' || group.status === 'approved'}
+            className={`flex items-center justify-center gap-2 rounded-md border border-emerald-400/35 bg-emerald-400/14 font-black text-emerald-100 transition-colors hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-45 ${buttonClass}`}
+          >
+            <CheckCircle size={14} />
+            Aprobar costo
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              handleIgnoreSupplierGroup(group);
+            }}
+            disabled={isOfflineReadOnly || !hasSupplierPrice}
+            className={`flex items-center justify-center gap-2 rounded-md border border-slate-600 bg-slate-900/70 font-black text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45 ${buttonClass}`}
+          >
+            <Check size={14} />
+            Ignorar
+          </button>
+          {canUndo ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                handleUndoSupplierGroup(group);
+              }}
+              disabled={isOfflineReadOnly}
+              className={`flex items-center justify-center gap-2 rounded-md border border-amber-400/35 bg-amber-400/12 font-black text-amber-100 transition-colors hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-45 ${buttonClass}`}
+            >
+              <Undo2 size={14} />
+              Deshacer
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              openSupplierLinkEditor(group);
+            }}
+            className={`flex items-center justify-center gap-2 rounded-md border border-slate-600 bg-slate-900/60 font-black text-slate-200 transition-colors hover:bg-slate-800 ${buttonClass}`}
+          >
+            <Edit3 size={14} />
+            Revisar enlace
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              handleUnlinkSupplierGroup(group);
+            }}
+            disabled={isOfflineReadOnly}
+            className={`flex items-center justify-center gap-2 rounded-md border border-rose-400/30 bg-rose-400/10 font-black text-rose-100 transition-colors hover:bg-rose-400/18 disabled:cursor-not-allowed disabled:opacity-45 ${buttonClass}`}
+          >
+            <X size={14} />
+            Desvincular
+          </button>
+          {group.productUrl || group.sourceUrl ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                openSupplierExternalUrl(group.productUrl || group.sourceUrl);
+              }}
+              className={`flex items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-950/30 font-black text-slate-300 transition-colors hover:border-slate-500 ${buttonClass}`}
+            >
+              <ExternalLink size={14} />
+              Fuente
+            </button>
+          ) : null}
+        </div>
+      );
+    };
+
+    const renderSupplierProducts = (group, { compact = false } = {}) => (
+      <div className={compact ? 'space-y-1' : 'space-y-1.5'}>
+        {group.products.map((product) => {
+          const productImage = getProductImageUrl(product);
+          const isSelected = getSelectedProductsForGroup(group).some((entry) => String(entry.id) === String(product.id));
+          return (
+            <button
+              key={product.id}
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleSupplierProductSelection(group, product.id);
+              }}
+              className={`grid w-full min-w-0 items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors ${
+                compact
+                  ? 'grid-cols-[20px_34px_minmax(0,1fr)_74px]'
+                  : 'grid-cols-[22px_42px_minmax(0,1fr)_86px_86px_86px]'
+              } ${
+                isSelected
+                  ? 'border-emerald-400/45 bg-emerald-400/10'
+                  : 'border-slate-700/60 bg-[#0b1728] hover:border-slate-500'
+              }`}
+            >
+              <span className={`flex h-5 w-5 items-center justify-center rounded border ${
+                isSelected
+                  ? 'border-emerald-300 bg-emerald-400/20 text-emerald-100'
+                  : 'border-slate-600 text-slate-500'
+              }`}>
+                {isSelected ? <Check size={12} /> : null}
+              </span>
+              <span className="h-9 w-9 overflow-hidden rounded-md border border-slate-700 bg-slate-950/30">
+                {productImage ? (
+                  <img src={productImage} alt={product.title} className="h-full w-full object-cover" />
+                ) : (
+                  <ImageIcon size={14} className="mx-auto mt-2.5 text-slate-500" />
+                )}
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-xs font-black text-white" title={product.title}>{product.title}</span>
+                <span className="mt-0.5 block truncate text-[10px] font-bold text-slate-500">{product.barcode || 'Sin codigo'}</span>
+              </span>
+              <span className="text-[11px] font-black text-slate-200">
+                <span className="block text-[8px] uppercase tracking-[0.12em] text-slate-500">Costo</span>
+                {formatSupplierMoney(product.purchasePrice)}
+              </span>
+              {!compact ? (
+                <>
+                  <span className="text-[11px] font-black text-slate-200">
+                    <span className="block text-[8px] uppercase tracking-[0.12em] text-slate-500">Venta</span>
+                    {formatSupplierMoney(product.price)}
+                  </span>
+                  <span className="text-[11px] font-black text-emerald-200">
+                    <span className="block text-[8px] uppercase tracking-[0.12em] text-slate-500">Sugerida</span>
+                    {getSupplierCardMath(group).hasSupplierPrice
+                      ? formatSupplierMoney(getSupplierSuggestedSale(product, group.supplierPrice))
+                      : '-'}
+                  </span>
+                </>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+    );
+
+    const renderSupplierMetricChips = (group) => {
+      const math = getSupplierCardMath(group);
+      const formatRange = (minValue, maxValue) => {
+        if (!minValue) return '-';
+        if (maxValue && Math.abs(Number(maxValue) - Number(minValue)) >= 0.01) {
+          return `${formatSupplierMoney(minValue)} - ${formatSupplierMoney(maxValue)}`;
+        }
+        return formatSupplierMoney(minValue);
+      };
+      const costDelta = math.hasSupplierPrice && math.currentCost
+        ? calculateDiffPercent(math.currentCost, math.estimatedCost)
+        : null;
+      return (
+        <div className="flex flex-wrap gap-2">
+          <span className="rounded-lg border border-slate-700 bg-slate-950/25 px-2.5 py-1.5 text-[11px] font-black text-slate-200">
+            Proveedor {math.hasSupplierPrice ? formatSupplierMoney(math.supplierPrice) : '-'}
+          </span>
+          <span className="rounded-lg border border-sky-400/25 bg-sky-400/10 px-2.5 py-1.5 text-[11px] font-black text-sky-100">
+            Costo real {math.hasSupplierPrice ? formatSupplierMoney(math.estimatedCost) : '-'}
+          </span>
+          <span className="rounded-lg border border-slate-700 bg-slate-950/25 px-2.5 py-1.5 text-[11px] font-black text-slate-200">
+            Costo Rebu {formatRange(math.currentCost, math.currentCostMax)}
+          </span>
+          <span className="rounded-lg border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1.5 text-[11px] font-black text-emerald-100">
+            Venta sugerida {math.hasSupplierPrice ? formatSupplierMoney(math.suggestedSale) : '-'}
+          </span>
+          {costDelta ? (
+            <span className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-2.5 py-1.5 text-[11px] font-black text-amber-100">
+              {costDelta}
+            </span>
+          ) : null}
+        </div>
+      );
+    };
 
     return (
       <div className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-700/70 bg-[#07111f] text-slate-100">
@@ -1650,6 +2353,11 @@ export default function BulkEditorView({
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 custom-scrollbar">
+            {isOfflineReadOnly ? (
+              <section className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-[11px] font-bold leading-relaxed text-amber-100">
+                Modo sin conexion: podes revisar datos guardados, pero no chequear ni aprobar costos.
+              </section>
+            ) : null}
             <section className="rounded-lg border border-slate-700/80 bg-slate-900/35 p-3">
               <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Resumen</p>
               <div className="mt-3 grid grid-cols-2 gap-2">
@@ -1660,6 +2368,16 @@ export default function BulkEditorView({
                 <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-2">
                   <p className="text-[9px] font-black uppercase tracking-[0.12em] text-amber-200/80">Pendientes</p>
                   <p className="mt-1 text-xl font-black text-amber-100">{supplierPricePendingCount}</p>
+                </div>
+                <div className="rounded-lg border border-rose-400/30 bg-rose-400/10 p-2">
+                  <p className="text-[9px] font-black uppercase tracking-[0.12em] text-rose-200/80">Errores</p>
+                  <p className="mt-1 text-xl font-black text-rose-100">{supplierPriceErrorCount}</p>
+                </div>
+                <div className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 p-2">
+                  <p className="text-[9px] font-black uppercase tracking-[0.12em] text-emerald-200/80">Revisados</p>
+                  <p className="mt-1 text-xl font-black text-emerald-100">
+                    {filterOptions.find((option) => option.value === 'reviewed')?.count || 0}
+                  </p>
                 </div>
               </div>
               <button
@@ -1672,6 +2390,62 @@ export default function BulkEditorView({
               </button>
             </section>
 
+            <section className="rounded-lg border border-sky-400/25 bg-sky-400/10 p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.12em] text-sky-100">Ajuste de precios</p>
+                  <p className="mt-1 text-[10px] font-bold leading-snug text-sky-100/70">
+                    Se aplica a todo el panel antes de aprobar costos.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSupplierCostExtraPercent(Math.round(CASA_ALBERTO_COST_EXTRA_RATE * 100));
+                    setSupplierSaleMarkupPercent(Math.round(CASA_ALBERTO_SALE_MARKUP_RATE * 100));
+                  }}
+                  className="h-7 rounded-md border border-slate-600 bg-slate-950/25 px-2 text-[10px] font-black text-slate-300 hover:bg-slate-800"
+                >
+                  Reset
+                </button>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <label className="block rounded-md border border-sky-400/20 bg-slate-950/20 p-2">
+                  <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-sky-100/70">Costo +</span>
+                  <div className="mt-1 flex h-8 items-center overflow-hidden rounded-md border border-slate-700 bg-[#07111f]">
+                    <input
+                      type="number"
+                      min="0"
+                      max="300"
+                      step="1"
+                      value={supplierCostExtraPercent}
+                      onChange={(event) => setSupplierCostExtraPercent(clampSupplierPercent(event.target.value, 0))}
+                      className="no-spinners min-w-0 flex-1 bg-transparent px-2 text-right text-sm font-black text-white outline-none"
+                    />
+                    <span className="border-l border-slate-700 px-2 text-[10px] font-black text-slate-400">%</span>
+                  </div>
+                </label>
+                <label className="block rounded-md border border-emerald-400/20 bg-slate-950/20 p-2">
+                  <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-emerald-100/70">Venta +</span>
+                  <div className="mt-1 flex h-8 items-center overflow-hidden rounded-md border border-slate-700 bg-[#07111f]">
+                    <input
+                      type="number"
+                      min="0"
+                      max="300"
+                      step="1"
+                      value={supplierSaleMarkupPercent}
+                      onChange={(event) => setSupplierSaleMarkupPercent(clampSupplierPercent(event.target.value, 0))}
+                      className="no-spinners min-w-0 flex-1 bg-transparent px-2 text-right text-sm font-black text-white outline-none"
+                    />
+                    <span className="border-l border-slate-700 px-2 text-[10px] font-black text-slate-400">%</span>
+                  </div>
+                </label>
+              </div>
+              <p className="mt-2 rounded-md border border-slate-700/60 bg-slate-950/20 px-2 py-1.5 text-[10px] font-bold leading-snug text-slate-400">
+                Formula: proveedor + {supplierCostExtraPercent}% = costo real. Costo real + {supplierSaleMarkupPercent}% = venta sugerida.
+              </p>
+            </section>
+
             <section className="rounded-lg border border-emerald-400/25 bg-emerald-400/10 p-3">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-200">Detectar enlaces</p>
@@ -1680,7 +2454,7 @@ export default function BulkEditorView({
                 </span>
               </div>
               <p className="mt-1.5 text-[10px] font-bold leading-snug text-emerald-100/70">
-                Busca productos sin enlace por codigo, codigo corregido o nombre.
+                Exactos se guardan. Codigo corregido o nombre queda para revisar.
               </p>
 
               <div className="mt-3 grid grid-cols-3 gap-1.5 rounded-md border border-emerald-400/20 bg-slate-950/20 p-1">
@@ -1709,7 +2483,7 @@ export default function BulkEditorView({
                 <button
                   type="button"
                   onClick={handleDetectCasaAlbertoLinks}
-                  disabled={isDetectingSupplierLinks || casaAlbertoLinkCandidates.length === 0}
+                  disabled={isOfflineReadOnly || isDetectingSupplierLinks || casaAlbertoLinkCandidates.length === 0}
                   className="flex h-9 min-w-0 flex-1 items-center justify-center gap-2 rounded-md border border-emerald-400/30 bg-emerald-500/70 text-xs font-black text-white transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {isDetectingSupplierLinks ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
@@ -1734,6 +2508,45 @@ export default function BulkEditorView({
               ) : null}
             </section>
 
+            {false && supplierLinkSuggestions.length > 0 ? (
+              <section className="rounded-lg border border-amber-400/25 bg-amber-400/10 p-3">
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-amber-100">Enlaces para revisar</p>
+                <div className="mt-2 space-y-2">
+                  {supplierLinkSuggestions.length > 5 ? (
+                    <p className="rounded-md border border-amber-400/15 bg-slate-950/20 px-2 py-1 text-[10px] font-black text-amber-100/75">
+                      {supplierLinkSuggestions.length} enlaces pendientes de revision.
+                    </p>
+                  ) : null}
+                  <div className="max-h-64 space-y-2 overflow-y-auto pr-1 custom-scrollbar">
+                  {supplierLinkSuggestions.map((suggestion) => (
+                    <div key={`${suggestion.product.id}-${suggestion.result.casaAlbertoId}`} className="rounded-md border border-amber-400/20 bg-slate-950/20 p-2">
+                      <p className="truncate text-[11px] font-black text-white">{suggestion.product.title}</p>
+                      <p className="mt-0.5 truncate text-[10px] font-bold text-amber-100/75">
+                        {suggestion.result.foundTitle || 'Casa Alberto'} · ID {suggestion.result.casaAlbertoId || '-'}
+                      </p>
+                      <div className="mt-2 flex gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleApproveSupplierLinkSuggestion(suggestion)}
+                          className="h-7 flex-1 rounded-md border border-emerald-400/30 bg-emerald-400/14 text-[10px] font-black text-emerald-100"
+                        >
+                          Guardar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => dismissSupplierLinkSuggestion(suggestion)}
+                          className="h-7 w-8 rounded-md border border-slate-600 bg-slate-900 text-slate-300"
+                        >
+                          <X size={12} className="mx-auto" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
             <section className="rounded-lg border border-slate-700/80 bg-slate-900/35 p-3">
               <p className="mb-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Mostrar</p>
               <div className="space-y-1.5">
@@ -1755,8 +2568,67 @@ export default function BulkEditorView({
               </div>
             </section>
 
+            <section className="rounded-lg border border-slate-700/80 bg-slate-900/35 p-3">
+              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Lote</p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleCheckAllSupplierPrices('visible')}
+                  disabled={isOfflineReadOnly || isCheckingSupplierPrices || visibleCasaAlbertoGroups.length === 0}
+                  className="h-8 rounded-md border border-sky-400/30 bg-sky-400/12 text-[10px] font-black text-sky-100 disabled:opacity-45"
+                >
+                  Chequear visibles
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCheckAllSupplierPrices('all')}
+                  disabled={isOfflineReadOnly || isCheckingSupplierPrices || casaAlbertoGroups.length === 0}
+                  className="h-8 rounded-md border border-sky-400/30 bg-sky-400/12 text-[10px] font-black text-sky-100 disabled:opacity-45"
+                >
+                  Chequear todos
+                </button>
+                {isCheckingSupplierPrices ? (
+                  <button
+                    type="button"
+                    onClick={isSupplierPriceCheckPaused ? resumeSupplierPriceCheck : pauseSupplierPriceCheck}
+                    className="h-8 rounded-md border border-amber-400/30 bg-amber-400/12 text-[10px] font-black text-amber-100"
+                  >
+                    {isSupplierPriceCheckPaused ? 'Continuar' : 'Pausar'}
+                  </button>
+                ) : (
+                  <button type="button" disabled className="h-8 rounded-md border border-slate-700 bg-slate-950/20 text-[10px] font-black text-slate-600">
+                    Pausar
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={stopSupplierPriceCheck}
+                  disabled={!isCheckingSupplierPrices}
+                  className="h-8 rounded-md border border-rose-400/30 bg-rose-400/12 text-[10px] font-black text-rose-100 disabled:opacity-45"
+                >
+                  Detener
+                </button>
+                <button
+                  type="button"
+                  onClick={handleApproveSelectedSupplierGroups}
+                  disabled={isOfflineReadOnly || selectedSupplierGroups.length === 0}
+                  className="h-8 rounded-md border border-emerald-400/30 bg-emerald-400/14 text-[10px] font-black text-emerald-100 disabled:opacity-45"
+                >
+                  Aprobar sel.
+                </button>
+                <button
+                  type="button"
+                  onClick={handleIgnoreSelectedSupplierGroups}
+                  disabled={isOfflineReadOnly || selectedSupplierGroups.length === 0}
+                  className="h-8 rounded-md border border-slate-600 bg-slate-900/70 text-[10px] font-black text-slate-200 disabled:opacity-45"
+                >
+                  Ignorar sel.
+                </button>
+              </div>
+            </section>
+
             <p className="rounded-lg border border-slate-700/80 bg-[#0f1e33] p-3 text-[11px] font-bold leading-relaxed text-slate-400">
-              Se compara el precio del proveedor contra el costo Rebu. Al aprobar se actualiza el costo; la venta queda como sugerencia.
+              Costo real = proveedor + {supplierExtraPercent}%. Venta sugerida = costo real + {supplierMarkupPercent}%, redondeada a decena.
             </p>
           </div>
         </aside>
@@ -1769,18 +2641,156 @@ export default function BulkEditorView({
                 {visibleCasaAlbertoGroups.length} grupo(s) visibles. Chequeo manual, sin cambios automáticos.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={handleCheckAllSupplierPrices}
-              disabled={isCheckingSupplierPrices || casaAlbertoGroups.length === 0}
-              className="flex h-10 items-center justify-center gap-2 rounded-md border border-emerald-400/35 bg-emerald-400/14 px-4 text-xs font-black text-emerald-100 transition-colors hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              {isCheckingSupplierPrices ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
-              {isCheckingSupplierPrices ? 'Chequeando...' : 'Chequear visibles'}
-            </button>
+            <div className="flex items-center gap-2">
+              <div className="flex h-10 items-center rounded-md border border-slate-700 bg-slate-950/25 p-1">
+                {[
+                  { mode: 'cards', label: 'Tarjetas', icon: LayoutGrid },
+                  { mode: 'list', label: 'Lista', icon: List },
+                ].map((option) => {
+                  const Icon = option.icon;
+                  const isActive = supplierPriceViewMode === option.mode;
+                  return (
+                    <button
+                      key={option.mode}
+                      type="button"
+                      onClick={() => setSupplierPriceViewMode(option.mode)}
+                      className={`flex h-8 items-center gap-1.5 rounded px-2.5 text-[10px] font-black uppercase tracking-[0.08em] transition-colors ${
+                        isActive
+                          ? 'bg-sky-400/18 text-sky-100'
+                          : 'text-slate-500 hover:bg-slate-800/70 hover:text-slate-200'
+                      }`}
+                    >
+                      <Icon size={13} />
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={() => handleCheckAllSupplierPrices('visible')}
+                disabled={isOfflineReadOnly || isCheckingSupplierPrices || visibleCasaAlbertoGroups.length === 0}
+                className="flex h-10 items-center justify-center gap-2 rounded-md border border-emerald-400/35 bg-emerald-400/14 px-4 text-xs font-black text-emerald-100 transition-colors hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {isCheckingSupplierPrices ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                {isCheckingSupplierPrices ? 'Chequeando...' : 'Chequear visibles'}
+              </button>
+            </div>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
+            {supplierLinkSuggestions.length > 0 ? (
+              <section className="mb-4 overflow-hidden rounded-xl border border-amber-400/25 bg-amber-400/8">
+                <div className="flex items-center justify-between gap-3 border-b border-amber-400/20 bg-slate-950/20 px-3 py-2.5">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-100">Revisar enlaces detectados</p>
+                    <p className="mt-0.5 text-[11px] font-bold text-slate-400">
+                      Son coincidencias por codigo corregido o nombre parecido. Confirmalas antes de seguir costos.
+                    </p>
+                  </div>
+                  <span className="rounded-md border border-amber-400/30 bg-amber-400/12 px-2.5 py-1 text-[10px] font-black text-amber-100">
+                    {supplierLinkSuggestions.length} pendiente(s)
+                  </span>
+                </div>
+                <div className="max-h-[320px] divide-y divide-amber-400/12 overflow-y-auto custom-scrollbar">
+                  {supplierLinkSuggestions.map((suggestion) => {
+                    const productImage = getProductImageUrl(suggestion.product);
+                    const sourceUrl = suggestion.result.productUrl || suggestion.result.sourceUrl || '';
+                    const suggestionEstimatedCost = getSupplierEstimatedCost(suggestion.result.supplierPrice);
+                    const matchLabel = suggestion.matchedBy === 'trimmed_barcode'
+                      ? 'Codigo corregido'
+                      : suggestion.matchedBy === 'title_search'
+                        ? 'Nombre parecido'
+                        : 'Coincidencia manual';
+                    return (
+                      <div
+                        key={`${suggestion.product.id}-${suggestion.result.casaAlbertoId}`}
+                        className="grid items-center gap-3 px-3 py-2.5 min-[1366px]:grid-cols-[minmax(260px,1fr)_minmax(300px,1.25fr)_150px_170px]"
+                      >
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <span className="flex h-10 w-10 shrink-0 overflow-hidden rounded-md border border-slate-700 bg-slate-950/35 text-slate-500">
+                            {productImage ? (
+                              <img src={productImage} alt={suggestion.product.title} className="h-full w-full object-cover" />
+                            ) : (
+                              <ImageIcon size={15} className="m-auto" />
+                            )}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-black text-white" title={suggestion.product.title}>
+                              {suggestion.product.title}
+                            </p>
+                            <p className="mt-0.5 truncate text-[10px] font-bold text-slate-500">
+                              Rebu - {suggestion.product.barcode || 'Sin codigo'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="min-w-0 rounded-md border border-slate-700/65 bg-slate-950/20 px-2.5 py-2">
+                          <div className="flex items-center gap-2">
+                            <span className="rounded border border-amber-400/25 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] text-amber-100">
+                              {matchLabel}
+                            </span>
+                            {suggestion.result.casaAlbertoId ? (
+                              <span className="text-[10px] font-black text-slate-500">ID {suggestion.result.casaAlbertoId}</span>
+                            ) : null}
+                          </div>
+                          <p className="mt-1 truncate text-xs font-black text-slate-100" title={suggestion.result.foundTitle}>
+                            {suggestion.result.foundTitle || 'Producto Casa Alberto'}
+                          </p>
+                          <p className="mt-0.5 truncate text-[10px] font-bold text-slate-500">
+                            Codigo proveedor {suggestion.result.supplierCode || '-'}
+                          </p>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 min-[1366px]:grid-cols-1">
+                          <div>
+                            <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Proveedor</p>
+                            <p className="mt-0.5 text-xs font-black text-slate-100">
+                              {Number(suggestion.result.supplierPrice || 0) > 0 ? formatSupplierMoney(suggestion.result.supplierPrice) : '-'}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Costo real</p>
+                            <p className="mt-0.5 text-xs font-black text-sky-100">
+                              {suggestionEstimatedCost > 0 ? formatSupplierMoney(suggestionEstimatedCost) : '-'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2">
+                          {sourceUrl ? (
+                            <button
+                              type="button"
+                              onClick={() => openSupplierExternalUrl(sourceUrl)}
+                              className="flex h-8 items-center gap-1.5 rounded-md border border-slate-700 bg-slate-950/30 px-2.5 text-[10px] font-black text-slate-300 hover:border-slate-500"
+                            >
+                              <ExternalLink size={13} />
+                              Fuente
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => handleApproveSupplierLinkSuggestion(suggestion)}
+                            className="h-8 rounded-md border border-emerald-400/35 bg-emerald-400/14 px-3 text-[10px] font-black text-emerald-100 hover:bg-emerald-400/20"
+                          >
+                            Guardar enlace
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => dismissSupplierLinkSuggestion(suggestion)}
+                            className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 bg-slate-950/30 text-slate-400 hover:text-white"
+                            title="Descartar"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : null}
+
             {casaAlbertoGroups.length === 0 ? (
               <div className="flex h-full min-h-[320px] items-center justify-center rounded-xl border border-dashed border-slate-700/80 bg-[#0f1e33]/70">
                 <div className="max-w-md text-center">
@@ -1797,28 +2807,123 @@ export default function BulkEditorView({
               <div className="flex h-full min-h-[320px] items-center justify-center rounded-xl border border-dashed border-slate-700/80 bg-[#0f1e33]/70">
                 <p className="text-sm font-black text-slate-400">No hay enlaces en este filtro.</p>
               </div>
+            ) : supplierPriceViewMode === 'list' ? (
+              <div className="overflow-x-auto rounded-xl border border-slate-700/80 bg-[#0f1e33] custom-scrollbar">
+                <div className="grid min-w-[1180px] grid-cols-[36px_58px_minmax(220px,1.4fr)_120px_minmax(220px,1.1fr)_120px_120px_120px_120px_210px] items-center gap-2 border-b border-slate-700/80 bg-slate-950/30 px-3 py-2 text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
+                  <span>OK</span>
+                  <span>Foto</span>
+                  <span>Casa Alberto</span>
+                  <span>ID</span>
+                  <span>Producto Rebu</span>
+                  <span>Proveedor</span>
+                  <span>Costo real</span>
+                  <span>Costo Rebu</span>
+                  <span>Chequeo</span>
+                  <span>Acciones</span>
+                </div>
+                <div className="divide-y divide-slate-700/65">
+                  {visibleCasaAlbertoGroups.map((group) => {
+                    const meta = getSupplierPriceStatusMeta(group.status);
+                    const math = getSupplierCardMath(group);
+                    const primaryProduct = group.products[0] || {};
+                    const selectedCount = getSupplierSelectedCount(group);
+                    const isSelected = selectedSupplierGroupKeys.map(String).includes(String(group.key));
+                    return (
+                      <div
+                        key={group.key}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setSupplierDetailGroupKey(group.key)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') setSupplierDetailGroupKey(group.key);
+                        }}
+                        className="grid min-h-[72px] min-w-[1180px] cursor-pointer grid-cols-[36px_58px_minmax(220px,1.4fr)_120px_minmax(220px,1.1fr)_120px_120px_120px_120px_210px] items-center gap-2 px-3 py-2 transition-colors hover:bg-sky-400/8"
+                      >
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleSupplierGroupSelection(group.key);
+                          }}
+                          className={`flex h-6 w-6 items-center justify-center rounded-md border ${
+                            isSelected ? 'border-emerald-300 bg-emerald-400/20 text-emerald-100' : 'border-slate-600 text-slate-500'
+                          }`}
+                          title="Seleccionar grupo"
+                        >
+                          {isSelected ? <Check size={14} /> : null}
+                        </button>
+                        {renderSupplierImage(group, 'h-12 w-12')}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className={`h-2 w-2 shrink-0 rounded-full ${meta.railClassName}`} />
+                            <p className="truncate text-xs font-black text-white" title={group.supplierTitle}>{group.supplierTitle}</p>
+                          </div>
+                          <p className="mt-1 truncate text-[10px] font-bold text-slate-500">{meta.label} - {group.supplierCode || 'Sin codigo proveedor'}</p>
+                        </div>
+                        <p className="truncate text-[11px] font-black text-slate-300">{group.casaAlbertoId || '-'}</p>
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-black text-white" title={primaryProduct.title}>
+                            {primaryProduct.title || 'Sin producto Rebu'}
+                          </p>
+                          <p className="mt-1 text-[10px] font-bold text-slate-500">{selectedCount}/{group.products.length} seleccionados</p>
+                        </div>
+                        <p className="text-[12px] font-black text-slate-100">{math.hasSupplierPrice ? formatSupplierMoney(math.supplierPrice) : '-'}</p>
+                        <p className="text-[12px] font-black text-sky-100">{math.hasSupplierPrice ? formatSupplierMoney(math.estimatedCost) : '-'}</p>
+                        <p className="text-[12px] font-black text-slate-100">{formatSupplierMoney(primaryProduct.purchasePrice)}</p>
+                        <p className="text-[11px] font-black text-slate-300">{formatSupplierDate(group.lastCheckedAt)}</p>
+                        <div onClick={(event) => event.stopPropagation()}>
+                          {renderSupplierActions(group, { compact: true })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             ) : (
               <div className="space-y-3">
                 {visibleCasaAlbertoGroups.map((group) => {
                   const meta = getSupplierPriceStatusMeta(group.status);
                   const draft = supplierLinkDrafts[group.key] || {};
                   const isEditingLink = supplierLinkEditKey === group.key;
-                  const supplierPrice = Number(group.supplierPrice || 0);
-                  const hasSupplierPrice = supplierPrice > 0;
+                  const math = getSupplierCardMath(group);
+                  const supplierPrice = math.supplierPrice;
+                  const hasSupplierPrice = math.hasSupplierPrice;
                   const priceDeltaLabel = hasSupplierPrice && group.previousSupplierPrice
                     ? calculateDiffPercent(Number(group.previousSupplierPrice), supplierPrice)
                     : null;
+                  const isGroupSelected = selectedSupplierGroupKeys.map(String).includes(String(group.key));
 
                   return (
                     <article
                       key={group.key}
-                      className="overflow-hidden rounded-xl border border-slate-700/80 bg-[#0f1e33]"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSupplierDetailGroupKey(group.key)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') setSupplierDetailGroupKey(group.key);
+                      }}
+                      className="overflow-hidden rounded-xl border border-slate-700/80 bg-[#0f1e33] transition-colors hover:border-sky-400/35 hover:bg-[#12243c]"
                     >
                       <div className={`h-1 ${meta.railClassName}`} />
                       <div className="grid gap-3 p-3 min-[1500px]:grid-cols-[minmax(280px,0.95fr)_minmax(420px,1.35fr)_220px]">
                         <div className="min-w-0">
                           <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
+                            <div className="flex min-w-0 items-start gap-3">
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  toggleSupplierGroupSelection(group.key);
+                                }}
+                                className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${
+                                  isGroupSelected ? 'border-emerald-300 bg-emerald-400/20 text-emerald-100' : 'border-slate-600 text-slate-500'
+                                }`}
+                                title="Seleccionar grupo"
+                              >
+                                {isGroupSelected ? <Check size={14} /> : null}
+                              </button>
+                              {renderSupplierImage(group, 'h-14 w-14')}
+                              <div className="min-w-0">
                               <p className="truncate text-sm font-black text-white" title={group.supplierTitle}>
                                 {group.supplierTitle}
                               </p>
@@ -1826,26 +2931,30 @@ export default function BulkEditorView({
                                 {group.casaAlbertoId && <span>ID Casa Alberto {group.casaAlbertoId}</span>}
                                 {group.supplierCode && <span>Codigo {group.supplierCode}</span>}
                               </div>
+                              </div>
                             </div>
                             <span className={`shrink-0 rounded-md border px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] ${meta.className}`}>
                               {meta.label}
                             </span>
                           </div>
 
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {renderSupplierMetricChips(group)}
+                          </div>
                           <div className="mt-3 grid grid-cols-3 gap-2">
                             <div className="rounded-lg border border-slate-700/75 bg-slate-950/25 p-2">
                               <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Proveedor</p>
                               <p className="mt-1 text-sm font-black text-slate-100">{hasSupplierPrice ? formatSupplierMoney(supplierPrice) : '-'}</p>
                             </div>
-                            <div className="rounded-lg border border-slate-700/75 bg-slate-950/25 p-2">
-                              <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Anterior</p>
-                              <p className="mt-1 text-sm font-black text-slate-100">
-                                {group.previousSupplierPrice ? formatSupplierMoney(group.previousSupplierPrice) : '-'}
-                              </p>
+                            <div className="rounded-lg border border-sky-400/25 bg-sky-400/10 p-2">
+                              <p className="text-[9px] font-black uppercase tracking-[0.12em] text-sky-200/80">Costo real</p>
+                              <p className="mt-1 text-sm font-black text-sky-100">{hasSupplierPrice ? formatSupplierMoney(math.estimatedCost) : '-'}</p>
                             </div>
                             <div className="rounded-lg border border-slate-700/75 bg-slate-950/25 p-2">
                               <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Chequeo</p>
-                              <p className="mt-1 truncate text-[11px] font-black text-slate-200">{formatSupplierDate(group.lastCheckedAt)}</p>
+                              <p className="mt-1 text-sm font-black text-slate-100">
+                                {formatSupplierDate(group.lastCheckedAt)}
+                              </p>
                             </div>
                           </div>
 
@@ -1863,80 +2972,11 @@ export default function BulkEditorView({
                               {group.products.length}
                             </span>
                           </div>
-                          <div className="space-y-1.5">
-                            {group.products.map((product) => {
-                              const suggestedSale = hasSupplierPrice
-                                ? buildSuggestedSalePriceFromMargin(product, supplierPrice)
-                                : 0;
-                              const costDelta = hasSupplierPrice
-                                ? calculateDiffPercent(Number(product.purchasePrice || 0), supplierPrice)
-                                : null;
-
-                              return (
-                                <div
-                                  key={product.id}
-                                  className="grid min-w-0 grid-cols-[minmax(0,1fr)_92px_92px_92px] items-center gap-2 rounded-md border border-slate-700/60 bg-[#0b1728] px-2.5 py-2"
-                                >
-                                  <div className="min-w-0">
-                                    <p className="truncate text-xs font-black text-white" title={product.title}>{product.title}</p>
-                                    <p className="mt-0.5 truncate text-[10px] font-bold text-slate-500">{product.barcode || 'Sin codigo'}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[8px] font-black uppercase tracking-[0.12em] text-slate-500">Costo</p>
-                                    <p className="text-[12px] font-black text-slate-100">{formatSupplierMoney(product.purchasePrice)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[8px] font-black uppercase tracking-[0.12em] text-slate-500">Venta</p>
-                                    <p className="text-[12px] font-black text-slate-100">{formatSupplierMoney(product.price)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[8px] font-black uppercase tracking-[0.12em] text-slate-500">Sugerida</p>
-                                    <p className="text-[12px] font-black text-emerald-200">{hasSupplierPrice ? formatSupplierMoney(suggestedSale) : '-'}</p>
-                                    {costDelta ? <p className="text-[9px] font-black text-amber-200">{costDelta}</p> : null}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
+                          {renderSupplierProducts(group)}
                         </div>
 
-                        <div className="flex flex-col gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleCheckSupplierPriceGroup(group)}
-                            disabled={checkingSupplierGroupKey === group.key || isCheckingSupplierPrices}
-                            className="flex h-9 items-center justify-center gap-2 rounded-md border border-sky-400/35 bg-sky-400/12 text-xs font-black text-sky-100 transition-colors hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-45"
-                          >
-                            {checkingSupplierGroupKey === group.key ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                            Chequear
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleApproveSupplierGroup(group)}
-                            disabled={!hasSupplierPrice || group.status === 'reviewed' || group.status === 'approved'}
-                            className="flex h-9 items-center justify-center gap-2 rounded-md border border-emerald-400/35 bg-emerald-400/14 text-xs font-black text-emerald-100 transition-colors hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-45"
-                          >
-                            <CheckCircle size={14} />
-                            Aprobar costo
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openSupplierLinkEditor(group)}
-                            className="flex h-9 items-center justify-center gap-2 rounded-md border border-slate-600 bg-slate-900/60 text-xs font-black text-slate-200 transition-colors hover:bg-slate-800"
-                          >
-                            <Edit3 size={14} />
-                            Revisar enlace
-                          </button>
-                          {group.productUrl || group.sourceUrl ? (
-                            <button
-                              type="button"
-                              onClick={() => openSupplierExternalUrl(group.productUrl || group.sourceUrl)}
-                              className="flex h-9 items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-950/30 text-xs font-black text-slate-300 transition-colors hover:border-slate-500"
-                            >
-                              <ExternalLink size={14} />
-                              Fuente
-                            </button>
-                          ) : null}
+                        <div onClick={(event) => event.stopPropagation()}>
+                          {renderSupplierActions(group)}
                           {priceDeltaLabel ? (
                             <span className="rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1.5 text-center text-[10px] font-black text-amber-100">
                               Proveedor {priceDeltaLabel}
@@ -1989,6 +3029,97 @@ export default function BulkEditorView({
             )}
           </div>
         </section>
+        {supplierDetailGroup ? (() => {
+          const group = supplierDetailGroup;
+          const meta = getSupplierPriceStatusMeta(group.status);
+          const math = getSupplierCardMath(group);
+          return (
+            <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/70 p-6 backdrop-blur-sm" onClick={() => setSupplierDetailGroupKey('')}>
+              <div
+                className="flex max-h-[86vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-slate-700 bg-[#0f1e33] text-slate-100 shadow-2xl"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="flex items-start justify-between gap-4 border-b border-slate-700/80 px-4 py-3">
+                  <div className="flex min-w-0 gap-3">
+                    {renderSupplierImage(group, 'h-20 w-20')}
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded-md border px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] ${meta.className}`}>
+                          {meta.label}
+                        </span>
+                        {group.casaAlbertoId ? (
+                          <span className="rounded-md border border-slate-700 bg-slate-950/30 px-2 py-1 text-[10px] font-black text-slate-300">
+                            ID Casa Alberto {group.casaAlbertoId}
+                          </span>
+                        ) : null}
+                      </div>
+                      <h3 className="mt-2 truncate text-lg font-black text-white" title={group.supplierTitle}>{group.supplierTitle}</h3>
+                      <p className="mt-1 text-xs font-bold text-slate-400">
+                        Codigo proveedor: {group.supplierCode || 'Sin codigo'} - Ultimo chequeo: {formatSupplierDate(group.lastCheckedAt)}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSupplierDetailGroupKey('')}
+                    className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-700 bg-slate-950/30 text-slate-300 hover:bg-slate-800"
+                    title="Cerrar"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
+                  <div className="grid gap-3 lg:grid-cols-[1fr_320px]">
+                    <section className="rounded-lg border border-slate-700/80 bg-slate-950/20 p-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Datos del proveedor</p>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-4">
+                        <div className="rounded-lg border border-slate-700 bg-[#0b1728] p-2.5">
+                          <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Proveedor</p>
+                          <p className="mt-1 text-sm font-black">{math.hasSupplierPrice ? formatSupplierMoney(math.supplierPrice) : '-'}</p>
+                        </div>
+                        <div className="rounded-lg border border-sky-400/25 bg-sky-400/10 p-2.5">
+                          <p className="text-[9px] font-black uppercase tracking-[0.12em] text-sky-200/80">Costo real</p>
+                          <p className="mt-1 text-sm font-black text-sky-100">{math.hasSupplierPrice ? formatSupplierMoney(math.estimatedCost) : '-'}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-700 bg-[#0b1728] p-2.5">
+                          <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Anterior proveedor</p>
+                          <p className="mt-1 text-sm font-black">{group.previousSupplierPrice ? formatSupplierMoney(group.previousSupplierPrice) : '-'}</p>
+                        </div>
+                        <div className="rounded-lg border border-emerald-400/25 bg-emerald-400/10 p-2.5">
+                          <p className="text-[9px] font-black uppercase tracking-[0.12em] text-emerald-200/80">Venta sugerida</p>
+                          <p className="mt-1 text-sm font-black text-emerald-100">{math.hasSupplierPrice ? formatSupplierMoney(math.suggestedSale) : '-'}</p>
+                        </div>
+                      </div>
+                      {group.message ? (
+                        <p className="mt-3 rounded-lg border border-slate-700 bg-[#0b1728] p-2 text-xs font-bold text-slate-300">{group.message}</p>
+                      ) : null}
+                      <div className="mt-4">
+                        <p className="mb-2 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Productos Rebu asociados</p>
+                        {renderSupplierProducts(group)}
+                      </div>
+                    </section>
+                    <aside className="space-y-3">
+                      <section className="rounded-lg border border-slate-700/80 bg-slate-950/20 p-3">
+                        <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Revision</p>
+                        <div className="mt-3">
+                          {renderSupplierActions(group)}
+                        </div>
+                      </section>
+                      <section className="rounded-lg border border-slate-700/80 bg-slate-950/20 p-3">
+                        <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Tracking</p>
+                        <div className="mt-2 space-y-1.5 text-xs font-bold text-slate-300">
+                          <p>Estado: <span className="text-white">{getCasaAlbertoPriceTracking(group.products[0] || {}).reviewStatus || group.status}</span></p>
+                          <p>Fuente: <span className="text-white">{group.productUrl || group.sourceUrl ? 'Disponible' : 'Sin URL'}</span></p>
+                          <p>Seleccionados: <span className="text-white">{getSupplierSelectedCount(group)}/{group.products.length}</span></p>
+                        </div>
+                      </section>
+                    </aside>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })() : null}
       </div>
     );
   };
@@ -2390,17 +3521,17 @@ export default function BulkEditorView({
 
       {/* ✨ HUD COMPACTO: VISTA PREVIA Y EDICIÓN DE CANTIDADES */}
       {isExportModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-slate-100 rounded-xl shadow-2xl w-full max-w-6xl h-full max-h-[95vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-300">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0b1728] rounded-xl shadow-2xl w-full max-w-6xl h-full max-h-[95vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-700">
             
             {/* Modal Header */}
-            <div className="bg-indigo-700 px-4 py-2.5 flex justify-between items-center text-white shrink-0">
+            <div className="bg-[#0f1e33] border-b border-slate-700 px-4 py-2.5 flex justify-between items-center text-white shrink-0">
               <div>
                 <h3 className="font-bold text-base flex items-center gap-2">
                   <FileText size={18} /> Preview de PDF
                 </h3>
               </div>
-              <button onClick={() => setIsExportModalOpen(false)} className="text-indigo-300 hover:text-white transition-colors bg-indigo-800/50 p-1.5 rounded-lg">
+              <button onClick={() => setIsExportModalOpen(false)} className="text-slate-400 hover:text-white transition-colors bg-slate-900/60 p-1.5 rounded-lg">
                 <X size={18} />
               </button>
             </div>
@@ -2409,15 +3540,15 @@ export default function BulkEditorView({
             <div className="flex flex-1 overflow-hidden">
               
               {/* COLUMNA IZQUIERDA: Configuración (Miniaturizada) */}
-              <div className="w-1/3 bg-white border-r border-slate-200 p-4 flex flex-col overflow-y-auto custom-scrollbar">
+              <div className="w-1/3 bg-[#0b1728] border-r border-slate-700 p-4 flex flex-col overflow-y-auto custom-scrollbar">
                 
-                <h4 className="font-black text-slate-800 uppercase tracking-wider text-[11px] mb-3 flex items-center gap-1.5">
-                  <User size={14} className="text-indigo-600"/> Tipo de Documento
+                <h4 className="font-black text-slate-100 uppercase tracking-wider text-[11px] mb-3 flex items-center gap-1.5">
+                  <User size={14} className="text-sky-300"/> Tipo de Documento
                 </h4>
                 
-                <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl mb-4">
+                <div className="flex items-center justify-between p-3 bg-[#0f1e33] border border-slate-700 rounded-xl mb-4">
                   <div>
-                    <p className="font-bold text-xs text-slate-800">Presupuesto a Cliente</p>
+                    <p className="font-bold text-xs text-slate-100">Presupuesto a Cliente</p>
                   </div>
                   <label className="relative inline-flex items-center cursor-pointer">
                     <input type="checkbox" className="sr-only peer" checked={exportConfig.isForClient} onChange={(e) => setExportConfig({...exportConfig, isForClient: e.target.checked})} />
@@ -2427,80 +3558,80 @@ export default function BulkEditorView({
 
                 {exportConfig.isForClient ? (
                   <div className="space-y-3 animate-in fade-in duration-300">
-                    <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-3 space-y-3">
+                    <div className="bg-sky-500/10 border border-sky-400/25 rounded-xl p-3 space-y-3">
                       
                       <div>
-                        <label className="block text-[9px] font-bold text-indigo-800 mb-1 uppercase tracking-wider">
+                        <label className="block text-[9px] font-bold text-sky-200 mb-1 uppercase tracking-wider">
                           Título del Documento
                         </label>
                         <input 
                           type="text" 
                           maxLength={30} 
                           placeholder="Ej: PRESUPUESTO" 
-                          className="w-full px-2.5 py-1.5 border border-indigo-200 rounded-lg text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white font-bold uppercase placeholder:normal-case placeholder:font-normal" 
+                          className="w-full px-2.5 py-1.5 border border-slate-600 rounded-lg text-xs outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40 bg-[#07111f] text-slate-100 font-bold uppercase placeholder:normal-case placeholder:font-normal placeholder:text-slate-500" 
                           value={exportConfig.documentTitle} 
                           onChange={(e) => setExportConfig({...exportConfig, documentTitle: e.target.value.toUpperCase()})} 
                         />
                       </div>
 
                       <div>
-                        <label className="block text-[9px] font-bold text-indigo-800 mb-1 uppercase tracking-wider">
+                        <label className="block text-[9px] font-bold text-sky-200 mb-1 uppercase tracking-wider">
                           Nombre del Cliente
                         </label>
                         <input 
                           type="text" 
                           maxLength={40} 
                           placeholder="Ej: Sofía" 
-                          className="w-full px-2.5 py-1.5 border border-indigo-200 rounded-lg text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
+                          className="w-full px-2.5 py-1.5 border border-slate-600 rounded-lg text-xs outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40 bg-[#07111f] text-slate-100 placeholder:text-slate-500" 
                           value={exportConfig.clientName} 
                           onChange={(e) => setExportConfig({...exportConfig, clientName: e.target.value})} 
                         />
                       </div>
                     </div>
                     
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-3">
+                    <div className="bg-[#0f1e33] border border-slate-700 rounded-xl p-3 space-y-3">
                       <div>
-                        <label className="block text-[9px] font-bold text-slate-600 mb-1 uppercase tracking-wider">Detalle del Evento</label>
+                        <label className="block text-[9px] font-bold text-slate-300 mb-1 uppercase tracking-wider">Detalle del Evento</label>
                         <input 
                           type="text" 
                           maxLength={40} 
                           placeholder="Ej: 15 Años" 
-                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
+                          className="w-full px-2.5 py-1.5 border border-slate-600 rounded-lg text-xs outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40 bg-[#07111f] text-slate-100 placeholder:text-slate-500" 
                           value={exportConfig.clientEvent} 
                           onChange={(e) => setExportConfig({...exportConfig, clientEvent: e.target.value})} 
                         />
                       </div>
                       <div>
-                        <label className="block text-[9px] font-bold text-slate-600 mb-1 uppercase tracking-wider">Teléfono</label>
+                        <label className="block text-[9px] font-bold text-slate-300 mb-1 uppercase tracking-wider">Teléfono</label>
                         <input 
                           type="text" 
                           maxLength={10} 
                           placeholder="Ej: 1112345678" 
-                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white" 
+                          className="w-full px-2.5 py-1.5 border border-slate-600 rounded-lg text-xs outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40 bg-[#07111f] text-slate-100 placeholder:text-slate-500" 
                           value={exportConfig.clientPhone} 
                           onChange={(e) => setExportConfig({...exportConfig, clientPhone: e.target.value})} 
                         />
                       </div>
                     </div>
 
-                    <div className="mt-4 pt-3 border-t border-slate-200">
-                      <label className="block text-[9px] font-bold text-slate-600 mb-2 uppercase tracking-wider">Mostrar en PDF:</label>
+                    <div className="mt-4 pt-3 border-t border-slate-700">
+                      <label className="block text-[9px] font-bold text-slate-300 mb-2 uppercase tracking-wider">Mostrar en PDF:</label>
                       <div className="grid grid-cols-2 gap-2">
-                        <label className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 bg-white shadow-sm transition-colors">
+                        <label className="flex items-center gap-1.5 p-1.5 border border-slate-700 rounded-lg cursor-pointer hover:bg-slate-800 bg-[#0f1e33] transition-colors">
                           <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.clientColumns.showQty} onChange={(e) => setExportConfig({...exportConfig, clientColumns: {...exportConfig.clientColumns, showQty: e.target.checked}})} />
-                          <span className="text-[10px] font-bold text-slate-700">Cantidades</span>
+                          <span className="text-[10px] font-bold text-slate-200">Cantidades</span>
                         </label>
-                        <label className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 bg-white shadow-sm transition-colors">
+                        <label className="flex items-center gap-1.5 p-1.5 border border-slate-700 rounded-lg cursor-pointer hover:bg-slate-800 bg-[#0f1e33] transition-colors">
                           <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.clientColumns.showUnitPrice} onChange={(e) => setExportConfig({...exportConfig, clientColumns: {...exportConfig.clientColumns, showUnitPrice: e.target.checked}})} />
-                          <span className="text-[10px] font-bold text-slate-700">Precio Unitario</span>
+                          <span className="text-[10px] font-bold text-slate-200">Precio Unitario</span>
                         </label>
-                        <label className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 bg-white shadow-sm transition-colors">
+                        <label className="flex items-center gap-1.5 p-1.5 border border-slate-700 rounded-lg cursor-pointer hover:bg-slate-800 bg-[#0f1e33] transition-colors">
                           <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.clientColumns.showSubtotal} onChange={(e) => setExportConfig({...exportConfig, clientColumns: {...exportConfig.clientColumns, showSubtotal: e.target.checked}})} />
-                          <span className="text-[10px] font-bold text-slate-700">Subtotales</span>
+                          <span className="text-[10px] font-bold text-slate-200">Subtotales</span>
                         </label>
-                        <label className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 bg-white shadow-sm transition-colors">
+                        <label className="flex items-center gap-1.5 p-1.5 border border-slate-700 rounded-lg cursor-pointer hover:bg-slate-800 bg-[#0f1e33] transition-colors">
                           <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.clientColumns.showTotal} onChange={(e) => setExportConfig({...exportConfig, clientColumns: {...exportConfig.clientColumns, showTotal: e.target.checked}})} />
-                          <span className="text-[10px] font-bold text-slate-700">Total Final</span>
+                          <span className="text-[10px] font-bold text-slate-200">Total Final</span>
                         </label>
                       </div>
                     </div>
@@ -2511,23 +3642,23 @@ export default function BulkEditorView({
                     <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">
                       <p className="text-amber-800 text-[10px] font-medium">Estás exportando un <strong>Reporte Interno</strong>.</p>
                     </div>
-                    <label className="block text-[9px] font-bold text-slate-600 mb-2 uppercase tracking-wider">Columnas Visibles:</label>
+                    <label className="block text-[9px] font-bold text-slate-300 mb-2 uppercase tracking-wider">Columnas Visibles:</label>
                     <div className="space-y-1.5">
-                      <label className="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 transition-colors bg-white shadow-sm">
+                      <label className="flex items-center gap-2 p-2 border border-slate-700 rounded-lg cursor-pointer hover:bg-slate-800 transition-colors bg-[#0f1e33]">
                         <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.columns.cost} onChange={(e) => setExportConfig({...exportConfig, columns: {...exportConfig.columns, cost: e.target.checked}})} />
-                        <span className="text-xs font-bold text-slate-700">Costo Original</span>
+                        <span className="text-xs font-bold text-slate-200">Costo Original</span>
                       </label>
-                      <label className="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 transition-colors bg-white shadow-sm">
+                      <label className="flex items-center gap-2 p-2 border border-slate-700 rounded-lg cursor-pointer hover:bg-slate-800 transition-colors bg-[#0f1e33]">
                         <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.columns.price} onChange={(e) => setExportConfig({...exportConfig, columns: {...exportConfig.columns, price: e.target.checked}})} />
-                        <span className="text-xs font-bold text-slate-700">Precio Original</span>
+                        <span className="text-xs font-bold text-slate-200">Precio Original</span>
                       </label>
-                      <label className="flex items-center gap-2 p-2 border border-indigo-200 rounded-lg cursor-pointer hover:bg-indigo-50 transition-colors bg-indigo-50/30 shadow-sm">
+                      <label className="flex items-center gap-2 p-2 border border-sky-400/25 rounded-lg cursor-pointer hover:bg-sky-500/10 transition-colors bg-sky-500/10">
                         <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.columns.newPrice} onChange={(e) => setExportConfig({...exportConfig, columns: {...exportConfig.columns, newPrice: e.target.checked}})} />
-                        <span className="text-xs font-bold text-indigo-900">Precio Editado (Rec.)</span>
+                        <span className="text-xs font-bold text-sky-100">Precio Editado (Rec.)</span>
                       </label>
-                      <label className="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 transition-colors bg-white shadow-sm">
+                      <label className="flex items-center gap-2 p-2 border border-slate-700 rounded-lg cursor-pointer hover:bg-slate-800 transition-colors bg-[#0f1e33]">
                         <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={exportConfig.columns.stock} onChange={(e) => setExportConfig({...exportConfig, columns: {...exportConfig.columns, stock: e.target.checked}})} />
-                        <span className="text-xs font-bold text-slate-700">Stock Actual</span>
+                        <span className="text-xs font-bold text-slate-200">Stock Actual</span>
                       </label>
                     </div>
                   </div>
@@ -2535,16 +3666,16 @@ export default function BulkEditorView({
               </div>
 
               {/* COLUMNA DERECHA: Vista Previa */}
-              <div className="w-2/3 bg-slate-100 flex flex-col p-4 overflow-hidden">
+              <div className="w-2/3 bg-[#07111f] flex flex-col p-4 overflow-hidden">
                 <div className="flex justify-between items-center mb-3">
-                  <h4 className="font-black text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
-                    <Edit3 size={14} className="text-indigo-600"/> 
+                  <h4 className="font-black text-slate-100 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                    <Edit3 size={14} className="text-sky-300"/> 
                     {exportConfig.isForClient ? 'Ajustar Cantidades del Presupuesto' : 'Resumen de Productos a Exportar'}
                   </h4>
                   <div className="flex items-center gap-2">
                     <button 
                       onClick={handleClearPreview}
-                      className="bg-white hover:bg-red-50 text-slate-500 hover:text-red-600 font-bold text-[9px] px-2 py-1 rounded flex items-center gap-1 transition-colors uppercase tracking-wider border border-slate-200 hover:border-red-200 shadow-sm"
+                      className="bg-[#0f1e33] hover:bg-red-500/10 text-slate-300 hover:text-red-200 font-bold text-[9px] px-2 py-1 rounded flex items-center gap-1 transition-colors uppercase tracking-wider border border-slate-700 hover:border-red-400/40"
                       title="Limpiar todo el presupuesto"
                     >
                       <Trash2 size={10} strokeWidth={3} /> Limpiar
@@ -2553,7 +3684,7 @@ export default function BulkEditorView({
                     {exportConfig.isForClient && (
                       <button 
                         onClick={handleAddTemporaryItem}
-                        className="bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-bold text-[9px] px-2 py-1 rounded flex items-center gap-1 transition-colors uppercase tracking-wider border border-indigo-200 shadow-sm"
+                        className="bg-sky-500/15 hover:bg-sky-500/25 text-sky-100 font-bold text-[9px] px-2 py-1 rounded flex items-center gap-1 transition-colors uppercase tracking-wider border border-sky-400/30"
                       >
                         <Plus size={10} strokeWidth={3} /> Producto Extra
                       </button>
@@ -2561,11 +3692,11 @@ export default function BulkEditorView({
                   </div>
                 </div>
 
-                <div className="bg-white border border-slate-200 rounded-xl flex-1 overflow-hidden flex flex-col shadow-sm">
+                <div className="bg-[#0f1e33] border border-slate-700 rounded-xl flex-1 overflow-hidden flex flex-col">
                   {/* SCROLL CONTAINER (Tabla Ajustada) */}
                   <div className="overflow-y-auto custom-scrollbar flex-1 relative" onScroll={handlePreviewScroll}>
                     <table className="w-full text-left text-sm">
-                      <thead className="bg-slate-800 text-white sticky top-0 z-[70]">
+                      <thead className="bg-slate-950 text-slate-100 sticky top-0 z-[70]">
                         <tr>
                           <th className="py-2 px-3 font-bold text-[9px] uppercase tracking-wider">Producto</th>
                           {exportConfig.isForClient ? (
@@ -2583,15 +3714,15 @@ export default function BulkEditorView({
                           )}
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100 pb-20">
+                      <tbody className="divide-y divide-slate-700 pb-20 text-slate-100">
                         {exportItems.slice(0, previewLimit).map((item, idx) => {
                           const isWeight = item.product_type === 'weight';
                           const subtotal = isWeight ? item.newPrice * (item.qty / 1000) : item.newPrice * item.qty;
                           
-                          const rowColorClass = idx % 2 !== 0 ? 'bg-slate-50/80' : 'bg-transparent';
+                          const rowColorClass = idx % 2 !== 0 ? 'bg-slate-900/28' : 'bg-transparent';
 
                           return (
-                            <tr key={item.id} className={`hover:bg-slate-100 transition-colors ${rowColorClass}`}>
+                            <tr key={item.id} className={`hover:bg-slate-800/50 transition-colors ${rowColorClass}`}>
                               <td className="py-1.5 px-3 relative">
                                 <div className="flex flex-col gap-0.5">
                                   {/* SI ES TEMPORAL Y NO ESTÁ BLOQUEADO */}
@@ -2599,7 +3730,7 @@ export default function BulkEditorView({
                                     <div className="relative">
                                       <input 
                                         type="text"
-                                        className="w-full px-1.5 py-1 text-[11px] font-bold border border-slate-300 rounded focus:border-indigo-500 outline-none shadow-sm"
+                                        className="w-full px-1.5 py-1 text-[11px] font-bold border border-slate-600 rounded focus:border-sky-400 outline-none bg-[#07111f] text-slate-100 placeholder:text-slate-500"
                                         value={item.title}
                                         onChange={(e) => {
                                           updateExportItemField(item.id, 'title', e.target.value);
@@ -2611,7 +3742,7 @@ export default function BulkEditorView({
                                         autoFocus
                                       />
                                       {focusedTempId === item.id && item.title.length >= 2 && (
-                                        <ul className="absolute top-full left-0 w-full min-w-[250px] bg-white border border-indigo-200 shadow-2xl rounded-lg mt-1 z-[80] max-h-[160px] overflow-y-auto custom-scrollbar divide-y divide-slate-100">
+                                        <ul className="absolute top-full left-0 w-full min-w-[250px] bg-[#0f1e33] border border-sky-400/30 shadow-2xl rounded-lg mt-1 z-[80] max-h-[160px] overflow-y-auto custom-scrollbar divide-y divide-slate-700">
                                           {/* ✨ BÚSQUEDA TOKENIZADA */}
                                           {sandboxInventory
                                             .filter(p => {
@@ -2628,17 +3759,17 @@ export default function BulkEditorView({
                                               return (
                                                 <li
                                                   key={p.id}
-                                                  className="p-1.5 hover:bg-indigo-50 cursor-pointer flex justify-between items-center transition-colors"
+                                                  className="p-1.5 hover:bg-sky-500/10 cursor-pointer flex justify-between items-center transition-colors"
                                                   onMouseDown={(e) => {
                                                     e.preventDefault();
                                                     handleSelectProductForTemp(item.id, p);
                                                   }}
                                                 >
                                                   <div className="truncate flex-1 pr-2">
-                                                    <span className="font-bold text-[11px] text-slate-800 block truncate">{p.title}</span>
-                                                    <span className="text-[8px] text-slate-500 uppercase">{p.category}</span>
+                                                    <span className="font-bold text-[11px] text-slate-100 block truncate">{p.title}</span>
+                                                    <span className="text-[8px] text-slate-400 uppercase">{p.category}</span>
                                                   </div>
-                                                  <span className="text-[11px] font-bold text-indigo-600 shrink-0">
+                                                    <span className="text-[11px] font-bold text-sky-200 shrink-0">
                                                     $<FancyPrice amount={previewPrice} />
                                                   </span>
                                                 </li>
@@ -2653,7 +3784,7 @@ export default function BulkEditorView({
                                               return words.every(w => targetTitle.includes(w) || targetBarcode.includes(w));
                                             }).length === 0 && (
                                             <li 
-                                              className="p-1.5 text-[10px] font-bold text-indigo-600 hover:bg-indigo-50 cursor-pointer text-center transition-colors flex items-center justify-center gap-1"
+                                              className="p-1.5 text-[10px] font-bold text-sky-200 hover:bg-sky-500/10 cursor-pointer text-center transition-colors flex items-center justify-center gap-1"
                                               onMouseDown={(e) => {
                                                 e.preventDefault();
                                                 handleSetAsCustomProduct(item.id);
@@ -2668,7 +3799,7 @@ export default function BulkEditorView({
                                   ) : (
                                     /* SI YA SE BLOQUEÓ, SE MUESTRA COMO TEXTO NORMAL */
                                     <div className="flex items-center gap-1.5">
-                                      <p className="font-bold text-slate-800 text-[11px]">{item.title}</p>
+                                      <p className="font-bold text-slate-100 text-[11px]">{item.title}</p>
                                       {isWeight && <span className="bg-amber-100 text-amber-700 text-[8px] px-1 rounded font-bold uppercase tracking-widest border border-amber-200 whitespace-nowrap">Por Peso</span>}
                                     </div>
                                   )}
@@ -2676,13 +3807,13 @@ export default function BulkEditorView({
                                   {item.isTemporary && !item.isTitleLocked ? (
                                     <input 
                                       type="text"
-                                      className="w-full max-w-[120px] px-1 py-0.5 text-[8px] font-bold border border-slate-200 rounded outline-none text-slate-500 uppercase"
+                                      className="w-full max-w-[120px] px-1 py-0.5 text-[8px] font-bold border border-slate-600 rounded outline-none text-slate-300 bg-[#07111f] uppercase"
                                       value={item.category}
                                       onChange={(e) => updateExportItemField(item.id, 'category', e.target.value)}
                                       placeholder="Categoría..."
                                     />
                                   ) : (
-                                    <p className="text-[8px] text-slate-400 font-bold uppercase">{item.category}</p>
+                                    <p className="text-[8px] text-slate-500 font-bold uppercase">{item.category}</p>
                                   )}
                                 </div>
                               </td>
@@ -2696,7 +3827,7 @@ export default function BulkEditorView({
                                         <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-400 text-[11px] font-bold">$</span>
                                         <input 
                                           type="number"
-                                          className="no-spinners w-full pl-4 pr-1.5 py-1 text-[11px] font-bold border border-slate-300 rounded hover:border-slate-400 focus:border-indigo-500 outline-none text-right transition-colors"
+                                          className="no-spinners w-full pl-4 pr-1.5 py-1 text-[11px] font-bold border border-slate-600 rounded bg-[#07111f] text-slate-100 hover:border-slate-500 focus:border-sky-400 outline-none text-right transition-colors"
                                           value={item.newPrice}
                                           onChange={(e) => updateExportItemField(item.id, 'newPrice', Number(e.target.value) || 0)}
                                         />
@@ -2710,7 +3841,7 @@ export default function BulkEditorView({
                                         <input 
                                           type="number"
                                           min="1"
-                                          className="no-spinners w-12 p-1 text-center text-[11px] font-bold border border-slate-300 hover:border-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-colors"
+                                          className="no-spinners w-12 p-1 text-center text-[11px] font-bold border border-slate-600 bg-[#07111f] text-slate-100 hover:border-slate-500 focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40 outline-none transition-colors"
                                           value={item.qty}
                                           onChange={(e) => updateExportItemQty(item.id, e.target.value)}
                                         />
@@ -2731,7 +3862,7 @@ export default function BulkEditorView({
                                     <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-400 text-[11px] font-bold">$</span>
                                     <input 
                                       type="number"
-                                      className="no-spinners w-full pl-4 pr-1.5 py-1 text-[11px] font-bold border border-slate-300 rounded hover:border-slate-400 focus:border-indigo-500 outline-none text-right transition-colors"
+                                      className="no-spinners w-full pl-4 pr-1.5 py-1 text-[11px] font-bold border border-slate-600 rounded bg-[#07111f] text-slate-100 hover:border-slate-500 focus:border-sky-400 outline-none text-right transition-colors"
                                       value={item.newPrice}
                                       onChange={(e) => updateExportItemField(item.id, 'newPrice', Number(e.target.value) || 0)}
                                     />
@@ -2755,7 +3886,7 @@ export default function BulkEditorView({
                         
                         {previewLimit < exportItems.length && (
                           <tr>
-                            <td colSpan="5" className="p-2 text-center text-slate-400 text-[9px] font-bold bg-slate-50 flex items-center justify-center gap-1.5">
+                            <td colSpan="5" className="p-2 text-center text-slate-400 text-[9px] font-bold bg-slate-900/50 flex items-center justify-center gap-1.5">
                               <ChevronDown size={12} className="animate-bounce" /> Mostrando {previewLimit} de {exportItems.length}
                             </td>
                           </tr>
@@ -2771,9 +3902,9 @@ export default function BulkEditorView({
                   
                   {/* Fila de Total */}
                   {exportConfig.isForClient && exportConfig.clientColumns.showTotal && (
-                    <div className="bg-slate-50 border-t border-slate-200 p-3 flex justify-between items-center shrink-0 z-20">
-                      <span className="font-black text-slate-500 uppercase tracking-widest text-[10px]">Total del Presupuesto:</span>
-                      <span className="text-xl font-black text-emerald-600">
+                    <div className="bg-[#0b1728] border-t border-slate-700 p-3 flex justify-between items-center shrink-0 z-20">
+                      <span className="font-black text-slate-400 uppercase tracking-widest text-[10px]">Total del Presupuesto:</span>
+                      <span className="text-xl font-black text-emerald-300">
                         <FancyPrice amount={exportItems.reduce((acc, item) => acc + (item.product_type === 'weight' ? item.newPrice * (item.qty / 1000) : item.newPrice * item.qty), 0)} />
                       </span>
                     </div>
@@ -2783,21 +3914,21 @@ export default function BulkEditorView({
             </div>
 
             {/* Modal Footer */}
-            <div className="bg-white border-t border-slate-200 p-3 flex justify-between items-center shrink-0 z-20">
-              <span className="text-[11px] font-bold text-slate-400 bg-slate-100 px-2.5 py-1.5 rounded-md border border-slate-200">
+            <div className="bg-[#0f1e33] border-t border-slate-700 p-3 flex justify-between items-center shrink-0 z-20">
+              <span className="text-[11px] font-bold text-slate-300 bg-[#07111f] px-2.5 py-1.5 rounded-md border border-slate-700">
                 {exportItems.length} ítems listos
               </span>
               <div className="flex gap-2.5">
                 <button 
                   onClick={() => setIsExportModalOpen(false)}
-                  className="px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors"
+                  className="px-4 py-2 rounded-lg text-xs font-bold text-slate-300 hover:bg-slate-800 hover:text-slate-100 transition-colors"
                 >
                   Cerrar Vista Previa
                 </button>
                 <button 
                   onClick={handleConfirmExport}
                   disabled={exportItems.length === 0}
-                  className="px-5 py-2 rounded-lg text-xs font-black bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-all flex items-center gap-1.5 shadow-lg shadow-indigo-200 hover:shadow-indigo-300 transform hover:-translate-y-0.5"
+                  className="px-5 py-2 rounded-lg text-xs font-black bg-sky-600 text-white hover:bg-sky-500 disabled:opacity-50 transition-all flex items-center gap-1.5 transform hover:-translate-y-0.5"
                 >
                   <FileText size={16} /> GUARDAR COMO PDF
                 </button>
@@ -3281,9 +4412,9 @@ export default function BulkEditorView({
           >
             <Link2 size={14} />
             Casa Alberto
-            {supplierPricePendingCount > 0 ? (
+            {supplierPriceBadgeCount > 0 ? (
               <span className="ml-1 rounded-md bg-amber-400 px-1.5 py-0.5 text-[9px] font-black text-slate-950">
-                {supplierPricePendingCount}
+                {supplierPriceBadgeCount}
               </span>
             ) : null}
           </button>
