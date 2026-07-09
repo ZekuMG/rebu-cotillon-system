@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { formatCurrency, formatNumber, isTestRecord, isVentaLog, normalizeDate } from '../utils/helpers';
-import { getPaymentMethodLabel, getPaymentMethodTotals, normalizePaymentBreakdown } from '../utils/paymentBreakdown';
-import { buildSalesDataset, getExplicitItemUnitCost, getMetricProductKey } from '../utils/salesMetricsCore';
+import { getPaymentMethodLabel, normalizePaymentBreakdown } from '../utils/paymentBreakdown';
+import { buildSalesDataset, getCostBasisStatus, getItemCostInfo, getMetricProductKey } from '../utils/salesMetricsCore';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -201,23 +201,7 @@ const getItemRevenue = (item = {}) => {
 };
 
 const getItemCost = (item = {}, lookups) => {
-  if (shouldSkipCostItem(item)) return 0;
-
-  if (isTemporaryCustomItem(item)) {
-    return getExplicitItemUnitCost(item) * getItemQty(item);
-  }
-
-  if (item?.isCombo && Array.isArray(item.productsIncluded) && item.productsIncluded.length > 0) {
-    const comboQty = toNumber(item.qty ?? item.quantity ?? 1) || 1;
-    return item.productsIncluded.reduce((sum, included) => {
-      const product = getLiveProduct(included, lookups);
-      const qty = toNumber(included.quantity ?? included.qty ?? 1);
-      return sum + toNumber(product?.purchasePrice ?? included.purchasePrice ?? included.cost) * qty * comboQty;
-    }, 0);
-  }
-
-  const product = getLiveProduct(item, lookups);
-  return toNumber(product?.purchasePrice ?? item.purchasePrice ?? item.cost) * getItemQty(item);
+  return getItemCostInfo(item, lookups).totalCost;
 };
 
 const _getTransactionCost = (tx = {}, lookups) => {
@@ -256,6 +240,24 @@ const getItemProductType = (item = {}, product = null) =>
 const addToMap = (map, key, seed, patch) => {
   const current = map.get(key) || { key, ...seed };
   map.set(key, { ...current, ...patch(current) });
+};
+
+const emptyCostBasis = () => ({ snapshot: 0, inventory: 0, missing: 0, excluded: 0 });
+
+const mergeCostBasis = (current = emptyCostBasis(), next = emptyCostBasis()) => ({
+  snapshot: toNumber(current.snapshot) + toNumber(next.snapshot),
+  inventory: toNumber(current.inventory) + toNumber(next.inventory),
+  missing: toNumber(current.missing) + toNumber(next.missing),
+  excluded: toNumber(current.excluded) + toNumber(next.excluded),
+});
+
+const withCostStatus = (item = {}) => {
+  const costBasis = item.costBasis || emptyCostBasis();
+  return {
+    ...item,
+    costBasis,
+    costStatus: getCostBasisStatus(costBasis, item.cost),
+  };
 };
 
 const calculateChange = (current, previous) => {
@@ -553,13 +555,18 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
     const txRevenue = toNumber(tx.total);
     const txCost = toNumber(tx.cost);
     const txProfit = toNumber(tx.profit);
+    const txItemsForStats = (tx.metricItems || tx.items || []).filter((item) => !(item?.isDiscount || item?.is_discount));
+    const txItemsGrossRevenue = txItemsForStats.reduce((sum, item) => sum + Math.max(0, getItemRevenue(item)), 0);
+    const txItemDiscountImpact = toNumber(tx.itemDiscountImpact ?? tx.discountImpact);
+    const txItemCount = txItemsForStats.reduce((sum, item) => sum + getItemQty(item), 0);
     revenue += txRevenue;
     cost += txCost;
 
     const periodKey = isHourlyRange ? getHourKey(tx.metricDate) : formatDateKey(tx.metricDate);
     const periodLabel = isHourlyRange ? getHourLabel(tx.metricDate) : formatShortDate(tx.metricDate);
-    addToMap(periodMap, periodKey, { label: periodLabel, revenue: 0, profit: 0, expenses: 0, expenseCount: 0, salesCount: 0 }, (current) => ({
+    addToMap(periodMap, periodKey, { label: periodLabel, revenue: 0, cost: 0, profit: 0, expenses: 0, expenseCount: 0, salesCount: 0 }, (current) => ({
       revenue: current.revenue + txRevenue,
+      cost: current.cost + txCost,
       profit: current.profit + txProfit,
       salesCount: current.salesCount + 1,
     }));
@@ -578,8 +585,10 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
 
     const hasPaymentBreakdown = Array.isArray(tx.paymentBreakdown) && tx.paymentBreakdown.length > 0;
     const paymentScopeRatio = hasPaymentBreakdown && Number.isFinite(tx.metricScopeRatio) ? tx.metricScopeRatio : 1;
-    const paymentTotal = hasPaymentBreakdown ? toNumber(tx.originalTotal ?? tx.total) : tx.total;
-    const totalsByPayment = getPaymentMethodTotals(
+    const paymentTotal = hasPaymentBreakdown
+      ? toNumber(tx.originalTotal ?? tx.total)
+      : Math.max(0, toNumber(tx.total) - toNumber(tx.discountImpact));
+    const paymentLines = normalizePaymentBreakdown(
       tx.paymentBreakdown,
       tx.payment,
       tx.installments,
@@ -587,10 +596,29 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
       tx.cashChange,
       paymentTotal,
     );
-    Object.entries(totalsByPayment).forEach(([method, amount]) => {
-      addToMap(paymentMap, method, { name: method, value: 0, salesCount: 0 }, (current) => ({
-        value: current.value + (toNumber(amount) * paymentScopeRatio),
+    paymentLines.forEach((line, lineIndex) => {
+      const method = getPaymentMethodLabel(line.method);
+      const amount = toNumber(line.chargedAmount) * paymentScopeRatio;
+      addToMap(paymentMap, method, { name: method, value: 0, salesCount: 0, history: [] }, (current) => ({
+        value: current.value + amount,
         salesCount: current.salesCount + 1,
+        history: [
+          ...(current.history || []),
+          {
+            key: `${tx.id || periodKey}-${line.id || lineIndex}-${current.salesCount || 0}`,
+            transactionId: tx.id,
+            method,
+            rawMethod: line.method,
+            amount,
+            saleTotal: txRevenue,
+            itemCount: txItemCount,
+            clientName: getClientName(tx),
+            user: getUserLabel(tx),
+            date: tx.metricDate,
+            time: tx.time || tx.timestamp || '',
+            sortTime: tx.metricDate?.getTime?.() || 0,
+          },
+        ],
       }));
     });
 
@@ -612,23 +640,29 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
       }));
     }
 
-    (tx.metricItems || tx.items || []).forEach((item) => {
+    txItemsForStats.forEach((item) => {
       if (item?.isDiscount || item?.is_discount) return;
       const product = getLiveProduct(item, lookups);
       const title = item.title || item.product_title || product?.title || 'Producto';
       const qty = getItemQty(item);
-      const itemRevenue = getItemRevenue(item);
-      const itemCost = getItemCost(item, lookups);
+      const itemGrossRevenue = getItemRevenue(item);
+      const itemDiscountImpact = txItemsGrossRevenue > 0
+        ? txItemDiscountImpact * Math.min(1, Math.max(0, itemGrossRevenue / txItemsGrossRevenue))
+        : 0;
+      const itemRevenue = Math.max(0, itemGrossRevenue - itemDiscountImpact);
+      const itemCostInfo = getItemCostInfo(item, lookups);
+      const itemCost = itemCostInfo.totalCost;
       const productKey = getMetricProductKey(item, product);
       const productType = getItemProductType(item, product);
       const categories = getItemCategories(item, product);
       itemsSold += qty;
 
-      addToMap(productMap, productKey, { name: title, qty: 0, revenue: 0, cost: 0, profit: 0, type: productType }, (current) => ({
+      addToMap(productMap, productKey, { name: title, qty: 0, revenue: 0, cost: 0, profit: 0, type: productType, costBasis: emptyCostBasis() }, (current) => ({
         qty: current.qty + qty,
         revenue: current.revenue + itemRevenue,
         cost: current.cost + itemCost,
         profit: current.profit + itemRevenue - itemCost,
+        costBasis: mergeCostBasis(current.costBasis, itemCostInfo.basis),
       }));
 
       addToMap(typeMap, productType, { name: productType === 'weight' ? 'Por peso' : 'Por unidad', qty: 0, revenue: 0 }, (current) => ({
@@ -637,15 +671,16 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
       }));
 
       categories.forEach((category) => {
-        addToMap(categoryMap, category, { name: category, qty: 0, revenue: 0, cost: 0, profit: 0, products: new Map() }, (current) => {
+        addToMap(categoryMap, category, { name: category, qty: 0, revenue: 0, cost: 0, profit: 0, costBasis: emptyCostBasis(), products: new Map() }, (current) => {
           const products = new Map(current.products || []);
-          const productEntry = products.get(productKey) || { key: productKey, name: title, qty: 0, revenue: 0, cost: 0, profit: 0 };
+          const productEntry = products.get(productKey) || { key: productKey, name: title, qty: 0, revenue: 0, cost: 0, profit: 0, costBasis: emptyCostBasis() };
           products.set(productKey, {
             ...productEntry,
             qty: productEntry.qty + qty,
             revenue: productEntry.revenue + itemRevenue,
             cost: productEntry.cost + itemCost,
             profit: productEntry.profit + itemRevenue - itemCost,
+            costBasis: mergeCostBasis(productEntry.costBasis, itemCostInfo.basis),
           });
 
           return {
@@ -653,6 +688,7 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
             revenue: current.revenue + itemRevenue,
             cost: current.cost + itemCost,
             profit: current.profit + itemRevenue - itemCost,
+            costBasis: mergeCostBasis(current.costBasis, itemCostInfo.basis),
             products,
           };
         });
@@ -664,18 +700,27 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
   filteredExpenses.forEach((expense) => {
     const periodKey = isHourlyRange ? getHourKey(expense.metricDate) : formatDateKey(expense.metricDate);
     const periodLabel = isHourlyRange ? getHourLabel(expense.metricDate) : formatShortDate(expense.metricDate);
-    addToMap(periodMap, periodKey, { label: periodLabel, revenue: 0, profit: 0, expenses: 0, expenseCount: 0, salesCount: 0 }, (current) => ({
+    addToMap(periodMap, periodKey, { label: periodLabel, revenue: 0, cost: 0, profit: 0, expenses: 0, expenseCount: 0, salesCount: 0 }, (current) => ({
       expenses: current.expenses + toNumber(expense.amount),
       expenseCount: current.expenseCount + 1,
       profit: current.profit - toNumber(expense.amount),
     }));
   });
 
+  const periodCostBasis = [...productMap.values()].reduce(
+    (basis, item) => mergeCostBasis(basis, item.costBasis),
+    emptyCostBasis(),
+  );
+
   const stats = {
     revenue,
     cost,
-    discounts: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.discountImpact), 0),
+    costBasis: periodCostBasis,
+    costStatus: getCostBasisStatus(periodCostBasis, cost),
+    discounts: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.itemDiscountImpact ?? tx.discountImpact), 0),
     discountImpact: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.discountImpact), 0),
+    theoreticalProfit: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.theoreticalProfit), 0),
+    theoreticalNet: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.theoreticalProfit), 0) - totalExpenses,
     expenses: totalExpenses,
     profit: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.profit), 0) - totalExpenses,
     salesCount: filteredTransactions.length,
@@ -686,6 +731,12 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
   const periodSeries = [...periodMap.values()]
     .sort((a, b) => a.key.localeCompare(b.key))
     .map((day) => ({ ...day }));
+
+  const allProductStats = sortBy([...productMap.values()].map((item) => withCostStatus({
+    ...item,
+    total: item.revenue + item.profit,
+    marginRate: item.revenue ? (item.profit / item.revenue) * 100 : 0,
+  })), 'revenue', Number.MAX_SAFE_INTEGER);
 
   return {
     stats,
@@ -699,14 +750,11 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
     periodMode: isHourlyRange ? 'hour' : 'day',
     periodLabel: isHourlyRange ? 'horario' : 'día',
     periodLabelPlural: isHourlyRange ? 'horarios' : 'días',
-    productStats: sortBy([...productMap.values()].map((item) => ({
-      ...item,
-      total: item.revenue + item.profit,
-      marginRate: item.revenue ? (item.profit / item.revenue) * 100 : 0,
-    })), 'revenue', 20),
+    allProductStats,
+    productStats: allProductStats.slice(0, 20),
     categoryStats: sortBy([...categoryMap.values()].map((item) => {
       const products = [...(item.products || new Map()).values()]
-        .map((product) => ({
+        .map((product) => withCostStatus({
           ...product,
           total: product.revenue + product.profit,
           marginRate: product.revenue ? (product.profit / product.revenue) * 100 : 0,
@@ -714,15 +762,20 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
         .sort((a, b) => toNumber(b.revenue) - toNumber(a.revenue))
         .slice(0, 12);
 
-      return {
+      return withCostStatus({
         ...item,
         products: undefined,
         productBreakdown: products,
         total: item.revenue + item.profit,
         marginRate: item.revenue ? (item.profit / item.revenue) * 100 : 0,
-      };
+      });
     }), 'revenue', 16),
-    paymentStats: sortBy([...paymentMap.values()], 'value', 10),
+    paymentStats: sortBy([...paymentMap.values()].map((item) => ({
+      ...item,
+      history: [...(item.history || [])]
+        .sort((a, b) => toNumber(b.sortTime) - toNumber(a.sortTime))
+        .slice(0, 40),
+    })), 'value', 10),
     userStats: sortBy([...userMap.values()].map((item) => ({
       ...item,
       total: item.revenue + item.profit,
@@ -859,8 +912,8 @@ const buildRecommendations = ({ current, previous, stockStats, orderStats, membe
   if (profitChange < -15) {
     recommendations.push({
       tone: 'danger',
-      title: 'Revisar rentabilidad',
-      detail: `La ganancia neta bajó ${formatNumber(Math.abs(profitChange), 1)}%. Mirá gastos, costos y descuentos.`,
+      title: 'Revisar resultado de caja',
+      detail: `El resultado bajó ${formatNumber(Math.abs(profitChange), 1)}%. Mirá gastos, cobros y descuentos.`,
     });
   }
 

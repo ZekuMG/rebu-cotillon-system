@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rebu Cotillon | Tienda preview</title>
+    <style>
+      :root {
+        --party-paper: #f7fbff;
+        --party-paper-2: #edf5fb;
+        --party-counter: #ffffff;
+        --party-ink: #102033;
+        --party-ink-2: #3a4c63;
+        --party-ink-3: #708198;
+        --party-line: rgba(35, 51, 72, 0.15);
+        --party-line-strong: rgba(35, 51, 72, 0.28);
+        --party-pink: #e43895;
+        --party-pink-soft: #ffe5f3;
+        --party-blue: #14aeea;
+        --party-blue-soft: #e0f6ff;
+        --party-yellow: #ffd13d;
+        --party-yellow-soft: #fff5c8;
+        --party-green: #86cc23;
+        --party-green-soft: #effbdc;
+        --party-orange: #ff8a1f;
+        --party-shadow: 0 18px 40px rgba(14, 33, 54, 0.12);
+        --party-shadow-small: 0 10px 24px rgba(14, 33, 54, 0.09);
+        --radius: 8px;
+        --step: 8px;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        color: var(--party-ink);
+        background: var(--party-paper);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(237, 245, 251, 0.92)),
+          repeating-linear-gradient(
+            90deg,
+            rgba(228, 56, 149, 0.06) 0,
+            rgba(228, 56, 149, 0.06) 1px,
+            transparent 1px,
+            transparent 34px
+          );
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .store-shell {
+        width: min(1480px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 16px 0 28px;
+      }
+
+      .store-topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 16px;
+        align-items: center;
+        min-height: 72px;
+        margin-bottom: 18px;
+        padding: 10px 12px;
+        border: 1px solid var(--party-line);
+        border-top: 0;
+        border-radius: 0 0 var(--radius) var(--radius);
+        background: rgba(255, 255, 255, 0.86);
+        box-shadow: 0 10px 26px rgba(16, 32, 51, 0.08);
+        backdrop-filter: blur(14px);
+      }
+
+      .brand-lockup {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .brand-lockup img {
+        width: 54px;
+        height: 54px;
+        object-fit: contain;
+      }
+
+      .brand-title {
+        margin: 0;
+        color: var(--party-ink);
+        font-size: 21px;
+        font-weight: 950;
+        line-height: 1;
+      }
+
+      .brand-subtitle {
+        margin: 4px 0 0;
+        color: var(--party-ink-3);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+
+      .topbar-search {
+        position: relative;
+        min-width: 160px;
+      }
+
+      .topbar-search input {
+        width: 100%;
+        height: 42px;
+        border: 1px solid var(--party-line);
+        border-radius: var(--radius);
+        padding: 0 14px;
+        color: var(--party-ink);
+        background: var(--party-paper);
+        outline: 0;
+      }
+
+      .topbar-search input:focus {
+        border-color: rgba(228, 56, 149, 0.6);
+        box-shadow: 0 0 0 3px rgba(228, 56, 149, 0.14);
+      }
+
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .pill {
+        display: inline-flex;
+        min-height: 36px;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        border: 1px solid var(--party-line);
+        border-radius: var(--radius);
+        padding: 0 12px;
+        color: var(--party-ink-2);
+        background: var(--party-counter);
+        font-size: 13px;
+        font-weight: 900;
+        text-decoration: none;
+      }
+
+      .pill strong {
+        color: var(--party-pink);
+      }
+
+      .primary-action {
+        border-color: rgba(228, 56, 149, 0.38);
+        color: #ffffff;
+        background: var(--party-pink);
+        box-shadow: 0 8px 18px rgba(228, 56, 149, 0.22);
+      }
+
+      .commerce-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 18px;
+        align-items: start;
+      }
+
+      .catalog-main {
+        display: grid;
+        gap: 16px;
+      }
+
+      .occasion-strip {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr 0.9fr;
+        gap: 12px;
+      }
+
+      .occasion-tile {
+        min-height: 148px;
+        border: 1px solid var(--party-line);
+        border-radius: var(--radius);
+        padding: 16px;
+        background: var(--party-counter);
+        box-shadow: var(--party-shadow-small);
+        overflow: hidden;
+      }
+
+      .occasion-tile.is-main {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 180px;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--party-pink);
+        font-size: 11px;
+        font-weight: 950;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .occasion-tile h2,
+      .occasion-tile h3 {
+        margin: 0;
+        color: var(--party-ink);
+        line-height: 1.05;
+      }
+
+      .occasion-tile h2 {
+        max-width: 560px;
+        font-size: clamp(26px, 3vw, 46px);
+        font-weight: 1000;
+      }
+
+      .occasion-tile h3 {
+        font-size: 21px;
+        font-weight: 950;
+      }
+
+      .occasion-tile p {
+        margin: 10px 0 0;
+        max-width: 560px;
+        color: var(--party-ink-2);
+        font-size: 15px;
+        line-height: 1.45;
+      }
+
+      .kit-meter {
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+        border: 1px solid rgba(16, 32, 51, 0.12);
+        border-radius: var(--radius);
+        background:
+          linear-gradient(90deg, var(--party-pink-soft), var(--party-yellow-soft) 46%, var(--party-blue-soft));
+      }
+
+      .meter-row {
+        display: grid;
+        grid-template-columns: 58px 1fr auto;
+        gap: 8px;
+        align-items: center;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .meter-track {
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.78);
+        overflow: hidden;
+      }
+
+      .meter-fill {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--party-pink);
+      }
+
+      .category-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 10px;
+        border: 1px solid var(--party-line);
+        border-radius: var(--radius);
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .category-tab {
+        min-height: 36px;
+        border: 1px solid transparent;
+        border-radius: var(--radius);
+        padding: 0 12px;
+        color: var(--party-ink-2);
+        background: transparent;
+        font-size: 13px;
+        font-weight: 900;
+      }
+
+      .category-tab:hover {
+        background: var(--party-paper);
+      }
+
+      .category-tab.is-active {
+        border-color: rgba(228, 56, 149, 0.34);
+        color: var(--party-pink);
+        background: var(--party-pink-soft);
+      }
+
+      .section-heading {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .section-heading h2 {
+        margin: 0;
+        color: var(--party-ink);
+        font-size: 22px;
+        font-weight: 1000;
+      }
+
+      .section-heading p {
+        margin: 4px 0 0;
+        color: var(--party-ink-3);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .product-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .product-card {
+        display: grid;
+        grid-template-rows: 164px 1fr auto;
+        min-height: 356px;
+        border: 1px solid var(--party-line);
+        border-radius: var(--radius);
+        background: var(--party-counter);
+        box-shadow: var(--party-shadow-small);
+        overflow: hidden;
+      }
+
+      .product-art {
+        position: relative;
+        display: grid;
+        place-items: center;
+        border-bottom: 1px solid rgba(16, 32, 51, 0.08);
+        background: var(--art-bg, var(--party-yellow-soft));
+      }
+
+      .product-art::before,
+      .product-art::after {
+        position: absolute;
+        content: "";
+        border-radius: 999px;
+        opacity: 0.62;
+      }
+
+      .product-art::before {
+        width: 74px;
+        height: 74px;
+        left: 16px;
+        top: 18px;
+        background: var(--art-dot, var(--party-pink));
+      }
+
+      .product-art::after {
+        width: 110px;
+        height: 110px;
+        right: -28px;
+        bottom: -34px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .product-art span {
+        position: relative;
+        z-index: 1;
+        width: min(78%, 164px);
+        border: 3px solid rgba(255, 255, 255, 0.86);
+        border-radius: var(--radius);
+        padding: 14px 12px;
+        color: #ffffff;
+        background: rgba(16, 32, 51, 0.82);
+        font-size: 18px;
+        font-weight: 1000;
+        line-height: 1.1;
+        text-align: center;
+        box-shadow: 0 14px 28px rgba(16, 32, 51, 0.16);
+      }
+
+      .product-body {
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+      }
+
+      .product-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        color: var(--party-ink-3);
+        font-size: 11px;
+        font-weight: 950;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .product-card h3 {
+        margin: 0;
+        color: var(--party-ink);
+        font-size: 17px;
+        font-weight: 1000;
+        line-height: 1.18;
+      }
+
+      .product-card p {
+        margin: 0;
+        color: var(--party-ink-2);
+        font-size: 13px;
+        line-height: 1.38;
+      }
+
+      .price-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 0 12px 12px;
+      }
+
+      .price {
+        color: var(--party-ink);
+        font-size: 22px;
+        font-weight: 1000;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .add-button {
+        min-height: 38px;
+        border: 1px solid rgba(16, 32, 51, 0.16);
+        border-radius: var(--radius);
+        padding: 0 12px;
+        color: var(--party-ink);
+        background: var(--party-yellow);
+        font-size: 13px;
+        font-weight: 950;
+      }
+
+      .add-button:hover {
+        filter: brightness(0.98);
+      }
+
+      .cart-panel {
+        position: sticky;
+        top: 92px;
+        display: grid;
+        gap: 12px;
+        border: 1px solid var(--party-line);
+        border-radius: var(--radius);
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.9);
+        box-shadow: var(--party-shadow);
+      }
+
+      .cart-panel h2 {
+        margin: 0;
+        color: var(--party-ink);
+        font-size: 19px;
+        font-weight: 1000;
+      }
+
+      .cart-empty {
+        margin: 0;
+        border: 1px dashed var(--party-line-strong);
+        border-radius: var(--radius);
+        padding: 14px;
+        color: var(--party-ink-3);
+        background: var(--party-paper);
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.4;
+      }
+
+      .cart-lines {
+        display: grid;
+        gap: 8px;
+      }
+
+      .cart-line {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: center;
+        border: 1px solid var(--party-line);
+        border-radius: var(--radius);
+        padding: 10px;
+        background: var(--party-paper);
+      }
+
+      .cart-line strong {
+        display: block;
+        color: var(--party-ink);
+        font-size: 13px;
+        line-height: 1.2;
+      }
+
+      .cart-line span {
+        display: block;
+        margin-top: 4px;
+        color: var(--party-ink-3);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .qty-control {
+        display: flex;
+        align-items: center;
+        border: 1px solid var(--party-line);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+
+      .qty-control button {
+        width: 30px;
+        height: 30px;
+        border: 0;
+        color: var(--party-ink);
+        background: #ffffff;
+        font-weight: 1000;
+      }
+
+      .qty-control output {
+        width: 30px;
+        text-align: center;
+        font-size: 13px;
+        font-weight: 950;
+      }
+
+      .total-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border-top: 1px solid var(--party-line);
+        padding-top: 12px;
+        color: var(--party-ink);
+        font-weight: 950;
+      }
+
+      .total-row strong {
+        font-size: 24px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .checkout-button {
+        min-height: 46px;
+        border: 1px solid rgba(40, 140, 68, 0.34);
+        border-radius: var(--radius);
+        color: #ffffff;
+        background: #1f9b4b;
+        font-size: 15px;
+        font-weight: 1000;
+      }
+
+      .checkout-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      .store-note {
+        margin: 0;
+        color: var(--party-ink-3);
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.4;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      @media (max-width: 1180px) {
+        .commerce-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .cart-panel {
+          position: static;
+        }
+
+        .product-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 820px) {
+        .store-shell {
+          width: min(100% - 20px, 1480px);
+          padding-top: 8px;
+        }
+
+        .store-topbar {
+          grid-template-columns: 1fr;
+          gap: 10px;
+        }
+
+        .topbar-actions {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .occasion-strip {
+          grid-template-columns: 1fr;
+        }
+
+        .occasion-tile.is-main {
+          grid-template-columns: 1fr;
+        }
+
+        .product-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="store-shell">
+      <header class="store-topbar">
+        <a class="brand-lockup" href="#" aria-label="Rebu Cotillon">
+          <img src="./rebu-logo.png" alt="Rebu" />
+          <span>
+            <span class="brand-title">Rebu Cotillon</span>
+            <span class="brand-subtitle">Cotillon + reposteria en Berazategui</span>
+          </span>
+        </a>
+
+        <label class="topbar-search">
+          <span class="hidden">Buscar productos</span>
+          <input id="searchInput" type="search" placeholder="Buscar globos, velas, kits, descartables..." />
+        </label>
+
+        <div class="topbar-actions">
+          <a class="pill" href="https://www.instagram.com/rebucotillon/" target="_blank" rel="noreferrer">
+            @rebucotillon
+          </a>
+          <a class="pill primary-action" href="#cartPanel">Carrito <strong id="cartCount">0</strong></a>
+        </div>
+      </header>
+
+      <section class="commerce-grid" aria-label="Tienda Rebu">
+        <div class="catalog-main">
+          <section class="occasion-strip" aria-label="Kits y ocasiones">
+            <article class="occasion-tile is-main">
+              <div>
+                <p class="eyebrow">Armamos tu cumple sin estres</p>
+                <h2>Kits listos para festejar en Platanos.</h2>
+                <p>
+                  Elegi por ocasion, suma descartables, velas, deco y reposteria. El pedido queda listo
+                  para coordinar por WhatsApp.
+                </p>
+              </div>
+              <div class="kit-meter" aria-label="Composicion de kit sugerido">
+                <div class="meter-row">
+                  <span>Deco</span>
+                  <span class="meter-track"><span class="meter-fill" style="width: 86%"></span></span>
+                  <span>86%</span>
+                </div>
+                <div class="meter-row">
+                  <span>Mesa</span>
+                  <span class="meter-track"><span class="meter-fill" style="width: 62%; background: var(--party-blue)"></span></span>
+                  <span>62%</span>
+                </div>
+                <div class="meter-row">
+                  <span>Torta</span>
+                  <span class="meter-track"><span class="meter-fill" style="width: 48%; background: var(--party-green)"></span></span>
+                  <span>48%</span>
+                </div>
+              </div>
+            </article>
+
+            <article class="occasion-tile" style="background: var(--party-pink-soft)">
+              <p class="eyebrow">Mas pedido</p>
+              <h3>Cumple infantil</h3>
+              <p>Globos, pi&ntilde;ata, velas y descartables combinados.</p>
+            </article>
+
+            <article class="occasion-tile" style="background: var(--party-yellow-soft)">
+              <p class="eyebrow">Rapido</p>
+              <h3>Pedido express</h3>
+              <p>Carrito corto para retirar o coordinar envio local.</p>
+            </article>
+          </section>
+
+          <nav class="category-tabs" aria-label="Categorias">
+            <button class="category-tab is-active" type="button" data-category="Todos">Todos</button>
+            <button class="category-tab" type="button" data-category="Globos">Globos</button>
+            <button class="category-tab" type="button" data-category="Descartables">Descartables</button>
+            <button class="category-tab" type="button" data-category="Decoracion">Decoracion</button>
+            <button class="category-tab" type="button" data-category="Velas">Velas</button>
+            <button class="category-tab" type="button" data-category="Disfraces">Disfraces</button>
+            <button class="category-tab" type="button" data-category="Luminoso">Luminoso</button>
+          </nav>
+
+          <section>
+            <div class="section-heading">
+              <div>
+                <h2>Catalogo para armar tu fiesta</h2>
+                <p id="resultLabel">10 productos disponibles</p>
+              </div>
+              <span class="pill">Pedidos por WhatsApp</span>
+            </div>
+            <div class="product-grid" id="productGrid" aria-live="polite"></div>
+          </section>
+        </div>
+
+        <aside class="cart-panel" id="cartPanel" aria-label="Carrito">
+          <h2>Pedido Rebu</h2>
+          <p class="cart-empty" id="emptyCart">
+            Agrega productos y mandamos el resumen para coordinar disponibilidad, colores y entrega.
+          </p>
+          <div class="cart-lines" id="cartLines"></div>
+          <div class="total-row">
+            <span>Total estimado</span>
+            <strong id="cartTotal">$0</strong>
+          </div>
+          <button class="checkout-button" id="checkoutButton" type="button" disabled>Pedir por WhatsApp</button>
+          <p class="store-note">
+            Los precios son de muestra para el preview. En produccion se sincronizan con inventario, stock y promociones.
+          </p>
+        </aside>
+      </section>
+    </main>
+
+    <script>
+      const products = [
+        {
+          id: 1,
+          title: "Pack globos metalizados dorados",
+          brand: "PartyTime",
+          category: "Globos",
+          price: 3500,
+          stock: 50,
+          note: "Brillo fuerte para mesa dulce, arco o fondo de fotos.",
+          art: "Globos metalizados",
+          bg: "#fff0b8",
+          dot: "#14aeea"
+        },
+        {
+          id: 2,
+          title: "Set vasos neon fluo x50",
+          brand: "Luminix",
+          category: "Descartables",
+          price: 4200,
+          stock: 100,
+          note: "Color alto impacto para cumples de noche y mesa infantil.",
+          art: "Vasos neon",
+          bg: "#e6fbff",
+          dot: "#e43895"
+        },
+        {
+          id: 3,
+          title: "Antifaz veneciano con plumas",
+          brand: "CarnavalPro",
+          category: "Disfraces",
+          price: 1800,
+          stock: 25,
+          note: "Detalle rapido para invitados, fotos y cotillon de fiesta.",
+          art: "Antifaz",
+          bg: "#ffe5f3",
+          dot: "#ffd13d"
+        },
+        {
+          id: 4,
+          title: "Pinata mexicana multicolor",
+          brand: "FiestaMex",
+          category: "Decoracion",
+          price: 8500,
+          stock: 8,
+          note: "Pieza central para cumple infantil con mucho color.",
+          art: "Pinata",
+          bg: "#edf5fb",
+          dot: "#86cc23"
+        },
+        {
+          id: 5,
+          title: "Bengalas para torta pack x4",
+          brand: "Chispitas",
+          category: "Velas",
+          price: 1200,
+          stock: 200,
+          note: "Para cerrar el momento torta con luz y foto.",
+          art: "Bengalas",
+          bg: "#fff5c8",
+          dot: "#ff8a1f"
+        },
+        {
+          id: 6,
+          title: "Guirnalda LED multicolor 5m",
+          brand: "Luminix",
+          category: "Luminoso",
+          price: 6500,
+          stock: 15,
+          note: "Luz decorativa para ambientar salon, patio o vidriera.",
+          art: "Guirnalda LED",
+          bg: "#e0f6ff",
+          dot: "#86cc23"
+        },
+        {
+          id: 7,
+          title: "Cotillon Ano Nuevo kit 10 personas",
+          brand: "PartyTime",
+          category: "Decoracion",
+          price: 12000,
+          stock: 5,
+          note: "Kit cerrado para resolver una mesa completa.",
+          art: "Kit fiesta",
+          bg: "#ffe5f3",
+          dot: "#14aeea"
+        },
+        {
+          id: 8,
+          title: "Velas numero 0-9 glitter",
+          brand: "Chispitas",
+          category: "Velas",
+          price: 800,
+          stock: 45,
+          note: "Numeros con brillo para tortas infantiles o teen.",
+          art: "Velas glitter",
+          bg: "#fff0b8",
+          dot: "#e43895"
+        },
+        {
+          id: 9,
+          title: "Mantel descartable premium",
+          brand: "DecoFiesta",
+          category: "Descartables",
+          price: 2200,
+          stock: 30,
+          note: "Base prolija para mesa dulce, comida o souvenirs.",
+          art: "Mantel premium",
+          bg: "#effbdc",
+          dot: "#14aeea"
+        },
+        {
+          id: 10,
+          title: "Peluca afro colores",
+          brand: "CarnavalPro",
+          category: "Disfraces",
+          price: 3500,
+          stock: 12,
+          note: "Accesorio protagonista para fotos y hora loca.",
+          art: "Peluca color",
+          bg: "#edf5fb",
+          dot: "#ff8a1f"
+        }
+      ];
+
+      const formatter = new Intl.NumberFormat("es-AR", {
+        style: "currency",
+        currency: "ARS",
+        maximumFractionDigits: 0
+      });
+
+      const state = {
+        category: "Todos",
+        search: "",
+        cart: new Map()
+      };
+
+      const productGrid = document.querySelector("#productGrid");
+      const searchInput = document.querySelector("#searchInput");
+      const resultLabel = document.querySelector("#resultLabel");
+      const cartLines = document.querySelector("#cartLines");
+      const emptyCart = document.querySelector("#emptyCart");
+      const cartTotal = document.querySelector("#cartTotal");
+      const cartCount = document.querySelector("#cartCount");
+      const checkoutButton = document.querySelector("#checkoutButton");
+
+      function normalize(value) {
+        return String(value || "")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase();
+      }
+
+      function getFilteredProducts() {
+        const term = normalize(state.search);
+        return products.filter((product) => {
+          const inCategory = state.category === "Todos" || product.category === state.category;
+          const haystack = normalize(`${product.title} ${product.brand} ${product.category} ${product.note}`);
+          return inCategory && (!term || haystack.includes(term));
+        });
+      }
+
+      function renderProducts() {
+        const filtered = getFilteredProducts();
+        resultLabel.textContent = `${filtered.length} productos disponibles`;
+        productGrid.innerHTML = filtered
+          .map(
+            (product) => `
+              <article class="product-card">
+                <div class="product-art" style="--art-bg: ${product.bg}; --art-dot: ${product.dot}">
+                  <span>${product.art}</span>
+                </div>
+                <div class="product-body">
+                  <div class="product-meta">
+                    <span>${product.category}</span>
+                    <span>Stock ${product.stock}</span>
+                  </div>
+                  <h3>${product.title}</h3>
+                  <p>${product.note}</p>
+                </div>
+                <div class="price-row">
+                  <span class="price">${formatter.format(product.price)}</span>
+                  <button class="add-button" type="button" data-add="${product.id}">Agregar</button>
+                </div>
+              </article>
+            `
+          )
+          .join("");
+      }
+
+      function renderCart() {
+        const lines = [...state.cart.entries()]
+          .map(([id, qty]) => ({ product: products.find((item) => item.id === id), qty }))
+          .filter((line) => line.product);
+        const total = lines.reduce((sum, line) => sum + line.product.price * line.qty, 0);
+        const count = lines.reduce((sum, line) => sum + line.qty, 0);
+
+        emptyCart.classList.toggle("hidden", lines.length > 0);
+        checkoutButton.disabled = lines.length === 0;
+        cartCount.textContent = count;
+        cartTotal.textContent = formatter.format(total);
+        cartLines.innerHTML = lines
+          .map(
+            (line) => `
+              <div class="cart-line">
+                <div>
+                  <strong>${line.product.title}</strong>
+                  <span>${formatter.format(line.product.price * line.qty)}</span>
+                </div>
+                <div class="qty-control">
+                  <button type="button" data-dec="${line.product.id}" aria-label="Quitar">-</button>
+                  <output>${line.qty}</output>
+                  <button type="button" data-inc="${line.product.id}" aria-label="Sumar">+</button>
+                </div>
+              </div>
+            `
+          )
+          .join("");
+      }
+
+      function addToCart(id, delta = 1) {
+        const product = products.find((item) => item.id === id);
+        if (!product) return;
+        const nextQty = Math.max(0, Math.min(product.stock, (state.cart.get(id) || 0) + delta));
+        if (nextQty === 0) {
+          state.cart.delete(id);
+        } else {
+          state.cart.set(id, nextQty);
+        }
+        renderCart();
+      }
+
+      document.querySelector(".category-tabs").addEventListener("click", (event) => {
+        const button = event.target.closest("[data-category]");
+        if (!button) return;
+        document.querySelectorAll(".category-tab").forEach((tab) => tab.classList.remove("is-active"));
+        button.classList.add("is-active");
+        state.category = button.dataset.category;
+        renderProducts();
+      });
+
+      searchInput.addEventListener("input", (event) => {
+        state.search = event.target.value;
+        renderProducts();
+      });
+
+      productGrid.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-add]");
+        if (!button) return;
+        addToCart(Number(button.dataset.add), 1);
+      });
+
+      cartLines.addEventListener("click", (event) => {
+        const inc = event.target.closest("[data-inc]");
+        const dec = event.target.closest("[data-dec]");
+        if (inc) addToCart(Number(inc.dataset.inc), 1);
+        if (dec) addToCart(Number(dec.dataset.dec), -1);
+      });
+
+      checkoutButton.addEventListener("click", () => {
+        const lines = [...state.cart.entries()]
+          .map(([id, qty]) => {
+            const product = products.find((item) => item.id === id);
+            return product ? `- ${qty} x ${product.title} (${formatter.format(product.price * qty)})` : "";
+          })
+          .filter(Boolean);
+        const total = [...state.cart.entries()].reduce((sum, [id, qty]) => {
+          const product = products.find((item) => item.id === id);
+          return sum + (product ? product.price * qty : 0);
+        }, 0);
+        const message = encodeURIComponent(
+          `Hola Rebu, quiero consultar disponibilidad para este pedido:\n\n${lines.join("\n")}\n\nTotal estimado: ${formatter.format(total)}`
+        );
+        window.open(`https://wa.me/?text=${message}`, "_blank", "noopener,noreferrer");
+      });
+
+      renderProducts();
+      renderCart();
+    </script>
+  </body>
+</html>

@@ -201,6 +201,7 @@ export default function Sidebar({
     { id: 'orders', tab: 'orders', section: 'top', canView: canViewOrders, icon: ClipboardList, label: 'Pedidos' },
     { id: 'metrics', tab: 'metrics', section: 'top', canView: canViewMetrics, icon: BarChart3, label: 'Métricas' },
     { id: 'bulk-editor', tab: 'bulk-editor', section: 'top', canView: canViewBulkEditor, icon: Percent, label: 'Productos (Avanzado)' },
+    { id: 'ticket-test', tab: 'ticket-test', section: 'top', canView: Boolean(currentUser), icon: FileText, label: 'Prueba Tickets' },
     { id: 'reports', tab: 'reports', section: 'bottom', canView: canViewReports, icon: FileBarChart, label: 'Reportes de Caja' },
     { id: 'history', tab: 'history', section: 'bottom', canView: canAccessTab(currentUser, 'history'), icon: History, label: 'Historial de Ventas' },
   ]), [
@@ -246,7 +247,7 @@ export default function Sidebar({
     setDraggedItemId(null);
     setDropTarget(null);
     didDragRef.current = false;
-  }, [sidebarLayoutStorageKey]);
+  }, [currentUser, sidebarLayoutStorageKey]);
 
   const persistSidebarSections = (nextSections) => {
     const layout = {

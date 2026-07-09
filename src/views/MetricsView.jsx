@@ -25,6 +25,8 @@ import {
   CartesianGrid,
   Cell,
   Legend,
+  Line,
+  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -60,6 +62,8 @@ const PIE_SEMANTIC_COLORS = {
   cancelada: '#fb7185',
   presupuesto: '#a78bfa',
   'costo vendido': '#94a3b8',
+  'costo ref': '#94a3b8',
+  'resultado caja': '#34d399',
   gastos: '#fb7185',
   ganancia: '#34d399',
   'por peso': '#2dd4bf',
@@ -139,6 +143,13 @@ const DEFAULT_FILTERS = {
 
 const METRICS_VIEW_MODE_STORAGE_KEY = 'rebu_metrics_view_mode_v1';
 const DEFAULT_METRICS_VIEW_MODE = 'modern';
+const PROFIT_CONTROL_VIEW_MODE = 'profit-control';
+
+const METRICS_VIEW_MODE_OPTIONS = [
+  { id: 'modern', label: 'Panel', helper: 'Operativo' },
+  { id: PROFIT_CONTROL_VIEW_MODE, label: 'Lectura', helper: 'Simple' },
+  { id: 'legacy', label: 'Clasica', helper: 'Detalle' },
+];
 
 const RANGE_FILTER_OPTIONS = [
   { value: 'today', label: 'Hoy', helper: 'Caja actual' },
@@ -161,16 +172,19 @@ const STATUS_FILTER_OPTIONS = [
   { value: 'restored', label: 'Restauradas' },
 ];
 
-const getInitialMetricsViewMode = () => {
-  if (typeof window === 'undefined') return DEFAULT_METRICS_VIEW_MODE;
+const normalizeMetricsViewMode = (value) => (
+  value === 'legacy' || value === PROFIT_CONTROL_VIEW_MODE ? value : DEFAULT_METRICS_VIEW_MODE
+);
+
+const getStoredMetricsViewMode = () => {
+  if (typeof window === 'undefined') return null;
   try {
-    return window.localStorage.getItem(METRICS_VIEW_MODE_STORAGE_KEY) === 'legacy' ? 'legacy' : DEFAULT_METRICS_VIEW_MODE;
+    const storedMode = window.localStorage.getItem(METRICS_VIEW_MODE_STORAGE_KEY);
+    return storedMode ? normalizeMetricsViewMode(storedMode) : null;
   } catch {
-    return DEFAULT_METRICS_VIEW_MODE;
+    return null;
   }
 };
-
-const normalizeMetricsViewMode = (value) => (value === 'legacy' ? 'legacy' : 'modern');
 
 const calculatePercentageChange = (current, previous) => {
   const currentValue = Number(current || 0);
@@ -197,8 +211,10 @@ const getComparisonLabel = (metrics) =>
     : 'Sin comparacion anterior';
 
 const getPreferredMetricsViewMode = (user) => {
+  const storedMode = getStoredMetricsViewMode();
+  if (storedMode) return storedMode;
   if (user?.metricsViewMode) return normalizeMetricsViewMode(user.metricsViewMode);
-  return getInitialMetricsViewMode();
+  return DEFAULT_METRICS_VIEW_MODE;
 };
 
 const BASE_SECTIONS = [
@@ -264,6 +280,175 @@ const ModernChangeBadge = ({ change, invert = false }) => {
   );
 };
 
+const COST_BASIS_META = {
+  real: {
+    label: 'Real',
+    className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  },
+  estimated: {
+    label: 'Estimado',
+    className: 'border-amber-200 bg-amber-50 text-amber-700',
+  },
+  missing: {
+    label: 'Sin costo',
+    className: 'border-slate-200 bg-slate-50 text-slate-500',
+  },
+};
+
+const CostBasisBadge = ({ status }) => {
+  const meta = COST_BASIS_META[status] || COST_BASIS_META.missing;
+  return (
+    <span className={`inline-flex h-5 items-center rounded-full border px-2 text-[9px] font-black uppercase leading-none ${meta.className}`}>
+      {meta.label}
+    </span>
+  );
+};
+
+const SOLD_COST_COLUMNS = [
+  { key: 'cost', label: 'Costo vendido', align: 'right', render: (row) => <FancyPrice amount={row.cost} /> },
+  { key: 'costStatus', label: 'Base', align: 'right', render: (row) => <CostBasisBadge status={row.costStatus} /> },
+];
+
+const PRODUCT_LOOKUP_LIMIT = 60;
+const PRODUCT_LOOKUP_SALE_PRICE_FIELDS = ['price', 'newPrice', 'new_price', 'unitPrice', 'unit_price'];
+const PRODUCT_LOOKUP_COST_FIELDS = ['purchasePrice', 'purchase_price', 'cost', 'unitCost', 'unit_cost', 'costPrice', 'cost_price'];
+const PRODUCT_LOOKUP_STOCK_FIELDS = ['stock', 'quantity', 'qty'];
+
+const PRODUCT_LOOKUP_COST_COLUMNS = [
+  {
+    key: 'cost',
+    label: 'Costo vendido',
+    align: 'right',
+    render: (row) => (
+      row.lookupOnly
+        ? <span className="text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">Sin ventas</span>
+        : <FancyPrice amount={row.cost} />
+    ),
+  },
+  {
+    key: 'costStatus',
+    label: 'Base',
+    align: 'right',
+    render: (row) => (
+      row.lookupOnly
+        ? (
+          <span className="inline-flex h-5 items-center rounded-full border border-slate-200 bg-slate-50 px-2 text-[9px] font-black uppercase leading-none text-slate-500">
+            Inventario
+          </span>
+        )
+        : <CostBasisBadge status={row.costStatus} />
+    ),
+  },
+];
+
+const splitProductLookupTerms = (value) => normalizeMetricText(value).split(/\s+/).filter(Boolean);
+
+const getFirstFiniteProductNumber = (source = {}, fields = []) => {
+  for (const field of fields) {
+    const rawValue = source?.[field];
+    if (rawValue === undefined || rawValue === null || rawValue === '') continue;
+    const value = Number(rawValue);
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+};
+
+const getInventoryProductName = (product = {}) =>
+  String(product.title || product.name || product.product_title || 'Producto sin nombre').trim();
+
+const getInventoryProductKey = (product = {}) => {
+  if (product.id !== undefined && product.id !== null) return String(product.id);
+  return normalizeMetricText(getInventoryProductName(product));
+};
+
+const getInventoryProductCategories = (product = {}) => {
+  const categorySource = Array.isArray(product.categories) && product.categories.length
+    ? product.categories
+    : Array.isArray(product.category)
+      ? product.category
+      : String(product.category || '').split(',');
+  const categories = categorySource.map((category) => String(category || '').trim()).filter(Boolean);
+  return categories.length ? categories : ['Sin categoria'];
+};
+
+const getInventoryProductType = (product = {}) => (
+  String(product.product_type || product.productType || '').toLowerCase() === 'weight'
+    ? 'weight'
+    : 'quantity'
+);
+
+const getProductTypeLabel = (type) => (type === 'weight' ? 'Por peso' : 'Por unidad');
+
+const getInventoryProductSnapshot = (product = {}) => {
+  const categories = getInventoryProductCategories(product);
+  const type = getInventoryProductType(product);
+  return {
+    productKey: getInventoryProductKey(product),
+    name: getInventoryProductName(product),
+    category: categories.join(', '),
+    categories,
+    type,
+    typeLabel: getProductTypeLabel(type),
+    salePrice: getFirstFiniteProductNumber(product, PRODUCT_LOOKUP_SALE_PRICE_FIELDS),
+    purchasePrice: getFirstFiniteProductNumber(product, PRODUCT_LOOKUP_COST_FIELDS),
+    stock: getFirstFiniteProductNumber(product, PRODUCT_LOOKUP_STOCK_FIELDS),
+    inventoryProduct: product,
+  };
+};
+
+const getMetricProductLookupKey = (row = {}) => String(row.productKey || row.key || normalizeMetricText(row.name));
+
+const getProductLookupSearchText = (source = {}) => {
+  const product = source.inventoryProduct || source;
+  const categories = source.categories || getInventoryProductCategories(product);
+  return normalizeMetricText([
+    source.name,
+    product.title,
+    product.name,
+    product.product_title,
+    product.barcode,
+    product.barCode,
+    product.code,
+    product.sku,
+    product.internalCode,
+    product.internal_code,
+    product.category,
+    ...(Array.isArray(categories) ? categories : []),
+  ].join(' '));
+};
+
+const matchesProductLookupTerms = (source, terms = []) => {
+  if (!terms.length) return true;
+  const searchText = getProductLookupSearchText(source);
+  return terms.every((term) => searchText.includes(term));
+};
+
+const buildInventoryLookupRow = (product) => {
+  const snapshot = getInventoryProductSnapshot(product);
+  return {
+    ...snapshot,
+    key: `inventory:${snapshot.productKey}`,
+    qty: 0,
+    revenue: 0,
+    cost: 0,
+    profit: 0,
+    costStatus: 'missing',
+    lookupOnly: true,
+    hasSales: false,
+  };
+};
+
+const productMatchesInventoryFilters = (product, filters = {}) => {
+  const productKey = getInventoryProductKey(product);
+  const categories = getInventoryProductCategories(product);
+  const type = getInventoryProductType(product);
+  return (
+    (!filters.product || productKey === filters.product) &&
+    (!filters.category || categories.includes(filters.category)) &&
+    (filters.productType === 'all' || type === filters.productType)
+  );
+};
+
 const ModernHealthCard = ({ label, value, detail, change, tone = 'slate', hidden = false, invertChange = false }) => (
   <article className={`metrics-modern-kpi metrics-modern-kpi-${tone}`}>
     <div className="metrics-modern-kpi-head">
@@ -275,6 +460,47 @@ const ModernHealthCard = ({ label, value, detail, change, tone = 'slate', hidden
     </div>
     <p className="metrics-modern-kpi-detail">{hidden ? 'Permiso requerido' : detail}</p>
   </article>
+);
+
+const MetricsModeSwitch = ({ value, onChange, className = '' }) => (
+  <div
+    className={`metrics-view-mode-toggle inline-flex h-8 shrink-0 items-center rounded-md border border-slate-200 bg-slate-100 p-0.5 ${className}`}
+    role="group"
+    aria-label="Modo de metricas"
+  >
+    {METRICS_VIEW_MODE_OPTIONS.map((option) => {
+      const isActiveOption = value === option.id;
+      return (
+        <button
+          key={option.id}
+          type="button"
+          onClick={() => onChange(option.id)}
+          className={`inline-flex h-7 min-w-[78px] items-center justify-center rounded-[5px] px-2 text-[10px] font-black uppercase leading-none transition ${
+            isActiveOption
+              ? 'is-active bg-white text-slate-900 shadow-sm'
+              : 'text-slate-500 hover:bg-white/70 hover:text-slate-700'
+          }`}
+          title={option.helper}
+          aria-pressed={isActiveOption}
+        >
+          {option.label}
+        </button>
+      );
+    })}
+  </div>
+);
+
+const MetricLensSelect = ({ label, value, onChange, children, className = '' }) => (
+  <label className={`metrics-lens-select flex min-h-8 min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-slate-50/80 px-2 py-1 ${className}`}>
+    <span className="shrink-0 text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">{label}</span>
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="min-w-0 flex-1 bg-transparent text-[11px] font-black text-slate-800 outline-none"
+    >
+      {children}
+    </select>
+  </label>
 );
 
 const ModernLedgerRow = ({ label, value, tone = 'slate', strong = false }) => (
@@ -371,19 +597,21 @@ const MetricCard = ({ label, value, sublabel, change, tone = 'slate', hidden = f
 };
 
 const FinanceBreakdown = ({ stats, profitStatusLabel = null, profitStatusToneClass = null }) => {
-  const marginRate = stats.revenue ? (stats.profit / stats.revenue) * 100 : 0;
+  const collectedRevenue = Math.max(0, Number(stats.revenue || 0) - Number(stats.discountImpact || 0));
+  const marginRate = collectedRevenue ? (stats.profit / collectedRevenue) * 100 : 0;
   const items = [
     {
-      label: 'Ingreso bruto',
-      value: stats.revenue,
+      label: 'Ingreso cobrado',
+      value: collectedRevenue,
       tone: 'text-sky-700 bg-sky-50 border-sky-100',
-      hint: 'Total vendido antes de restar costos y gastos.',
+      hint: 'Total efectivamente cobrado en ventas del rango, neto de descuentos aplicados.',
     },
     {
       label: 'Costo vendido',
       value: stats.cost,
       tone: 'text-slate-700 bg-slate-50 border-slate-200',
-      hint: 'Costo estimado de la mercadería vendida, calculado desde stockChanges o precio de compra.',
+      hint: 'Costo de la mercaderia vendida: usa la foto guardada en la venta y, para ventas viejas, inventario actual como estimacion.',
+      costStatus: stats.costStatus,
     },
     {
       label: 'Gastos',
@@ -392,11 +620,11 @@ const FinanceBreakdown = ({ stats, profitStatusLabel = null, profitStatusToneCla
       hint: 'Gastos registrados dentro del rango filtrado.',
     },
     {
-      label: 'Ganancia neta',
+      label: 'Resultado caja',
       value: stats.profit,
       displayValue: profitStatusLabel,
       tone: profitStatusToneClass || (stats.profit >= 0 ? 'text-emerald-700 bg-emerald-50 border-emerald-100' : 'text-rose-700 bg-rose-50 border-rose-100'),
-      hint: 'Ingreso bruto menos costo vendido y gastos.',
+      hint: 'Ingreso cobrado menos gastos reales registrados. No descuenta costo de mercaderia automaticamente.',
     },
   ];
 
@@ -411,12 +639,17 @@ const FinanceBreakdown = ({ stats, profitStatusLabel = null, profitStatusToneCla
           <div className="mt-1 truncate text-lg font-black">
             {item.displayValue || <FancyPrice amount={item.value} />}
           </div>
+          {item.costStatus && (
+            <div className="mt-1">
+              <CostBasisBadge status={item.costStatus} />
+            </div>
+          )}
         </div>
       ))}
       <div className="md:col-span-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] font-bold text-slate-500">
-        <span>Fórmula: ingreso bruto - costo vendido - gastos = ganancia neta</span>
+        <span>Formula: ingreso cobrado - gastos registrados = resultado de caja</span>
         <span className={`rounded-full px-2 py-0.5 font-black ${marginRate >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
-          Margen neto {formatNumber(marginRate, 1)}%
+          Resultado / cobrado {formatNumber(marginRate, 1)}%
         </span>
       </div>
     </div>
@@ -516,7 +749,7 @@ const EvolutionChartTooltip = ({ active, payload, label }) => {
   );
 };
 
-const Table = ({ columns, rows, emptyText }) => (
+const Table = ({ columns, rows, emptyText, onRowClick, isRowSelected }) => (
   <div className="overflow-hidden rounded-lg border border-slate-200">
     <div className="custom-scrollbar max-h-[340px] overflow-auto">
       <table className="w-full min-w-[560px] text-left text-xs">
@@ -535,8 +768,21 @@ const Table = ({ columns, rows, emptyText }) => (
               <td colSpan={columns.length} className="px-3 py-8 text-center font-bold text-slate-400">{emptyText}</td>
             </tr>
           ) : (
-            rows.map((row, index) => (
-              <tr key={row.key || `${row.name || row.label}-${index}`} className="hover:bg-slate-50">
+            rows.map((row, index) => {
+              const isInteractive = typeof onRowClick === 'function';
+              const selected = Boolean(isRowSelected?.(row, index));
+              return (
+              <tr
+                key={row.key || `${row.name || row.label}-${index}`}
+                tabIndex={isInteractive ? 0 : undefined}
+                onClick={isInteractive ? () => onRowClick(row, index) : undefined}
+                onKeyDown={isInteractive ? (event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return;
+                  event.preventDefault();
+                  onRowClick(row, index);
+                } : undefined}
+                className={`${isInteractive ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-fuchsia-200' : ''} ${selected ? 'bg-fuchsia-50/80' : 'hover:bg-slate-50'}`}
+              >
                 {columns.map((column) => (
                   <td
                     key={column.key}
@@ -551,7 +797,8 @@ const Table = ({ columns, rows, emptyText }) => (
                   </td>
                 ))}
               </tr>
-            ))
+              );
+            })
           )}
         </tbody>
       </table>
@@ -783,17 +1030,17 @@ const buildCsvRows = ({ metrics, canViewProfit, canViewUsers, canViewClients }) 
   ];
 
   if (canViewProfit) {
-    rows.push(['Resumen', 'Costo estimado', metrics.current.stats.cost]);
-    rows.push(['Resumen', 'Ganancia neta', metrics.current.stats.profit]);
+    rows.push(['Resumen', 'Costo vendido', metrics.current.stats.cost]);
+    rows.push(['Resumen', 'Resultado caja', metrics.current.stats.profit]);
   }
 
   rows.push([]);
-  rows.push(['Productos', 'Nombre', 'Cantidad', 'Ingreso', canViewProfit ? 'Ganancia' : '']);
-  metrics.current.productStats.forEach((item) => rows.push(['Productos', item.name, item.qty, item.revenue, canViewProfit ? item.profit : '']));
+  rows.push(['Productos', 'Nombre', 'Cantidad', 'Ingreso', canViewProfit ? 'Costo vendido' : '', canViewProfit ? 'Base' : '']);
+  metrics.current.productStats.forEach((item) => rows.push(['Productos', item.name, item.qty, item.revenue, canViewProfit ? item.cost : '', canViewProfit ? (COST_BASIS_META[item.costStatus]?.label || 'Sin costo') : '']));
 
   rows.push([]);
-  rows.push(['Categorías', 'Nombre', 'Cantidad', 'Ingreso', canViewProfit ? 'Ganancia' : '']);
-  metrics.current.categoryStats.forEach((item) => rows.push(['Categorías', item.name, item.qty, item.revenue, canViewProfit ? item.profit : '']));
+  rows.push(['Categorías', 'Nombre', 'Cantidad', 'Ingreso', canViewProfit ? 'Costo vendido' : '', canViewProfit ? 'Base' : '']);
+  metrics.current.categoryStats.forEach((item) => rows.push(['Categorías', item.name, item.qty, item.revenue, canViewProfit ? item.cost : '', canViewProfit ? (COST_BASIS_META[item.costStatus]?.label || 'Sin costo') : '']));
 
   rows.push([]);
   rows.push(['Pagos', 'Medio', 'Importe', 'Usos']);
@@ -807,7 +1054,7 @@ const buildCsvRows = ({ metrics, canViewProfit, canViewUsers, canViewClients }) 
 
   if (canViewUsers) {
     rows.push([]);
-    rows.push(['Usuarios', 'Nombre', 'Ventas', 'Ingreso', canViewProfit ? 'Ganancia' : '']);
+    rows.push(['Usuarios', 'Nombre', 'Ventas', 'Ingreso', canViewProfit ? 'Resultado' : '']);
     metrics.current.userStats.forEach((item) => rows.push(['Usuarios', item.name, item.salesCount, item.revenue, canViewProfit ? item.profit : '']));
   }
 
@@ -825,7 +1072,7 @@ export default function MetricsView({
   dailyLogs = [],
   currentUser,
   isLoading = false,
-  isProfitSyncing = false,
+  isProfitSyncing: _isProfitSyncing = false,
   emptyStateMessage = '',
   onRefresh,
   isActive = true,
@@ -838,6 +1085,7 @@ export default function MetricsView({
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [summaryEvolutionMetrics, setSummaryEvolutionMetrics] = useState(['revenue']);
   const [pieSelections, setPieSelections] = useState({});
+  const [productLookupQuery, setProductLookupQuery] = useState('');
 
   const canViewProfit = hasPermission(currentUser, 'metrics.viewProfit');
   const canViewUsers = hasPermission(currentUser, 'metrics.viewUsers');
@@ -845,6 +1093,7 @@ export default function MetricsView({
   const canExport = hasPermission(currentUser, 'metrics.export');
   const canConfigureAlerts = hasPermission(currentUser, 'metrics.configureAlerts');
   const isModernMode = viewMode === 'modern';
+  const isProfitControlMode = viewMode === PROFIT_CONTROL_VIEW_MODE;
 
   useEffect(() => {
     setSummaryEvolutionMetrics((current) => {
@@ -877,6 +1126,69 @@ export default function MetricsView({
       return matchesCategory && matchesType;
     })
   ), [metrics.filterOptions.products, filters.category, filters.productType]);
+  const currentProductStats = metrics.current.productStats;
+  const currentAllProductStats = metrics.current.allProductStats || currentProductStats;
+  const productLookupTerms = useMemo(() => splitProductLookupTerms(productLookupQuery), [productLookupQuery]);
+  const productLookupRows = useMemo(() => {
+    const hasLookup = productLookupTerms.length > 0;
+    const metricRows = hasLookup
+      ? currentAllProductStats
+      : currentProductStats;
+    const inventoryByKey = new Map();
+    const inventoryByName = new Map();
+
+    (inventory || []).forEach((product) => {
+      const productKey = getInventoryProductKey(product);
+      const productName = normalizeMetricText(getInventoryProductName(product));
+      if (productKey) inventoryByKey.set(productKey, product);
+      if (productName) inventoryByName.set(productName, product);
+    });
+
+    const soldRows = (metricRows || [])
+      .map((row) => {
+        const productKey = getMetricProductLookupKey(row);
+        const inventoryProduct = inventoryByKey.get(productKey) || inventoryByName.get(normalizeMetricText(row.name));
+        const snapshot = inventoryProduct ? getInventoryProductSnapshot(inventoryProduct) : {};
+        return {
+          ...row,
+          ...snapshot,
+          key: row.key,
+          productKey,
+          name: row.name || snapshot.name || 'Producto',
+          type: row.type || snapshot.type || 'quantity',
+          typeLabel: snapshot.typeLabel || getProductTypeLabel(row.type),
+          lookupOnly: false,
+          hasSales: true,
+        };
+      })
+      .filter((row) => matchesProductLookupTerms(row, productLookupTerms));
+
+    if (!hasLookup) return soldRows;
+
+    const seenKeys = new Set(soldRows.map((row) => row.productKey).filter(Boolean));
+    const seenNames = new Set(soldRows.map((row) => normalizeMetricText(row.name)).filter(Boolean));
+    const inventoryRows = (inventory || [])
+      .filter((product) => productMatchesInventoryFilters(product, filters))
+      .filter((product) => matchesProductLookupTerms(product, productLookupTerms))
+      .filter((product) => {
+        const productKey = getInventoryProductKey(product);
+        const productName = normalizeMetricText(getInventoryProductName(product));
+        return !seenKeys.has(productKey) && !seenNames.has(productName);
+      })
+      .map(buildInventoryLookupRow);
+
+    return [...soldRows, ...inventoryRows]
+      .sort((a, b) => (Number(b.revenue || 0) - Number(a.revenue || 0)) || String(a.name).localeCompare(String(b.name)))
+      .slice(0, PRODUCT_LOOKUP_LIMIT);
+  }, [
+    filters,
+    inventory,
+    currentAllProductStats,
+    currentProductStats,
+    productLookupTerms,
+  ]);
+  const selectedProductLookup = productLookupTerms.length ? productLookupRows[0] || null : null;
+  const allSoldProductCount = currentAllProductStats.length;
 
   useEffect(() => {
     if (!filters.product) return;
@@ -884,25 +1196,10 @@ export default function MetricsView({
     setFilters((prev) => ({ ...prev, product: '' }));
   }, [filters.product, visibleProductOptions]);
 
-  const hasGrossWithoutCost =
-    Number(metrics.current.stats.revenue || 0) > 0 &&
-    Number(metrics.current.stats.cost || 0) <= 0 &&
-    Number(metrics.current.stats.salesCount || 0) > 0;
-  const isProfitPending = hasGrossWithoutCost && (isProfitSyncing || isLoading);
-  const isProfitUnverified = hasGrossWithoutCost && !isProfitPending;
-  const profitStatusLabel = isProfitPending
-    ? 'Sincronizando...'
-    : isProfitUnverified
-      ? 'Revisar costos'
-      : null;
-  const profitStatusDetail = isProfitPending
-    ? 'Esperando ventas y costos'
-    : isProfitUnverified
-      ? 'Costos sin verificar'
-      : 'Ingreso - costo - gastos';
-  const profitStatusTone = isProfitUnverified
-    ? 'amber'
-    : metrics.current.stats.profit >= 0
+  const isProfitUnverified = false;
+  const profitStatusLabel = null;
+  const profitStatusDetail = 'Ingreso cobrado - gastos';
+  const profitStatusTone = metrics.current.stats.profit >= 0
       ? 'emerald'
       : 'rose';
 
@@ -934,6 +1231,17 @@ export default function MetricsView({
     }
   };
 
+  const handleMetricsViewModeChange = (mode) => {
+    const nextMode = normalizeMetricsViewMode(mode);
+    setViewMode(nextMode);
+    setIsModernControlOpen(false);
+    try {
+      window.localStorage.setItem(METRICS_VIEW_MODE_STORAGE_KEY, nextMode);
+    } catch (error) {
+      console.error('No se pudo guardar la preferencia de metricas:', error);
+    }
+  };
+
   const handleCsvExport = () => {
     exportCsv('metricas-rebu.csv', buildCsvRows({ metrics, canViewProfit, canViewUsers, canViewClients }));
   };
@@ -946,6 +1254,10 @@ export default function MetricsView({
     setActiveSection(sectionId);
     setIsModernControlOpen(false);
   };
+
+  const renderModeSwitch = (className = '') => (
+    <MetricsModeSwitch value={viewMode} onChange={handleMetricsViewModeChange} className={className} />
+  );
 
   const renderModernFiltersPanel = () => (
     <div className="metrics-modern-filters">
@@ -1068,7 +1380,7 @@ export default function MetricsView({
   const isHourlyMode = metrics.current.periodMode === 'hour';
   const summaryEvolutionOptions = [
     { id: 'revenue', label: 'Ingreso', color: '#0ea5e9', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
-    ...(canViewProfit ? [{ id: 'profit', label: 'Ganancia', color: '#10b981', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' }] : []),
+    ...(canViewProfit ? [{ id: 'profit', label: 'Resultado', color: '#10b981', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' }] : []),
     { id: 'expenses', label: 'Gastos', color: '#ef4444', tone: 'border-rose-200 bg-rose-50 text-rose-700' },
   ];
   const activeEvolutionOptions = summaryEvolutionOptions.filter((option) => summaryEvolutionMetrics.includes(option.id));
@@ -1271,6 +1583,447 @@ export default function MetricsView({
     </aside>
   );
 
+  const renderProfitControlFilters = () => (
+    <section className="metrics-profit-filterbar rounded-lg border border-slate-200 bg-white/95 px-2.5 py-2 shadow-sm">
+      <div className="flex flex-col gap-2 2xl:flex-row 2xl:items-center">
+        <div className="flex min-w-[176px] items-center gap-2">
+          <span className="metrics-filter-mark inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700">
+            <Search size={15} />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Consulta</p>
+            <p className="truncate text-[12px] font-black text-slate-900">{metrics.range.label}</p>
+          </div>
+        </div>
+
+        <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-[0.68fr_0.78fr_0.9fr_0.95fr_minmax(190px,1.2fr)]">
+          <MetricLensSelect label="Rango" value={filters.preset} onChange={(value) => updateFilter('preset', value)}>
+            {RANGE_FILTER_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </MetricLensSelect>
+          <MetricLensSelect label="Estado" value={filters.status} onChange={(value) => updateFilter('status', value)}>
+            {STATUS_FILTER_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </MetricLensSelect>
+          <MetricLensSelect label="Pago" value={filters.payment} onChange={(value) => updateFilter('payment', value)}>
+            <option value="">Todos</option>
+            {metrics.filterOptions.payments.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </MetricLensSelect>
+          <MetricLensSelect label="Rubro" value={filters.category} onChange={(value) => updateFilter('category', value)}>
+            <option value="">Todos</option>
+            {metrics.filterOptions.categories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </MetricLensSelect>
+          <MetricLensSelect label="Producto" value={filters.product} onChange={(value) => updateFilter('product', value)}>
+            <option value="">Todos</option>
+            {visibleProductOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </MetricLensSelect>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setShowAdvancedFilters((prev) => !prev)}
+            aria-expanded={showAdvancedFilters}
+            className={`metrics-filter-action inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-[11px] font-black transition ${
+              showAdvancedFilters || hasAdvancedFilters
+                ? 'is-active border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700'
+                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <SlidersHorizontal size={14} />
+            Ajustes
+          </button>
+          <button type="button" onClick={resetFilters} className="metrics-filter-action inline-flex h-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-black text-slate-600 transition hover:bg-slate-100">
+            Limpiar
+          </button>
+        </div>
+      </div>
+
+      {filters.preset === 'custom' && (
+        <div className="mt-2 grid grid-cols-1 gap-2 border-t border-slate-100 pt-2 sm:grid-cols-2">
+          <InputField label="Desde" type="date" value={filters.startDate} onChange={(value) => updateFilter('startDate', value)} />
+          <InputField label="Hasta" type="date" value={filters.endDate} onChange={(value) => updateFilter('endDate', value)} />
+        </div>
+      )}
+
+      {showAdvancedFilters && (
+        <div className="mt-2 grid grid-cols-1 items-center gap-2 border-t border-slate-100 pt-2 sm:grid-cols-2 lg:grid-cols-[0.8fr_1fr_1fr_auto_auto]">
+          <MetricLensSelect label="Tipo" value={filters.productType} onChange={(value) => updateFilter('productType', value)}>
+            <option value="all">Todos</option>
+            <option value="quantity">Unidad</option>
+            <option value="weight">Peso</option>
+          </MetricLensSelect>
+          {canViewUsers && (
+            <MetricLensSelect label="Usuario" value={filters.user} onChange={(value) => updateFilter('user', value)}>
+              <option value="">Todos</option>
+              {metrics.filterOptions.users.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </MetricLensSelect>
+          )}
+          {canViewClients && (
+            <MetricLensSelect label="Socio" value={filters.client} onChange={(value) => updateFilter('client', value)}>
+              <option value="">Todos</option>
+              {metrics.filterOptions.clients.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </MetricLensSelect>
+          )}
+          <label className="inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-black text-slate-600">
+            <input type="checkbox" checked={filters.includeVoided} onChange={(event) => updateFilter('includeVoided', event.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500" />
+            Anuladas
+          </label>
+          <label className="inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-black text-slate-600">
+            <input type="checkbox" checked={filters.includeTest} onChange={(event) => updateFilter('includeTest', event.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500" />
+            Test
+          </label>
+        </div>
+      )}
+    </section>
+  );
+
+  const renderProfitControlMode = () => {
+    const stats = metrics.current.stats;
+    const revenue = Number(stats.revenue || 0);
+    const cost = Number(stats.cost || 0);
+    const expensesTotal = Number(stats.expenses || 0);
+    const netProfit = Number(stats.profit || 0);
+    const grossProfit = revenue - cost;
+    const grossMarginRate = revenue ? (grossProfit / revenue) * 100 : 0;
+    const netMarginRate = revenue ? (netProfit / revenue) * 100 : 0;
+    const costRate = revenue ? (cost / revenue) * 100 : 0;
+    const expenseRate = revenue ? (expensesTotal / revenue) * 100 : 0;
+    const productRows = [...metrics.current.productStats]
+      .sort((a, b) => Number(b.revenue || 0) - Number(a.revenue || 0))
+      .slice(0, 14);
+    const leadingProduct = productRows[0] || metrics.current.productStats[0];
+    const profitControlSeries = metrics.current.dailySeries.map((row) => ({
+      ...row,
+      grossProfit: Number(row.profit || 0) + Number(row.expenses || 0),
+      netProfit: Number(row.profit || 0),
+    }));
+    const hasEvolutionData = profitControlSeries.some((row) => (
+      Number(row.revenue || 0) !== 0 ||
+      Number(row.grossProfit || 0) !== 0 ||
+      Number(row.netProfit || 0) !== 0
+    ));
+    const summaryCards = [
+      {
+        label: 'Ventas totales',
+        value: <FancyPrice amount={revenue} />,
+        helper: `${formatNumber(stats.salesCount)} ventas`,
+        icon: ShoppingBag,
+        tone: 'from-violet-500 to-fuchsia-500',
+      },
+      {
+        label: 'Costo vendido',
+        value: <FancyPrice amount={cost} />,
+        helper: `${formatNumber(costRate, 1)}% de ventas`,
+        icon: PackageSearch,
+        tone: 'from-teal-500 to-emerald-500',
+        restricted: !canViewProfit,
+      },
+      {
+        label: 'Margen vendido',
+        value: <FancyPrice amount={grossProfit} />,
+        helper: `${formatNumber(grossMarginRate, 1)}%`,
+        icon: BarChart3,
+        tone: 'from-blue-500 to-sky-500',
+        restricted: !canViewProfit,
+      },
+      {
+        label: 'Gastos y comisiones',
+        value: <FancyPrice amount={expensesTotal} />,
+        helper: `${formatNumber(expenseRate, 1)}%`,
+        icon: FileText,
+        tone: 'from-amber-500 to-orange-500',
+      },
+      {
+        label: 'Resultado caja',
+        value: profitStatusLabel || <FancyPrice amount={netProfit} />,
+        helper: `${formatNumber(netMarginRate, 1)}%`,
+        icon: WalletCards,
+        tone: 'from-emerald-600 to-green-500',
+        restricted: !canViewProfit,
+      },
+    ];
+    const detailRows = [
+      { label: 'Ventas cobradas', value: <FancyPrice amount={revenue} /> },
+      { label: '(-) Gastos registrados', value: <FancyPrice amount={expensesTotal} /> },
+      { label: '= Resultado caja', value: profitStatusLabel || <FancyPrice amount={netProfit} />, strong: true, tone: isProfitUnverified ? 'text-amber-700' : netProfit >= 0 ? 'text-emerald-700' : 'text-rose-700', restricted: !canViewProfit },
+      { label: 'Costo vendido', value: <FancyPrice amount={cost} />, restricted: !canViewProfit },
+      { label: 'Margen vendido', value: <FancyPrice amount={grossProfit} />, strong: true, tone: grossProfit >= 0 ? 'text-emerald-700' : 'text-rose-700', restricted: !canViewProfit },
+    ];
+    const profitControlInsight = !canViewProfit
+      ? null
+      : isProfitUnverified
+        ? {
+            tone: 'warning',
+            title: 'Costos pendientes',
+            text: 'Revisar productos antes de tomar decisiones finas.',
+          }
+        : netProfit < 0 && expensesTotal > revenue
+          ? {
+              tone: 'danger',
+              title: 'Gastos por encima de cobros',
+              text: 'Los gastos registrados superan lo cobrado en el rango.',
+            }
+          : netProfit < 0
+            ? {
+                tone: 'danger',
+                title: 'Caja negativa',
+                text: 'El resultado de caja queda debajo de cero. Revisar gastos y cobros.',
+              }
+            : netMarginRate < 8
+              ? {
+                  tone: 'warning',
+                  title: 'Resultado ajustado',
+                  text: `Queda ${formatNumber(netMarginRate, 1)}% sobre lo cobrado. Hay poco aire operativo.`,
+                }
+              : {
+                  tone: 'success',
+                  title: 'Caja positiva',
+                  text: `Queda ${formatNumber(netMarginRate, 1)}% sobre lo cobrado despues de gastos.`,
+                };
+    return (
+      <div className="metrics-view flex h-full min-h-0 flex-col bg-slate-100">
+        <div className="relative z-20 shrink-0 border-b border-slate-200 bg-white px-3 py-2 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700">
+                <WalletCards size={18} />
+              </span>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-black text-slate-950">Lectura simple de metricas</h2>
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] text-slate-500">
+                    {metrics.range.label}
+                  </span>
+                </div>
+                <p className="mt-0.5 text-[11px] font-semibold text-slate-500">Lo importante del rango, explicado como caja: entro, salio y quedo.</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {renderModeSwitch()}
+              {renderHeaderActions(true)}
+            </div>
+          </div>
+        </div>
+
+        <main className="custom-scrollbar min-h-0 flex-1 overflow-auto bg-[linear-gradient(135deg,#f8fbff_0%,#eef5fb_52%,#f7fbff_100%)] p-2.5">
+          <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-2.5">
+            {renderProfitControlFilters()}
+
+            {metrics.current.filteredTransactions.length === 0 && metrics.current.filteredExpenses.length === 0 ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
+                <div className="flex items-center gap-2">
+                  <Search size={16} />
+                  No hay ventas ni gastos para los filtros activos.
+                </div>
+              </div>
+            ) : null}
+
+            <section className="metrics-profit-control-card space-y-2.5">
+              <div className="metrics-profit-summary-row grid grid-cols-1 items-start gap-2.5 xl:grid-cols-[260px_minmax(0,1fr)] 2xl:grid-cols-[280px_minmax(0,1fr)]">
+                <aside className="metrics-profit-explainer order-2 self-start rounded-lg border border-slate-200 bg-white/80 p-3 xl:order-1">
+                  <p className="text-sm font-black leading-5 text-slate-950">Lectura rapida</p>
+                  <div className="mt-2.5 space-y-2 text-[12px] font-semibold leading-5 text-slate-700">
+                    {profitControlInsight ? (
+                      <div className={`metrics-profit-insight metrics-profit-insight-${profitControlInsight.tone}`}>
+                        <strong>{profitControlInsight.title}</strong>
+                        <span>{profitControlInsight.text}</span>
+                      </div>
+                    ) : null}
+                    <div className="space-y-1.5 border-t border-slate-200 pt-2.5 text-[11px] leading-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-slate-500">Resultado / ventas</span>
+                        <strong className={netMarginRate >= 0 ? 'text-emerald-600' : 'text-rose-500'}>{formatNumber(netMarginRate, 1)}%</strong>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-slate-500">Gastos / ventas</span>
+                        <strong className="text-amber-500">{formatNumber(expenseRate, 1)}%</strong>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-slate-500">Resultado</span>
+                        <strong className={netProfit >= 0 ? 'text-emerald-600' : 'text-rose-500'}>{formatCurrency(netProfit)}</strong>
+                      </div>
+                    </div>
+                    {isProfitUnverified ? (
+                      <div className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-amber-800">
+                        Hay costos sin verificar. Revisalos antes de tomar decisiones finas.
+                      </div>
+                    ) : null}
+                  </div>
+                </aside>
+
+                <div className="order-1 min-w-0 rounded-lg border border-slate-200 bg-white p-2.5 xl:order-2">
+                  <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-[172px_minmax(0,1fr)] 2xl:grid-cols-[190px_minmax(0,1fr)]">
+                    <div className="metrics-summary-context rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2.5">
+                      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Resumen del rango</p>
+                      <h3 className="mt-1 text-base font-black leading-tight text-slate-950">Control de caja</h3>
+                      <p className="mt-2 text-[11px] font-semibold leading-4 text-slate-500">{getComparisonLabel(metrics)}</p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                      {summaryCards.map((card) => {
+                        const Icon = card.icon;
+                        return (
+                          <article key={card.label} className="min-h-[94px] rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+                            <div className="flex items-start gap-2.5">
+                              <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-gradient-to-br ${card.tone} text-white shadow-sm`}>
+                                <Icon size={17} />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-[11px] font-black text-slate-700">{card.label}</p>
+                                <div className="mt-1 truncate text-[20px] font-black leading-none text-slate-950">
+                                  {card.restricted ? <span className="text-base text-slate-400">Restringido</span> : card.value}
+                                </div>
+                                <p className="mt-1.5 truncate text-[11px] font-semibold text-slate-500">{card.restricted ? 'Permiso requerido' : card.helper}</p>
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-[minmax(360px,0.66fr)_minmax(0,1.34fr)]">
+                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                    <div className="mb-2 flex items-center gap-2">
+                      <FileText size={17} className="text-fuchsia-600" />
+                      <h3 className="text-sm font-black text-slate-900">Detalle del rango</h3>
+                    </div>
+                    <div className="overflow-hidden rounded-lg border border-slate-200">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                          <tr>
+                            <th className="px-3 py-2 font-black">Concepto</th>
+                            <th className="px-3 py-2 text-right font-black">Importe</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 bg-white">
+                          {detailRows.map((row) => (
+                            <tr key={row.label} className={row.strong ? 'bg-slate-50/80' : ''}>
+                              <td className={`px-3 py-2 ${row.strong ? 'font-black text-slate-900' : 'font-semibold text-slate-700'}`}>{row.label}</td>
+                              <td className={`px-3 py-2 text-right text-sm font-black ${row.tone || 'text-slate-800'}`}>
+                                {row.restricted ? <span className="text-xs text-slate-400">Restringido</span> : row.value}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+
+                  <section className="rounded-lg border border-slate-200 bg-white p-3">
+                    <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <TrendingUp size={17} className="text-sky-600" />
+                        <div>
+                          <h3 className="text-sm font-black text-slate-900">Evolucion de caja</h3>
+                          <p className="text-[10px] font-semibold text-slate-500">Azul: cobrado. Verde: resultado.</p>
+                        </div>
+                      </div>
+                    </div>
+                    {canViewProfit && hasEvolutionData ? (
+                      <ChartFrame height={248}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={profitControlSeries} margin={{ top: 8, right: 12, left: -4, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#dbe5ef" />
+                            <XAxis dataKey="label" tick={{ fontSize: 10 }} stroke="#7c8da3" interval="preserveStartEnd" minTickGap={18} />
+                            <YAxis width={64} tick={{ fontSize: 10 }} stroke="#7c8da3" tickFormatter={(value) => `$${formatNumber(value)}`} />
+                            <Tooltip content={<EvolutionChartTooltip />} />
+                            <Legend verticalAlign="top" height={24} />
+                            <Line type="monotone" dataKey="grossProfit" name="Ingreso cobrado" stroke="#2563eb" strokeWidth={2.2} dot={false} activeDot={{ r: 4 }} />
+                            <Line type="monotone" dataKey="netProfit" name="Resultado caja" stroke="#16a34a" strokeWidth={2.2} dot={false} activeDot={{ r: 4 }} />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </ChartFrame>
+                    ) : (
+                      <EmptyState text={canViewProfit ? 'Sin evolucion para estos filtros.' : 'Permiso requerido para ver ganancias.'} />
+                    )}
+                  </section>
+              </div>
+            </section>
+
+            <section className="metrics-profit-products-card grid grid-cols-1 items-start gap-2.5 xl:grid-cols-[minmax(0,1fr)_236px] 2xl:grid-cols-[minmax(0,1fr)_252px]">
+              <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-2.5">
+                <div className="mb-2.5 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <h3 className="text-lg font-black text-slate-950">Productos</h3>
+                    <p className="text-[11px] font-semibold text-slate-500">Ranking por ingreso vendido.</p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:w-[min(620px,55vw)]">
+                    <MetricLensSelect label="Producto" value={filters.product} onChange={(value) => updateFilter('product', value)}>
+                      <option value="">Todos</option>
+                      {visibleProductOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </MetricLensSelect>
+                    <MetricLensSelect label="Categoria" value={filters.category} onChange={(value) => updateFilter('category', value)}>
+                      <option value="">Todas</option>
+                      {metrics.filterOptions.categories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </MetricLensSelect>
+                  </div>
+                </div>
+                <div className="custom-scrollbar overflow-auto rounded-lg border border-slate-200">
+                  <table className="w-full min-w-[760px] text-left text-xs">
+                    <thead className="sticky top-0 z-10 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                      <tr>
+                        <th className="px-3 py-2 font-black">Producto</th>
+                        <th className="px-3 py-2 font-black">Tipo</th>
+                        <th className="px-3 py-2 text-right font-black">Cantidad</th>
+                        <th className="px-3 py-2 text-right font-black">Ventas</th>
+                        {canViewProfit && <th className="px-3 py-2 text-right font-black">Costo vendido</th>}
+                        {canViewProfit && <th className="px-3 py-2 text-right font-black">Base</th>}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {(canViewProfit ? productRows : metrics.current.productStats).length ? (
+                        (canViewProfit ? productRows : metrics.current.productStats).map((row, index) => (
+                          <tr key={row.key || `${row.name}-${index}`} className="hover:bg-slate-50">
+                            <td className="px-3 py-2 font-black text-slate-800">
+                              <span className="block max-w-[360px] truncate 2xl:max-w-[520px]" title={row.name}>{row.name}</span>
+                            </td>
+                            <td className="px-3 py-2 font-semibold text-slate-500">{row.type === 'weight' ? 'Peso' : 'Unidad'}</td>
+                            <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatNumber(row.qty)}</td>
+                            <td className="px-3 py-2 text-right font-semibold text-slate-700"><FancyPrice amount={row.revenue} /></td>
+                            {canViewProfit && <td className="px-3 py-2 text-right font-semibold text-slate-700"><FancyPrice amount={row.cost} /></td>}
+                            {canViewProfit && <td className="px-3 py-2 text-right"><CostBasisBadge status={row.costStatus} /></td>}
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={canViewProfit ? 6 : 4} className="px-3 py-8 text-center font-bold text-slate-400">Sin productos vendidos.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <aside className="metrics-products-explainer self-start rounded-lg border border-emerald-200 bg-emerald-50/80 p-3">
+                <p className="text-sm font-black leading-5 text-slate-950">Lectura por producto</p>
+                    <p className="mt-2 text-[12px] font-semibold leading-5 text-slate-700">Compara ventas, cantidad y costo vendido para revisar precios y reposicion.</p>
+                {leadingProduct ? (
+                  <div className="mt-3 rounded-md border border-emerald-200 bg-white/70 px-2.5 py-2">
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">Producto lider</p>
+                    <p className="mt-1 truncate text-sm font-black text-slate-900" title={leadingProduct.name}>{leadingProduct.name}</p>
+                    {canViewProfit && (
+                      <div className="mt-2 grid grid-cols-2 gap-1.5 border-t border-emerald-100 pt-2 text-[10px] font-semibold text-slate-500">
+                        <span>Ventas</span>
+                        <strong className="text-right text-slate-800">{formatCurrency(leadingProduct.revenue || 0)}</strong>
+                        <span>Costo</span>
+                        <strong className="text-right text-slate-800">{formatCurrency(leadingProduct.cost || 0)}</strong>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </aside>
+            </section>
+          </div>
+        </main>
+      </div>
+    );
+  };
+
   const renderModernHeader = () => (
     <div className="metrics-modern-header relative z-20 shrink-0 border-b border-slate-200 px-3 py-2 shadow-sm">
       <div className="flex flex-col gap-2">
@@ -1290,6 +2043,7 @@ export default function MetricsView({
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {renderModeSwitch()}
             <button
               type="button"
               onClick={() => setIsModernControlOpen(true)}
@@ -1357,7 +2111,7 @@ export default function MetricsView({
             tone="sky"
           />
           <ModernHealthCard
-            label="Ganancia neta"
+            label="Resultado caja"
             value={profitStatusLabel || <FancyPrice amount={stats.profit} />}
             detail={profitStatusLabel ? profitStatusDetail : `Margen ${formatNumber(marginRate, 1)}%`}
             change={metrics.changes.profit}
@@ -1512,7 +2266,7 @@ export default function MetricsView({
                 {canViewProfit ? (
                   <>
                     <ModernLedgerRow label="Resultado" value={profitStatusLabel || <FancyPrice amount={stats.profit} />} tone={profitStatusTone} strong />
-                    <ModernLedgerRow label="Margen neto" value={`${formatNumber(marginRate, 1)}%`} tone="emerald" />
+                    <ModernLedgerRow label="Resultado / ingreso" value={`${formatNumber(marginRate, 1)}%`} tone="emerald" />
                   </>
                 ) : (
                   <ModernLedgerRow label="Ticket promedio" value={<FancyPrice amount={stats.averageTicket} />} tone="amber" strong />
@@ -1599,7 +2353,7 @@ export default function MetricsView({
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
         <MetricCard label="Ingreso bruto" value={<FancyPrice amount={metrics.current.stats.revenue} />} sublabel={metrics.range.label} change={metrics.changes.revenue} tone="sky" hint="Total vendido en el rango filtrado, antes de restar costos o gastos." />
-        <MetricCard label="Ganancia neta" value={profitStatusLabel || <FancyPrice amount={metrics.current.stats.profit} />} sublabel={profitStatusLabel ? profitStatusDetail : 'Ingreso - costo - gastos'} change={metrics.changes.profit} tone={profitStatusTone} hidden={!canViewProfit} hint="Resultado final estimado del periodo: ingreso bruto menos costo de mercaderia vendida y gastos." />
+        <MetricCard label="Resultado caja" value={profitStatusLabel || <FancyPrice amount={metrics.current.stats.profit} />} sublabel={profitStatusLabel ? profitStatusDetail : 'Ingreso cobrado - gastos'} change={metrics.changes.profit} tone={profitStatusTone} hidden={!canViewProfit} hint="Resultado del periodo: ingreso cobrado menos gastos registrados. El costo vendido se usa para margen de productos." />
         <MetricCard label="Ventas" value={formatNumber(metrics.current.stats.salesCount)} sublabel="Tickets emitidos" change={metrics.changes.salesCount} tone="violet" />
         <MetricCard label="Ticket promedio" value={<FancyPrice amount={metrics.current.stats.averageTicket} />} sublabel="Promedio por venta" change={metrics.changes.averageTicket} tone="amber" hint="Ingreso bruto dividido por cantidad de ventas." />
         <MetricCard label="Gastos" value={<FancyPrice amount={metrics.current.stats.expenses} />} sublabel={`${metrics.current.filteredExpenses.length} movimientos`} change={metrics.changes.expenses} invertChange tone="rose" hint="Suma de gastos registrados en el rango filtrado." />
@@ -1632,7 +2386,7 @@ export default function MetricsView({
               ))}
             </div>
           )}
-          hint={`Compara ingreso bruto, cantidad de ventas y, si tenés permiso, ganancia neta por ${periodUnit}.`}
+          hint={`Compara ingreso bruto, cantidad de ventas y, si tenés permiso, resultado de caja por ${periodUnit}.`}
         >
           {metrics.current.dailySeries.length ? (
             <ChartFrame height={260}>
@@ -1748,7 +2502,7 @@ export default function MetricsView({
               { key: 'label', label: isHourlyMode ? 'Horario' : 'Dia' },
               { key: 'salesCount', label: 'Ventas', align: 'right', render: (row) => formatNumber(row.salesCount) },
               { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-              ...(canViewProfit ? [{ key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }] : []),
+              ...(canViewProfit ? [{ key: 'profit', label: 'Resultado', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }] : []),
             ]}
             rows={metrics.current.dailySeries}
           />
@@ -1770,9 +2524,9 @@ export default function MetricsView({
 
   const renderProfit = () => {
     const financialPieData = [
-      { name: 'Costo vendido', value: Math.max(Number(metrics.current.stats.cost || 0), 0) },
       { name: 'Gastos', value: Math.max(Number(metrics.current.stats.expenses || 0), 0) },
-      { name: 'Ganancia', value: Math.max(Number(metrics.current.stats.profit || 0), 0) },
+      { name: 'Resultado caja', value: Math.max(Number(metrics.current.stats.profit || 0), 0) },
+      { name: 'Costo vendido', value: Math.max(Number(metrics.current.stats.cost || 0), 0) },
     ].filter((item) => item.value > 0);
     const selectedFinancialName = pieSelections.profitBreakdown || null;
     const financialColumns = selectedFinancialName === 'Costo vendido'
@@ -1780,32 +2534,33 @@ export default function MetricsView({
           key: 'cost',
           label: 'Costo vendido',
           align: 'right',
-          render: (row) => <FancyPrice amount={Math.max(Number(row.revenue || 0) - Number(row.expenses || 0) - Number(row.profit || 0), 0)} />,
+          render: (row) => <FancyPrice amount={row.cost} />,
         }]
       : selectedFinancialName === 'Gastos'
         ? [{ key: 'expenses', label: 'Gastos', align: 'right', render: (row) => <FancyPrice amount={row.expenses} /> }]
-        : selectedFinancialName === 'Ganancia'
-          ? [{ key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }]
+        : selectedFinancialName === 'Resultado caja'
+          ? [{ key: 'profit', label: 'Resultado', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }]
           : [
               { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-              { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
+              { key: 'profit', label: 'Resultado', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
               { key: 'expenses', label: 'Gastos', align: 'right', render: (row) => <FancyPrice amount={row.expenses} /> },
+              { key: 'cost', label: 'Costo vendido', align: 'right', render: (row) => <FancyPrice amount={row.cost} /> },
             ];
 
     return (
     <div className="space-y-4">
       <StatStrip
         items={[
-          { label: 'Ingreso', value: <FancyPrice amount={metrics.current.stats.revenue} />, sub: 'Bruto', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
-          { label: 'Ganancia', value: profitStatusLabel || <FancyPrice amount={metrics.current.stats.profit} />, sub: profitStatusLabel ? profitStatusDetail : 'Neta', tone: isProfitUnverified ? 'border-amber-200 bg-amber-50 text-amber-700' : metrics.current.stats.profit >= 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700' },
+          { label: 'Ingreso', value: <FancyPrice amount={metrics.current.stats.revenue} />, sub: 'Cobrado', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
+          { label: 'Resultado caja', value: profitStatusLabel || <FancyPrice amount={metrics.current.stats.profit} />, sub: profitStatusLabel ? profitStatusDetail : 'Cobrado - gastos', tone: isProfitUnverified ? 'border-amber-200 bg-amber-50 text-amber-700' : metrics.current.stats.profit >= 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700' },
           { label: 'Gastos', value: <FancyPrice amount={metrics.current.stats.expenses} />, sub: `${metrics.current.filteredExpenses.length} movimientos`, tone: 'border-rose-200 bg-rose-50 text-rose-700' },
-          { label: 'Margen', value: `${formatNumber(metrics.current.stats.revenue ? (metrics.current.stats.profit / metrics.current.stats.revenue) * 100 : 0, 1)}%`, sub: 'Ganancia / ingreso', tone: 'border-slate-200 bg-slate-50 text-slate-700' },
+          { label: 'Ratio caja', value: `${formatNumber(metrics.current.stats.revenue ? (metrics.current.stats.profit / metrics.current.stats.revenue) * 100 : 0, 1)}%`, sub: 'Resultado / ingreso', tone: 'border-slate-200 bg-slate-50 text-slate-700' },
         ]}
       />
       <Panel
         title="Resultado financiero"
         icon={WalletCards}
-        hint="El desglose muestra los importes que explican la ganancia neta del rango actual."
+        hint="El desglose muestra lo cobrado, gastos reales y costo vendido del rango actual."
       >
         <FinanceBreakdown
           stats={metrics.current.stats}
@@ -1814,12 +2569,12 @@ export default function MetricsView({
         />
       </Panel>
 
-      <Panel title={isHourlyMode ? 'Evolucion de ganancia por horario' : 'Evolucion de ganancia'} icon={TrendingUp}>
+      <Panel title={isHourlyMode ? 'Evolucion de caja por horario' : 'Evolucion de caja'} icon={TrendingUp}>
         <AreaMetricPanel
           data={metrics.current.dailySeries}
           areas={[
             { key: 'revenue', label: 'Ingreso', color: '#0ea5e9' },
-            { key: 'profit', label: 'Ganancia', color: '#10b981' },
+            { key: 'profit', label: 'Resultado', color: '#10b981' },
             { key: 'expenses', label: 'Gastos', color: '#ef4444' },
           ]}
           height={280}
@@ -1827,7 +2582,7 @@ export default function MetricsView({
       </Panel>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Panel title={isHourlyMode ? 'Detalle financiero por horario' : 'Detalle financiero por periodo'} icon={TrendingUp} hint={`Ingreso bruto, ganancia neta y gastos por ${periodUnit}.`}>
+        <Panel title={isHourlyMode ? 'Detalle financiero por horario' : 'Detalle financiero por periodo'} icon={TrendingUp} hint={`Ingreso, resultado de caja, gastos y costo vendido por ${periodUnit}.`}>
           <PieMetricPanel
             data={financialPieData}
             height={250}
@@ -1844,14 +2599,13 @@ export default function MetricsView({
             rows={metrics.current.dailySeries}
           />
         </Panel>
-        <Panel title="Margen por producto" icon={ShoppingBag} hint="El margen es la ganancia estimada de cada producto sobre su ingreso. Puede variar si faltan costos de compra.">
+        <Panel title="Costo por producto" icon={ShoppingBag} hint="Ingreso del producto, costo vendido y base usada para ese costo.">
           <Table
             emptyText="Sin productos vendidos."
             columns={[
               { key: 'name', label: 'Producto' },
               { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-              { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
-              { key: 'marginRate', label: 'Margen', align: 'right', render: (row) => `${formatNumber(row.marginRate, 1)}%` },
+              ...SOLD_COST_COLUMNS,
             ]}
             rows={metrics.current.productStats}
           />
@@ -1867,31 +2621,133 @@ export default function MetricsView({
     const selectedCategory = selectedCategoryName
       ? metrics.current.categoryStats.find((category) => category.name === selectedCategoryName)
       : null;
+    const hasProductLookup = productLookupTerms.length > 0;
+    const productLookupResultLabel = productLookupRows.length === 1
+      ? '1 resultado'
+      : `${formatNumber(productLookupRows.length)} resultados`;
 
     return (
       <div className="space-y-4">
         <StatStrip
           items={[
-            { label: 'Productos vendidos', value: formatNumber(metrics.current.productStats.length), sub: 'Con movimiento', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
+            { label: 'Productos vendidos', value: formatNumber(allSoldProductCount), sub: 'Con movimiento', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
             { label: 'Unidades/items', value: formatNumber(metrics.current.stats.itemsSold), sub: 'Cantidad total', tone: 'border-violet-200 bg-violet-50 text-violet-700' },
             { label: 'Categorias', value: formatNumber(metrics.current.categoryStats.length), sub: 'Con ventas', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
             { label: 'Top producto', value: metrics.current.productStats[0]?.name || '-', sub: 'Mayor ingreso', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
           ]}
         />
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_0.9fr]">
-          <Panel title="Ranking de productos" icon={ShoppingBag}>
+          <Panel
+            title={hasProductLookup ? 'Consulta de productos' : 'Ranking de productos'}
+            icon={ShoppingBag}
+            action={(
+              <label className="relative block w-[180px] sm:w-[260px]">
+                <Search size={14} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="search"
+                  value={productLookupQuery}
+                  onChange={(event) => setProductLookupQuery(event.target.value)}
+                  placeholder="Buscar producto"
+                  aria-label="Buscar producto por nombre"
+                  className="h-8 w-full rounded-md border border-slate-200 bg-slate-50 pl-7 pr-2 text-[11px] font-bold text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-fuchsia-300 focus:bg-white focus:ring-2 focus:ring-fuchsia-100"
+                />
+              </label>
+            )}
+          >
+            {hasProductLookup && (
+              <div className="mb-2 rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="min-w-0 truncate text-[11px] font-black text-slate-700">
+                    {selectedProductLookup ? selectedProductLookup.name : 'Sin coincidencias'}
+                  </p>
+                  <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-black text-slate-500">
+                    {productLookupResultLabel}
+                  </span>
+                </div>
+                {selectedProductLookup ? (
+                  <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
+                    <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                      <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Estado</span>
+                      <strong className={`mt-1 block truncate text-[11px] ${selectedProductLookup.lookupOnly ? 'text-slate-500' : 'text-emerald-700'}`}>
+                        {selectedProductLookup.lookupOnly ? 'Sin ventas' : 'Con ventas'}
+                      </strong>
+                    </div>
+                    <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                      <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Categoria</span>
+                      <strong className="mt-1 block truncate text-[11px] text-slate-700" title={selectedProductLookup.category}>
+                        {selectedProductLookup.category || '-'}
+                      </strong>
+                    </div>
+                    <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                      <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Stock</span>
+                      <strong className="mt-1 block truncate text-[11px] text-slate-700">
+                        {Number.isFinite(selectedProductLookup.stock) ? formatNumber(selectedProductLookup.stock) : '-'}
+                      </strong>
+                    </div>
+                    <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                      <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Tipo</span>
+                      <strong className="mt-1 block truncate text-[11px] text-slate-700">
+                        {selectedProductLookup.typeLabel || getProductTypeLabel(selectedProductLookup.type)}
+                      </strong>
+                    </div>
+                    <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                      <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Precio</span>
+                      <strong className="mt-1 block truncate text-[11px] text-slate-700">
+                        {Number.isFinite(selectedProductLookup.salePrice) ? <FancyPrice amount={selectedProductLookup.salePrice} /> : '-'}
+                      </strong>
+                    </div>
+                    {canViewProfit && (
+                      <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                        <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Costo inv.</span>
+                        <strong className="mt-1 block truncate text-[11px] text-slate-700">
+                          {Number.isFinite(selectedProductLookup.purchasePrice) ? <FancyPrice amount={selectedProductLookup.purchasePrice} /> : '-'}
+                        </strong>
+                      </div>
+                    )}
+                    <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                      <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Vendido</span>
+                      <strong className="mt-1 block truncate text-[11px] text-slate-700">
+                        {formatNumber(selectedProductLookup.qty)}
+                      </strong>
+                    </div>
+                    <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                      <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Ingreso</span>
+                      <strong className="mt-1 block truncate text-[11px] text-slate-700">
+                        <FancyPrice amount={selectedProductLookup.revenue} />
+                      </strong>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-[11px] font-semibold text-slate-500">
+                    No encontre productos con ese nombre en ventas ni inventario.
+                  </p>
+                )}
+              </div>
+            )}
             <Table
-              emptyText="Sin productos vendidos."
+              emptyText={hasProductLookup ? 'Sin productos encontrados.' : 'Sin productos vendidos.'}
               columns={[
-                { key: 'name', label: 'Producto' },
+                {
+                  key: 'name',
+                  label: 'Producto',
+                  render: (row) => (
+                    <div className="min-w-0">
+                      <span className="block max-w-[220px] truncate font-black text-slate-800" title={row.name}>
+                        {row.name}
+                      </span>
+                      {row.lookupOnly ? (
+                        <span className="mt-0.5 block text-[10px] font-bold text-slate-400">Sin ventas en periodo</span>
+                      ) : row.category ? (
+                        <span className="mt-0.5 block max-w-[220px] truncate text-[10px] font-bold text-slate-400">{row.category}</span>
+                      ) : null}
+                    </div>
+                  ),
+                },
                 { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
                 { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-                ...(canViewProfit ? [
-                  { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
-                  { key: 'marginRate', label: 'Margen', align: 'right', render: (row) => `${formatNumber(row.marginRate, 1)}%` },
-                ] : []),
+                ...(canViewProfit ? PRODUCT_LOOKUP_COST_COLUMNS : []),
               ]}
-              rows={metrics.current.productStats}
+              rows={productLookupRows}
             />
           </Panel>
           <Panel title={isModernMode ? 'Categorias por ingreso' : 'Tipo de producto'} icon={isModernMode ? Boxes : PackageSearch}>
@@ -1928,12 +2784,11 @@ export default function MetricsView({
                   { key: 'name', label: 'Categoria' },
                   { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
                   { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-                  ...(canViewProfit ? [
-                    { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
-                    { key: 'marginRate', label: 'Margen', align: 'right', render: (row) => `${formatNumber(row.marginRate, 1)}%` },
-                  ] : []),
+                  ...(canViewProfit ? SOLD_COST_COLUMNS : []),
                 ]}
                 rows={metrics.current.categoryStats}
+                onRowClick={(row) => updatePieSelection('productCategories', row.name)}
+                isRowSelected={(row) => row.name === selectedCategoryName}
               />
             </Panel>
 
@@ -1956,10 +2811,7 @@ export default function MetricsView({
                   { key: 'name', label: 'Articulo' },
                   { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
                   { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-                  ...(canViewProfit ? [
-                    { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
-                    { key: 'marginRate', label: 'Margen', align: 'right', render: (row) => `${formatNumber(row.marginRate, 1)}%` },
-                  ] : []),
+                  ...(canViewProfit ? SOLD_COST_COLUMNS : []),
                 ]}
                 rows={selectedCategory?.productBreakdown || []}
               />
@@ -1984,7 +2836,7 @@ export default function MetricsView({
             { label: 'Categorias', value: formatNumber(metrics.current.categoryStats.length), sub: 'Con ventas', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
             { label: 'Top categoria', value: metrics.current.categoryStats[0]?.name || '-', sub: 'Mayor ingreso', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
             { label: 'Ingreso top', value: <FancyPrice amount={metrics.current.categoryStats[0]?.revenue || 0} />, sub: 'Categoria lider', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
-            ...(canViewProfit ? [{ label: 'Ganancia top', value: <FancyPrice amount={metrics.current.categoryStats[0]?.profit || 0} />, sub: 'Categoria lider', tone: 'border-violet-200 bg-violet-50 text-violet-700' }] : []),
+            ...(canViewProfit ? [{ label: 'Margen vendido top', value: <FancyPrice amount={metrics.current.categoryStats[0]?.profit || 0} />, sub: 'Categoria lider', tone: 'border-violet-200 bg-violet-50 text-violet-700' }] : []),
           ]}
         />
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -2010,12 +2862,11 @@ export default function MetricsView({
                 { key: 'name', label: 'Categoria' },
                 { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
                 { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-                ...(canViewProfit ? [
-                  { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
-                  { key: 'marginRate', label: 'Margen', align: 'right', render: (row) => `${formatNumber(row.marginRate, 1)}%` },
-                ] : []),
+                ...(canViewProfit ? SOLD_COST_COLUMNS : []),
               ]}
               rows={metrics.current.categoryStats}
+              onRowClick={(row) => updatePieSelection('categories', row.name)}
+              isRowSelected={(row) => row.name === selectedCategoryName}
             />
           </Panel>
         </div>
@@ -2040,10 +2891,7 @@ export default function MetricsView({
                 { key: 'name', label: 'Articulo' },
                 { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
                 { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-                ...(canViewProfit ? [
-                  { key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
-                  { key: 'marginRate', label: 'Margen', align: 'right', render: (row) => `${formatNumber(row.marginRate, 1)}%` },
-                ] : []),
+                ...(canViewProfit ? SOLD_COST_COLUMNS : []),
               ]}
               rows={selectedCategory.productBreakdown || []}
             />
@@ -2058,10 +2906,24 @@ export default function MetricsView({
     const visiblePaymentRows = selectedPaymentName
       ? metrics.current.paymentStats.filter((row) => row.name === selectedPaymentName)
       : metrics.current.paymentStats;
+    const paymentHistoryRows = (selectedPaymentName
+      ? visiblePaymentRows.flatMap((row) => row.history || [])
+      : metrics.current.paymentStats.flatMap((row) => row.history || [])
+    )
+      .sort((a, b) => Number(b.sortTime || 0) - Number(a.sortTime || 0))
+      .slice(0, 40);
+    const formatPaymentHistoryDate = (row) => {
+      const date = row.date instanceof Date ? row.date : null;
+      if (!date || Number.isNaN(date.getTime())) return row.time || '-';
+      const day = date.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+      const time = date.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      return `${day} ${time}`;
+    };
 
     return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1fr]">
-      <Panel title="Distribución de pagos" icon={CreditCard}>
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1fr]">
+      <Panel title="Distribucion de pagos" icon={CreditCard}>
         <PieMetricPanel
           data={metrics.current.paymentStats}
           dataKey="value"
@@ -2081,6 +2943,36 @@ export default function MetricsView({
             { key: 'value', label: 'Importe', align: 'right', render: (row) => <FancyPrice amount={row.value} /> },
           ]}
           rows={visiblePaymentRows}
+          onRowClick={(row) => updatePieSelection('payments', row.name)}
+          isRowSelected={(row) => row.name === selectedPaymentName}
+        />
+      </Panel>
+      </div>
+
+      <Panel
+        title={selectedPaymentName ? `Historial de ${selectedPaymentName}` : 'Historial reciente de pagos'}
+        icon={CalendarDays}
+        action={selectedPaymentName ? (
+          <button
+            type="button"
+            onClick={() => updatePieSelection('payments', null)}
+            className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-500 hover:bg-slate-50"
+          >
+            Ver todos
+          </button>
+        ) : null}
+      >
+        <Table
+          emptyText="Sin historial de pagos para estos filtros."
+          columns={[
+            { key: 'date', label: 'Fecha', render: (row) => formatPaymentHistoryDate(row) },
+            { key: 'method', label: 'Medio' },
+            { key: 'clientName', label: 'Cliente' },
+            { key: 'user', label: 'Usuario' },
+            { key: 'itemCount', label: 'Items', align: 'right', render: (row) => formatNumber(row.itemCount) },
+            { key: 'amount', label: 'Importe', align: 'right', render: (row) => <FancyPrice amount={row.amount} /> },
+          ]}
+          rows={paymentHistoryRows}
         />
       </Panel>
     </div>
@@ -2103,19 +2995,34 @@ export default function MetricsView({
     const previousClientSales = previousClients.reduce((sum, client) => sum + Number(client.salesCount || 0), 0);
     const clientAverageTicket = clientSales ? clientRevenue / clientSales : 0;
     const previousClientAverageTicket = previousClientSales ? previousClientRevenue / previousClientSales : 0;
+    const newClientsSublabel = metrics.canComparePreviousRange
+      ? `Anterior: ${formatNumber(previousNewClients)}`
+      : 'Altas en el rango';
     const selectedClientType = pieSelections.clientTypes || null;
     const visibleClients = selectedClientType === 'Recurrentes'
       ? clients.filter((client) => Number(client.salesCount || 0) > 1)
       : selectedClientType === 'Una compra'
         ? clients.filter((client) => Number(client.salesCount || 0) === 1)
         : clients;
-    const getClientChange = (currentValue, previousValue) =>
-      metrics.canComparePreviousRange ? calculatePercentageChange(currentValue, previousValue) : null;
+    const getClientChange = (currentValue, previousValue) => {
+      if (!metrics.canComparePreviousRange) return null;
+      const currentNumber = Number(currentValue || 0);
+      const previousNumber = Number(previousValue || 0);
+      if (!currentNumber && !previousNumber) return null;
+      return calculatePercentageChange(currentNumber, previousNumber);
+    };
 
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
-          <MetricCard label="Socios nuevos" value={formatNumber(newClients)} sublabel="Altas en el rango" change={getClientChange(newClients, previousNewClients)} tone="emerald" />
+          <MetricCard
+            label="Socios nuevos"
+            value={formatNumber(newClients)}
+            sublabel={newClientsSublabel}
+            change={getClientChange(newClients, previousNewClients)}
+            tone="emerald"
+            hint="Cuenta socios por fecha de alta. En rangos comparables usa el periodo anterior equivalente; en 30 dias son los 30 dias previos."
+          />
           <MetricCard label="Socios con compras" value={formatNumber(clients.length)} sublabel="En el rango" change={getClientChange(clients.length, previousClients.length)} tone="sky" />
           <MetricCard label="Recurrentes" value={formatNumber(recurringClients)} sublabel="Mas de una compra" change={getClientChange(recurringClients, previousRecurringClients)} tone="emerald" />
           <MetricCard label="Ingreso socios" value={<FancyPrice amount={clientRevenue} />} sublabel="Total asociado" change={getClientChange(clientRevenue, previousClientRevenue)} tone="violet" />
@@ -2340,7 +3247,7 @@ export default function MetricsView({
               { key: 'salesCount', label: 'Ventas', align: 'right', render: (row) => formatNumber(row.salesCount) },
               { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
               { key: 'averageTicket', label: 'Ticket prom.', align: 'right', render: (row) => <FancyPrice amount={row.averageTicket} /> },
-              ...(canViewProfit ? [{ key: 'profit', label: 'Ganancia', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }] : []),
+              ...(canViewProfit ? [{ key: 'profit', label: 'Resultado', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }] : []),
             ]}
             rows={visibleUserRows}
           />
@@ -2435,6 +3342,10 @@ export default function MetricsView({
     }
   };
 
+  if (isProfitControlMode) {
+    return renderProfitControlMode();
+  }
+
   if (isModernMode) {
     return (
       <div className="metrics-view metrics-view-modern flex h-full min-h-0 flex-col bg-slate-100">
@@ -2476,6 +3387,7 @@ export default function MetricsView({
               <p className="mt-0.5 text-[11px] font-semibold text-slate-400">Ventas, productos, stock, caja y operación.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              {renderModeSwitch()}
               <button
                 type="button"
                 onClick={handleRefresh}

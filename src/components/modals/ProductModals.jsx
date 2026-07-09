@@ -522,13 +522,14 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
 // v6: Agregado boton "Duplicar" segun permiso inventory.create
 // ==========================================
 
-export const EditProductModal = ({ product, onClose, setEditingProduct, categories, onImageUpload, editReason, setEditReason, onSave, inventory, onDuplicateBarcode, isUploadingImage, onDuplicate, onRetireDeletedProduct, currentUser }) => {
+export const EditProductModal = ({ product, onClose, setEditingProduct, categories, onImageUpload, editReason, setEditReason, onSave, inventory, onDuplicateBarcode, isUploadingImage, onDuplicate, onDeleteProduct, onRetireDeletedProduct, currentUser }) => {
   const [stockUnit, setStockUnit] = useState('g');
   const [deletedReason, setDeletedReason] = useState('');
   const { isPending, runAction } = usePendingAction();
   if (!product) return null;
   const productType = product.product_type || 'quantity';
   const canDuplicateProduct = hasPermission(currentUser, 'inventory.create');
+  const canDeleteProduct = hasPermission(currentUser, 'inventory.delete');
   const isProductActive = product.is_active !== false && product.isActive !== false;
 
   // ✅ Precio guardado en /g → lo mostramos en /kg
@@ -734,7 +735,18 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
           )}
 
           {/* Botones: Duplicar segun permiso + Guardar */}
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
+            {canDeleteProduct && onDeleteProduct && (
+              <button
+                type="button"
+                onClick={() => onDeleteProduct(product)}
+                className="flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-3 text-sm font-bold text-red-600 transition-colors hover:bg-red-50"
+                title="Eliminar este producto del catalogo normal"
+              >
+                <Trash2 size={16} />
+                Eliminar
+              </button>
+            )}
             {canDuplicateProduct && onDuplicate && (
               <button
                 type="button"

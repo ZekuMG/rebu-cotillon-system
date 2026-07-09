@@ -2,29 +2,102 @@ import React from 'react';
 import { formatCurrency, formatNumber, formatTime24 } from '../utils/helpers';
 import { getPaymentBreakdownDisplayItems, getPaymentSummary } from '../utils/paymentBreakdown';
 
-const LINE_WIDTH = 24;
+const DEFAULT_TICKET_PROFILE = {
+  lineWidth: 24,
+  fontSize: 10,
+  lineHeight: 1,
+  horizontalPadding: 2,
+  wrapProductNames: false,
+  productLineWidth: null,
+};
 
-const line = (left = '', right = '') => {
+const buildTicketProfile = (profile = {}) => ({
+  ...DEFAULT_TICKET_PROFILE,
+  ...(profile || {}),
+  lineWidth: Number(profile?.lineWidth || DEFAULT_TICKET_PROFILE.lineWidth),
+  fontSize: Number(profile?.fontSize || DEFAULT_TICKET_PROFILE.fontSize),
+  lineHeight: Number(profile?.lineHeight || DEFAULT_TICKET_PROFILE.lineHeight),
+  horizontalPadding: Number(profile?.horizontalPadding ?? DEFAULT_TICKET_PROFILE.horizontalPadding),
+  productLineWidth: profile?.productLineWidth ? Number(profile.productLineWidth) : null,
+});
+
+const createLineFormatter = (lineWidth) => (left = '', right = '') => {
   let l = String(left);
   const r = String(right);
   const rightWidth = r.length + 1;
-  const maxLeftWidth = LINE_WIDTH - rightWidth;
+  const maxLeftWidth = lineWidth - rightWidth;
 
   if (l.length > maxLeftWidth) {
     l = l.slice(0, maxLeftWidth);
   }
 
-  const space = LINE_WIDTH - l.length - r.length;
+  const space = lineWidth - l.length - r.length;
   return l + ' '.repeat(Math.max(0, space)) + r;
 };
 
-const center = (text = '') => {
-  const t = String(text).slice(0, LINE_WIDTH);
-  const space = Math.floor((LINE_WIDTH - t.length) / 2);
+const createCenterFormatter = (lineWidth) => (text = '') => {
+  const t = String(text).slice(0, lineWidth);
+  const space = Math.floor((lineWidth - t.length) / 2);
   return ' '.repeat(Math.max(0, space)) + t;
 };
 
-const divider = () => '-'.repeat(LINE_WIDTH);
+const createDivider = (lineWidth) => () => '-'.repeat(lineWidth);
+
+const wrapText = (text = '', width = 24) => {
+  const safeWidth = Math.max(8, Number(width || 24));
+  const words = String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  if (words.length === 0) return [''];
+
+  const chunks = [];
+  let current = '';
+
+  words.forEach((word) => {
+    if (word.length > safeWidth) {
+      if (current) {
+        chunks.push(current);
+        current = '';
+      }
+      for (let index = 0; index < word.length; index += safeWidth) {
+        chunks.push(word.slice(index, index + safeWidth));
+      }
+      return;
+    }
+
+    const next = current ? `${current} ${word}` : word;
+    if (next.length > safeWidth) {
+      if (current) chunks.push(current);
+      current = word;
+    } else {
+      current = next;
+    }
+  });
+
+  if (current) chunks.push(current);
+  return chunks.length ? chunks : [''];
+};
+
+const pushItemLine = (lines, { title, priceStr, line, lineWidth, wrapProductNames, productLineWidth }) => {
+  if (!wrapProductNames) {
+    lines.push(line(title, priceStr));
+    return;
+  }
+
+  const productWidth = Math.max(8, Math.min(Number(productLineWidth || lineWidth), lineWidth));
+  const firstLineWidth = Math.max(8, Math.min(productWidth, lineWidth - String(priceStr).length - 1));
+  const firstLineParts = wrapText(title, firstLineWidth);
+  const firstPart = firstLineParts.shift() || title.slice(0, firstLineWidth);
+
+  lines.push(line(firstPart, priceStr));
+
+  const continuationText = firstLineParts.join(' ');
+  const continuationParts = continuationText
+    ? wrapText(continuationText, productWidth)
+    : [];
+
+  continuationParts.forEach((part) => {
+    lines.push(part);
+  });
+};
 
 const getExplicitSubtotal = (item = {}) => {
   const explicitSubtotal = Number(item.subtotal ?? item.lineSubtotal ?? item.line_subtotal ?? item.lineTotal);
@@ -41,8 +114,37 @@ const getLineSubtotal = (item = {}) => {
   return price >= 100 ? price * (qty / 1000) : price * qty;
 };
 
-export const TicketPrintLayout = ({ transaction }) => {
+const getPointMovementDelta = (movement = {}) => {
+  const explicitDelta = Number(movement.signedDiff);
+  if (Number.isFinite(explicitDelta) && explicitDelta !== 0) return explicitDelta;
+  const points = Number(movement.points || 0);
+  return movement.type === 'earned' ? points : -points;
+};
+
+const getPointMovementLabel = (movement = {}) => {
+  if (movement.concept) return movement.concept;
+  if (movement.type === 'earned') return 'Puntos por compra';
+  if (movement.type === 'redeemed') return 'Canje de puntos';
+  if (movement.type === 'expired') return 'Vencimiento';
+  return 'Ajuste manual';
+};
+
+const getPointMovementTime = (movement = {}) => {
+  const rawTime = movement.time || movement.timestamp || '';
+  if (!rawTime) return '--:--';
+  return formatTime24(String(rawTime).replace(/hs/ig, '').trim()).slice(0, 5);
+};
+
+const isFiniteNumber = (value) => Number.isFinite(Number(value));
+
+export const TicketPrintLayout = ({ transaction, profile }) => {
   if (!transaction) return null;
+
+  const ticketProfile = buildTicketProfile(profile);
+  const lineWidth = ticketProfile.lineWidth;
+  const line = createLineFormatter(lineWidth);
+  const center = createCenterFormatter(lineWidth);
+  const divider = createDivider(lineWidth);
 
   const paymentItems = getPaymentBreakdownDisplayItems(
     transaction.paymentBreakdown,
@@ -89,6 +191,9 @@ export const TicketPrintLayout = ({ transaction }) => {
         ? clientCurrentPoints
         : 0
     : 0;
+  const pointHistory = Array.isArray(transaction.pointHistory)
+    ? transaction.pointHistory.slice(0, 10)
+    : [];
 
   const lines = [];
 
@@ -123,6 +228,33 @@ export const TicketPrintLayout = ({ transaction }) => {
   lines.push(`#${formattedId}`);
   lines.push(divider());
 
+  if (transaction.isPointsTicket) {
+    lines.push(center('PUNTOS REB'));
+    lines.push(divider());
+    lines.push('ULTIMOS 10 MOVS');
+
+    if (pointHistory.length === 0) {
+      lines.push('Sin movimientos.');
+    } else {
+      pointHistory.forEach((movement) => {
+        const delta = getPointMovementDelta(movement);
+        const sign = delta >= 0 ? '+' : '-';
+        const pointsText = `${sign}${formatNumber(Math.abs(delta))} pts`;
+        const dateLabel = `${movement.date || '--/--/--'} ${getPointMovementTime(movement)}`;
+        const conceptLines = wrapText(getPointMovementLabel(movement), lineWidth);
+
+        lines.push(line(dateLabel, pointsText));
+        conceptLines.slice(0, 2).forEach((part) => lines.push(part));
+
+        if (isFiniteNumber(movement.prevPoints) && isFiniteNumber(movement.newPoints)) {
+          lines.push(line('Saldo mov:', `${formatNumber(movement.prevPoints)}>${formatNumber(movement.newPoints)}`));
+        }
+      });
+    }
+
+    lines.push(divider());
+  }
+
   if (!transaction.isPointsTicket) {
     lines.push(line('DESCRIPCION', 'IMPORTE'));
 
@@ -132,7 +264,14 @@ export const TicketPrintLayout = ({ transaction }) => {
       const fullTitle = titlePrefix + (item.title || 'Producto');
       const priceStr = item.isReward ? 'GRATIS' : formatCurrency(getLineSubtotal(item));
 
-      lines.push(line(fullTitle, priceStr));
+      pushItemLine(lines, {
+        title: fullTitle,
+        priceStr,
+        line,
+        lineWidth,
+        wrapProductNames: ticketProfile.wrapProductNames,
+        productLineWidth: ticketProfile.productLineWidth,
+      });
     });
 
     lines.push(divider());
@@ -202,15 +341,16 @@ export const TicketPrintLayout = ({ transaction }) => {
       <pre
         style={{
           fontFamily: '"Courier New", Courier, monospace',
-          fontSize: '10px',
+          fontSize: `${ticketProfile.fontSize}px`,
           fontWeight: 'bold',
-          lineHeight: '1',
+          lineHeight: String(ticketProfile.lineHeight),
           margin: 0,
-          padding: '0 2px',
-          whiteSpace: 'pre-wrap',
+          padding: `0 ${ticketProfile.horizontalPadding}px`,
+          whiteSpace: 'pre',
           color: 'black',
-          width: '100%',
-          overflow: 'hidden',
+          width: 'max-content',
+          maxWidth: 'none',
+          overflow: 'visible',
         }}
       >
         {lines.join('\n')}

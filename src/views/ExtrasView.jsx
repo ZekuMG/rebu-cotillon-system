@@ -50,6 +50,7 @@ const OFFER_WIZARD_STEPS = [
 ];
 const OFFER_FREE_MODES = ['2x1', '3x2', '4x3'];
 const INCREMENTAL_BATCH_SIZE = 50;
+const SHOW_LEGACY_CATEGORIES_PANEL = false;
 
 function useIncrementalList(items, options = {}) {
   const { initialCount = INCREMENTAL_BATCH_SIZE, step = INCREMENTAL_BATCH_SIZE, threshold = 120 } = options;
@@ -84,8 +85,24 @@ function useIncrementalList(items, options = {}) {
   };
 }
 
+const getProductCategoryNames = (product = {}) => {
+  if (Array.isArray(product.categories)) {
+    return product.categories.map((category) => String(category || '').trim()).filter(Boolean);
+  }
+
+  return String(product.category || '')
+    .split(',')
+    .map((category) => category.trim())
+    .filter(Boolean);
+};
+
 function ProductPreviewGrid({ items = [], fallbackIcon: FallbackIcon = Package, accent = 'slate' }) {
-  const previewItems = items.filter((item) => item?.image).slice(0, 4);
+  const previewItems = [];
+  for (const item of items) {
+    if (!item?.image) continue;
+    previewItems.push(item);
+    if (previewItems.length >= 4) break;
+  }
   const count = previewItems.length;
   const fallbackAccentClass =
     {
@@ -1019,11 +1036,7 @@ export default function ExtrasView({
   };
 
   const productHasCategory = useCallback((product, catName) => {
-    const originalCats = Array.isArray(product.categories)
-      ? product.categories
-      : product.category
-      ? [product.category]
-      : [];
+    const originalCats = getProductCategoryNames(product);
     let hasCat = originalCats.includes(catName);
 
     const changes = pendingChanges.filter((c) => c.productId === product.id);
@@ -1039,11 +1052,37 @@ export default function ExtrasView({
 
   const productsByCategory = useMemo(() => {
     const result = {};
+    const categorySet = new Set(categories);
     categories.forEach((cat) => {
-      result[cat] = inventory ? inventory.filter((p) => productHasCategory(p, cat)) : [];
+      result[cat] = [];
     });
+
+    const productById = new Map();
+    (inventory || []).forEach((product) => {
+      productById.set(product.id, product);
+      getProductCategoryNames(product).forEach((cat) => {
+        if (!categorySet.has(cat)) return;
+        result[cat].push(product);
+      });
+    });
+
+    pendingChanges.forEach((change) => {
+      if (!categorySet.has(change.categoryName)) return;
+      const product = productById.get(change.productId);
+      if (!product) return;
+
+      if (change.action === 'remove') {
+        result[change.categoryName] = result[change.categoryName].filter((entry) => entry.id !== change.productId);
+        return;
+      }
+
+      if (change.action === 'add' && !result[change.categoryName].some((entry) => entry.id === change.productId)) {
+        result[change.categoryName].push(product);
+      }
+    });
+
     return result;
-  }, [categories, inventory, productHasCategory]);
+  }, [categories, inventory, pendingChanges]);
 
   const handleSubmitCategory = (e) => {
     e.preventDefault();
@@ -1932,7 +1971,8 @@ export default function ExtrasView({
       {/* ========================================= */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-[22px] border border-slate-200 border-t-0 bg-white shadow-sm">
 
-        <div className={extrasTabClass('categories')}>
+        {activeTab === 'categories' && (
+          <div className={extrasTabClass('categories')}>
           <div className="h-full overflow-hidden p-2 sm:p-2.5 lg:p-3">
             <div className="grid h-full min-h-0 gap-2 xl:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)]">
               <div className="flex min-h-0 flex-col rounded-[22px] border border-orange-200 bg-orange-50/60 p-2 sm:p-2.5">
@@ -2147,9 +2187,11 @@ export default function ExtrasView({
             </div>
           </div>
         </div>
+        )}
         
         {/* VISTA DE CATEGORÍAS */}
-        <div className={extrasTabClass('offers')}>
+        {activeTab === 'offers' && (
+          <div className={extrasTabClass('offers')}>
           <div className="h-full overflow-hidden p-2 sm:p-2.5 lg:p-3">
             <div className="grid h-full min-h-0 gap-2 xl:grid-cols-[minmax(0,0.95fr)_minmax(340px,1.05fr)]">
               <div className="flex min-h-0 flex-col rounded-[22px] border border-slate-200 bg-white p-2 sm:p-2.5">
@@ -2437,7 +2479,9 @@ export default function ExtrasView({
           </div>
         </div>
 
-        <div className={extrasTabClass('rewards')}>
+        )}
+        {activeTab === 'rewards' && (
+          <div className={extrasTabClass('rewards')}>
           <div className="h-full overflow-hidden p-2 sm:p-2.5 lg:p-3">
             <div className="grid h-full min-h-0 gap-2 xl:grid-cols-[minmax(0,0.95fr)_minmax(340px,1.05fr)]">
               <div className="flex min-h-0 flex-col rounded-[22px] border border-amber-300 bg-amber-50/60 p-2 sm:p-2.5">
@@ -2690,6 +2734,10 @@ export default function ExtrasView({
           </div>
         </div>
 
+        )}
+
+        {SHOW_LEGACY_CATEGORIES_PANEL && (
+        <>
         <div data-test="categories-old" className="hidden">
           <div className="h-full overflow-y-auto p-3 sm:p-4 lg:p-5 [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none' }}>
             <div className="mb-3 grid grid-cols-2 gap-2 xl:grid-cols-4">
@@ -3063,6 +3111,8 @@ export default function ExtrasView({
             )}
           </div>
         </div>
+        </>
+        )}
 
       </div>
 

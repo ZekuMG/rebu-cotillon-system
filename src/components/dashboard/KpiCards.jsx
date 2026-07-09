@@ -17,15 +17,11 @@ import { hasPermission } from '../../utils/userPermissions';
 import { FancyPrice } from '../FancyPrice';
 import { HintIcon } from '../HintIcon';
 
-export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, currentUser, setTempOpeningBalance, setIsOpeningBalanceModalOpen, globalFilter, expenses = [], isNetProfitPending = false, isNetProfitUnverified = false, onOpenExpenseModal }) => {
+export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, currentUser, setTempOpeningBalance, setIsOpeningBalanceModalOpen, globalFilter, expenses = [], onOpenExpenseModal }) => {
   const canManageExpenses = hasPermission(currentUser, 'extras.expenses.manage');
   const canManageRegister = hasPermission(currentUser, 'register.manage');
   const canViewProfit = hasPermission(currentUser, 'metrics.viewProfit');
-  const netProfitStatusLabel = isNetProfitPending
-    ? 'Sincronizando...'
-    : isNetProfitUnverified
-      ? 'Revisar costos'
-      : null;
+  const isNetNegative = Number(kpiStats.net || 0) < 0;
   const getPeriodText = (prefix) => {
     if (globalFilter === 'day') return `${prefix} del Dia`;
     if (globalFilter === 'week') return `${prefix} Semanal`;
@@ -72,29 +68,25 @@ export const KpiCard = ({ widgetKey, kpiStats, averageTicket, openingBalance, cu
       );
     case 'net':
       return (
-        <div className={`bg-white p-3 rounded-lg shadow-sm border relative overflow-hidden flex flex-col justify-between h-24 ${!canViewProfit ? 'border-slate-200' : isNetProfitUnverified ? 'border-amber-200' : 'border-emerald-100'}`}>
+        <div className={`bg-white p-3 rounded-lg shadow-sm border relative overflow-hidden flex flex-col justify-between h-24 ${!canViewProfit ? 'border-slate-200' : isNetNegative ? 'border-rose-200' : 'border-emerald-100'}`}>
           <div className="flex justify-between items-start z-10">
-            <span className={`text-[11px] font-black uppercase tracking-wide ${!canViewProfit ? 'text-slate-400' : isNetProfitUnverified ? 'text-amber-600' : 'text-emerald-500'}`}>Ganancia Neta</span>
+            <span className={`text-[11px] font-black uppercase tracking-wide ${!canViewProfit ? 'text-slate-400' : isNetNegative ? 'text-rose-600' : 'text-emerald-500'}`}>Resultado Caja</span>
             <div className="flex items-center gap-1.5">
               <HintIcon
                 hint={!canViewProfit
-                  ? 'Tu usuario no tiene permiso para ver costos y ganancias.'
-                  : isNetProfitPending
-                    ? 'Esperando costos/productos para calcular la ganancia neta real.'
-                    : isNetProfitUnverified
-                      ? 'Hay ventas pero no se detectaron costos vendidos. Revisa que los productos tengan costo cargado antes de tomar este valor como final.'
-                      : 'Ganancia neta del periodo: ingreso bruto menos costos de productos vendidos y gastos registrados.'}
+                  ? 'Tu usuario no tiene permiso para ver resultado y ganancias.'
+                  : 'Resultado del periodo: ingreso cobrado menos gastos registrados. El costo vendido se usa para margen de productos, no para caja.'}
                 size={13}
                 side="left"
               />
-              <DollarSign size={14} className={!canViewProfit ? 'text-slate-400' : isNetProfitUnverified ? 'text-amber-500' : 'text-emerald-500'} />
+              <DollarSign size={14} className={!canViewProfit ? 'text-slate-400' : isNetNegative ? 'text-rose-500' : 'text-emerald-500'} />
             </div>
           </div>
           {/* ♻️ FIX: FancyPrice */}
-          <span className={`font-black z-10 ${!canViewProfit ? 'text-slate-400' : isNetProfitUnverified ? 'text-amber-600' : 'text-emerald-600'} ${netProfitStatusLabel || !canViewProfit ? 'text-[11px] uppercase tracking-[0.08em]' : 'text-xl'}`}>
-            {!canViewProfit ? 'No disponible' : netProfitStatusLabel || <FancyPrice amount={kpiStats.net} />}
+          <span className={`font-black z-10 ${!canViewProfit ? 'text-slate-400 text-[11px] uppercase tracking-[0.08em]' : isNetNegative ? 'text-rose-600 text-xl' : 'text-emerald-600 text-xl'}`}>
+            {!canViewProfit ? 'No disponible' : <FancyPrice amount={kpiStats.net} />}
           </span>
-          <div className={`absolute bottom-0 left-0 w-full h-1 ${!canViewProfit ? 'bg-slate-300' : isNetProfitUnverified ? 'bg-amber-400' : 'bg-emerald-400'}`}></div>
+          <div className={`absolute bottom-0 left-0 w-full h-1 ${!canViewProfit ? 'bg-slate-300' : isNetNegative ? 'bg-rose-400' : 'bg-emerald-400'}`}></div>
         </div>
       );
     case 'opening':

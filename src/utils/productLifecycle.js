@@ -168,6 +168,24 @@ export const upsertCasaAlbertoPriceTracking = (
       ? trackingPatch.suggestedSalePrice
       : previousTracking.suggestedSalePrice,
   );
+  const rawSupplierPrice = normalizeSupplierTrackingPrice(
+    hasOwn(trackingPatch, 'rawSupplierPrice')
+      ? trackingPatch.rawSupplierPrice
+      : previousTracking.rawSupplierPrice ?? lastSupplierPrice,
+  );
+  const unitDivisorValue = Number(
+    hasOwn(trackingPatch, 'unitDivisor')
+      ? trackingPatch.unitDivisor
+      : previousTracking.unitDivisor ?? 1,
+  );
+  const unitDivisor = Number.isFinite(unitDivisorValue) && unitDivisorValue > 0
+    ? Math.max(1, Math.round(unitDivisorValue))
+    : 1;
+  const unitSupplierPrice = normalizeSupplierTrackingPrice(
+    hasOwn(trackingPatch, 'unitSupplierPrice')
+      ? trackingPatch.unitSupplierPrice
+      : previousTracking.unitSupplierPrice ?? (rawSupplierPrice ? rawSupplierPrice / unitDivisor : rawSupplierPrice),
+  );
 
   return {
     ...nextLinks,
@@ -180,6 +198,9 @@ export const upsertCasaAlbertoPriceTracking = (
         previousSupplierPrice,
         previousPurchasePrice,
         suggestedSalePrice,
+        rawSupplierPrice,
+        unitSupplierPrice,
+        unitDivisor,
         reviewStatus: trackingPatch.reviewStatus || previousTracking.reviewStatus || 'unchecked',
         lastCheckedAt: trackingPatch.lastCheckedAt || previousTracking.lastCheckedAt || now,
         lastChangedAt: trackingPatch.lastChangedAt || previousTracking.lastChangedAt || null,

@@ -133,8 +133,7 @@ export default function InventoryView({
   useEffect(() => {
     const query = String(inventorySearch || '').trim();
     const searchInactive = inactiveSearchHandlerRef.current;
-    const shouldFetchInactive = showInactiveOnly || query.length >= 2;
-    if (!searchInactive || !shouldFetchInactive) {
+    if (!searchInactive || !showInactiveOnly) {
       setInactiveSearchResults([]);
       setInactiveSearchLoading(false);
       return undefined;
@@ -219,17 +218,13 @@ export default function InventoryView({
   const searchString = (inventorySearch || '').toLowerCase().trim();
   const searchWords = searchString ? searchString.split(/\s+/) : [];
   const activeInventory = (inventory || []).filter((item) => getProductActiveState(item));
-  const inactiveSearchInventory = (showInactiveOnly || searchWords.length > 0)
+  const inactiveSearchInventory = showInactiveOnly
     ? (inactiveSearchResults || []).filter((item) => !getProductActiveState(item))
     : [];
   const inactiveSearchResultIds = new Set(inactiveSearchInventory.map((item) => String(item.id)));
-  const inactiveIds = new Set(activeInventory.map((item) => String(item.id)));
   const inventoryForSearch = showInactiveOnly
     ? inactiveSearchInventory
-    : [
-        ...activeInventory,
-        ...inactiveSearchInventory.filter((item) => !inactiveIds.has(String(item.id))),
-      ];
+    : activeInventory;
 
   const filteredInventory = inventoryForSearch.filter((item) => {
     const matchesSearch = searchWords.length === 0 || searchWords.every(word =>
@@ -303,7 +298,7 @@ export default function InventoryView({
   const visibleInventoryCount = filteredInventory.length;
   const inactiveButtonMeta = showInactiveOnly
     ? {
-        label: inactiveSearchLoading ? 'Cargando...' : 'Inhabilitados',
+        label: 'Inhabilitados',
         title: 'Mostrando solo productos inhabilitados. Click para volver al catalogo normal.',
         buttonClass: 'bg-slate-800 border-slate-700 text-white shadow-inner hover:bg-slate-700',
         iconClass: 'text-amber-300',
@@ -584,9 +579,13 @@ export default function InventoryView({
                 });
               }}
               title={inactiveButtonMeta.title}
+              aria-pressed={showInactiveOnly}
               className={`flex h-8 min-[1920px]:h-9 min-w-0 items-center justify-center gap-1.5 rounded-lg border px-1.5 text-xs font-semibold transition-all ${inactiveButtonMeta.buttonClass}`}
             >
-              <PackageX size={14} className={inactiveButtonMeta.iconClass} />
+              <PackageX
+                size={14}
+                className={`${inactiveButtonMeta.iconClass} ${inactiveSearchLoading && showInactiveOnly ? 'animate-pulse' : ''}`}
+              />
               <span className="inline truncate">{inactiveButtonMeta.label}</span>
             </button>
 
@@ -998,7 +997,7 @@ export default function InventoryView({
             {hasInventoryWriteAccess && (
               <div className="space-y-3 pt-2">
                 {canEditProducts && <button onClick={() => setEditingProduct(selectedProduct)} className="w-full py-2.5 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 transition flex items-center justify-center gap-2 shadow-lg"><Edit size={17} /> Editar Detalles</button>}
-                {canDeleteProducts && <button onClick={() => { handleDeleteProduct(selectedProduct.id); setSelectedProduct(null); }} className="w-full py-2.5 bg-white text-red-600 border border-red-200 rounded-xl font-bold hover:bg-red-50 transition flex items-center justify-center gap-2"><Trash2 size={17} /> Eliminar Producto</button>}
+                {canDeleteProducts && <button onClick={() => { handleDeleteProduct(selectedProduct); setSelectedProduct(null); }} className="w-full py-2.5 bg-white text-red-600 border border-red-200 rounded-xl font-bold hover:bg-red-50 transition flex items-center justify-center gap-2"><Trash2 size={17} /> Eliminar Producto</button>}
               </div>
             )}
           </div>

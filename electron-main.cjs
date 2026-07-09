@@ -13,6 +13,175 @@ const SUPPLIER_IMAGE_PARTITION = 'persist:rebu-casa-alberto-images';
 const SUPPLIER_LOGIN_URL = 'http://cotilloncasaalberto.com.ar/pedido/login.php';
 const SUPPLIER_DEFAULT_ORIGIN = 'http://cotilloncasaalberto.com.ar';
 const SUPPLIER_RESTRICTED_PATH = '/pedido/index_restringido.php';
+const OPENAI_IMAGE_EDIT_ENDPOINT = 'https://api.openai.com/v1/images/edits';
+
+const readEnvFileValue = (key) => {
+  const candidateFiles = [
+    path.join(app.getAppPath(), '.env.local'),
+    path.join(app.getAppPath(), '.env'),
+    path.join(process.cwd(), '.env.local'),
+    path.join(process.cwd(), '.env'),
+  ];
+
+  for (const filePath of candidateFiles) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const content = fs.readFileSync(filePath, 'utf8');
+      const match = content.match(new RegExp(`^\\s*${key}\\s*=\\s*(.+?)\\s*$`, 'm'));
+      if (match?.[1]) return match[1].trim().replace(/^['"]|['"]$/g, '');
+    } catch {
+      // La variable de entorno sigue siendo la fuente principal.
+    }
+  }
+  return '';
+};
+
+const getOpenAIApiKey = () =>
+  String(process.env.OPENAI_API_KEY || readEnvFileValue('OPENAI_API_KEY') || '').trim();
+
+const decodeImageInput = async (source) => {
+  const rawSource = String(source || '').trim();
+  if (!rawSource) throw new Error('No se recibio una imagen para editar.');
+
+  if (rawSource.startsWith('data:image/')) {
+    const match = rawSource.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+    if (!match) throw new Error('La imagen base64 no tiene un formato valido.');
+    return {
+      buffer: Buffer.from(match[2], 'base64'),
+      mimeType: match[1],
+      fileName: `rebu-product.${match[1].includes('png') ? 'png' : match[1].includes('webp') ? 'webp' : 'jpg'}`,
+    };
+  }
+
+  const parsedUrl = new URL(rawSource);
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+    throw new Error('La URL de imagen no esta permitida.');
+  }
+
+  const response = await fetch(parsedUrl.href);
+  if (!response.ok) {
+    throw new Error(`No se pudo descargar la imagen original (${response.status}).`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  const contentType = response.headers.get('content-type') || 'image/jpeg';
+  return {
+    buffer: Buffer.from(arrayBuffer),
+    mimeType: contentType.split(';')[0] || 'image/jpeg',
+    fileName: `rebu-product.${contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg'}`,
+  };
+};
+
+const editImageWithOpenAI = async ({
+  imageUrl,
+  logoImageUrl = '',
+  logoInstruction = '',
+  referenceImages = [],
+  prompt,
+  productTitle = '',
+} = {}) => {
+  const apiKey = getOpenAIApiKey();
+  if (!apiKey) {
+    return {
+      success: false,
+      error: 'Falta OPENAI_API_KEY. Configurala como variable de entorno o en .env.local.',
+    };
+  }
+
+  const safePrompt = String(prompt || '').trim();
+  if (safePrompt.length < 12) {
+    return { success: false, error: 'El prompt es demasiado corto para editar la foto.' };
+  }
+
+  const imageInput = await decodeImageInput(imageUrl);
+  const logoInput = logoImageUrl ? await decodeImageInput(logoImageUrl) : null;
+  const safeReferenceImages = Array.isArray(referenceImages)
+    ? referenceImages.slice(0, 6).filter((item) => item?.imageUrl)
+    : [];
+  const decodedReferences = [];
+  for (const [index, reference] of safeReferenceImages.entries()) {
+    const input = await decodeImageInput(reference.imageUrl);
+    decodedReferences.push({
+      ...reference,
+      input,
+      imageNumber: 2 + (logoInput ? 1 : 0) + index,
+    });
+  }
+  const finalPrompt = [
+    'Input images:',
+    '- Image 1 is the product photo to edit.',
+    logoInput
+      ? '- Image 2 is the brand logo/reference image. Treat it only as the Rebu logo, not as another product.'
+      : '',
+    ...decodedReferences.map((reference) => (
+      `- Image ${reference.imageNumber} is an extra reference. Role: ${String(reference.role || 'reference').trim()}. ${String(reference.instruction || '').trim()}`
+    )),
+    '',
+    safePrompt,
+    logoInput && logoInstruction
+      ? `Logo instruction: ${String(logoInstruction || '').trim()}`
+      : '',
+    decodedReferences.length > 0
+      ? [
+          'Extra image instructions:',
+          ...decodedReferences.map((reference) => (
+            `Image ${reference.imageNumber} (${String(reference.name || reference.role || 'reference').trim()}): ${String(reference.instruction || 'Use only as visual reference.').trim()}`
+          )),
+        ].join('\n')
+      : '',
+    '',
+    `Producto de Rebu Cotillon: ${String(productTitle || 'producto de cotillon').slice(0, 140)}`,
+    'Preservar el producto principal, sus colores reales, bordes, textura, sombras y perspectiva.',
+    'No agregar texto, logos, marcas de agua ni objetos nuevos, salvo que el prompt o la instruccion del logo lo pidan explicitamente.',
+  ].join('\n');
+
+  const form = new FormData();
+  form.append('model', 'gpt-image-2');
+  form.append('image[]', new Blob([imageInput.buffer], { type: imageInput.mimeType }), imageInput.fileName);
+  if (logoInput) {
+    form.append('image[]', new Blob([logoInput.buffer], { type: logoInput.mimeType }), `rebu-logo-${logoInput.fileName}`);
+  }
+  decodedReferences.forEach((reference, index) => {
+    form.append(
+      'image[]',
+      new Blob([reference.input.buffer], { type: reference.input.mimeType }),
+      `rebu-reference-${index + 1}-${reference.input.fileName}`,
+    );
+  });
+  form.append('prompt', finalPrompt);
+  form.append('quality', 'medium');
+  form.append('size', '1024x1024');
+  form.append('output_format', 'webp');
+
+  const response = await fetch(OPENAI_IMAGE_EDIT_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: form,
+  });
+
+  const responseBody = await response.json().catch(() => null);
+  if (!response.ok) {
+    return {
+      success: false,
+      error: responseBody?.error?.message || `OpenAI respondio ${response.status}.`,
+    };
+  }
+
+  const b64 = responseBody?.data?.[0]?.b64_json;
+  if (!b64) {
+    return { success: false, error: 'OpenAI no devolvio una imagen editable.' };
+  }
+
+  return {
+    success: true,
+    imageDataUrl: `data:image/webp;base64,${b64}`,
+    revisedPrompt: responseBody?.data?.[0]?.revised_prompt || '',
+    usage: responseBody?.usage || null,
+  };
+};
+
 const sanitizePdfFileName = (value) => {
   const fallback = 'rebu-documento.pdf';
   const baseName = String(value || fallback)
@@ -1515,6 +1684,21 @@ app.on('ready', () => {
       supplierCode: request?.supplierCode || request?.providerCode,
       title: request?.title,
     });
+  });
+
+  ipcMain.handle('openai-image-edit', async (event, request) => {
+    if (!isTrustedIpcSender(event)) {
+      return { success: false, error: 'Origen IPC no autorizado' };
+    }
+
+    try {
+      return await editImageWithOpenAI(request || {});
+    } catch (error) {
+      return {
+        success: false,
+        error: error?.message || 'No se pudo editar la imagen con OpenAI.',
+      };
+    }
   });
 
   createWindow();

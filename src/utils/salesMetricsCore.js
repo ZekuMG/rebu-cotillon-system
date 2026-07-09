@@ -5,6 +5,20 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const toNumber = (value) => Number(value) || 0;
 
+const parseFiniteNumber = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+const pickNumericField = (source = {}, fields = []) => {
+  for (const field of fields) {
+    const value = parseFiniteNumber(source?.[field]);
+    if (value !== null) return { field, value };
+  }
+  return null;
+};
+
 export const startOfDay = (date) => {
   const next = new Date(date);
   next.setHours(0, 0, 0, 0);
@@ -173,16 +187,56 @@ export const isTemporaryCustomItem = (item = {}) => {
   );
 };
 
+const SNAPSHOT_UNIT_COST_FIELDS = [
+  'purchasePriceAtSale',
+  'purchase_price_at_sale',
+  'unitCostAtSale',
+  'unit_cost_at_sale',
+  'costAtSale',
+  'cost_at_sale',
+  'snapshotUnitCost',
+  'snapshot_unit_cost',
+  'cost',
+  'unitCost',
+  'unit_cost',
+  'purchasePrice',
+  'purchase_price',
+  'costPrice',
+  'cost_price',
+];
+
+const INVENTORY_UNIT_COST_FIELDS = [
+  'purchasePrice',
+  'purchase_price',
+  'cost',
+  'unitCost',
+  'unit_cost',
+  'costPrice',
+  'cost_price',
+];
+
+const emptyCostBasis = () => ({ snapshot: 0, inventory: 0, missing: 0, excluded: 0 });
+
+const mergeCostBasis = (...basisItems) =>
+  basisItems.reduce((merged, basis = {}) => ({
+    snapshot: merged.snapshot + toNumber(basis.snapshot),
+    inventory: merged.inventory + toNumber(basis.inventory),
+    missing: merged.missing + toNumber(basis.missing),
+    excluded: merged.excluded + toNumber(basis.excluded),
+  }), emptyCostBasis());
+
+export const getCostBasisStatus = (basis = {}, totalCost = 0) => {
+  const hasSnapshot = toNumber(basis.snapshot) > 0;
+  const hasInventoryFallback = toNumber(basis.inventory) > 0;
+  const hasMissing = toNumber(basis.missing) > 0;
+
+  if (!hasSnapshot && !hasInventoryFallback && (!hasMissing || totalCost <= 0)) return 'missing';
+  if (hasInventoryFallback || hasMissing) return 'estimated';
+  return 'real';
+};
+
 export const getExplicitItemUnitCost = (item = {}) =>
-  toNumber(
-    item.cost ??
-      item.unitCost ??
-      item.unit_cost ??
-      item.purchasePrice ??
-      item.purchase_price ??
-      item.costPrice ??
-      item.cost_price
-  );
+  toNumber(pickNumericField(item, SNAPSHOT_UNIT_COST_FIELDS)?.value);
 
 export const isDiscountItem = (item = {}) =>
   Boolean(item.isDiscount || item.is_discount || item.type === 'discount');
@@ -238,43 +292,108 @@ export const getItemRevenue = (item = {}) => {
   return toNumber(item.price ?? item.unit_price ?? item.newPrice) * getItemQty(item);
 };
 
-export const getItemCost = (item = {}, lookups) => {
-  if (shouldSkipCostItem(item)) return 0;
-
-  if (isTemporaryCustomItem(item)) {
-    return getExplicitItemUnitCost(item) * getItemQty(item);
+export const getItemCostInfo = (item = {}, lookups) => {
+  if (shouldSkipCostItem(item)) {
+    return {
+      unitCost: 0,
+      totalCost: 0,
+      source: 'excluded',
+      status: 'excluded',
+      basis: { ...emptyCostBasis(), excluded: 1 },
+    };
   }
 
   if (item?.isCombo && Array.isArray(item.productsIncluded) && item.productsIncluded.length > 0) {
     const comboQty = toNumber(item.qty ?? item.quantity ?? 1) || 1;
-    return item.productsIncluded.reduce((sum, included) => {
-      const product = getLiveProduct(included, lookups);
-      const qty = toNumber(included.quantity ?? included.qty ?? 1);
-      return sum + toNumber(product?.purchasePrice ?? product?.purchase_price ?? included.purchasePrice ?? included.purchase_price ?? included.cost) * qty * comboQty;
-    }, 0);
+    const includedInfo = item.productsIncluded.map((included) => {
+      const qty = toNumber(included.quantity ?? included.qty ?? 1) || 1;
+      const info = getItemCostInfo(included, lookups);
+      return {
+        ...info,
+        totalCost: toNumber(info.unitCost) * qty * comboQty,
+      };
+    });
+    const totalCost = includedInfo.reduce((sum, info) => sum + toNumber(info.totalCost), 0);
+    const basis = mergeCostBasis(...includedInfo.map((info) => info.basis));
+    return {
+      unitCost: comboQty ? totalCost / comboQty : totalCost,
+      totalCost,
+      source: basis.inventory || basis.missing ? 'mixed' : 'snapshot',
+      status: getCostBasisStatus(basis, totalCost),
+      basis,
+    };
+  }
+
+  const qty = getItemQty(item);
+  const snapshotCost = pickNumericField(item, SNAPSHOT_UNIT_COST_FIELDS);
+  if (snapshotCost && snapshotCost.value > 0) {
+    const totalCost = snapshotCost.value * qty;
+    const basis = { ...emptyCostBasis(), snapshot: 1 };
+    return {
+      unitCost: snapshotCost.value,
+      totalCost,
+      source: 'snapshot',
+      status: getCostBasisStatus(basis, totalCost),
+      basis,
+    };
   }
 
   const product = getLiveProduct(item, lookups);
-  return toNumber(product?.purchasePrice ?? product?.purchase_price ?? item.purchasePrice ?? item.purchase_price ?? item.cost) * getItemQty(item);
+  const inventoryCost = pickNumericField(product, INVENTORY_UNIT_COST_FIELDS);
+  if (inventoryCost && inventoryCost.value > 0) {
+    const totalCost = inventoryCost.value * qty;
+    const basis = { ...emptyCostBasis(), inventory: 1 };
+    return {
+      unitCost: inventoryCost.value,
+      totalCost,
+      source: 'inventory',
+      status: getCostBasisStatus(basis, totalCost),
+      basis,
+    };
+  }
+
+  const basis = { ...emptyCostBasis(), missing: 1 };
+  return {
+    unitCost: 0,
+    totalCost: 0,
+    source: 'missing',
+    status: 'missing',
+    basis,
+  };
+};
+
+export const getItemCost = (item = {}, lookups) => {
+  return getItemCostInfo(item, lookups).totalCost;
 };
 
 export const getTransactionCost = (tx = {}, lookups) => {
   const stockChanges = Array.isArray(tx.stockChanges) ? tx.stockChanges : [];
-  const customItemsCost = (tx.items || []).reduce((sum, item) => {
+  const items = Array.isArray(tx.items) ? tx.items : [];
+  const itemCostInfos = items.map((item) => getItemCostInfo(item, lookups));
+  const itemCost = itemCostInfos.reduce((sum, info) => sum + toNumber(info.totalCost), 0);
+  const itemBasis = mergeCostBasis(...itemCostInfos.map((info) => info.basis));
+  const customItemsCost = items.reduce((sum, item) => {
     if (!isTemporaryCustomItem(item) || shouldSkipCostItem(item)) return sum;
     return sum + getItemCost(item, lookups);
   }, 0);
+  const hasCompleteItemCostBasis = itemBasis.missing === 0 && (itemBasis.snapshot > 0 || itemBasis.inventory > 0 || itemCost > 0);
+
+  if (items.length > 0 && (stockChanges.length === 0 || hasCompleteItemCostBasis)) {
+    return itemCost;
+  }
 
   if (stockChanges.length > 0) {
     return stockChanges.reduce((sum, change) => {
       const productId = change.productId || change.product_id || change.id;
       const product = productId ? lookups.byId.get(String(productId)) : null;
       const qty = Math.abs(toNumber(change.quantitySold ?? change.quantityReserved ?? change.quantityChanged ?? change.quantity ?? change.qty));
-      return sum + toNumber(product?.purchasePrice ?? product?.purchase_price ?? change.purchasePrice ?? change.purchase_price ?? change.cost) * qty;
+      const changeCost = pickNumericField(change, SNAPSHOT_UNIT_COST_FIELDS)
+        || pickNumericField(product, INVENTORY_UNIT_COST_FIELDS);
+      return sum + toNumber(changeCost?.value) * qty;
     }, customItemsCost);
   }
 
-  return (tx.items || []).reduce((sum, item) => sum + getItemCost(item, lookups), 0);
+  return itemCost;
 };
 
 export const getTransactionProfit = (tx = {}, lookups) =>
@@ -472,10 +591,14 @@ export const buildSalesDataset = ({
     const cost = scopedItemFilters
       ? metricItems.reduce((sum, item) => sum + getItemCost(item, lookups), 0)
       : getTransactionCost(tx, lookups);
-    const discountImpact = scopedItemFilters && grossItemsRevenue > 0
+    const scopedDiscountImpact = scopedItemFilters && grossItemsRevenue > 0
       ? totalDiscount * Math.min(1, Math.max(0, revenue / grossItemsRevenue))
       : 0;
-    const profit = revenue - cost - discountImpact;
+    const itemDiscountImpact = scopedItemFilters
+      ? scopedDiscountImpact
+      : Math.max(0, grossItemsRevenue - originalTotal, totalDiscount);
+    const cashProfit = revenue - scopedDiscountImpact;
+    const theoreticalProfit = revenue - cost - scopedDiscountImpact;
     return {
       ...tx,
       date: tx.metricDate,
@@ -484,11 +607,13 @@ export const buildSalesDataset = ({
       items,
       metricItems,
       metricScopeRatio: scopedItemFilters && grossItemsRevenue > 0 ? Math.min(1, Math.max(0, revenue / grossItemsRevenue)) : 1,
-      discountImpact,
+      discountImpact: scopedDiscountImpact,
+      itemDiscountImpact,
       stockChanges: Array.isArray(tx.stockChanges) ? tx.stockChanges : [],
       cost,
-      profit,
-      net: profit,
+      theoreticalProfit,
+      profit: cashProfit,
+      net: cashProfit,
     };
   });
 
@@ -497,6 +622,7 @@ export const buildSalesDataset = ({
   const revenue = filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.total), 0);
   const cost = filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.cost), 0);
   const discountImpact = filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.discountImpact), 0);
+  const itemDiscountImpact = filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.itemDiscountImpact ?? tx.discountImpact), 0);
   const totalExpenses = filteredExpenses.reduce((sum, expense) => sum + toNumber(expense.amount), 0);
   const itemsSold = filteredTransactions.reduce((sum, tx) => (
     sum + (tx.metricItems || tx.items || []).reduce((itemSum, item) => (
@@ -513,11 +639,14 @@ export const buildSalesDataset = ({
       revenue,
       gross: revenue,
       cost,
-      discounts: discountImpact,
+      discounts: itemDiscountImpact,
       discountImpact,
+      itemDiscountImpact,
       expenses: totalExpenses,
-      profit: revenue - cost - discountImpact - totalExpenses,
-      net: revenue - cost - discountImpact - totalExpenses,
+      theoreticalProfit: revenue - cost - discountImpact,
+      theoreticalNet: revenue - cost - discountImpact - totalExpenses,
+      profit: revenue - discountImpact - totalExpenses,
+      net: revenue - discountImpact - totalExpenses,
       salesCount: filteredTransactions.length,
       count: filteredTransactions.length,
       averageTicket: filteredTransactions.length ? revenue / filteredTransactions.length : 0,

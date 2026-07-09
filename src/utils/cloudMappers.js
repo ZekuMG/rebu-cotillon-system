@@ -153,6 +153,12 @@ const mapSaleItemRecord = (item) => ({
   cost: Number(item.cost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
   unitCost: Number(item.cost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
   purchasePrice: Number(item.cost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  costAtSale: Number(item.cost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  unitCostAtSale: Number(item.cost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  purchasePriceAtSale: Number(item.cost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  priceAtSale: Number(item.price ?? 0) || 0,
+  lineSubtotal: Number(item.subtotal ?? item.line_subtotal ?? 0) || undefined,
+  costSource: item.cost_source || item.costSource || 'sale_items',
   isReward: Boolean(item.is_reward),
   isCustom: Boolean(item.is_custom),
   isDiscount: Boolean(item.is_discount),
@@ -168,9 +174,15 @@ const mapRecoveredSaleItem = (item) => ({
   qty: Number(item.quantity ?? item.qty ?? 1),
   price: Number(item.price ?? 0),
   subtotal: Number(item.subtotal ?? item.lineSubtotal ?? item.line_total ?? item.lineTotal ?? 0) || undefined,
-  cost: Number(item.cost ?? item.unitCost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
-  unitCost: Number(item.cost ?? item.unitCost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
-  purchasePrice: Number(item.cost ?? item.unitCost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  cost: Number(item.costAtSale ?? item.cost_at_sale ?? item.cost ?? item.unitCost ?? item.unit_cost ?? item.purchasePriceAtSale ?? item.purchase_price_at_sale ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  unitCost: Number(item.unitCostAtSale ?? item.unit_cost_at_sale ?? item.costAtSale ?? item.cost_at_sale ?? item.cost ?? item.unitCost ?? item.unit_cost ?? item.purchasePriceAtSale ?? item.purchase_price_at_sale ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  purchasePrice: Number(item.purchasePriceAtSale ?? item.purchase_price_at_sale ?? item.costAtSale ?? item.cost_at_sale ?? item.cost ?? item.unitCost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  costAtSale: Number(item.costAtSale ?? item.cost_at_sale ?? item.cost ?? item.unitCost ?? item.unit_cost ?? item.purchasePriceAtSale ?? item.purchase_price_at_sale ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  unitCostAtSale: Number(item.unitCostAtSale ?? item.unit_cost_at_sale ?? item.costAtSale ?? item.cost_at_sale ?? item.cost ?? item.unitCost ?? item.unit_cost ?? item.purchasePriceAtSale ?? item.purchase_price_at_sale ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  purchasePriceAtSale: Number(item.purchasePriceAtSale ?? item.purchase_price_at_sale ?? item.costAtSale ?? item.cost_at_sale ?? item.cost ?? item.unitCost ?? item.unit_cost ?? item.purchasePrice ?? item.purchase_price ?? 0) || 0,
+  priceAtSale: Number(item.priceAtSale ?? item.price_at_sale ?? item.price ?? 0) || 0,
+  lineSubtotal: Number(item.lineSubtotal ?? item.line_subtotal ?? item.subtotal ?? item.line_total ?? item.lineTotal ?? 0) || undefined,
+  costSource: item.costSource || item.cost_source || null,
   isReward: Boolean(item.isReward ?? item.is_reward ?? false),
   isDiscount: Boolean(item.isDiscount ?? item.is_discount ?? false),
   discountMode: item.discountMode || item.discount_mode || null,
@@ -200,6 +212,15 @@ const getSaleSnapshotScore = (items = []) => {
   if (items.some((item) => item?.product_type)) score += 4;
   if (items.some((item) => item?.isCustom || item?.isCombo || item?.isReward || item?.productId || item?.product_id || item?.id)) score += 2;
   if (items.some((item) => item?.price !== undefined)) score += 1;
+  if (items.some((item) => (
+    item?.purchasePriceAtSale !== undefined ||
+    item?.purchase_price_at_sale !== undefined ||
+    item?.unitCostAtSale !== undefined ||
+    item?.unit_cost_at_sale !== undefined ||
+    item?.costAtSale !== undefined ||
+    item?.cost_at_sale !== undefined ||
+    item?.cost !== undefined
+  ))) score += 3;
 
   return score;
 };
@@ -263,6 +284,12 @@ const enrichSaleItemsWithSnapshot = (items = [], snapshotItems = []) => {
       cost: item.cost || snapshotItem.cost || 0,
       unitCost: item.unitCost || snapshotItem.unitCost || snapshotItem.cost || 0,
       purchasePrice: item.purchasePrice || snapshotItem.purchasePrice || snapshotItem.cost || 0,
+      costAtSale: item.costAtSale || snapshotItem.costAtSale || snapshotItem.cost || 0,
+      unitCostAtSale: item.unitCostAtSale || snapshotItem.unitCostAtSale || snapshotItem.unitCost || snapshotItem.cost || 0,
+      purchasePriceAtSale: item.purchasePriceAtSale || snapshotItem.purchasePriceAtSale || snapshotItem.purchasePrice || snapshotItem.cost || 0,
+      priceAtSale: item.priceAtSale || snapshotItem.priceAtSale || snapshotItem.price || 0,
+      lineSubtotal: item.lineSubtotal || snapshotItem.lineSubtotal || snapshotItem.subtotal || undefined,
+      costSource: snapshotItem.costSource || item.costSource || null,
     };
   });
 

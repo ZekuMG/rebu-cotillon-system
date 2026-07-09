@@ -51,7 +51,7 @@ export const ExportPdfLayout = ({ data }) => {
   );
 
   return (
-    <div className="bg-white text-black w-full max-w-[210mm] mx-auto text-sm print:p-0 print:max-w-none relative min-h-screen overflow-hidden">
+    <div data-pdf-export data-theme="light" className="pdf-export-paper bg-white text-black w-full max-w-[210mm] mx-auto text-sm print:p-0 print:max-w-none relative min-h-screen overflow-hidden">
       
       {/* MARCA DE AGUA */}
       <div className="fixed inset-0 flex items-center justify-center pointer-events-none z-0 print:fixed">

@@ -70,7 +70,9 @@ export const MemberIdentityPanel = ({
   const [newMemberData, setNewMemberData] = useState(INITIAL_MEMBER_FORM);
   const [activeMember, setActiveMember] = useState(null);
   const [guestChoice, setGuestChoice] = useState('consumer-final');
+  const [isCreatingMember, setIsCreatingMember] = useState(false);
   const [loadedCount, setLoadedCount] = useState(10);
+  const createMemberInFlightRef = useRef(false);
   const scrollContainerRef = useRef(null);
 
   useEffect(() => {
@@ -103,6 +105,12 @@ export const MemberIdentityPanel = ({
   useEffect(() => {
     setLoadedCount(10);
   }, [memberSearch]);
+
+  useEffect(() => {
+    if (isOpen) return;
+    createMemberInFlightRef.current = false;
+    setIsCreatingMember(false);
+  }, [isOpen]);
 
   const filteredMembersAll = useMemo(() => {
     const safeClients = Array.isArray(clients) ? clients : [];
@@ -156,16 +164,26 @@ export const MemberIdentityPanel = ({
 
   const handleCreateMember = async (event) => {
     event.preventDefault();
+    if (createMemberInFlightRef.current) return;
+
     const cleanPayload = sanitizeMemberPayload(newMemberData);
     if (!cleanPayload.name) return;
 
-    const createdMember = await onCreateClient?.(cleanPayload);
-    if (!createdMember?.id) return;
+    createMemberInFlightRef.current = true;
+    setIsCreatingMember(true);
 
-    setActiveMember(createdMember);
-    setMode('member');
-    setPanelView('redeem');
-    setNewMemberData(INITIAL_MEMBER_FORM);
+    try {
+      const createdMember = await onCreateClient?.(cleanPayload);
+      if (!createdMember?.id) return;
+
+      setActiveMember(createdMember);
+      setMode('member');
+      setPanelView('redeem');
+      setNewMemberData(INITIAL_MEMBER_FORM);
+    } finally {
+      createMemberInFlightRef.current = false;
+      setIsCreatingMember(false);
+    }
   };
 
   const handleChooseGuest = () => {
@@ -547,7 +565,8 @@ export const MemberIdentityPanel = ({
           <button
             type="button"
             onClick={() => setPanelView('guest-options')}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black text-slate-600 transition-colors hover:bg-slate-50"
+            disabled={isCreatingMember}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60"
           >
             Volver
           </button>
@@ -562,9 +581,10 @@ export const MemberIdentityPanel = ({
               autoFocus
               required
               type="text"
+              disabled={isCreatingMember}
               value={newMemberData.name}
               onChange={(event) => setNewMemberData((prev) => ({ ...prev, name: event.target.value }))}
-              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-700 outline-none transition-all focus:border-fuchsia-400 focus:bg-white focus:ring-2 focus:ring-fuchsia-100"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-700 outline-none transition-all focus:border-fuchsia-400 focus:bg-white focus:ring-2 focus:ring-fuchsia-100 disabled:cursor-wait disabled:opacity-70"
               placeholder="Ej: Juan Perez"
             />
           </div>
@@ -573,9 +593,10 @@ export const MemberIdentityPanel = ({
             <label className="mb-1 block text-[11px] font-black uppercase tracking-[0.12em] text-slate-500">DNI</label>
             <input
               type="text"
+              disabled={isCreatingMember}
               value={newMemberData.dni}
               onChange={(event) => setNewMemberData((prev) => ({ ...prev, dni: event.target.value }))}
-              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-700 outline-none transition-all focus:border-fuchsia-400 focus:bg-white focus:ring-2 focus:ring-fuchsia-100"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-700 outline-none transition-all focus:border-fuchsia-400 focus:bg-white focus:ring-2 focus:ring-fuchsia-100 disabled:cursor-wait disabled:opacity-70"
               placeholder="Solo numeros"
             />
           </div>
@@ -584,9 +605,10 @@ export const MemberIdentityPanel = ({
             <label className="mb-1 block text-[11px] font-black uppercase tracking-[0.12em] text-slate-500">Telefono</label>
             <input
               type="text"
+              disabled={isCreatingMember}
               value={newMemberData.phone}
               onChange={(event) => setNewMemberData((prev) => ({ ...prev, phone: event.target.value }))}
-              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-700 outline-none transition-all focus:border-fuchsia-400 focus:bg-white focus:ring-2 focus:ring-fuchsia-100"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-700 outline-none transition-all focus:border-fuchsia-400 focus:bg-white focus:ring-2 focus:ring-fuchsia-100 disabled:cursor-wait disabled:opacity-70"
               placeholder="Cod + numero"
             />
           </div>
@@ -595,9 +617,10 @@ export const MemberIdentityPanel = ({
             <label className="mb-1 block text-[11px] font-black uppercase tracking-[0.12em] text-slate-500">Email</label>
             <input
               type="email"
+              disabled={isCreatingMember}
               value={newMemberData.email}
               onChange={(event) => setNewMemberData((prev) => ({ ...prev, email: event.target.value }))}
-              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-700 outline-none transition-all focus:border-fuchsia-400 focus:bg-white focus:ring-2 focus:ring-fuchsia-100"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-700 outline-none transition-all focus:border-fuchsia-400 focus:bg-white focus:ring-2 focus:ring-fuchsia-100 disabled:cursor-wait disabled:opacity-70"
               placeholder="cliente@ejemplo.com"
             />
           </div>
@@ -611,18 +634,20 @@ export const MemberIdentityPanel = ({
               <label className="inline-flex cursor-pointer items-center gap-2 text-[11px] font-black text-slate-600">
                 <input
                   type="checkbox"
+                  disabled={isCreatingMember}
                   checked={Boolean(newMemberData.instagramConnected)}
                   onChange={(event) => setNewMemberData((prev) => ({ ...prev, instagramConnected: event.target.checked }))}
-                  className="h-4 w-4 rounded border-fuchsia-200 text-fuchsia-600 focus:ring-fuchsia-200"
+                  className="h-4 w-4 rounded border-fuchsia-200 text-fuchsia-600 focus:ring-fuchsia-200 disabled:cursor-wait disabled:opacity-70"
                 />
                 Confirmado
               </label>
             </div>
             <input
               type="text"
+              disabled={isCreatingMember}
               value={newMemberData.instagramHandle}
               onChange={(event) => setNewMemberData((prev) => ({ ...prev, instagramHandle: event.target.value }))}
-              className="w-full rounded-xl border border-fuchsia-100 bg-white px-3 py-3 text-sm font-medium text-slate-700 outline-none transition-all focus:border-fuchsia-400 focus:ring-2 focus:ring-fuchsia-100"
+              className="w-full rounded-xl border border-fuchsia-100 bg-white px-3 py-3 text-sm font-medium text-slate-700 outline-none transition-all focus:border-fuchsia-400 focus:ring-2 focus:ring-fuchsia-100 disabled:cursor-wait disabled:opacity-70"
               placeholder="@usuario"
             />
             <p className="mt-2 text-[11px] font-semibold text-fuchsia-700">
@@ -635,15 +660,17 @@ export const MemberIdentityPanel = ({
           <button
             type="button"
             onClick={() => setPanelView('guest-options')}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-600 transition-colors hover:bg-slate-50"
+            disabled={isCreatingMember}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60"
           >
             Volver
           </button>
           <button
             type="submit"
-            className="rounded-xl bg-fuchsia-600 px-4 py-3 text-sm font-black text-white transition-colors hover:bg-fuchsia-700"
+            disabled={isCreatingMember}
+            className="rounded-xl bg-fuchsia-600 px-4 py-3 text-sm font-black text-white transition-colors hover:bg-fuchsia-700 disabled:cursor-wait disabled:bg-fuchsia-400"
           >
-            Guardar y seleccionar
+            {isCreatingMember ? 'Guardando...' : 'Guardar y seleccionar'}
           </button>
         </div>
       </form>
@@ -651,9 +678,9 @@ export const MemberIdentityPanel = ({
   );
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-200" onClick={isCreatingMember ? undefined : onClose}>
       <div className="relative flex h-[85vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl md:flex-row" onClick={(e) => e.stopPropagation()}>
-        <button onClick={onClose} className="absolute right-4 top-4 z-10 rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600">
+        <button onClick={isCreatingMember ? undefined : onClose} disabled={isCreatingMember} className="absolute right-4 top-4 z-10 rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-wait disabled:opacity-50">
           <X size={20} />
         </button>
         <aside className="w-full shrink-0 border-b border-slate-200 bg-slate-50/90 p-5 md:w-[340px] md:border-b-0 md:border-r">

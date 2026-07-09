@@ -355,18 +355,18 @@ export default function BudgetBuilderModal({
     draftItems.filter((item) => Number(item.newPrice || 0) >= 0)
   );
   const fieldShellClass =
-    'rounded-[16px] border border-slate-700/80 bg-[#0b1728] px-2 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]';
-  const panelShellClass = 'rounded-[18px] border border-slate-700/80 bg-[#0f1e33] p-1.5';
+    'budget-builder-field rounded-[16px] border border-slate-700/80 bg-[#0b1728] px-2 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]';
+  const panelShellClass = 'budget-builder-panel rounded-[18px] border border-slate-700/80 bg-[#0f1e33] p-1.5';
   const fieldInputClass =
-    'w-full rounded-[11px] border border-slate-600/80 bg-[#07111f] px-2 py-1 text-[12px] font-medium text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40';
+    'budget-builder-input w-full rounded-[11px] border border-slate-600/80 bg-[#07111f] px-2 py-1 text-[12px] font-medium text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40';
   const fieldSelectClass =
-    'w-full rounded-[11px] border border-slate-600/80 bg-[#07111f] px-2 py-1 text-[12px] font-semibold text-slate-100 outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40';
+    'budget-builder-input w-full rounded-[11px] border border-slate-600/80 bg-[#07111f] px-2 py-1 text-[12px] font-semibold text-slate-100 outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40';
   const fieldNumberClass =
-    'w-full rounded-[11px] border border-slate-600/80 bg-[#07111f] px-2 py-1 text-center text-[12px] font-black text-slate-100 outline-none [appearance:textfield] focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
+    'budget-builder-input w-full rounded-[11px] border border-slate-600/80 bg-[#07111f] px-2 py-1 text-center text-[12px] font-black text-slate-100 outline-none [appearance:textfield] focus:border-sky-400 focus:ring-1 focus:ring-sky-500/40 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
   const quantityInputClass =
-    'w-full rounded-[11px] border border-sky-500/45 bg-[#07111f] px-2 py-1 text-center text-[12px] font-black text-sky-100 outline-none [appearance:textfield] ring-1 ring-sky-500/20 focus:border-sky-300 focus:ring-sky-400/40 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
+    'budget-builder-input budget-builder-quantity-input w-full rounded-[11px] border border-sky-500/45 bg-[#07111f] px-2 py-1 text-center text-[12px] font-black text-sky-100 outline-none [appearance:textfield] ring-1 ring-sky-500/20 focus:border-sky-300 focus:ring-sky-400/40 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
   const lockedFieldClass =
-    'flex min-h-[30px] items-center rounded-[11px] border border-slate-700/90 bg-slate-900/70 px-2 py-1 text-[12px] font-semibold text-slate-200';
+    'budget-builder-locked-field flex min-h-[30px] items-center rounded-[11px] border border-slate-700/90 bg-slate-900/70 px-2 py-1 text-[12px] font-semibold text-slate-200';
 
   const handleCatalogScroll = (e) => {
     const { scrollTop, clientHeight, scrollHeight } = e.target;
@@ -504,6 +504,7 @@ export default function BudgetBuilderModal({
         product.product_type === 'weight'
           ? Math.round((Number(product.price) || 0) * 1000)
           : Number(product.price) || 0,
+      purchasePrice: Number(product.purchasePrice ?? product.purchase_price ?? 0) || 0,
       product_type: product.product_type || 'quantity',
       isTemporary: false,
       stock: Number(product.stock || 0),
@@ -747,7 +748,7 @@ export default function BudgetBuilderModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[80] bg-slate-950/70 backdrop-blur-sm p-2.5 sm:p-3">
+    <div className="budget-builder-modal fixed inset-0 z-[80] bg-slate-950/70 backdrop-blur-sm p-2.5 sm:p-3">
       <div className="mx-auto flex h-full max-h-[94vh] w-full max-w-[94rem] flex-col overflow-hidden rounded-[22px] border border-slate-700 bg-[#0b1728] shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-700 bg-[#0f1e33] px-3 py-2">
           <div className="flex items-center gap-2.5">
@@ -1334,7 +1335,7 @@ export default function BudgetBuilderModal({
                     return (
                       <div
                         key={item.id}
-                        className="overflow-hidden rounded-[13px] border border-slate-700/80 bg-[#0f1e33] px-1.5 py-[3px] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                        className="budget-builder-item-row overflow-hidden rounded-[13px] border border-slate-700/80 bg-[#0f1e33] px-1.5 py-[3px] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
                       >
                         <div className="grid min-w-0 gap-1 sm:grid-cols-[minmax(0,1.52fr)_90px_94px_94px_120px_30px]">
                           <label className={fieldShellClass}>
@@ -1414,7 +1415,7 @@ export default function BudgetBuilderModal({
                             />
                           </label>
 
-                          <div className="rounded-[13px] border border-emerald-400/25 bg-emerald-500/12 px-2 py-[3px]">
+                          <div className="budget-builder-item-subtotal rounded-[13px] border border-emerald-400/25 bg-emerald-500/12 px-2 py-[3px]">
                             <span className="mb-0.5 block text-[10px] font-black uppercase tracking-[0.1em] text-emerald-200">
                               Subtotal
                             </span>
@@ -1431,7 +1432,7 @@ export default function BudgetBuilderModal({
                           <button
                             type="button"
                             onClick={() => removeDraftItem(item.id)}
-                            className="flex h-full min-h-[38px] items-center justify-center rounded-[12px] border border-red-200 bg-red-50 text-red-600 transition hover:bg-red-100"
+                            className="budget-builder-delete-button flex h-full min-h-[38px] items-center justify-center rounded-[12px] border border-red-200 bg-red-50 text-red-600 transition hover:bg-red-100"
                           >
                             <Trash2 size={14} />
                           </button>

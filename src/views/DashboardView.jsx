@@ -118,7 +118,7 @@ export default function DashboardView({
   inventory,
   expenses = [],
   isLoading = false,
-  isProfitSyncing = false,
+  isProfitSyncing: _isProfitSyncing = false,
   emptyStateMessage = '',
   onOpenExpenseModal,
   onAlertClick,
@@ -359,13 +359,6 @@ export default function DashboardView({
     cleanTransactions.length > 0 ||
     cleanDailyLogs.length > 0 ||
     cleanExpenses.length > 0;
-  const hasGrossWithoutCost =
-    Number(kpiStats.gross || 0) > 0 &&
-    Number(kpiStats.cost || 0) <= 0 &&
-    Number(kpiStats.count || 0) > 0;
-  const isNetProfitPending = hasGrossWithoutCost && (isProfitSyncing || isLoading);
-  const isNetProfitUnverified = hasGrossWithoutCost && !isNetProfitPending;
-
   const renderWidget = (widgetKey) => {
     switch (widgetKey) {
       case 'payments':
@@ -747,8 +740,6 @@ export default function DashboardView({
                 setIsOpeningBalanceModalOpen={setIsOpeningBalanceModalOpen}
                 globalFilter={globalFilter}
                 expenses={filteredExpenses} 
-                isNetProfitPending={isNetProfitPending}
-                isNetProfitUnverified={isNetProfitUnverified}
                 onOpenExpenseModal={onOpenExpenseModal}
               />
             </div>

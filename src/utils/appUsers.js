@@ -30,6 +30,12 @@ export const APP_USER_ROLE_META = {
   seller: { label: 'Caja', avatar: 'VE', color: '#059669' },
 };
 
+export const LEGACY_DEFAULT_PASSWORDS = {
+  system: '1234',
+  owner: '1234',
+  seller: '4321',
+};
+
 export const normalizeUserText = (value) =>
   String(value || '')
     .normalize('NFD')
@@ -46,6 +52,15 @@ export const normalizeAppUserRole = (value) => {
   if (['seller', 'vendedor', 'caja'].includes(normalized)) return 'seller';
   return 'seller';
 };
+
+export const isUnsafeLegacyPassword = (role, password) => {
+  const normalizedRole = normalizeAppUserRole(role);
+  return String(password || '') === LEGACY_DEFAULT_PASSWORDS[normalizedRole];
+};
+
+export const hasUnsafeLegacyBootstrapPasswords = (seed = {}) =>
+  isUnsafeLegacyPassword('system', seed.systemUser?.password) ||
+  isUnsafeLegacyPassword('seller', seed.sellerUser?.password);
 
 export const getInitialsFromName = (value, fallback = 'US') => {
   const words = String(value || '')

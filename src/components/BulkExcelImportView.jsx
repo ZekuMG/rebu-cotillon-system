@@ -24,6 +24,10 @@ import { getExcelImportAliases, productMatchesExcelAlias } from '../utils/produc
 
 const REQUIRED_COLUMNS = ['codigo', 'descripcion', 'cantidad', 'precio', 'descuento', 'costo', 'venta'];
 const FIELD_KEYS = ['stock', 'cost', 'price'];
+const MAX_EXCEL_IMPORT_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+const MAX_EXCEL_IMPORT_ROWS = 5000;
+const MAX_EXCEL_IMPORT_COLUMNS = 80;
+const EXCEL_IMPORT_EXTENSIONS = new Set(['xlsx', 'xls']);
 
 const normalizeHeader = (value) =>
   String(value ?? '')
@@ -34,6 +38,22 @@ const normalizeHeader = (value) =>
     .replace(/[^a-z0-9]/g, '');
 
 const normalizeCode = (value) => String(value ?? '').trim();
+
+const getFileExtension = (fileName = '') => {
+  const parts = String(fileName).toLowerCase().split('.');
+  return parts.length > 1 ? parts.pop() : '';
+};
+
+const validateExcelImportFile = (file) => {
+  const extension = getFileExtension(file?.name);
+  if (!EXCEL_IMPORT_EXTENSIONS.has(extension)) {
+    throw new Error('Solo se permiten archivos .xlsx o .xls.');
+  }
+
+  if (Number(file?.size || 0) > MAX_EXCEL_IMPORT_FILE_SIZE_BYTES) {
+    throw new Error('El archivo es demasiado grande. El limite es 5 MB.');
+  }
+};
 
 const normalizeProductName = (value) =>
   String(value ?? '')
@@ -594,15 +614,39 @@ export default function BulkExcelImportView({
     setFileName(file.name);
 
     try {
+      validateExcelImportFile(file);
       const buffer = await file.arrayBuffer();
       const XLSX = await import('xlsx');
-      const workbook = XLSX.read(buffer, { type: 'array' });
+      const workbook = XLSX.read(buffer, {
+        type: 'array',
+        cellFormula: false,
+        cellHTML: false,
+        cellNF: false,
+        cellStyles: false,
+        sheetRows: MAX_EXCEL_IMPORT_ROWS + 1,
+        WTF: false,
+      });
       const firstSheetName = workbook.SheetNames[0];
       if (!firstSheetName) throw new Error('El archivo no tiene hojas.');
 
       const sheet = workbook.Sheets[firstSheetName];
-      const sheetRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      const range = sheet['!ref'] ? XLSX.utils.decode_range(sheet['!ref']) : null;
+      if (!range) throw new Error('La primera hoja esta vacia.');
+
+      const columnCount = range.e.c - range.s.c + 1;
+      if (columnCount > MAX_EXCEL_IMPORT_COLUMNS) {
+        throw new Error(`El archivo tiene demasiadas columnas. El limite es ${MAX_EXCEL_IMPORT_COLUMNS}.`);
+      }
+
+      const sheetRows = XLSX.utils.sheet_to_json(sheet, {
+        blankrows: false,
+        defval: '',
+        raw: false,
+      });
       if (sheetRows.length === 0) throw new Error('La primera hoja esta vacia.');
+      if (sheetRows.length > MAX_EXCEL_IMPORT_ROWS) {
+        throw new Error(`El archivo tiene demasiadas filas. El limite es ${MAX_EXCEL_IMPORT_ROWS}.`);
+      }
 
       setRows(parseWorkbookRows(sheetRows));
       setActiveTargetBySource({});

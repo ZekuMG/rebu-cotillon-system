@@ -118,6 +118,41 @@ const AUDIT_RANGE_OPTIONS = [
   { label: '6 meses', days: 180 },
 ];
 
+const parseClientMovementDateTime = (dateValue, timeValue) => {
+  if (!dateValue || dateValue === '--/--/--') return 0;
+  const rawDate = String(dateValue);
+  if (rawDate.includes('/')) {
+    const [day, month, year] = rawDate.split('/');
+    const fullYear = year && year.length === 2 ? `20${year}` : year;
+    const timePart = timeValue ? String(timeValue).split(' ')[0] : '00:00:00';
+    return new Date(`${fullYear}-${month}-${day}T${timePart}`).getTime();
+  }
+  return new Date(rawDate).getTime();
+};
+
+const getPointMovementDelta = (movement = {}) => {
+  const explicitDelta = Number(movement.signedDiff);
+  if (Number.isFinite(explicitDelta) && explicitDelta !== 0) return explicitDelta;
+  const points = Number(movement.points || 0);
+  return movement.type === 'earned' ? points : -points;
+};
+
+const getPointMovementLabel = (movement = {}) => {
+  if (movement.concept) return movement.concept;
+  if (movement.type === 'earned') return 'Puntos por compra';
+  if (movement.type === 'redeemed') return 'Canje de puntos';
+  if (movement.type === 'expired') return 'Vencimiento de puntos';
+  return 'Ajuste manual';
+};
+
+const getPointMovementTextClass = (movement = {}) => {
+  const delta = getPointMovementDelta(movement);
+  if (movement.type === 'expired') return 'text-red-600';
+  if (delta > 0) return 'text-green-600';
+  if (movement.type === 'redeemed') return 'text-orange-600';
+  return 'text-red-600';
+};
+
 export default function ClientsView({ 
   members, 
   addMember, 
@@ -129,6 +164,7 @@ export default function ClientsView({
   onDeleteTransaction,
   userCatalog,
   transactions = [],
+  dailyLogs = [],
   checkExpirations 
 }) {
   
@@ -253,16 +289,8 @@ export default function ClientsView({
   const getMemberHistory = (member) => {
     if (!member) return [];
 
-    const parseDateTime = (dStr, tStr) => {
-      if (!dStr || dStr === '--/--/--') return 0;
-      if (dStr.includes('/')) {
-        const [day, month, year] = dStr.split('/');
-        const fullYear = year.length === 2 ? `20${year}` : year;
-        const timePart = tStr ? tStr.split(' ')[0] : '00:00:00';
-        return new Date(`${fullYear}-${month}-${day}T${timePart}`).getTime();
-      }
-      return new Date(dStr).getTime();
-    };
+    const memberId = String(member.id || '');
+    const memberNumber = String(member.memberNumber || member.member_number || '');
 
     const memberSales = transactions.filter(tx => {
       if (!tx.client) return false;
@@ -271,36 +299,118 @@ export default function ClientsView({
              String(tx.client.memberNumber) === String(member.memberNumber);
     });
 
-    const normalizedHistory = memberSales
-      .map((tx) => {
+    const saleMovements = memberSales
+      .flatMap((tx) => {
         const earnedPoints = Number(tx.pointsEarned || 0);
         const spentPoints = Number(tx.pointsSpent || 0);
-        const signedDiff = earnedPoints - spentPoints;
-        const isRedemption = spentPoints > 0;
-
-        return {
-          id: tx.id,
+        const baseMovement = {
           orderId: tx.id,
           date: tx.date || '--/--/--',
           time: tx.time || tx.timestamp || '--:--',
-          type: isRedemption ? 'redeemed' : 'earned',
-          concept: isRedemption ? 'Canje en Compra' : 'Compra Regular',
           totalSale: tx.total,
-          points: isRedemption ? spentPoints : earnedPoints,
-          signedDiff,
         };
+
+        return [
+          spentPoints > 0
+            ? {
+                ...baseMovement,
+                id: `${tx.id}:redeemed`,
+                type: 'redeemed',
+                concept: 'Canje en compra',
+                points: spentPoints,
+                signedDiff: -spentPoints,
+                sequence: 0,
+              }
+            : null,
+          earnedPoints > 0
+            ? {
+                ...baseMovement,
+                id: `${tx.id}:earned`,
+                type: 'earned',
+                concept: 'Puntos por compra',
+                points: earnedPoints,
+                signedDiff: earnedPoints,
+                sequence: 1,
+              }
+            : null,
+        ].filter(Boolean);
       })
-      .sort((a, b) => parseDateTime(a.date, a.time) - parseDateTime(b.date, b.time));
+      .sort((a, b) =>
+        parseClientMovementDateTime(a.date, a.time) - parseClientMovementDateTime(b.date, b.time) ||
+        Number(a.sequence || 0) - Number(b.sequence || 0)
+      );
+
+    const logMovements = (Array.isArray(dailyLogs) ? dailyLogs : [])
+      .flatMap((log) => {
+        const details = log?.details && typeof log.details === 'object' ? log.details : {};
+        const action = String(log?.action || '');
+
+        const normalizedAction = action.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+        if (normalizedAction.includes('edici') && normalizedAction.includes('socio')) {
+          const logMemberId = String(details.id || '');
+          const logMemberNumber = String(details.number || details.memberNumber || '');
+          const pointsDelta = Number(details.pointsDelta || 0);
+          const matchesMember =
+            (memberId && logMemberId && memberId === logMemberId) ||
+            (memberNumber && logMemberNumber && memberNumber === logMemberNumber);
+
+          if (!matchesMember || !Number.isFinite(pointsDelta) || pointsDelta === 0) return [];
+
+          return [{
+            id: `log:${log.id}:points-adjust`,
+            orderId: '---',
+            date: log.date || log.created_at || '--/--/--',
+            time: log.timestamp || '--:--',
+            type: pointsDelta > 0 ? 'earned' : 'adjusted',
+            concept: 'Ajuste manual',
+            totalSale: 0,
+            points: Math.abs(pointsDelta),
+            signedDiff: pointsDelta,
+            sequence: 2,
+          }];
+        }
+
+        if (action === 'Auditoria de Puntos') {
+          const affectedMember = (Array.isArray(details.members) ? details.members : []).find((entry) => (
+            (memberId && String(entry.id || entry.memberId || '') === memberId) ||
+            (memberNumber && String(entry.memberNumber || '') === memberNumber)
+          ));
+          const expiredPoints = Number(affectedMember?.expiredPoints || 0);
+          if (!affectedMember || expiredPoints <= 0) return [];
+
+          return [{
+            id: `log:${log.id}:points-expired:${memberId || memberNumber}`,
+            orderId: '---',
+            date: log.date || log.created_at || '--/--/--',
+            time: log.timestamp || '--:--',
+            type: 'expired',
+            concept: 'Vencimiento de puntos',
+            totalSale: 0,
+            points: expiredPoints,
+            signedDiff: -expiredPoints,
+            sequence: 2,
+          }];
+        }
+
+        return [];
+      });
+
+    const normalizedHistory = [...saleMovements, ...logMovements]
+      .sort((a, b) =>
+        parseClientMovementDateTime(a.date, a.time) - parseClientMovementDateTime(b.date, b.time) ||
+        Number(a.sequence || 0) - Number(b.sequence || 0)
+      );
 
     const startingPoints =
       Number(member.points || 0) -
-      normalizedHistory.reduce((acc, movement) => acc + movement.signedDiff, 0);
+      normalizedHistory.reduce((acc, movement) => acc + getPointMovementDelta(movement), 0);
 
     let runningPoints = startingPoints;
 
     const historyWithTotals = normalizedHistory.map((movement) => {
       const prevPoints = runningPoints;
-      const newPoints = prevPoints + movement.signedDiff;
+      const newPoints = prevPoints + getPointMovementDelta(movement);
       runningPoints = newPoints;
 
       return {
@@ -310,7 +420,10 @@ export default function ClientsView({
       };
     });
 
-    return historyWithTotals.sort((a, b) => parseDateTime(b.date, b.time) - parseDateTime(a.date, a.time));
+    return historyWithTotals.sort((a, b) =>
+      parseClientMovementDateTime(b.date, b.time) - parseClientMovementDateTime(a.date, a.time) ||
+      Number(b.sequence || 0) - Number(a.sequence || 0)
+    );
   };
 
   useEffect(() => {
@@ -540,10 +653,12 @@ export default function ClientsView({
 
   const handlePrintPoints = () => {
     if (!selectedMember) return;
+    const pointHistory = getMemberHistory(selectedMember).slice(0, 10);
     
     const pointsTicketData = {
       isPointsTicket: true, 
       client: selectedMember,
+      pointHistory,
       date: new Date().toLocaleDateString('es-AR'),
       time: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
       id: selectedMember.memberNumber 
@@ -1027,12 +1142,16 @@ export default function ClientsView({
 
                   <div className="space-y-4">
                     {getMemberHistory(selectedMember).length > 0 ? (
-                        getMemberHistory(selectedMember).map((mov) => (
+                        getMemberHistory(selectedMember).map((mov) => {
+                          const movementDelta = getPointMovementDelta(mov);
+                          const movementSign = movementDelta >= 0 ? '+' : '-';
+
+                          return (
                         <div key={mov.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all">
                           <div className="flex justify-between items-start mb-3 border-b border-gray-50 pb-2">
                             <div>
-                              <p className={`text-sm font-bold ${mov.type === 'earned' ? 'text-green-600' : mov.type === 'redeemed' ? 'text-orange-600' : 'text-red-600'}`}>
-                                {mov.type === 'earned' ? (mov.concept || 'Compra Realizada') : mov.type === 'redeemed' ? (mov.concept || 'Canje de Puntos') : (mov.concept || 'Vencimiento')}
+                              <p className={`text-sm font-bold ${getPointMovementTextClass(mov)}`}>
+                                {getPointMovementLabel(mov)}
                               </p>
                               <p className="text-xs text-gray-400 font-medium mt-0.5">
                                 {mov.date} • {mov.time.replace(/hs/ig, '').trim().slice(0, 5)} hs
@@ -1061,8 +1180,8 @@ export default function ClientsView({
                             <div className="flex items-center gap-2 text-xs bg-slate-50 px-2 py-1.5 rounded-lg border border-slate-100">
                               <span className="text-gray-400 font-mono">{formatNumber(mov.prevPoints || 0)}</span>
                               <span className="text-gray-300">→</span>
-                              <span className={`font-bold ${mov.type === 'earned' ? 'text-green-600' : 'text-red-600'}`}>
-                                {mov.type === 'earned' ? '+' : '-'}{formatNumber(mov.points)}
+                              <span className={`font-bold ${getPointMovementTextClass(mov)}`}>
+                                {movementSign}{formatNumber(Math.abs(movementDelta))}
                               </span>
                               <span className="text-gray-300">→</span>
                               <span className="font-bold text-gray-700 font-mono">{formatNumber(mov.newPoints)}</span>
@@ -1077,7 +1196,8 @@ export default function ClientsView({
                             </button>
                           )}
                         </div>
-                      ))
+                          );
+                        })
                     ) : (
                       <div className="text-center py-10 text-gray-400 bg-white rounded-xl border border-dashed border-gray-200">
                         <p className="text-sm">Sin movimientos registrados</p>

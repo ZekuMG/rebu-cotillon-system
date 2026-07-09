@@ -10,4 +10,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   supplierImageLoginState: () => ipcRenderer.invoke('supplier-image-login-state'),
   supplierImageSearch: (request) => ipcRenderer.invoke('supplier-image-search', request),
   supplierPriceSearch: (request) => ipcRenderer.invoke('supplier-price-search', request),
+  openAIImageEdit: (request) => ipcRenderer.invoke('openai-image-edit', request),
 });

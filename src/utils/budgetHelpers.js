@@ -48,11 +48,23 @@ export const calculateBudgetTotal = (items = []) =>
 
 const normalizeBudgetIncludedProduct = (product = {}) => {
   const productType = product.product_type || 'quantity';
+  const purchasePrice = Number(
+    product.purchasePrice ??
+      product.purchase_price ??
+      product.cost ??
+      product.unitCost ??
+      product.unit_cost ??
+      0
+  ) || 0;
   return {
     id: product.id ?? product.productId ?? product.product_id ?? null,
     productId: product.productId ?? product.product_id ?? product.id ?? null,
     title: product.title || product.name || '',
     price: Number(product.price || product.newPrice || product.unit_price || 0) || 0,
+    cost: purchasePrice,
+    unitCost: purchasePrice,
+    purchasePrice,
+    purchase_price: purchasePrice,
     product_type: productType,
     quantity:
       Number(product.quantity ?? product.qty ?? (productType === 'weight' ? 1000 : 1)) ||
@@ -67,6 +79,14 @@ export const normalizeBudgetBuilderItem = (item = {}) => ({
   category: item.category || 'Otros',
   qty: Number(item.qty ?? item.quantity ?? 1) || 1,
   newPrice: Number(item.newPrice ?? item.unit_price ?? item.price ?? 0) || 0,
+  purchasePrice: Number(
+    item.purchasePrice ??
+      item.purchase_price ??
+      item.cost ??
+      item.unitCost ??
+      item.unit_cost ??
+      0
+  ) || 0,
   product_type: item.product_type || 'quantity',
   isTemporary: Boolean(item.isTemporary ?? item.is_custom ?? false),
   stock:
@@ -92,6 +112,9 @@ export const buildBudgetSnapshot = (items = []) =>
       category: item.category || 'Otros',
       quantity: Number(item.qty) || 1,
       unit_price: Number(item.newPrice) || 0,
+      purchase_price: Number(item.purchasePrice) || 0,
+      unit_cost: Number(item.purchasePrice) || 0,
+      cost: Number(item.purchasePrice) || 0,
       subtotal: calculateBudgetLineSubtotal(item),
       product_type: item.product_type || 'quantity',
       is_combo: Boolean(item.isCombo),
@@ -112,6 +135,7 @@ export const hydrateBudgetSnapshot = (itemsSnapshot = []) =>
       category: item.category,
       quantity: item.quantity,
       unit_price: item.unit_price,
+      purchase_price: item.purchase_price ?? item.unit_cost ?? item.cost,
       product_type: item.product_type,
       is_custom: item.is_custom,
       is_combo: item.is_combo,
@@ -128,6 +152,7 @@ export const buildExportItemsFromSnapshot = (itemsSnapshot = []) =>
     category: item.category,
     qty: item.qty,
     newPrice: item.newPrice,
+    purchasePrice: item.purchasePrice,
     product_type: item.product_type,
     isTemporary: item.isTemporary,
     stock: item.stock,
