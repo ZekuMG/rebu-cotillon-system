@@ -354,6 +354,7 @@ export default function HistoryView({
   navigationRequest,
   onSoftReload,
   isActive = false,
+  enableCloudFeed = true,
 }) {
   const hexToRgba = (hex, alpha) => {
     const normalized = String(hex || '').trim();
@@ -456,7 +457,7 @@ export default function HistoryView({
     isLoading: isRemoteTransactionsLoading,
     hasMore: remoteTransactionsHasMore,
   } = useHistoryTransactionsFeed({
-    enabled: isActive,
+    enabled: isActive && enableCloudFeed,
     page: historyFetchPage,
     pageSize: HISTORY_PAGE_SIZE,
     sortDirection: sortOrder,
@@ -498,6 +499,16 @@ export default function HistoryView({
     (combinedHistoryLogs || []).forEach((log) => {
       if (log.action !== 'Venta Anulada') return;
       const txId = log.details?.id || log.details?.transactionId;
+      if (txId) ids.add(String(txId));
+    });
+    return ids;
+  }, [combinedHistoryLogs]);
+
+  const logDeletedTransactionIds = useMemo(() => {
+    const ids = new Set();
+    (combinedHistoryLogs || []).forEach((log) => {
+      if (!['Borrado Permanente', 'Venta Eliminada'].includes(log.action)) return;
+      const txId = log.details?.transactionId || log.details?.id;
       if (txId) ids.add(String(txId));
     });
     return ids;
@@ -844,11 +855,13 @@ export default function HistoryView({
 
   const activeTransactions = useMemo(() => {
     const withVoidedStatus = (records = []) =>
-      records.map((tx) => ({
-        ...tx,
-        status: logVoidedTransactionIds.has(String(tx.id)) ? 'voided' : (tx.status || 'completed'),
-        sortDate: getTransactionSortDate(tx) || new Date(),
-      }));
+      records
+        .filter((tx) => tx.status !== 'deleted' && !logDeletedTransactionIds.has(String(tx.id)))
+        .map((tx) => ({
+          ...tx,
+          status: logVoidedTransactionIds.has(String(tx.id)) ? 'voided' : (tx.status || 'completed'),
+          sortDate: getTransactionSortDate(tx) || new Date(),
+        }));
 
     if (isActive) {
       const byId = new Map();
@@ -868,7 +881,7 @@ export default function HistoryView({
     }
 
     return withVoidedStatus(fallbackActiveTransactions);
-  }, [fallbackActiveTransactions, isActive, logVoidedTransactionIds, remoteTransactions]);
+  }, [fallbackActiveTransactions, isActive, logDeletedTransactionIds, logVoidedTransactionIds, remoteTransactions]);
 
   const activeTransactionIds = useMemo(
     () => new Set(activeTransactions.map((tx) => String(tx.id))),

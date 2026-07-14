@@ -23,6 +23,9 @@ export const getProductSupplierLinks = (product = {}) => {
   return links && typeof links === 'object' && !Array.isArray(links) ? links : {};
 };
 
+export const hasHydratedSupplierLinks = (product = {}) =>
+  Object.prototype.hasOwnProperty.call(product || {}, 'supplier_links');
+
 export const getCasaAlbertoLink = (product = {}) => {
   const link = getProductSupplierLinks(product).casa_alberto;
   return link && typeof link === 'object' && !Array.isArray(link) ? link : {};

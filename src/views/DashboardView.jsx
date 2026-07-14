@@ -6,7 +6,8 @@ import {
   Clock,
   ChevronRight,
   ChevronDown,
-  CalendarDays
+  CalendarDays,
+  RefreshCw
 } from 'lucide-react';
 
 import useDashboardData from '../hooks/useDashboardData';
@@ -118,7 +119,7 @@ export default function DashboardView({
   inventory,
   expenses = [],
   isLoading = false,
-  isProfitSyncing: _isProfitSyncing = false,
+  isProfitSyncing = false,
   emptyStateMessage = '',
   onOpenExpenseModal,
   onAlertClick,
@@ -359,6 +360,7 @@ export default function DashboardView({
     cleanTransactions.length > 0 ||
     cleanDailyLogs.length > 0 ||
     cleanExpenses.length > 0;
+  const isRefreshingDashboardData = Boolean(isProfitSyncing && hasDashboardSourceData);
   const renderWidget = (widgetKey) => {
     switch (widgetKey) {
       case 'payments':
@@ -677,8 +679,20 @@ export default function DashboardView({
         <div className="rebu-content-frame pb-6">
       <div className="flex flex-col lg:flex-row justify-between items-center gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800 leading-tight">Panel de Control</h2>
-          <p className="text-xs text-slate-400">Resumen de operaciones en tiempo real</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-2xl font-bold text-slate-800 leading-tight">Panel de Control</h2>
+            {isRefreshingDashboardData && (
+              <span className="inline-flex h-6 items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 text-[10px] font-black uppercase tracking-[0.1em] text-amber-700">
+                <RefreshCw size={11} className="animate-spin" />
+                Recalculando
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-slate-400">
+            {isRefreshingDashboardData
+              ? 'Mostrando el ultimo valor mientras llega la informacion nueva de Supabase.'
+              : 'Resumen de operaciones en tiempo real'}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <LayoutManagerControls isAdmin={isAdmin} hasUnsavedChanges={hasUnsavedChanges} onSave={handleSaveLayout} onRestore={handleRestoreLayout} />
@@ -741,6 +755,7 @@ export default function DashboardView({
                 globalFilter={globalFilter}
                 expenses={filteredExpenses} 
                 onOpenExpenseModal={onOpenExpenseModal}
+                isRefreshing={isRefreshingDashboardData}
               />
             </div>
           </div>

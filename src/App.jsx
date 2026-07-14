@@ -46,7 +46,13 @@ import {
   CLOUD_SELECTS,
   DASHBOARD_LOG_LIMIT,
   HISTORY_LOG_ACTIONS,
+  isHistoryLogAction,
 } from './utils/cloudSelects';
+import {
+  fetchCloudPayloadWithRetries,
+  isUsableCloudResult as hasUsableCloudResult,
+  summarizeCloudResults,
+} from './utils/cloudLoadControl';
 import {
   extractSchemaMissingColumn,
   fetchAllCloudRowsWithSelectFallback,
@@ -111,6 +117,7 @@ import {
   getCasaAlbertoLink,
   getProductActiveState,
   getProductSupplierLinks,
+  hasHydratedSupplierLinks,
   removeCasaAlbertoLink,
   shouldAutoDisableOutOfStockProduct,
   updateStockLifecycleLinks,
@@ -195,6 +202,7 @@ const METRICS_VIEW_MODE_STORAGE_KEY = 'rebu_metrics_view_mode_v1';
 const REMEMBERED_SESSION_KEY = 'party_remembered_session_v1';
 const APP_TEXT_ENCODING_VERSION = 'utf8-clean';
 const CLOUD_FETCH_BATCH_SIZE = 200;
+const CLOUD_CORE_FETCH_BATCH_SIZE = 1000;
 const CLOUD_RECENT_SYNC_LIMIT = 250;
 const CLOUD_RECENT_TRANSACTION_OVERLAP_LIMIT = 80;
 const ENABLE_AUTHENTICATED_TRANSACTION_RPCS =
@@ -217,6 +225,19 @@ const createTransactionRpcRequiredError = (operationLabel, error = null) => {
     details ? `Detalle tecnico: ${details}` : '',
   ].filter(Boolean).join(' ');
   return new Error(message);
+};
+
+const getSupabaseAuthLoginRequiredMessage = (authMeta = {}) => {
+  if (authMeta.reason === 'missing-auth-email') {
+    return 'Este usuario no esta vinculado a Supabase Auth. Vinculalo con auth_email/auth_user_id o desactiva VITE_REBU_ENABLE_AUTH_RPC para volver al guardado legacy.';
+  }
+
+  if (authMeta.reason === 'auth-login-failed') {
+    const details = authMeta.error?.message ? ` Detalle: ${authMeta.error.message}` : '';
+    return `No se pudo abrir la sesion segura de Supabase Auth para este usuario.${details}`;
+  }
+
+  return 'La sesion segura de Supabase Auth no esta activa. Ingresa nuevamente con la clave del usuario antes de cobrar.';
 };
 
 const canUseAuthenticatedTransactionRpcs = async () => {
@@ -250,12 +271,16 @@ const HISTORY_LOG_INITIAL_LIMIT = 50;
 const HISTORY_LOG_RECENT_SYNC_LIMIT = 50;
 const LOCAL_TRANSACTION_OVERRIDE_TTL_MS = 45 * 1000;
 const APP_USERS_FRESHNESS_MS = 15 * 1000;
-const OFFLINE_BOOT_TIMEOUT_MS = 5500;
+const OFFLINE_BOOT_TIMEOUT_MS = 10000;
+const CLOUD_BOOT_RETRY_COUNT = 1;
+const CLOUD_BOOT_RETRY_DELAY_MS = 750;
 const APP_USERS_BOOT_TIMEOUT_MS = 20000;
 const OFFLINE_LOGIN_TIMEOUT_MS = 6500;
 const CLOUD_RECONNECT_TIMEOUT_MS = 15000;
 const FORCE_RELOAD_TIMEOUT_MS = 45000;
 const REPORT_LOG_ACTIONS = ['Cierre de Caja', 'Cierre Automático'];
+const CORE_SOURCE_NAMES = ['productos', 'clientes', 'agenda', 'categorias', 'premios', 'caja', 'ofertas'];
+const CORE_OPTIONAL_SOURCE_NAMES = ['agenda', 'categorias'];
 
 let localDemoIdCounter = 0;
 let localDemoStore = null;
@@ -486,7 +511,7 @@ const shouldIgnoreNestedTestDetectionForLog = (action) => {
 };
 
 const MODULE_LOAD_DEFAULT_STATE = {
-  core: { status: 'idle', lastLoadedAt: 0, dirty: false },
+  core: { status: 'idle', lastLoadedAt: 0, dirty: false, failedSources: [] },
   transactions: { status: 'idle', lastLoadedAt: 0, dirty: false },
   dashboard: { status: 'idle', lastLoadedAt: 0, dirty: false },
   history: { status: 'idle', lastLoadedAt: 0, dirty: false },
@@ -536,12 +561,22 @@ const isModuleStateFresh = (state, maxAgeMs) => {
   return Date.now() - lastLoadedAt < maxAgeMs;
 };
 
-const fetchAllCloudRows = async (buildQuery, batchSize = CLOUD_FETCH_BATCH_SIZE) => {
+const applyQueryAbortSignal = (query, signal) => {
+  if (!signal || typeof query?.abortSignal !== 'function') return query;
+  return query.abortSignal(signal);
+};
+
+const fetchAllCloudRows = async (
+  buildQuery,
+  batchSize = CLOUD_FETCH_BATCH_SIZE,
+  { signal = null } = {},
+) => {
   const rows = [];
   let from = 0;
 
   while (true) {
-    const { data, error } = await buildQuery().range(from, from + batchSize - 1);
+    const query = applyQueryAbortSignal(buildQuery(), signal);
+    const { data, error } = await query.range(from, from + batchSize - 1);
     if (error) return { data: null, error };
 
     const page = Array.isArray(data) ? data : [];
@@ -941,14 +976,14 @@ const compactLogDetailsForStorage = (value, key = '') => {
   return value;
 };
 
-const hasUsableCloudResult = (result) => result.status === 'fulfilled' && !result.value?.error;
-
 const fetchRowsWithOptionalActiveFilter = async ({
   table,
   selectColumns,
   orderBy,
   orderDirection = 'asc',
   additionalOrders = [],
+  batchSize = CLOUD_FETCH_BATCH_SIZE,
+  signal = null,
 }) => {
   let useActiveFilter = true;
 
@@ -967,7 +1002,8 @@ const fetchRowsWithOptionalActiveFilter = async ({
         return query;
       },
       selectColumns,
-      CLOUD_FETCH_BATCH_SIZE
+      batchSize,
+      { signal },
     );
 
     if (!result.error) return result;
@@ -1000,7 +1036,7 @@ const fetchProductCloudDetail = async (productId) => {
   return mapInventoryRecords([result.data])[0] || null;
 };
 
-const fetchCoreCloudPayload = async () => {
+const fetchCoreCloudPayload = async ({ signal = null } = {}) => {
   const [
     prodResult,
     clientResult,
@@ -1015,26 +1051,36 @@ const fetchCoreCloudPayload = async () => {
       selectColumns: CLOUD_SELECTS.productsList,
       orderBy: 'title',
       additionalOrders: [{ column: 'id', ascending: true }],
+      batchSize: CLOUD_CORE_FETCH_BATCH_SIZE,
+      signal,
     }),
     fetchRowsWithOptionalActiveFilter({
       table: 'clients',
       selectColumns: CLOUD_SELECTS.clients,
       orderBy: 'name',
       additionalOrders: [{ column: 'id', ascending: true }],
+      batchSize: CLOUD_CORE_FETCH_BATCH_SIZE,
+      signal,
     }),
-    fetchAllCloudRows(() =>
-      supabase
-        .from('agenda_contacts')
-        .select(CLOUD_SELECTS.agendaContacts)
-        .order('name')
-        .order('id')
+    fetchAllCloudRows(
+      () =>
+        supabase
+          .from('agenda_contacts')
+          .select(CLOUD_SELECTS.agendaContacts)
+          .order('name')
+          .order('id'),
+      CLOUD_CORE_FETCH_BATCH_SIZE,
+      { signal },
     ),
-    fetchAllCloudRows(() =>
-      supabase
-        .from('categories')
-        .select(CLOUD_SELECTS.categories)
-        .order('name')
-        .order('id')
+    fetchAllCloudRows(
+      () =>
+        supabase
+          .from('categories')
+          .select(CLOUD_SELECTS.categories)
+          .order('name')
+          .order('id'),
+      CLOUD_CORE_FETCH_BATCH_SIZE,
+      { signal },
     ),
     fetchRowsWithOptionalActiveFilter({
       table: 'rewards',
@@ -1042,27 +1088,47 @@ const fetchCoreCloudPayload = async () => {
       orderBy: 'points_cost',
       orderDirection: 'asc',
       additionalOrders: [{ column: 'id', ascending: true }],
+      batchSize: CLOUD_CORE_FETCH_BATCH_SIZE,
+      signal,
     }),
-    supabase.from('register_state').select(CLOUD_SELECTS.registerState).eq('id', 1).maybeSingle(),
-    fetchAllCloudRows(() =>
-      supabase
-        .from('offers')
-        .select(CLOUD_SELECTS.offers)
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false })
+    applyQueryAbortSignal(
+      supabase.from('register_state').select(CLOUD_SELECTS.registerState).eq('id', 1).maybeSingle(),
+      signal,
+    ),
+    fetchAllCloudRows(
+      () =>
+        supabase
+          .from('offers')
+          .select(CLOUD_SELECTS.offers)
+          .eq('is_active', true)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false }),
+      CLOUD_CORE_FETCH_BATCH_SIZE,
+      { signal },
     ),
   ]);
 
-  const hasCloudConnection = [
-    prodResult,
-    clientResult,
-    agendaResult,
-    catResult,
-    rewardsResult,
-    registerResult,
-    offersResult,
-  ].some(hasUsableCloudResult);
+  const coreResults = [
+    ['productos', prodResult],
+    ['clientes', clientResult],
+    ['agenda', agendaResult],
+    ['categorias', catResult],
+    ['premios', rewardsResult],
+    ['caja', registerResult],
+    ['ofertas', offersResult],
+  ];
+  const {
+    failedSources,
+    optionalFailedSources,
+    criticalFailedSources,
+    hasCloudConnection,
+    isComplete,
+  } = summarizeCloudResults(coreResults, { optionalSources: CORE_OPTIONAL_SOURCE_NAMES });
+  const shouldRetry = coreResults.some(([source, result]) => {
+    if (!criticalFailedSources.includes(source)) return false;
+    const error = result.status === 'rejected' ? result.reason : result.value?.error;
+    return isRecoverableCloudError(error);
+  });
 
   const prodData = safeCloudData(prodResult, 'productos');
   const clientData = safeCloudData(clientResult, 'clientes');
@@ -1077,17 +1143,25 @@ const fetchCoreCloudPayload = async () => {
   }
 
   if (!registerState && hasCloudConnection) {
-    const { data: newState, error: upsertErr } = await supabase
-      .from('register_state')
-      .upsert([{ id: 1, is_open: false, opening_balance: 0, closing_time: '21:00' }], { onConflict: 'id' })
-      .select(CLOUD_SELECTS.registerState)
-      .maybeSingle();
+    const { data: newState, error: upsertErr } = await applyQueryAbortSignal(
+      supabase
+        .from('register_state')
+        .upsert([{ id: 1, is_open: false, opening_balance: 0, closing_time: '21:00' }], { onConflict: 'id' })
+        .select(CLOUD_SELECTS.registerState)
+        .maybeSingle(),
+      signal,
+    );
 
     if (!upsertErr && newState) registerState = newState;
   }
 
   return {
     hasCloudConnection,
+    failedSources,
+    optionalFailedSources,
+    criticalFailedSources,
+    isComplete,
+    shouldRetry,
     inventory: prodData ? mapInventoryRecords(prodData) : null,
     members: clientData ? mapMemberRecords(clientData) : null,
     agendaContacts: agendaData ? mapAgendaContactRecords(agendaData) : null,
@@ -2297,6 +2371,21 @@ const getCloudErrorMessage = (error, fallback = 'Error de sincronizacion con la 
   return error?.message || error?.details || error?.hint || fallback;
 };
 
+const getCheckoutErrorMessage = (error) => {
+  const message = getCloudErrorMessage(error, 'Fallo al guardar la venta.');
+  const errorText = [message, error?.details, error?.hint, error?.code].filter(Boolean).join(' ');
+
+  if (/Operacion bloqueada: registrar ventas requiere RPC transaccional|sesion de Supabase Auth/i.test(errorText)) {
+    return 'La sesion segura de Supabase no esta activa. Cierra sesion e ingresa nuevamente con la clave del usuario antes de cobrar. Si vuelve a pasar, vincula ese usuario a Supabase Auth.';
+  }
+
+  if (/permission denied for function register_sale_transaction|42501/i.test(errorText)) {
+    return 'Supabase rechazo el cobro por permisos de register_sale_transaction. Reingresa al sistema y verifica que el usuario tenga sesion Supabase Auth.';
+  }
+
+  return message;
+};
+
 const getPayloadKeyForMissingColumn = (payload, missingColumn) => {
   const columnName = getSchemaMissingColumnName(missingColumn);
   if (!columnName || !payload || typeof payload !== 'object') return null;
@@ -2743,6 +2832,17 @@ export default function PartySupplyApp() {
     return true;
   };
 
+  const completeLocalDemoModuleLoad = (moduleKey) => {
+    setIsOfflineReadOnly(false);
+    setModuleState(moduleKey, {
+      status: 'loaded',
+      dirty: false,
+      lastLoadedAt: Date.now(),
+      ...(moduleKey === 'core' ? { failedSources: [] } : {}),
+    });
+    return true;
+  };
+
   const loadAppUsers = async ({ force = false, includeInactive = false } = {}) => {
     if (isLocalDemoMode()) {
       const legacyUsers = buildLegacyUsers(USERS, userSettings);
@@ -3031,22 +3131,24 @@ export default function PartySupplyApp() {
 
   const loadCoreCloudData = async ({ showSpinner = false, force = false, requireCloud = false } = {}) => {
     if (isLocalDemoMode()) {
-      applyLocalDemoSnapshot();
-      setIsOfflineReadOnly(false);
-      setModuleState('core', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-      return true;
+      return completeLocalDemoModuleLoad('core');
     }
 
     if (isBrowserOffline()) {
       const cachedSnapshot = loadOfflineSnapshot();
       if (applyCoreSnapshot(cachedSnapshot)) {
         setIsOfflineReadOnly(true);
-        setModuleState('core', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+        setModuleState('core', {
+          status: 'loaded',
+          dirty: false,
+          lastLoadedAt: Date.now(),
+          failedSources: CORE_SOURCE_NAMES,
+        });
         return !requireCloud;
       }
 
       setIsOfflineReadOnly(true);
-      setModuleState('core', { status: 'error', dirty: true });
+      setModuleState('core', { status: 'error', dirty: true, failedSources: CORE_SOURCE_NAMES });
       return false;
     }
 
@@ -3065,31 +3167,64 @@ export default function PartySupplyApp() {
     }
 
     const run = async () => {
+      const requestId = beginModuleLoadRequest('core');
       if (showSpinner) setIsCloudLoading(true);
       setModuleState('core', { status: 'loading', dirty: false });
 
+      const applyCachedCoreFallback = (notify = false) => {
+        if (!isCurrentModuleLoadRequest('core', requestId)) return false;
+        const cachedSnapshot = loadOfflineSnapshot();
+        if (applyCoreSnapshot(cachedSnapshot)) {
+          setIsOfflineReadOnly(true);
+          if (notify) {
+            notifyCloudFallback(
+              'Trabajando con datos locales',
+              'No se pudo confirmar conexion con Supabase despues de varios intentos. Reconecta la nube antes de hacer cambios importantes.'
+            );
+          }
+          setModuleState('core', {
+            status: 'loaded',
+            dirty: false,
+            lastLoadedAt: Date.now(),
+            failedSources: CORE_SOURCE_NAMES,
+          });
+          return !requireCloud;
+        }
+
+        setModuleState('core', { status: 'error', dirty: true, failedSources: CORE_SOURCE_NAMES });
+        return false;
+      };
+
       try {
         const fetchCorePayloadWithTimeout = () =>
-          withTimeout(fetchCoreCloudPayload(), OFFLINE_BOOT_TIMEOUT_MS, 'Carga inicial');
+          fetchCloudPayloadWithRetries({
+            fetchPayload: fetchCoreCloudPayload,
+            label: 'Carga inicial',
+            timeoutMs: OFFLINE_BOOT_TIMEOUT_MS,
+            retryCount: CLOUD_BOOT_RETRY_COUNT,
+            retryDelayMs: CLOUD_BOOT_RETRY_DELAY_MS,
+            isRecoverableError: isRecoverableCloudError,
+            isOffline: isBrowserOffline,
+            shouldRetryPayload: (payload) =>
+              !payload?.hasCloudConnection && payload?.shouldRetry !== false,
+          });
         const payload =
           !force && currentState.status === 'idle'
             ? await (initialBootstrapPromise ||= fetchCorePayloadWithTimeout())
             : await fetchCorePayloadWithTimeout();
 
-        if (!payload?.hasCloudConnection) {
-          const cachedSnapshot = loadOfflineSnapshot();
-          if (applyCoreSnapshot(cachedSnapshot)) {
-            setIsOfflineReadOnly(true);
-            setModuleState('core', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-            return !requireCloud;
-          }
+        if (!isCurrentModuleLoadRequest('core', requestId)) return false;
 
-          setModuleState('core', { status: 'error', dirty: true });
-          return false;
+        if (!payload?.hasCloudConnection) {
+          initialBootstrapPromise = null;
+          return applyCachedCoreFallback(true);
         }
 
         applyCorePayload(payload);
         setIsOfflineReadOnly(false);
+        if (payload.optionalFailedSources?.length > 0) {
+          console.warn('Carga base parcial. Se conservaron datos previos para:', payload.optionalFailedSources.join(', '));
+        }
 
         const nextSnapshot = {
           savedAt: new Date().toISOString(),
@@ -3103,24 +3238,18 @@ export default function PartySupplyApp() {
         };
         saveOfflineSnapshot(nextSnapshot);
         setOfflineSnapshotAt(nextSnapshot.savedAt);
-        setModuleState('core', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+        setModuleState('core', {
+          status: 'loaded',
+          dirty: false,
+          lastLoadedAt: Date.now(),
+          failedSources: payload.failedSources || [],
+        });
         return true;
       } catch (error) {
-        console.error('Error general de conexión (metrics):', error);
+        if (!isCurrentModuleLoadRequest('core', requestId)) return false;
+        console.error('Error general de conexion (core):', error);
         initialBootstrapPromise = null;
-        const cachedSnapshot = loadOfflineSnapshot();
-        if (applyCoreSnapshot(cachedSnapshot)) {
-          setIsOfflineReadOnly(true);
-          notifyCloudFallback(
-            'Trabajando con datos locales',
-            'Actualmente no estas conectado/a a internet. Reconecta antes de hacer cambios importantes.'
-          );
-          setModuleState('core', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
-          return !requireCloud;
-        }
-
-        setModuleState('core', { status: 'error', dirty: true });
-        return false;
+        return applyCachedCoreFallback(true);
       } finally {
         moduleLoadPromisesRef.current.core = null;
         if (showSpinner) setIsCloudLoading(false);
@@ -3133,6 +3262,8 @@ export default function PartySupplyApp() {
   };
 
   const loadTransactionsCloudData = async ({ force = false, requireCloud = false, full = false } = {}) => {
+    if (isLocalDemoMode()) return completeLocalDemoModuleLoad('transactions');
+
     if (moduleLoadPromisesRef.current.transactions) {
       if (!force) return moduleLoadPromisesRef.current.transactions;
       await withTimeout(
@@ -3239,6 +3370,8 @@ export default function PartySupplyApp() {
   };
 
   const loadDashboardCloudData = async ({ force = false, requireCloud = false, full = false } = {}) => {
+    if (isLocalDemoMode()) return completeLocalDemoModuleLoad('dashboard');
+
     if (moduleLoadPromisesRef.current.dashboard) {
       if (!force) return moduleLoadPromisesRef.current.dashboard;
       await withTimeout(
@@ -3358,6 +3491,8 @@ export default function PartySupplyApp() {
   };
 
   const loadHistoryCloudData = async ({ force = false, requireCloud = false } = {}) => {
+    if (isLocalDemoMode()) return completeLocalDemoModuleLoad('history');
+
     if (moduleLoadPromisesRef.current.history) {
       if (!force) return moduleLoadPromisesRef.current.history;
       await withTimeout(
@@ -3431,6 +3566,8 @@ export default function PartySupplyApp() {
   };
 
   const loadOrdersCloudData = async ({ force = false, requireCloud = false } = {}) => {
+    if (isLocalDemoMode()) return completeLocalDemoModuleLoad('orders');
+
     if (moduleLoadPromisesRef.current.orders) {
       if (!force) return moduleLoadPromisesRef.current.orders;
       await withTimeout(
@@ -3522,6 +3659,8 @@ export default function PartySupplyApp() {
   };
 
   const loadReportsCloudData = async ({ force = false, requireCloud = false } = {}) => {
+    if (isLocalDemoMode()) return completeLocalDemoModuleLoad('reports');
+
     if (moduleLoadPromisesRef.current.reports) {
       if (!force) return moduleLoadPromisesRef.current.reports;
       await withTimeout(
@@ -3600,6 +3739,8 @@ export default function PartySupplyApp() {
   };
 
   const loadMetricsCloudData = async ({ force = false, includeTransactions = true, requireCloud = false, full = false } = {}) => {
+    if (isLocalDemoMode()) return completeLocalDemoModuleLoad('metrics');
+
     if (moduleLoadPromisesRef.current.metrics) {
       if (!force) return moduleLoadPromisesRef.current.metrics;
       await withTimeout(
@@ -3928,6 +4069,7 @@ export default function PartySupplyApp() {
     }
 
     let realtimeSyncTimer = null;
+    let realtimeCoreSyncTimer = null;
     const markModulesDirty = (moduleKeys = []) => {
       moduleKeys.forEach((moduleKey) => {
         setModuleState(moduleKey, (prev) => ({ ...prev, dirty: true }));
@@ -3939,6 +4081,15 @@ export default function PartySupplyApp() {
       realtimeSyncTimer = window.setTimeout(() => {
         realtimeSyncTimer = null;
         void loadModuleForTab(activeTabRef.current, { force: true });
+      }, 650);
+    };
+    const scheduleCoreSync = () => {
+      setModuleState('core', (prev) => ({ ...prev, dirty: true }));
+      if (!currentUserRef.current) return;
+      if (realtimeCoreSyncTimer) window.clearTimeout(realtimeCoreSyncTimer);
+      realtimeCoreSyncTimer = window.setTimeout(() => {
+        realtimeCoreSyncTimer = null;
+        void loadCoreCloudData({ showSpinner: false, force: true });
       }, 650);
     };
 
@@ -3993,7 +4144,7 @@ export default function PartySupplyApp() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'logs' },
         (payload) => {
-          if (!HISTORY_LOG_ACTIONS.has(payload.new?.action)) return;
+          if (!isHistoryLogAction(payload.new?.action)) return;
           markModulesDirty(['transactions', 'dashboard', 'history', 'metrics']);
           scheduleActiveModuleSync();
         }
@@ -4008,6 +4159,12 @@ export default function PartySupplyApp() {
           });
         }
       )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, scheduleCoreSync)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, scheduleCoreSync)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, scheduleCoreSync)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'offers' }, scheduleCoreSync)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rewards' }, scheduleCoreSync)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'agenda_contacts' }, scheduleCoreSync)
       .subscribe();
 
     let lastFetchTime = Date.now();
@@ -4051,6 +4208,9 @@ export default function PartySupplyApp() {
       }
       if (realtimeSyncTimer) {
         window.clearTimeout(realtimeSyncTimer);
+      }
+      if (realtimeCoreSyncTimer) {
+        window.clearTimeout(realtimeCoreSyncTimer);
       }
       supabase.removeChannel(channel);
       window.removeEventListener('visibilitychange', handleReSync);
@@ -4230,36 +4390,56 @@ export default function PartySupplyApp() {
 
   useEffect(() => {
     if (currentUser || isAuthBootLoading || appUsers.length === 0) return;
-    const rememberedSession = loadRememberedSession();
-    if (!rememberedSession) return;
+    let cancelled = false;
 
-    const rememberedUser = appUsers.find((user) => String(user.id) === String(rememberedSession.userId));
-    if (!rememberedUser || rememberedUser.isActive === false) {
-      clearRememberedSession();
-      return;
-    }
+    const restoreRememberedSession = async () => {
+      const rememberedSession = loadRememberedSession();
+      if (!rememberedSession) return;
 
-    const restoredSession = {
-      ...rememberedSession.sessionMeta,
-      userId: rememberedUser.id || rememberedSession.sessionMeta.userId,
-      userName: rememberedUser.displayName || rememberedUser.name || rememberedSession.sessionMeta.userName,
-      role: rememberedUser.role,
-      avatar: rememberedUser.avatar,
-      permissionsVersion: Number(rememberedUser.permissionsVersion || rememberedSession.sessionMeta.permissionsVersion || 1),
-      status: 'Activa',
-      rememberedSession: true,
-      expiredAt: null,
-      closedAt: null,
-      lastActivityAt: new Date().toISOString(),
+      const rememberedUser = appUsers.find((user) => String(user.id) === String(rememberedSession.userId));
+      if (!rememberedUser || rememberedUser.isActive === false) {
+        clearRememberedSession();
+        return;
+      }
+
+      if (ENABLE_AUTHENTICATED_TRANSACTION_RPCS && authMode === 'supabase') {
+        const canUseTransactionSession = await canUseAuthenticatedTransactionRpcs();
+        if (cancelled) return;
+        if (!canUseTransactionSession) {
+          clearRememberedSession();
+          setLoginError('La sesion segura vencio. Ingresa nuevamente para poder cobrar.');
+          return;
+        }
+      }
+
+      const restoredSession = {
+        ...rememberedSession.sessionMeta,
+        userId: rememberedUser.id || rememberedSession.sessionMeta.userId,
+        userName: rememberedUser.displayName || rememberedUser.name || rememberedSession.sessionMeta.userName,
+        role: rememberedUser.role,
+        avatar: rememberedUser.avatar,
+        permissionsVersion: Number(rememberedUser.permissionsVersion || rememberedSession.sessionMeta.permissionsVersion || 1),
+        status: 'Activa',
+        rememberedSession: true,
+        expiredAt: null,
+        closedAt: null,
+        lastActivityAt: new Date().toISOString(),
+      };
+
+      currentUserRef.current = rememberedUser;
+      currentSessionMetaRef.current = restoredSession;
+      setCurrentUser(rememberedUser);
+      setCurrentSessionMeta(restoredSession);
+      setActiveTab(getDefaultTabForUser(rememberedUser));
+      saveRememberedSession(rememberedUser, restoredSession);
     };
 
-    currentUserRef.current = rememberedUser;
-    currentSessionMetaRef.current = restoredSession;
-    setCurrentUser(rememberedUser);
-    setCurrentSessionMeta(restoredSession);
-    setActiveTab(getDefaultTabForUser(rememberedUser));
-    saveRememberedSession(rememberedUser, restoredSession);
-  }, [appUsers, currentUser, isAuthBootLoading]);
+    void restoreRememberedSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [appUsers, authMode, currentUser, isAuthBootLoading]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -4806,7 +4986,7 @@ export default function PartySupplyApp() {
       ? Boolean(compactedDetails?.isTest || compactedDetails?.testMarker === 'test')
       : isTestRecord({ action, details: compactedDetails, reason });
     setDailyLogs((prev) => [newLog, ...prev].slice(0, DASHBOARD_LOG_LIMIT));
-    if (HISTORY_LOG_ACTIONS.includes(action)) {
+    if (isHistoryLogAction(action)) {
       upsertLocalHistoryLog(newLog);
     }
 
@@ -5476,17 +5656,17 @@ export default function PartySupplyApp() {
     const numericDelta = Number(delta || 0);
     const stockBefore = Number(product?.stock || 0);
     const stockAfter = stockBefore + numericDelta;
-    const supplierLinks = updateStockLifecycleLinks(
-      getProductSupplierLinks(product),
-      { stockBefore, stockAfter, delta: numericDelta, trackDepletion, now },
-    );
-    const payload = { supplier_links: supplierLinks };
-    const lifecycleProduct = {
-      ...product,
-      stock: stockAfter,
-      supplierLinks,
-      supplier_links: supplierLinks,
-    };
+    const supplierLinksAreHydrated = hasHydratedSupplierLinks(product);
+    const supplierLinks = supplierLinksAreHydrated
+      ? updateStockLifecycleLinks(
+          getProductSupplierLinks(product),
+          { stockBefore, stockAfter, delta: numericDelta, trackDepletion, now },
+        )
+      : null;
+    const payload = supplierLinksAreHydrated ? { supplier_links: supplierLinks } : {};
+    const lifecycleProduct = supplierLinksAreHydrated
+      ? { ...product, stock: stockAfter, supplierLinks, supplier_links: supplierLinks }
+      : { ...product, stock: stockAfter };
 
     if (numericDelta > 0 || stockAfter > 0) {
       payload.is_active = true;
@@ -5510,14 +5690,12 @@ export default function PartySupplyApp() {
       const product = inventory.find((entry) => String(entry.id) === String(id));
       if (!product) continue;
 
-      const { payload, supplierLinks, stockAfter } = buildStockLifecyclePayload(product, delta, { trackDepletion, now });
+      const { payload, stockAfter } = buildStockLifecyclePayload(product, delta, { trackDepletion, now });
 
       try {
+        if (Object.keys(payload).length === 0) continue;
         if (isLocalDemoMode()) {
-          const localProduct = localDemoUpdateRow('products', product.id, {
-            supplier_links: supplierLinks,
-            ...(payload.is_active !== undefined ? { is_active: payload.is_active } : {}),
-          });
+          const localProduct = localDemoUpdateRow('products', product.id, payload);
           updatedProducts.push(mapInventoryRecords([{ ...(localProduct || product), stock: stockAfter }])[0]);
         } else {
           const { data } = await updateWithSchemaFallback('products', product.id, payload, CLOUD_SELECTS.products);
@@ -5584,13 +5762,51 @@ export default function PartySupplyApp() {
       }
     }
 
-    const fallbackStock = Number(product.stock || 0) + numericDelta;
-    const { error: stockErr } = await supabase
+    const currentStock = Number(product.stock || 0);
+    const fallbackStock = currentStock + numericDelta;
+    const { data: updatedProduct, error: stockErr } = await supabase
       .from('products')
       .update({ stock: fallbackStock })
-      .eq('id', product.id);
+      .eq('id', product.id)
+      .eq('stock', currentStock)
+      .select('stock')
+      .maybeSingle();
     if (stockErr) throw stockErr;
-    return fallbackStock;
+    if (!updatedProduct) {
+      throw new Error('El stock cambio en otra caja. Recarga los datos e intenta nuevamente.');
+    }
+    return Number(updatedProduct.stock ?? fallbackStock);
+  };
+
+  const applyStockEntriesCloudWithRollback = async (entries = []) => {
+    if (isLocalDemoMode()) return;
+    const appliedEntries = [];
+
+    try {
+      for (const [id, delta] of entries) {
+        const product = inventory.find((entry) => String(entry.id) === String(id));
+        if (!product) continue;
+        await applyProductStockDeltaCloud(product, delta);
+        appliedEntries.push({ product, delta: Number(delta || 0) });
+      }
+    } catch (stockError) {
+      const rollbackErrors = [];
+      for (const { product, delta } of [...appliedEntries].reverse()) {
+        try {
+          await applyProductStockDeltaCloud(
+            { ...product, stock: Number(product.stock || 0) + delta },
+            -delta,
+          );
+        } catch (rollbackError) {
+          rollbackErrors.push(`${product.title}: ${rollbackError.message}`);
+        }
+      }
+
+      const rollbackDetail = rollbackErrors.length
+        ? ` No se pudo revertir: ${rollbackErrors.join(', ')}.`
+        : '';
+      throw new Error(`${stockError.message}${rollbackDetail}`);
+    }
   };
 
   const isTransactionalSaleRpcUnavailable = (error) => {
@@ -5611,6 +5827,7 @@ export default function PartySupplyApp() {
     clientPointUpdates = [],
   }) => {
     if (isLocalDemoMode()) return null;
+    if (!ENABLE_AUTHENTICATED_TRANSACTION_RPCS) return null;
     if (!(await canUseAuthenticatedTransactionRpcs())) {
       throw createTransactionRpcRequiredError('registrar ventas');
     }
@@ -5642,6 +5859,7 @@ export default function PartySupplyApp() {
     clientPointUpdates = [],
   }) => {
     if (isLocalDemoMode()) return null;
+    if (!ENABLE_AUTHENTICATED_TRANSACTION_RPCS) return null;
     if (!(await canUseAuthenticatedTransactionRpcs())) {
       throw createTransactionRpcRequiredError('editar ventas');
     }
@@ -5673,6 +5891,7 @@ export default function PartySupplyApp() {
     clientPointUpdates = [],
   }) => {
     if (isLocalDemoMode()) return null;
+    if (!ENABLE_AUTHENTICATED_TRANSACTION_RPCS) return null;
     if (!(await canUseAuthenticatedTransactionRpcs())) {
       throw createTransactionRpcRequiredError('anular ventas');
     }
@@ -5736,16 +5955,10 @@ export default function PartySupplyApp() {
       })
       .filter(Boolean);
 
-    if (!isLocalDemoMode()) {
-      for (const [id, delta] of entries) {
-        const product = inventory.find((entry) => String(entry.id) === String(id));
-        if (!product) continue;
-        try {
-          await applyProductStockDeltaCloud(product, delta);
-        } catch (stockErr) {
-          throw new Error(`Fallo actualizando stock de ${product.title}: ${stockErr.message}`);
-        }
-      }
+    try {
+      await applyStockEntriesCloudWithRollback(entries);
+    } catch (stockErr) {
+      throw new Error(`Fallo actualizando stock del pedido: ${stockErr.message}`);
     }
 
     setInventory((prev) =>
@@ -6148,16 +6361,10 @@ export default function PartySupplyApp() {
       return preview;
     }
 
-    if (!isLocalDemoMode()) {
-      for (const [id, delta] of entries) {
-        const product = inventory.find((entry) => String(entry.id) === String(id));
-        if (!product) continue;
-        try {
-          await applyProductStockDeltaCloud(product, delta);
-        } catch (stockErr) {
-          throw new Error(`Fallo actualizando stock de ${product.title}: ${stockErr.message}`);
-        }
-      }
+    try {
+      await applyStockEntriesCloudWithRollback(entries);
+    } catch (stockErr) {
+      throw new Error(`Fallo actualizando stock de la venta: ${stockErr.message}`);
     }
 
     setInventory((prev) =>
@@ -6289,8 +6496,7 @@ export default function PartySupplyApp() {
       totalAmount,
     );
     const orderItemsSnapshot = items.map((item) => buildSaleItemSnapshot(item));
-
-    const { data: sale, error: saleErr } = await insertWithSchemaFallback('sales', {
+    const salePayload = {
       total: totalAmount,
       payment_method: paymentInfo.payment,
       payment_breakdown: inheritedPaymentBreakdown,
@@ -6303,12 +6509,9 @@ export default function PartySupplyApp() {
       user_id: toOptionalDbId(actor.userId),
       user_role: actor.userRole,
       user_name: actor.userName,
-    }, 'id');
-
-    if (saleErr) throw saleErr;
+    };
 
     const itemsPayload = await sanitizeSaleItemProductIds(orderItemsSnapshot.map((item) => ({
-      sale_id: sale.id,
       product_id: getSaleItemDatabaseProductId(item),
       product_title: item.title,
       quantity: item.qty || item.quantity,
@@ -6319,40 +6522,88 @@ export default function PartySupplyApp() {
       ...getSaleItemCostPayload(item),
     })));
 
-    await insertRowsWithSchemaFallback('sale_items', itemsPayload);
-
-    let stockChanges = [];
-    if (!skipStockDeduction) {
-      const deltaByProduct = Object.fromEntries(
+    const deltaByProduct = skipStockDeduction
+      ? {}
+      : Object.fromEntries(
         Object.entries(requiredStock).map(([id, qty]) => [id, -Number(qty || 0)])
       );
-      const { stockChanges: appliedStockChanges, stockIssues: finalizeStockIssues } =
-        await applyOrderStockDelta(deltaByProduct);
-      if (finalizeStockIssues.length > 0) {
-        throw new Error(`No hay stock suficiente para completar el pedido: ${finalizeStockIssues.join(', ')}`);
-      }
-      stockChanges = appliedStockChanges.map((change) => ({
-        ...change,
-        quantitySold: change.quantityReserved || change.quantityChanged || 0,
-      }));
-    }
-
     let updatedClientForHistory = null;
     let pointsChange = null;
+    const clientPointUpdates = [];
     if (clientId) {
       const linkedMember = members.find((member) => String(member.id) === String(clientId));
       if (linkedMember) {
         const previousPoints = Number(linkedMember.points || 0);
         const newPoints = previousPoints + pointsEarned;
         pointsChange = { previous: previousPoints, new: newPoints, diff: newPoints - previousPoints };
-        await supabase.from('clients').update({ points: newPoints }).eq('id', clientId);
+        clientPointUpdates.push({
+          client_id: String(clientId),
+          points: newPoints,
+          expected_points: previousPoints,
+        });
         updatedClientForHistory = { ...linkedMember, points: newPoints, currentPoints: newPoints };
-        setMembers((prev) =>
-          prev.map((member) =>
-            String(member.id) === String(clientId) ? { ...member, points: newPoints, currentPoints: newPoints } : member
-          )
-        );
       }
+    }
+
+    let sale = await registerSaleTransactionCloud({
+      salePayload,
+      itemsPayload,
+      stockDeltaByProduct: deltaByProduct,
+      clientPointUpdates,
+    });
+    let stockChanges = [];
+
+    if (sale) {
+      stockChanges = getSaleStockDeltaPreview(deltaByProduct).stockChanges;
+      if (!skipStockDeduction) {
+        setInventory((prev) =>
+          prev.map((product) => {
+            const delta = deltaByProduct[String(product.id)];
+            return delta ? { ...product, stock: Number(product.stock || 0) + Number(delta || 0) } : product;
+          })
+        );
+        void syncStockLifecycleForDeltas(deltaByProduct, { trackDepletion: true });
+      }
+    } else {
+      const { data: insertedSale, error: saleErr } = await insertWithSchemaFallback('sales', salePayload, 'id');
+      if (saleErr) throw saleErr;
+      sale = insertedSale;
+
+      await insertRowsWithSchemaFallback(
+        'sale_items',
+        itemsPayload.map((item) => ({ ...item, sale_id: sale.id })),
+      );
+
+      if (!skipStockDeduction) {
+        const { stockChanges: appliedStockChanges, stockIssues: finalizeStockIssues } =
+          await applyOrderStockDelta(deltaByProduct);
+        if (finalizeStockIssues.length > 0) {
+          throw new Error(`No hay stock suficiente para completar el pedido: ${finalizeStockIssues.join(', ')}`);
+        }
+        stockChanges = appliedStockChanges.map((change) => ({
+          ...change,
+          quantitySold: change.quantityReserved || change.quantityChanged || 0,
+        }));
+      }
+
+      for (const update of clientPointUpdates) {
+        if (isLocalDemoMode()) continue;
+        const { error: pointsError } = await supabase
+          .from('clients')
+          .update({ points: update.points })
+          .eq('id', update.client_id);
+        if (pointsError) throw new Error(`Fallo actualizando puntos: ${pointsError.message}`);
+      }
+    }
+
+    if (updatedClientForHistory) {
+      setMembers((prev) =>
+        prev.map((member) =>
+          String(member.id) === String(clientId)
+            ? { ...member, points: updatedClientForHistory.points, currentPoints: updatedClientForHistory.points }
+            : member
+        )
+      );
     }
 
     const now = new Date();
@@ -7998,7 +8249,7 @@ export default function PartySupplyApp() {
   const safeTransactions = Array.isArray(transactions) ? transactions : [];
   
   const validTransactions = safeTransactions.filter(
-    (t) => t && t.status !== 'voided' && !t.isTest
+    (t) => t && !['voided', 'deleted'].includes(t.status) && !t.isTest
   );
 
   const totalSales = validTransactions.reduce(
@@ -8614,6 +8865,10 @@ export default function PartySupplyApp() {
       if (supabaseAuthMeta.error) {
         console.warn('No se pudo abrir sesion en Supabase Auth:', supabaseAuthMeta.error?.message || supabaseAuthMeta.error);
       }
+    }
+
+    if (!offline && ENABLE_AUTHENTICATED_TRANSACTION_RPCS && !supabaseAuthMeta.signedIn) {
+      throw new Error(getSupabaseAuthLoginRequiredMessage(supabaseAuthMeta));
     }
 
     const nextSession = {
@@ -9411,11 +9666,11 @@ export default function PartySupplyApp() {
     
     const cycleTransactions = cycleStart
       ? sourceTransactions.filter(tx => {
-          if (!tx || tx.status === 'voided' || tx.isTest) return false;
+          if (!tx || ['voided', 'deleted'].includes(tx.status) || tx.isTest) return false;
           const txDate = parseTxDate(tx);
           return txDate && txDate >= cycleStart && txDate <= closeDate;
         })
-      : sourceTransactions.filter(tx => tx && tx.status !== 'voided' && !tx.isTest);
+      : sourceTransactions.filter(tx => tx && !['voided', 'deleted'].includes(tx.status) && !tx.isTest);
 
     const cycleExpenses = cycleStart
       ? sourceExpenses.filter(exp => {
@@ -9769,7 +10024,8 @@ export default function PartySupplyApp() {
     if (window.confirm(`¿Eliminar categoría "${name}"?`)) {
       try {
         if (!isLocalDemoMode()) {
-          await supabase.from('categories').delete().eq('name', name);
+          const { error } = await supabase.from('categories').delete().eq('name', name);
+          if (error) throw error;
         }
         setCategories(categories.filter((c) => c !== name));
         addLog('Categoría', { name, type: 'delete' });
@@ -11556,7 +11812,7 @@ export default function PartySupplyApp() {
     const memberNumber = String(client.memberNumber || '');
 
     const usedCoupons = (transactions || []).flatMap((tx) => {
-      if (tx.status === 'voided' || !tx.client) return [];
+      if (['voided', 'deleted'].includes(tx.status) || !tx.client) return [];
 
       const sameClient =
         String(tx.client?.id || '') === memberId ||
@@ -11611,6 +11867,15 @@ export default function PartySupplyApp() {
 
   const handleCheckout = async (checkoutOptions = {}) => {
     if (blockIfOfflineReadonly('registrar ventas')) return;
+    if (ENABLE_AUTHENTICATED_TRANSACTION_RPCS && !(await canUseAuthenticatedTransactionRpcs())) {
+      Swal.fire(
+        'Sesion segura requerida',
+        'Cierra sesion e ingresa nuevamente con la clave del usuario antes de cobrar. Supabase necesita esa sesion para guardar la venta completa.',
+        'warning',
+      );
+      return;
+    }
+
     const subtotal = cart.reduce(
       (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
       0,
@@ -11698,12 +11963,13 @@ export default function PartySupplyApp() {
       const consumedCouponOverrides = new Set(saleCouponCodes);
       const nextCouponOverrides = previousCouponOverrides.filter((code) => !consumedCouponOverrides.has(code));
       const shouldConsumeCouponOverride = clientId && previousCouponOverrides.length !== nextCouponOverrides.length;
+      const previousClientSocialConnections = getSocialConnections(posSelectedClient);
       const nextClientSocialConnections = shouldConsumeCouponOverride
         ? buildSocialConnectionsWithCouponUsageOverrides(
-            getSocialConnections(posSelectedClient),
+            previousClientSocialConnections,
             { reenabledCodes: nextCouponOverrides },
           )
-        : getSocialConnections(posSelectedClient);
+        : previousClientSocialConnections;
 
       if (clientId) {
         pointsChange = { previous: previousPoints, new: newPoints, diff: newPoints - previousPoints };
@@ -11724,7 +11990,7 @@ export default function PartySupplyApp() {
         itemsPayload: validatedItemsPayload,
         stockDeltaByProduct: checkoutStockDelta,
         clientPointUpdates: clientId
-          ? [{ client_id: String(clientId), points: newPoints }]
+          ? [{ client_id: String(clientId), points: newPoints, expected_points: previousPoints }]
           : [],
       });
 
@@ -11752,21 +12018,20 @@ export default function PartySupplyApp() {
         if (saleErr) throw saleErr;
         sale = insertedSale;
         const itemsPayload = validatedItemsPayload.map((item) => ({ ...item, sale_id: sale.id }));
-        const saleItemsPromise = insertRowsWithSchemaFallback('sale_items', itemsPayload).catch((saleItemsErr) => {
-          throw new Error(`Supabase rechaz\u00f3 los productos de la venta: ${saleItemsErr.message}`);
-        });
+        let stockWasApplied = false;
+        let clientWasUpdated = false;
 
-        const stockPromise = applySaleStockDelta(checkoutStockDelta, { trackDepletion: true }).then(({ stockChanges, stockIssues: stockApplyIssues }) => {
-          if (stockApplyIssues.length > 0) {
-            throw new Error(`Stock insuficiente: ${stockApplyIssues.join(', ')}`);
+        try {
+          await insertRowsWithSchemaFallback('sale_items', itemsPayload);
+
+          const stockResult = await applySaleStockDelta(checkoutStockDelta, { trackDepletion: true });
+          if (stockResult.stockIssues.length > 0) {
+            throw new Error(`Stock insuficiente: ${stockResult.stockIssues.join(', ')}`);
           }
-          return stockChanges;
-        });
+          stockChanges = stockResult.stockChanges;
+          stockWasApplied = true;
 
-        const clientUpdatePromise = (async () => {
-          if (!clientId) return;
-
-          if (!isLocalDemoMode()) {
+          if (clientId && !isLocalDemoMode()) {
             const clientUpdates = shouldConsumeCouponOverride
               ? { points: newPoints, social_connections: nextClientSocialConnections }
               : { points: newPoints };
@@ -11774,15 +12039,48 @@ export default function PartySupplyApp() {
             if (clientUpdateError) {
               throw new Error(`Fallo actualizando puntos del cliente: ${clientUpdateError.message}`);
             }
+            clientWasUpdated = true;
           }
-        })();
+        } catch (legacySaleError) {
+          const rollbackErrors = [];
 
-        const [appliedStockChanges] = await Promise.all([
-          stockPromise,
-          saleItemsPromise,
-          clientUpdatePromise,
-        ]);
-        stockChanges = appliedStockChanges;
+          if (clientWasUpdated && clientId && !isLocalDemoMode()) {
+            const rollbackClientPayload = shouldConsumeCouponOverride
+              ? { points: previousPoints, social_connections: previousClientSocialConnections }
+              : { points: previousPoints };
+            const { error: rollbackClientError } = await supabase
+              .from('clients')
+              .update(rollbackClientPayload)
+              .eq('id', clientId);
+            if (rollbackClientError) rollbackErrors.push(`puntos: ${rollbackClientError.message}`);
+          }
+
+          if (stockWasApplied) {
+            const reverseStockDelta = Object.fromEntries(
+              Object.entries(checkoutStockDelta).map(([id, delta]) => [id, -Number(delta || 0)]),
+            );
+            try {
+              const rollbackStock = await applySaleStockDelta(reverseStockDelta);
+              if (rollbackStock.stockIssues.length > 0) {
+                rollbackErrors.push(`stock: ${rollbackStock.stockIssues.join(', ')}`);
+              }
+            } catch (rollbackStockError) {
+              rollbackErrors.push(`stock: ${rollbackStockError.message}`);
+            }
+          }
+
+          if (!isLocalDemoMode()) {
+            const { error: deleteItemsError } = await supabase.from('sale_items').delete().eq('sale_id', sale.id);
+            if (deleteItemsError) rollbackErrors.push(`items: ${deleteItemsError.message}`);
+            const { error: deleteSaleError } = await supabase.from('sales').delete().eq('id', sale.id);
+            if (deleteSaleError) rollbackErrors.push(`venta: ${deleteSaleError.message}`);
+          }
+
+          const rollbackDetail = rollbackErrors.length
+            ? ` Reversion incompleta: ${rollbackErrors.join(' | ')}.`
+            : '';
+          throw new Error(`${legacySaleError.message}${rollbackDetail}`);
+        }
       }
 
       if (updatedClientForTicket) {
@@ -11856,7 +12154,7 @@ export default function PartySupplyApp() {
 
     } catch (e) {
       console.error(e);
-      Swal.fire('Error', 'Fallo al guardar la venta', 'error');
+      Swal.fire('Error', getCheckoutErrorMessage(e), 'error');
     }
   };
 
@@ -11877,6 +12175,13 @@ export default function PartySupplyApp() {
       // ==========================================
       if (tx.status === 'voided') {
         Swal.fire({ title: 'Borrando...', text: 'Eliminando registro permanentemente...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+
+        await updateWithSchemaFallback(
+          'sales',
+          tx.id,
+          { status: 'deleted' },
+          'id',
+        );
         
         // Limpiamos la vista local de transacciones para que desaparezca el registro operativo,
         // pero mantenemos intacta la trazabilidad del Registro de Acciones.
@@ -11940,7 +12245,11 @@ export default function PartySupplyApp() {
           
           updatedMembers[clientIndex] = { ...dbClient, points: newPoints };
           pointsChange = { previous: previousPoints, new: newPoints, diff: newPoints - previousPoints };
-          clientPointUpdates.push({ client_id: String(dbClient.id), points: newPoints });
+          clientPointUpdates.push({
+            client_id: String(dbClient.id),
+            points: newPoints,
+            expected_points: previousPoints,
+          });
         }
       }
 
@@ -12171,7 +12480,11 @@ export default function PartySupplyApp() {
           const newPoints = clientDb.points + (tx.pointsEarned || 0) - (tx.pointsSpent || 0);
           
           pointsChange = { previous: previousPoints, new: newPoints, diff: newPoints - previousPoints };
-          clientPointUpdates.push({ client_id: String(clientDb.id), points: newPoints });
+          clientPointUpdates.push({
+            client_id: String(clientDb.id),
+            points: newPoints,
+            expected_points: previousPoints,
+          });
       }
 
       let stockChanges = [];
@@ -12506,7 +12819,11 @@ export default function PartySupplyApp() {
           const clientDb = members.find((member) => String(member.id) === String(memberId));
           if (!clientDb) continue;
           const finalPoints = Math.max(0, Number(clientDb.points || 0) + delta);
-          clientPointUpdates.push({ client_id: String(memberId), points: finalPoints });
+          clientPointUpdates.push({
+            client_id: String(memberId),
+            points: finalPoints,
+            expected_points: Number(clientDb.points || 0),
+          });
         }
       }
 
@@ -12794,6 +13111,7 @@ export default function PartySupplyApp() {
     isAuthBootLoading ||
     isCloudLoading ||
     isReconnectAttempting ||
+    moduleLoadState.core.failedSources?.includes('productos') ||
     ['idle', 'loading'].includes(moduleLoadState.core.status) ||
     ['idle', 'loading'].includes(moduleLoadState.transactions.status);
   const isDashboardProfitSyncing =
@@ -13247,6 +13565,34 @@ export default function PartySupplyApp() {
               </div>
             </div>
           </header>
+          {isOfflineReadOnly && (
+            <div className="z-20 border-b border-red-950/20 bg-red-600 px-5 py-3 text-white shadow-lg shadow-red-950/20">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/25 bg-white/15">
+                    <WifiOff size={21} />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-red-100">
+                      Modo local activo - solo lectura
+                    </p>
+                    <p className="mt-0.5 text-sm font-black leading-snug text-white">
+                      Estas viendo datos guardados en esta computadora. No se puede cobrar ni guardar cambios hasta reconectar Supabase.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleReconnectCloud}
+                  disabled={isReconnectAttempting}
+                  className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-white/30 bg-white px-3 text-[11px] font-black uppercase tracking-[0.08em] text-red-700 shadow-sm transition hover:bg-red-50 disabled:cursor-wait disabled:opacity-75"
+                >
+                  <RefreshCw size={13} className={isReconnectAttempting ? 'animate-spin' : ''} />
+                  {isReconnectAttempting ? 'Reconectando' : 'Reconectar'}
+                </button>
+              </div>
+            </div>
+          )}
           {isLocalDemoMode() && (
             <div className="flex flex-wrap items-center gap-2 border-b border-sky-200 bg-sky-50 px-5 py-2 text-[11px] font-semibold text-sky-900 shadow-sm">
               <span className="font-black uppercase tracking-[0.08em]">Modo demo local</span>
@@ -13255,7 +13601,7 @@ export default function PartySupplyApp() {
             </div>
           )}
           {isOfflineReadOnly && (
-            <div className="pointer-events-none fixed right-5 top-20 z-[80] w-[430px] max-w-[calc(100vw-2rem)]">
+            <div className="pointer-events-none fixed right-5 top-28 z-[80] w-[430px] max-w-[calc(100vw-2rem)]">
               <div className="pointer-events-auto overflow-hidden rounded-xl border border-amber-300/35 bg-[#0f1e33] text-slate-100 shadow-2xl shadow-slate-950/35">
                 <div className="h-1.5 bg-amber-300" />
                 <div className="p-4">
@@ -13267,15 +13613,15 @@ export default function PartySupplyApp() {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-200">
-                            Sin conexion
+                            Datos locales
                           </p>
                           <h3 className="mt-1 text-base font-black text-white">
-                            Actualmente no estas conectado/a a internet
+                            Supabase no esta confirmado
                           </h3>
                         </div>
                       </div>
                       <p className="mt-2 text-xs font-bold leading-relaxed text-slate-300">
-                        Estas perdiendo la sincronizacion de datos.
+                        La app esta usando el ultimo snapshot local. Las ventas y cambios quedan bloqueados para evitar datos desactualizados.
                       </p>
                       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-700/70 pt-3 text-[11px] font-bold text-slate-400">
                         <span>
@@ -13283,7 +13629,7 @@ export default function PartySupplyApp() {
                         </span>
                         <span className="h-1 w-1 rounded-full bg-slate-600" />
                         <span>
-                          Sin conexion hace <span className="text-amber-100">{offlineNoticeElapsed}</span>
+                          En local hace <span className="text-amber-100">{offlineNoticeElapsed}</span>
                         </span>
                       </div>
                       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -13419,7 +13765,7 @@ export default function PartySupplyApp() {
               </PersistentTabPanel>
             )}
             <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} offers={offers} currentUser={currentUser} userCatalog={userCatalog} isLoading={isOrdersModuleLoading && budgets.length === 0 && orders.length === 0} emptyStateMessage={ordersOfflineEmptyMessage} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onUpdateOrder={handleUpdateOrder} onDeleteBudget={handleDeleteBudget} onDeleteOrder={handleDeleteOrder} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
-            <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={historyLogs} inventory={inventory} currentUser={currentUser} userCatalog={userCatalog} members={members} isLoading={isHistoryModuleLoading && transactions.length === 0 && historyLogs.length === 0} emptyStateMessage={historyOfflineEmptyMessage} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setHistoryLogs} navigationRequest={historyNavigationRequest} onSoftReload={() => Promise.all([loadHistoryCloudData({ force: true }), loadTransactionsCloudData({ force: true, full: false })])} isActive={activeTab === 'history'} /></PersistentTabPanel>
+            <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={historyLogs} inventory={inventory} currentUser={currentUser} userCatalog={userCatalog} members={members} isLoading={isHistoryModuleLoading && transactions.length === 0 && historyLogs.length === 0} emptyStateMessage={historyOfflineEmptyMessage} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setHistoryLogs} navigationRequest={historyNavigationRequest} onSoftReload={() => Promise.all([loadHistoryCloudData({ force: true }), loadTransactionsCloudData({ force: true, full: false })])} isActive={activeTab === 'history'} enableCloudFeed={!isLocalDemoMode() && !isOfflineReadOnly} /></PersistentTabPanel>
             {canViewReports && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members} isLoading={isReportsModuleLoading && pastClosures.length === 0} emptyStateMessage={reportsOfflineEmptyMessage} onLoadReportDetail={fetchCashClosureDetailById} /></PersistentTabPanel>)}
             {canViewMetrics && (<PersistentTabPanel tab="metrics" activeTab={activeTab} className="h-full min-h-0"><MetricsView transactions={transactions} expenses={expenses} pastClosures={pastClosures} inventory={inventory} members={members} budgets={budgets} orders={orders} dailyLogs={dailyLogs} currentUser={currentUser} userCatalog={userCatalog} isLoading={isMetricsModuleLoading && transactions.length === 0 && expenses.length === 0 && pastClosures.length === 0} isProfitSyncing={isMetricsProfitSyncing} emptyStateMessage={metricsOfflineEmptyMessage} onRefresh={async () => { await loadCoreCloudData({ force: false }); return loadMetricsCloudData({ force: true, includeTransactions: true, full: false }); }} isActive={activeTab === 'metrics'} /></PersistentTabPanel>)}
             {canViewLogs && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView initialLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} userCatalog={userCatalog} inventory={inventory} isActive={activeTab === 'logs'} /></PersistentTabPanel>)}

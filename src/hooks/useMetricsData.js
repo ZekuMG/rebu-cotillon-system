@@ -1,7 +1,13 @@
 import { useMemo } from 'react';
-import { formatCurrency, formatNumber, isTestRecord, isVentaLog, normalizeDate } from '../utils/helpers';
+import { formatCurrency, formatNumber, isTestRecord, isVentaLog } from '../utils/helpers';
 import { getPaymentMethodLabel, normalizePaymentBreakdown } from '../utils/paymentBreakdown';
-import { buildSalesDataset, getCostBasisStatus, getItemCostInfo, getMetricProductKey } from '../utils/salesMetricsCore';
+import {
+  buildSalesDataset,
+  getCostBasisStatus,
+  getItemCostInfo,
+  getMetricProductKey,
+  parseMetricDate,
+} from '../utils/salesMetricsCore';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -19,21 +25,7 @@ const endOfDay = (date) => {
   return next;
 };
 
-const parseAnyDate = (value) => {
-  if (!value) return null;
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
-
-  const raw = String(value).trim();
-  if (!raw) return null;
-
-  if (/^\d{4}-\d{2}-\d{2}/.test(raw) || raw.includes('T')) {
-    const date = new Date(raw);
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-
-  const normalized = normalizeDate(raw);
-  return normalized && !Number.isNaN(normalized.getTime()) ? normalized : null;
-};
+const parseAnyDate = parseMetricDate;
 
 const formatDateKey = (date) => {
   if (!date) return 'sin-fecha';

@@ -600,7 +600,7 @@ export default function POSView({
     const reenabledCodes = new Set(getCouponUsageOverrides(selectedClient).reenabledCodes);
 
     const usedCodes = (transactions || []).flatMap((tx) => {
-      if (tx.status === 'voided' || !tx.client) return [];
+      if (['voided', 'deleted'].includes(tx.status) || !tx.client) return [];
 
       const sameClient =
         String(tx.client?.id || '') === memberId ||

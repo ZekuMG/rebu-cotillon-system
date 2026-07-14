@@ -209,7 +209,7 @@ export default function ClientsView({
     if (!member || !transactions || transactions.length === 0) return null;
     
     const memberTx = transactions.filter(tx => 
-      tx.status !== 'voided' && 
+      !['voided', 'deleted'].includes(tx.status) &&
       tx.client && 
       (String(tx.client.id) === String(member.id) || String(tx.client.memberNumber) === String(member.memberNumber))
     );
@@ -249,7 +249,7 @@ export default function ClientsView({
 
     return transactions
       .filter((tx) =>
-        tx.status !== 'voided' &&
+        !['voided', 'deleted'].includes(tx.status) &&
         tx.client &&
         (String(tx.client.id) === String(member.id) || String(tx.client.memberNumber) === String(member.memberNumber))
       )

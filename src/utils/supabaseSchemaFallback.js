@@ -210,7 +210,8 @@ export const removeColumnFromSelect = (selectColumns, missingColumn, currentRela
 export const fetchAllCloudRowsWithSelectFallback = async (
   buildQuery,
   selectColumns,
-  batchSize = 200
+  batchSize = 200,
+  { signal = null } = {},
 ) => {
   let safeSelect = selectColumns;
 
@@ -220,7 +221,11 @@ export const fetchAllCloudRowsWithSelectFallback = async (
     let shouldRetry = false;
 
     while (true) {
-      const { data, error } = await buildQuery(safeSelect).range(from, from + batchSize - 1);
+      let query = buildQuery(safeSelect);
+      if (signal && typeof query.abortSignal === 'function') {
+        query = query.abortSignal(signal);
+      }
+      const { data, error } = await query.range(from, from + batchSize - 1);
 
       if (error) {
         const missingColumn = extractSchemaMissingColumn(error);

@@ -280,6 +280,8 @@ export const HISTORY_LOG_ACTIONS = [
   'Venta Modificada',
 ];
 
+export const isHistoryLogAction = (action) => HISTORY_LOG_ACTIONS.includes(action);
+
 export const SESSION_LOG_ACTIONS = [
   'Sesion Iniciada',
   'Sesion Cerrada',

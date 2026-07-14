@@ -15,6 +15,20 @@ Este directorio contiene scripts de seguridad e integridad para Supabase. Ejecut
 8. Verificar grants, funciones, columnas e indices.
 9. Probar login, venta, edicion de venta, anulacion, restauracion, stock y logs en un entorno de prueba.
 
+## Activacion final de cobros transaccionales
+
+Despues de aplicar `app_users_auth_bridge_2026_05_25.sql`, vincular cada usuario operativo con
+`app_users.auth_user_id` y `app_users.auth_email`. Luego aplicar la migracion de Supabase:
+
+`supabase/migrations/20260710192217_harden_transaction_rpc_auth_and_points.sql`
+
+La migracion conserva las implementaciones atomicas existentes detras de wrappers protegidos,
+rechaza sesiones que no pertenezcan a un usuario activo de Rebu y detecta cambios concurrentes
+en puntos. Una vez verificada, compilar la aplicacion con `VITE_REBU_ENABLE_AUTH_RPC=1`.
+
+No activar la bandera antes de vincular los usuarios: el login se bloqueara deliberadamente para
+evitar que un cobro vuelva al guardado heredado no atomico.
+
 ## Archivos legacy o de referencia
 
 - `app_users_schema.sql`: baseline historico. No usar como script principal en produccion; puede fallar si ya existen RPCs dependientes de `app_users_public`. Usar `app_users_safe_upgrade_2026_05_22.sql`.
