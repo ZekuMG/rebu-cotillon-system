@@ -20,10 +20,10 @@ import logoRebuImg from './assets/logo-rebu.jpg';
 import appPackage from '../package.json';
 
 // --- CONEXIÓN A LA NUBE ---
-import { supabase } from './supabase/client';
+import { supabase, subscribeToRealtimeHeartbeat } from './supabase/client';
 import { uploadProductImage, deleteProductImage, uploadProductThumbFromSource } from './utils/storage';
 import { hasProductImage } from './utils/productImages';
-import { formatDateAR, formatNumber, formatTimeAR, formatTimeFullAR, isTestRecord } from './utils/helpers';
+import { formatCurrency, formatDateAR, formatNumber, formatTimeAR, formatTimeFullAR, isTestRecord } from './utils/helpers';
 import {
   mapAgendaContactRecord,
   mapAgendaContactRecords,
@@ -53,6 +53,17 @@ import {
   isUsableCloudResult as hasUsableCloudResult,
   summarizeCloudResults,
 } from './utils/cloudLoadControl';
+import {
+  createRealtimeIdBatcher,
+  getRealtimeRecordId,
+  reconcileRealtimePayload,
+} from './utils/realtimeSync';
+import {
+  getTransactionSnapshotScope,
+  shouldUseIncrementalTransactionSync,
+  TRANSACTION_SNAPSHOT_SCOPE_FULL,
+  TRANSACTION_SNAPSHOT_SCOPE_PARTIAL,
+} from './utils/transactionSync';
 import {
   extractSchemaMissingColumn,
   fetchAllCloudRowsWithSelectFallback,
@@ -110,6 +121,7 @@ import {
   getPrimaryPaymentInfo,
   normalizePaymentBreakdown,
   normalizeOrderPaymentHistory,
+  replaceOrderDepositPaymentHistory,
 } from './utils/paymentBreakdown';
 import {
   buildCasaAlbertoEstimatedCost,
@@ -520,6 +532,28 @@ const MODULE_LOAD_DEFAULT_STATE = {
   metrics: { status: 'idle', lastLoadedAt: 0, dirty: false },
 };
 
+const REALTIME_SOURCE_DEFAULT_STATE = {
+  sales: 'idle',
+  expenses: 'idle',
+  products: 'idle',
+  closures: 'idle',
+};
+
+const REALTIME_DEGRADED_STATUSES = new Set([
+  'CHANNEL_ERROR',
+  'TIMED_OUT',
+  'CLOSED',
+  'HEARTBEAT_TIMEOUT',
+  'DISCONNECTED',
+  'ERROR',
+]);
+
+const REALTIME_HEARTBEAT_DEGRADED_STATUSES = new Set([
+  'HEARTBEAT_TIMEOUT',
+  'DISCONNECTED',
+  'ERROR',
+]);
+
 const MODULE_FRESHNESS_MS = {
   core: 2 * 60 * 1000,
   transactions: 30 * 1000,
@@ -825,6 +859,23 @@ const fetchSaleRowsByIds = async (saleIds = []) => {
         .order('id', { ascending: false }),
     CLOUD_SELECTS.sales
   );
+};
+
+const fetchTransactionsCloudPayloadByIds = async (saleIds = []) => {
+  const [salesResult, parsedLogs] = await Promise.all([
+    fetchSaleRowsByIds(saleIds),
+    fetchSaleHistoryLogsForTransactions({ limit: CLOUD_RECENT_SYNC_LIMIT }),
+  ]);
+
+  if (salesResult.error) {
+    console.error('Error en tabla [ventas por Realtime]:', salesResult.error);
+    return { hasCloudConnection: false, transactions: null, error: salesResult.error };
+  }
+
+  return {
+    hasCloudConnection: true,
+    transactions: mapSaleRecords(salesResult.data || [], parsedLogs),
+  };
 };
 
 const getTransactionCostSignal = (tx = {}) => {
@@ -2619,7 +2670,20 @@ export default function PartySupplyApp() {
   const [orders, setOrders] = useState([]);
   const [offers, setOffers] = useState([]); // ? NUEVO ESTADO: Ofertas
   const [moduleLoadState, setModuleLoadState] = useState(MODULE_LOAD_DEFAULT_STATE);
+  const [realtimeConnectionState, setRealtimeConnectionState] = useState({
+    status: 'CONNECTING',
+    lastConnectedAt: 0,
+    lastEventAt: 0,
+    lastError: '',
+  });
+  const [realtimeSourceState, setRealtimeSourceState] = useState(REALTIME_SOURCE_DEFAULT_STATE);
   const moduleLoadStateRef = useRef(MODULE_LOAD_DEFAULT_STATE);
+  const realtimeConnectionStateRef = useRef({
+    status: 'CONNECTING',
+    lastConnectedAt: 0,
+    lastEventAt: 0,
+    lastError: '',
+  });
   const moduleLoadPromisesRef = useRef({
     core: null,
     transactions: null,
@@ -2641,6 +2705,7 @@ export default function PartySupplyApp() {
   const activeTabRef = useRef('pos');
   const dataStateRef = useRef({});
   const registerStateSnapshotRef = useRef(null);
+  const transactionSnapshotScopeRef = useRef(TRANSACTION_SNAPSHOT_SCOPE_PARTIAL);
 
   const [openingBalance, setOpeningBalance] = useState(0);
   const [isRegisterClosed, setIsRegisterClosed] = useState(true); 
@@ -2673,6 +2738,24 @@ export default function PartySupplyApp() {
       [moduleKey]: nextState,
     };
     setModuleLoadState(moduleLoadStateRef.current);
+  };
+
+  const setRealtimeConnection = (patch) => {
+    const nextPartial = typeof patch === 'function'
+      ? patch(realtimeConnectionStateRef.current)
+      : patch;
+    realtimeConnectionStateRef.current = {
+      ...realtimeConnectionStateRef.current,
+      ...(nextPartial || {}),
+    };
+    setRealtimeConnectionState(realtimeConnectionStateRef.current);
+  };
+
+  const setRealtimeSourceStatus = (source, status) => {
+    if (!Object.prototype.hasOwnProperty.call(REALTIME_SOURCE_DEFAULT_STATE, source)) return;
+    setRealtimeSourceState((prev) => (
+      prev[source] === status ? prev : { ...prev, [source]: status }
+    ));
   };
 
   const beginModuleLoadRequest = (moduleKey) => {
@@ -2743,6 +2826,7 @@ export default function PartySupplyApp() {
     const hasTransactionsData = snapshot && 'transactions' in snapshot;
     if (!hasTransactionsData) return false;
     const nextTransactions = Array.isArray(snapshot.transactions) ? snapshot.transactions : [];
+    transactionSnapshotScopeRef.current = getTransactionSnapshotScope(snapshot);
     dataStateRef.current = { ...dataStateRef.current, transactions: nextTransactions };
     setTransactions(nextTransactions);
     return true;
@@ -2815,6 +2899,7 @@ export default function PartySupplyApp() {
     setAgendaContacts([]);
     setOffers(mapOfferRecords(store.offers));
     setTransactions(Array.isArray(INITIAL_TRANSACTIONS) ? INITIAL_TRANSACTIONS : []);
+    transactionSnapshotScopeRef.current = TRANSACTION_SNAPSHOT_SCOPE_FULL;
     setDailyLogs([]);
     setHistoryLogs([]);
     setExpenses([]);
@@ -3274,7 +3359,13 @@ export default function PartySupplyApp() {
     }
 
     const currentState = moduleLoadStateRef.current.transactions;
-    if (!force && isModuleStateFresh(currentState, MODULE_FRESHNESS_MS.transactions)) {
+    const hasCompleteTransactionSnapshot =
+      transactionSnapshotScopeRef.current === TRANSACTION_SNAPSHOT_SCOPE_FULL;
+    if (
+      !force &&
+      hasCompleteTransactionSnapshot &&
+      isModuleStateFresh(currentState, MODULE_FRESHNESS_MS.transactions)
+    ) {
       return true;
     }
 
@@ -3287,9 +3378,11 @@ export default function PartySupplyApp() {
       const hasExistingTransactions =
         Array.isArray(dataStateRef.current.transactions) &&
         dataStateRef.current.transactions.length > 0;
-      const useRecentSync =
-        !full &&
-        hasExistingTransactions;
+      const useRecentSync = shouldUseIncrementalTransactionSync({
+        fullRequested: full,
+        hasExistingTransactions,
+        snapshotScope: transactionSnapshotScopeRef.current,
+      });
 
       try {
         const payload = useRecentSync
@@ -3309,7 +3402,11 @@ export default function PartySupplyApp() {
           const cachedSnapshot =
             loadOfflineTransactionsSnapshot() || loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
           if (applyTransactionsSnapshot(cachedSnapshot)) {
-            setModuleState('transactions', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+            setModuleState('transactions', {
+              status: 'loaded',
+              dirty: transactionSnapshotScopeRef.current !== TRANSACTION_SNAPSHOT_SCOPE_FULL,
+              lastLoadedAt: Date.now(),
+            });
             return !requireCloud;
           }
 
@@ -3323,6 +3420,9 @@ export default function PartySupplyApp() {
         }
 
         applyTransactionsPayload(payload, { merge: useRecentSync });
+        if (!useRecentSync) {
+          transactionSnapshotScopeRef.current = TRANSACTION_SNAPSHOT_SCOPE_FULL;
+        }
         setIsOfflineReadOnly(false);
         const rawNextTransactions =
           payload.transactions === null
@@ -3336,6 +3436,7 @@ export default function PartySupplyApp() {
         const nextSnapshot = {
           savedAt: new Date().toISOString(),
           transactions: nextTransactions,
+          transactionsScope: transactionSnapshotScopeRef.current,
         };
         saveOfflineTransactionsSnapshot(nextSnapshot);
         setModuleState('transactions', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
@@ -3351,7 +3452,11 @@ export default function PartySupplyApp() {
         const cachedSnapshot =
           loadOfflineTransactionsSnapshot() || loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
         if (applyTransactionsSnapshot(cachedSnapshot)) {
-          setModuleState('transactions', { status: 'loaded', dirty: false, lastLoadedAt: Date.now() });
+          setModuleState('transactions', {
+            status: 'loaded',
+            dirty: transactionSnapshotScopeRef.current !== TRANSACTION_SNAPSHOT_SCOPE_FULL,
+            lastLoadedAt: Date.now(),
+          });
           return !requireCloud;
         }
 
@@ -4068,29 +4173,294 @@ export default function PartySupplyApp() {
         });
     }
 
-    let realtimeSyncTimer = null;
+    let realtimeFallbackSyncTimer = null;
     let realtimeCoreSyncTimer = null;
+    let realtimeSnapshotTimer = null;
+    let shouldReconcileAfterSubscribe = false;
+    let hasSubscribedOnce = false;
+    const pendingSnapshotScopes = new Set();
     const markModulesDirty = (moduleKeys = []) => {
       moduleKeys.forEach((moduleKey) => {
         setModuleState(moduleKey, (prev) => ({ ...prev, dirty: true }));
       });
     };
-    const scheduleActiveModuleSync = () => {
+
+    const scheduleRealtimeSnapshotSave = (scope) => {
+      if (scope) pendingSnapshotScopes.add(scope);
+      if (realtimeSnapshotTimer) window.clearTimeout(realtimeSnapshotTimer);
+      realtimeSnapshotTimer = window.setTimeout(() => {
+        realtimeSnapshotTimer = null;
+        const snapshotState = dataStateRef.current;
+        const savedAt = new Date().toISOString();
+
+        if (pendingSnapshotScopes.has('core')) {
+          saveOfflineSnapshot({
+            savedAt,
+            inventory: snapshotState.inventory || [],
+            categories: snapshotState.categories || [],
+            rewards: snapshotState.rewards || [],
+            members: snapshotState.members || [],
+            agendaContacts: snapshotState.agendaContacts || [],
+            offers: snapshotState.offers || [],
+            registerState: registerStateSnapshotRef.current || null,
+          });
+        }
+        if (pendingSnapshotScopes.has('transactions')) {
+          saveOfflineTransactionsSnapshot({
+            savedAt,
+            transactions: snapshotState.transactions || [],
+            transactionsScope: transactionSnapshotScopeRef.current,
+          });
+        }
+        if (pendingSnapshotScopes.has('dashboard')) {
+          saveOfflineDashboardSnapshot({
+            savedAt,
+            dailyLogs: snapshotState.dailyLogs || [],
+            expenses: snapshotState.expenses || [],
+            pastClosures: snapshotState.pastClosures || [],
+          });
+        }
+        if (pendingSnapshotScopes.has('history')) {
+          saveOfflineHistorySnapshot({
+            savedAt,
+            historyLogs: snapshotState.historyLogs || [],
+          });
+        }
+        if (pendingSnapshotScopes.has('reports')) {
+          saveOfflineReportsSnapshot({
+            savedAt,
+            pastClosures: snapshotState.pastClosures || [],
+          });
+        }
+        pendingSnapshotScopes.clear();
+      }, 500);
+    };
+
+    const noteRealtimeEvent = () => {
+      setRealtimeConnection((prev) => ({
+        ...prev,
+        lastEventAt: Date.now(),
+      }));
+    };
+
+    const scheduleAffectedModuleSync = (moduleKeys = []) => {
+      const affectedModules = Array.from(new Set(moduleKeys.filter(Boolean)));
+      markModulesDirty(affectedModules);
       if (!currentUserRef.current) return;
-      if (realtimeSyncTimer) window.clearTimeout(realtimeSyncTimer);
-      realtimeSyncTimer = window.setTimeout(() => {
-        realtimeSyncTimer = null;
-        void loadModuleForTab(activeTabRef.current, { force: true });
+      const activeModule = TAB_TO_DATA_MODULE[activeTabRef.current];
+      if (!activeModule || !affectedModules.includes(activeModule)) return;
+      if (realtimeFallbackSyncTimer) window.clearTimeout(realtimeFallbackSyncTimer);
+      realtimeFallbackSyncTimer = window.setTimeout(() => {
+        realtimeFallbackSyncTimer = null;
+        const tabToSync = activeTabRef.current;
+        const moduleToSync = TAB_TO_DATA_MODULE[tabToSync];
+        if (!moduleToSync || !affectedModules.includes(moduleToSync)) return;
+
+        const syncTasks = [loadModuleForTab(tabToSync, { force: true })];
+        if (tabToSync === 'history' && affectedModules.includes('transactions')) {
+          syncTasks.push(loadTransactionsCloudData({ force: true }));
+        }
+        void Promise.all(syncTasks).catch((error) => {
+          console.error('No se pudo reconciliar el modulo despues de Realtime:', error);
+        });
       }, 650);
     };
+
     const scheduleCoreSync = () => {
       setModuleState('core', (prev) => ({ ...prev, dirty: true }));
       if (!currentUserRef.current) return;
       if (realtimeCoreSyncTimer) window.clearTimeout(realtimeCoreSyncTimer);
       realtimeCoreSyncTimer = window.setTimeout(() => {
         realtimeCoreSyncTimer = null;
-        void loadCoreCloudData({ showSpinner: false, force: true });
+        void loadCoreCloudData({ showSpinner: false, force: true }).catch((error) => {
+          console.error('No se pudo reconciliar la base despues de Realtime:', error);
+        });
       }, 650);
+    };
+
+    const markRealtimeDegraded = (status, error = null) => {
+      shouldReconcileAfterSubscribe = true;
+      setRealtimeConnection({
+        status,
+        lastError: error?.message || String(error || ''),
+      });
+      markModulesDirty(['core', 'transactions', 'dashboard', 'history', 'orders', 'reports', 'metrics']);
+    };
+
+    const syncSaleIds = async (saleIds) => {
+      if (disposed || saleIds.length === 0) return;
+      setRealtimeSourceStatus('sales', 'syncing');
+      const payload = await fetchTransactionsCloudPayloadByIds(saleIds);
+      if (!payload?.hasCloudConnection || payload.transactions === null) {
+        throw payload?.error || new Error('No se pudieron consultar las ventas notificadas por Realtime.');
+      }
+      if (disposed) return;
+
+      setTransactions((prev) => {
+        const next = applyLocalTransactionOverrides(
+          mergeTransactionsPreservingCostContext(prev, payload.transactions, { replace: false }),
+        );
+        dataStateRef.current = { ...dataStateRef.current, transactions: next };
+        return next;
+      });
+      setModuleState('transactions', {
+        status: 'loaded',
+        dirty: false,
+        lastLoadedAt: Date.now(),
+      });
+      setRealtimeSourceStatus('sales', 'idle');
+      scheduleRealtimeSnapshotSave('transactions');
+    };
+
+    const saleSyncBatcher = createRealtimeIdBatcher({
+      delayMs: 275,
+      onFlush: syncSaleIds,
+      onError: (error) => {
+        if (disposed) return;
+        console.error('No se pudo aplicar el evento Realtime de ventas:', error);
+        setRealtimeSourceStatus('sales', 'error');
+        scheduleAffectedModuleSync(['transactions', 'dashboard', 'history', 'metrics']);
+      },
+    });
+
+    const handleRealtimeSale = (payload) => {
+      noteRealtimeEvent();
+      const saleId = getRealtimeRecordId(payload);
+      if (!saleId) {
+        scheduleAffectedModuleSync(['transactions', 'dashboard', 'history', 'metrics']);
+        return;
+      }
+
+      if (String(payload.eventType || '').toUpperCase() === 'DELETE') {
+        localTransactionOverridesRef.current.delete(saleId);
+        setTransactions((prev) => {
+          const next = (prev || []).filter((transaction) => String(transaction?.id) !== saleId);
+          dataStateRef.current = { ...dataStateRef.current, transactions: next };
+          return next;
+        });
+        setRealtimeSourceStatus('sales', 'idle');
+        scheduleRealtimeSnapshotSave('transactions');
+        return;
+      }
+
+      setRealtimeSourceStatus('sales', 'pending');
+      saleSyncBatcher.enqueue(saleId);
+    };
+
+    const handleRealtimeExpense = (payload) => {
+      noteRealtimeEvent();
+      if (!getRealtimeRecordId(payload)) {
+        scheduleAffectedModuleSync(['dashboard', 'metrics']);
+        return;
+      }
+      setRealtimeSourceStatus('expenses', 'syncing');
+      setExpenses((prev) => {
+        const result = reconcileRealtimePayload(prev, payload, {
+          mapRecord: (record) => mapExpenseRecords([record])[0] || null,
+        });
+        const next = result.records;
+        dataStateRef.current = { ...dataStateRef.current, expenses: next };
+        return next;
+      });
+      setRealtimeSourceStatus('expenses', 'idle');
+      scheduleRealtimeSnapshotSave('dashboard');
+    };
+
+    const handleRealtimeClosure = (payload) => {
+      noteRealtimeEvent();
+      if (!getRealtimeRecordId(payload)) {
+        scheduleAffectedModuleSync(['dashboard', 'reports', 'metrics']);
+        return;
+      }
+      setRealtimeSourceStatus('closures', 'syncing');
+      setPastClosures((prev) => {
+        const result = reconcileRealtimePayload(prev, payload, {
+          mapRecord: mapCashClosureRecord,
+        });
+        const next = result.records;
+        dataStateRef.current = { ...dataStateRef.current, pastClosures: next };
+        return next;
+      });
+      setRealtimeSourceStatus('closures', 'idle');
+      scheduleRealtimeSnapshotSave('dashboard');
+      scheduleRealtimeSnapshotSave('reports');
+    };
+
+    const handleRealtimeProduct = (payload) => {
+      noteRealtimeEvent();
+      if (!getRealtimeRecordId(payload)) {
+        scheduleCoreSync();
+        return;
+      }
+      setRealtimeSourceStatus('products', 'syncing');
+      setInventory((prev) => {
+        const result = reconcileRealtimePayload(prev, payload, {
+          mapRecord: (record) => mapInventoryRecords([record])[0] || null,
+          keepRecord: (record) => getProductActiveState(record),
+        });
+        const next = result.records;
+        dataStateRef.current = { ...dataStateRef.current, inventory: next };
+        return next;
+      });
+      setRealtimeSourceStatus('products', 'idle');
+      scheduleRealtimeSnapshotSave('core');
+    };
+
+    const handleRealtimeClient = (payload) => {
+      noteRealtimeEvent();
+      if (!getRealtimeRecordId(payload)) {
+        scheduleCoreSync();
+        return;
+      }
+      setMembers((prev) => {
+        const result = reconcileRealtimePayload(prev, payload, {
+          mapRecord: (record) => mapMemberRecords([record])[0] || null,
+          keepRecord: (record) => record.is_active !== false,
+        });
+        const next = result.records;
+        dataStateRef.current = { ...dataStateRef.current, members: next };
+        return next;
+      });
+      scheduleRealtimeSnapshotSave('core');
+    };
+
+    const handleRealtimeLog = (payload) => {
+      noteRealtimeEvent();
+      const mappedLog = mapLogRecords([payload.new])[0] || null;
+      if (!mappedLog?.id) {
+        scheduleAffectedModuleSync(['transactions', 'dashboard', 'history', 'metrics']);
+        return;
+      }
+
+      setDailyLogs((prev) => {
+        const result = reconcileRealtimePayload(prev, payload, {
+          mapRecord: () => mappedLog,
+          maxItems: DASHBOARD_LOG_LIMIT,
+        });
+        const next = result.records;
+        dataStateRef.current = { ...dataStateRef.current, dailyLogs: next };
+        return next;
+      });
+      scheduleRealtimeSnapshotSave('dashboard');
+
+      if (!isHistoryLogAction(mappedLog.action)) return;
+      setHistoryLogs((prev) => {
+        const result = reconcileRealtimePayload(prev, payload, {
+          mapRecord: () => mappedLog,
+        });
+        const next = result.records;
+        dataStateRef.current = { ...dataStateRef.current, historyLogs: next };
+        return next;
+      });
+      scheduleRealtimeSnapshotSave('history');
+
+      const saleIds = Array.from(getSaleTransactionIdsFromLogs([mappedLog]));
+      if (saleIds.length > 0) {
+        setRealtimeSourceStatus('sales', 'pending');
+        saleSyncBatcher.enqueue(saleIds);
+      } else {
+        scheduleAffectedModuleSync(['transactions', 'dashboard', 'history', 'metrics']);
+      }
     };
 
     const channel = supabase
@@ -4101,53 +4471,29 @@ export default function PartySupplyApp() {
         (payload) => {
           const newState = payload.new;
           syncRegisterState(newState);
+          noteRealtimeEvent();
+          scheduleRealtimeSnapshotSave('core');
         }
       )
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'cash_closures' },
-        (payload) => {
-          const c = payload.new;
-          if (c) {
-             const newReport = mapCashClosureRecord(c);
-             if (moduleLoadStateRef.current.reports.status === 'loaded') {
-               setPastClosures((prev) => {
-                 const next = mergeLatestRecords(prev, [newReport]);
-                 dataStateRef.current = { ...dataStateRef.current, pastClosures: next };
-                 return next;
-               });
-             } else {
-               setModuleState('reports', (prev) => ({ ...prev, dirty: true }));
-             }
-             markModulesDirty(['dashboard', 'metrics']);
-             scheduleActiveModuleSync();
-          }
-        }
+        { event: '*', schema: 'public', table: 'cash_closures' },
+        handleRealtimeClosure
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'sales' },
-        () => {
-          markModulesDirty(['transactions', 'dashboard', 'history', 'metrics']);
-          scheduleActiveModuleSync();
-        }
+        handleRealtimeSale
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'expenses' },
-        () => {
-          markModulesDirty(['dashboard', 'metrics']);
-          scheduleActiveModuleSync();
-        }
+        handleRealtimeExpense
       )
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'logs' },
-        (payload) => {
-          if (!isHistoryLogAction(payload.new?.action)) return;
-          markModulesDirty(['transactions', 'dashboard', 'history', 'metrics']);
-          scheduleActiveModuleSync();
-        }
+        handleRealtimeLog
       )
       .on(
         'postgres_changes',
@@ -4159,13 +4505,65 @@ export default function PartySupplyApp() {
           });
         }
       )
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, scheduleCoreSync)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, scheduleCoreSync)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, handleRealtimeProduct)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, handleRealtimeClient)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, scheduleCoreSync)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'offers' }, scheduleCoreSync)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rewards' }, scheduleCoreSync)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agenda_contacts' }, scheduleCoreSync)
-      .subscribe();
+      .subscribe((status, error) => {
+        if (disposed) return;
+        if (status === 'SUBSCRIBED') {
+          const shouldReconcile = hasSubscribedOnce && shouldReconcileAfterSubscribe;
+          hasSubscribedOnce = true;
+          shouldReconcileAfterSubscribe = false;
+          setRealtimeConnection({
+            status,
+            lastConnectedAt: Date.now(),
+            lastError: '',
+          });
+          if (shouldReconcile && currentUserRef.current) {
+            void fetchCloudData(false, { force: true }).catch((syncError) => {
+              console.error('No se pudo reconciliar despues de reconectar Realtime:', syncError);
+            });
+          }
+          return;
+        }
+
+        if (REALTIME_DEGRADED_STATUSES.has(status)) {
+          markRealtimeDegraded(status, error);
+        }
+      });
+
+    const unsubscribeHeartbeat = subscribeToRealtimeHeartbeat(({ status, latency }) => {
+      if (disposed) return;
+      if (status === 'ok') {
+        const previousStatus = realtimeConnectionStateRef.current.status;
+        const recoveredFromHeartbeat = REALTIME_HEARTBEAT_DEGRADED_STATUSES.has(previousStatus);
+        setRealtimeConnection((prev) => ({
+          ...prev,
+          status: recoveredFromHeartbeat ? 'SUBSCRIBED' : prev.status,
+          lastConnectedAt: recoveredFromHeartbeat ? Date.now() : prev.lastConnectedAt,
+          heartbeatLatencyMs: latency,
+          lastHeartbeatAt: Date.now(),
+          lastError: recoveredFromHeartbeat ? '' : prev.lastError,
+        }));
+        if (recoveredFromHeartbeat) {
+          shouldReconcileAfterSubscribe = false;
+          if (currentUserRef.current) {
+            void fetchCloudData(false, { force: true }).catch((syncError) => {
+              console.error('No se pudo reconciliar despues de recuperar Realtime:', syncError);
+            });
+          }
+        }
+        return;
+      }
+      if (status === 'timeout' || status === 'disconnected' || status === 'error') {
+        const normalizedStatus = status === 'timeout' ? 'HEARTBEAT_TIMEOUT' : status.toUpperCase();
+        markRealtimeDegraded(normalizedStatus);
+        if (status === 'disconnected') supabase.realtime.connect();
+      }
+    });
 
     let lastFetchTime = Date.now();
     let lastVisibilityState = document.visibilityState;
@@ -4178,9 +4576,13 @@ export default function PartySupplyApp() {
       if (!becameVisible) return;
 
       const elapsed = Date.now() - lastFetchTime;
-      if (elapsed < MIN_RESYNC_INTERVAL) return;
+      const realtimeIsDegraded = REALTIME_DEGRADED_STATUSES.has(
+        realtimeConnectionStateRef.current.status,
+      );
+      if (elapsed < MIN_RESYNC_INTERVAL && !realtimeIsDegraded) return;
 
       lastFetchTime = Date.now();
+      if (realtimeIsDegraded) supabase.realtime.connect();
       void fetchCloudData(false, { force: true });
     };
 
@@ -4193,6 +4595,7 @@ export default function PartySupplyApp() {
 
     const handleBrowserOnline = () => {
       lastFetchTime = Date.now();
+      supabase.realtime.connect();
       void fetchCloudData(false, { force: true });
     };
 
@@ -4206,11 +4609,16 @@ export default function PartySupplyApp() {
         window.clearTimeout(sharedUsersCache.retryTimer);
         sharedUsersCache.retryTimer = null;
       }
-      if (realtimeSyncTimer) {
-        window.clearTimeout(realtimeSyncTimer);
+      saleSyncBatcher.dispose();
+      unsubscribeHeartbeat();
+      if (realtimeFallbackSyncTimer) {
+        window.clearTimeout(realtimeFallbackSyncTimer);
       }
       if (realtimeCoreSyncTimer) {
         window.clearTimeout(realtimeCoreSyncTimer);
+      }
+      if (realtimeSnapshotTimer) {
+        window.clearTimeout(realtimeSnapshotTimer);
       }
       supabase.removeChannel(channel);
       window.removeEventListener('visibilitychange', handleReSync);
@@ -5116,6 +5524,7 @@ export default function PartySupplyApp() {
       bodyTheme: body.dataset.theme,
       rootPdfTheme: root.dataset.pdfTheme,
       bodyPdfTheme: body.dataset.pdfTheme,
+      bodyPdfCapture: body.dataset.pdfCapture,
       rootColorScheme: root.style.colorScheme,
       bodyColorScheme: body.style.colorScheme,
     };
@@ -5136,9 +5545,78 @@ export default function PartySupplyApp() {
       else root.dataset.pdfTheme = previous.rootPdfTheme;
       if (previous.bodyPdfTheme === undefined) delete body.dataset.pdfTheme;
       else body.dataset.pdfTheme = previous.bodyPdfTheme;
+      if (previous.bodyPdfCapture === undefined) delete body.dataset.pdfCapture;
+      else body.dataset.pdfCapture = previous.bodyPdfCapture;
       root.style.colorScheme = previous.rootColorScheme;
       body.style.colorScheme = previous.bodyColorScheme;
     };
+  };
+
+  const waitForPdfExportReady = async () => {
+    if (typeof document === 'undefined') return;
+
+    document.body.dataset.pdfCapture = 'true';
+
+    const deadline = Date.now() + 5000;
+    let exportRoot = document.querySelector('[data-pdf-export]');
+    while ((!exportRoot || !String(exportRoot.textContent || '').trim()) && Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+      exportRoot = document.querySelector('[data-pdf-export]');
+    }
+
+    if (!exportRoot || !String(exportRoot.textContent || '').trim()) {
+      throw new Error('El contenido del PDF no lleg\u00f3 a renderizarse.');
+    }
+
+    if (document.fonts?.ready) {
+      await document.fonts.ready;
+    }
+
+    const images = Array.from(exportRoot.querySelectorAll('img'));
+    await Promise.all(images.map(async (image) => {
+      if (!image.complete) {
+        await new Promise((resolve) => {
+          image.addEventListener('load', resolve, { once: true });
+          image.addEventListener('error', resolve, { once: true });
+        });
+      }
+      if (typeof image.decode === 'function') {
+        await image.decode().catch(() => {});
+      }
+    }));
+
+    await new Promise((resolve) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+    });
+  };
+
+  const savePreparedPdf = async (safeName, restorePdfTheme) => {
+    try {
+      await waitForPdfExportReady();
+
+      if (window.electronAPI?.saveAsPdf) {
+        const result = await window.electronAPI.saveAsPdf(`${safeName}.pdf`);
+
+        if (result.success) {
+          showNotification('success', 'PDF Guardado', `Guardado en: ${result.filePath}`);
+        } else if (!result.canceled) {
+          Swal.fire('Error', 'No se pudo guardar el PDF: ' + result.error, 'error');
+        }
+      } else {
+        window.print();
+        showNotification('info', 'Vista de impresi\u00f3n abierta', 'No se detect\u00f3 Electron; us\u00e1 "Guardar como PDF" desde el di\u00e1logo del navegador');
+      }
+    } catch (error) {
+      console.error('Error preparando el PDF:', error);
+      Swal.fire(
+        'No se pudo generar el PDF',
+        error?.message || 'El documento no termin\u00f3 de renderizarse. Volv\u00e9 a intentarlo.',
+        'error',
+      );
+    } finally {
+      setExportPdfData(null);
+      restorePdfTheme();
+    }
   };
 
   const handleExportProducts = (config, items) => {
@@ -5170,31 +5648,9 @@ export default function PartySupplyApp() {
 
     const safeName = defaultTitle.replace(/[^a-zA-Z0-9 _-]/g, '');
 
-    setTimeout(async () => {
-      try {
-        if (window.electronAPI?.saveAsPdf) {
-          const result = await window.electronAPI.saveAsPdf(`${safeName}.pdf`);
-
-          if (result.success) {
-            showNotification('success', 'PDF Guardado', `Guardado en: ${result.filePath}`);
-          } else if (!result.canceled) {
-            Swal.fire('Error', 'No se pudo guardar el PDF: ' + result.error, 'error');
-          }
-        } else {
-          window.print();
-          showNotification('info', 'Vista de impresión abierta', 'No se detectó Electron; usá "Guardar como PDF" desde el diálogo del navegador');
-        }
-      } catch (e) {
-        console.error('Error IPC:', e);
-        window.print();
-        showNotification('info', 'Vista de impresión abierta', 'Falló la conexión con Windows; usá "Guardar como PDF" desde el diálogo del navegador');
-      }
-      
-      setTimeout(() => {
-        setExportPdfData(null);
-        restorePdfTheme();
-      }, 500);
-    }, 500);
+    window.setTimeout(() => {
+      void savePreparedPdf(safeName, restorePdfTheme);
+    }, 0);
   };
   
   const handleReprintPdf = (logDetails) => {
@@ -5220,31 +5676,9 @@ export default function PartySupplyApp() {
       : 'Reporte_Historico';
     const safeName = defaultTitle.replace(/[^a-zA-Z0-9 _-]/g, '');
 
-    setTimeout(async () => {
-      try {
-        if (window.electronAPI?.saveAsPdf) {
-          const result = await window.electronAPI.saveAsPdf(`${safeName}.pdf`);
-          
-          if (result.success) {
-            showNotification('success', 'PDF Guardado', `Guardado en: ${result.filePath}`);
-          } else if (!result.canceled) {
-            Swal.fire('Error', 'No se pudo guardar el PDF: ' + result.error, 'error');
-          }
-        } else {
-          window.print();
-          showNotification('info', 'Vista de impresión abierta', 'No se detectó Electron; usá "Guardar como PDF" desde el diálogo del navegador.');
-        }
-      } catch (e) {
-        console.error('Error IPC:', e);
-        window.print();
-        showNotification('info', 'Vista de impresión abierta', 'Falló la conexión con Windows; usá "Guardar como PDF" desde el diálogo del navegador.');
-      }
-      
-      setTimeout(() => {
-        setExportPdfData(null);
-        restorePdfTheme();
-      }, 500);
-    }, 500);
+    window.setTimeout(() => {
+      void savePreparedPdf(safeName, restorePdfTheme);
+    }, 0);
   };
   
 
@@ -6809,6 +7243,187 @@ export default function PartySupplyApp() {
     } catch (error) {
       console.error('Error convirtiendo presupuesto:', error);
       showNotification('error', 'Error', `No se pudo convertir el presupuesto en pedido. ${getCloudErrorMessage(error)}`);
+      throw error;
+    }
+  };
+
+  const handleUpdateOrderDeposit = async (orderRecord, depositPayment) => {
+    if (blockIfOfflineReadonly('corregir se\u00f1as de pedidos')) return;
+    try {
+      if (!orderRecord?.id) throw new Error('No se encontrÃ³ el pedido a actualizar.');
+      if (['Pagado', 'Retirado', 'Cancelado'].includes(String(orderRecord.status || ''))) {
+        showNotification('warning', 'Se\u00f1a bloqueada', 'No se puede corregir la se\u00f1a de un pedido cerrado.');
+        return null;
+      }
+      if (transactions.some((tx) => String(tx.orderId || '') === String(orderRecord.id))) {
+        showNotification('warning', 'Pedido facturado', 'La se\u00f1a no se puede corregir porque el pedido ya gener\u00f3 una venta.');
+        return null;
+      }
+
+      const totalAmount = roundOrderPaymentValue(orderRecord.totalAmount || 0);
+      const currentDeposit = Math.min(
+        roundOrderPaymentValue(orderRecord.depositAmount || 0),
+        roundOrderPaymentValue(orderRecord.paidTotal || 0),
+      );
+      const additionalPaid = Math.max(
+        roundOrderPaymentValue(orderRecord.paidTotal || 0) - currentDeposit,
+        0,
+      );
+      const maxDeposit = Math.max(totalAmount - additionalPaid, 0);
+      const normalizedDepositPayment = buildOrderPaymentRecord(
+        depositPayment,
+        depositPayment?.amount || 0,
+      );
+      const nextDeposit = Math.max(roundOrderPaymentValue(normalizedDepositPayment.amount || 0), 0);
+
+      if (nextDeposit > maxDeposit) {
+        showNotification(
+          'warning',
+          'Se\u00f1a inv\u00e1lida',
+          `La se\u00f1a no puede superar ${formatCurrency(maxDeposit)} porque hay otros pagos registrados.`,
+        );
+        return null;
+      }
+
+      const nextDepositEntry = nextDeposit > 0
+        ? createOrderPaymentEntry({
+            id: `order_deposit_${orderRecord.id}`,
+            entryType: 'deposit',
+            createdAt: orderRecord.createdAt || new Date().toISOString(),
+            amount: nextDeposit,
+            lines: normalizedDepositPayment.paymentBreakdown,
+          })
+        : null;
+      const nextPaymentHistory = replaceOrderDepositPaymentHistory(
+        orderRecord.paymentHistory || orderRecord.paymentBreakdown,
+        {
+          currentDepositAmount: currentDeposit,
+          nextDepositEntry,
+          fallbackPayment: orderRecord.paymentMethod || 'Pedido',
+          fallbackInstallments: orderRecord.installments || 0,
+          fallbackPaidTotal: orderRecord.paidTotal || 0,
+          fallbackCashReceived: orderRecord.cashReceived || 0,
+          fallbackCashChange: orderRecord.cashChange || 0,
+        },
+      );
+      const nextPaidTotal = Math.min(roundOrderPaymentValue(additionalPaid + nextDeposit), totalAmount);
+      const nextRemaining = Math.max(roundOrderPaymentValue(totalAmount - nextPaidTotal), 0);
+      const nextStatus = deriveOrderStatus({
+        paidTotal: nextPaidTotal,
+        totalAmount,
+        currentStatus: orderRecord.status,
+      });
+      const nextPaymentState = getOrderPaymentHistorySummary(
+        nextPaymentHistory,
+        normalizedDepositPayment.primaryMethod || orderRecord.paymentMethod || 'Efectivo',
+        normalizedDepositPayment.installments || orderRecord.installments || 0,
+        nextPaidTotal,
+      );
+      const wasStockReserved = isOrderStockReserved(orderRecord);
+      const shouldCommitStock = nextPaidTotal > 0;
+      let stockTransition = null;
+      let stockChanges = [];
+
+      if (!wasStockReserved && shouldCommitStock) {
+        const { stockIssues } = getOrderStockIssues(orderRecord);
+        if (stockIssues.length > 0) {
+          showNotification('error', 'Stock Insuficiente', `No se puede corregir la se\u00f1a: ${stockIssues.join(', ')}`);
+          return null;
+        }
+        const reservationResult = await reserveOrderStock(orderRecord);
+        if (reservationResult.stockIssues.length > 0) {
+          showNotification('error', 'Stock Insuficiente', `No se pudo reservar stock: ${reservationResult.stockIssues.join(', ')}`);
+          return null;
+        }
+        stockTransition = 'reserved';
+        stockChanges = reservationResult.stockChanges;
+      } else if (wasStockReserved && !shouldCommitStock) {
+        const restorationResult = await restoreOrderStock(orderRecord);
+        if (restorationResult.stockIssues.length > 0) {
+          showNotification('error', 'Stock', `No se pudo liberar el stock: ${restorationResult.stockIssues.join(', ')}`);
+          return null;
+        }
+        stockTransition = 'restored';
+        stockChanges = restorationResult.stockChanges;
+      }
+
+      let data;
+      try {
+        const result = await updateWithSchemaFallback(
+          'orders',
+          orderRecord.id,
+          {
+            payment_method: nextPaymentState.paymentMethod || null,
+            payment_breakdown: nextPaymentHistory,
+            installments: nextPaymentState.installments || 0,
+            deposit_amount: nextDeposit,
+            paid_total: nextPaidTotal,
+            remaining_amount: nextRemaining,
+            status: nextStatus,
+          },
+          CLOUD_SELECTS.orders,
+        );
+        data = result.data;
+      } catch (updateError) {
+        try {
+          if (stockTransition === 'reserved') await restoreOrderStock(orderRecord);
+          if (stockTransition === 'restored') await reserveOrderStock(orderRecord);
+        } catch (rollbackError) {
+          console.error('No se pudo revertir el stock tras fallar la correcci\u00f3n de se\u00f1a:', rollbackError);
+        }
+        throw updateError;
+      }
+
+      const updatedOrder = mapOrderRecords([data])[0];
+      setOrders((prev) =>
+        prev.map((order) => (String(order.id) === String(orderRecord.id) ? updatedOrder : order))
+      );
+
+      const isCrossingToFullyPaid =
+        Number(orderRecord.paidTotal || 0) < totalAmount &&
+        nextPaidTotal >= totalAmount &&
+        totalAmount > 0;
+      const finalizedSale = isCrossingToFullyPaid
+        ? await handleFinalizePaidOrder(updatedOrder, {
+            skipStockDeduction: wasStockReserved || stockTransition === 'reserved',
+          })
+        : null;
+
+      await addLog(
+        'Pedido Editado',
+        {
+          id: orderRecord.id,
+          budgetId: updatedOrder.budgetId || null,
+          sharedRecordId: updatedOrder.budgetId || orderRecord.id,
+          saleId: finalizedSale?.id || null,
+          transactionId: finalizedSale?.id || null,
+          customerName: updatedOrder.customerName,
+          customerPhone: updatedOrder.customerPhone || '',
+          eventLabel: updatedOrder.eventLabel || '',
+          documentTitle: updatedOrder.documentTitle || 'PEDIDO',
+          totalAmount,
+          previousDepositAmount: currentDeposit,
+          depositAmount: nextDeposit,
+          paidTotal: nextPaidTotal,
+          remainingAmount: nextRemaining,
+          paymentMethod: nextPaymentState.paymentMethod || null,
+          paymentHistory: nextPaymentHistory,
+          pickupDate: updatedOrder.pickupDate || null,
+          itemsSnapshot: buildOrderLogItems(updatedOrder.itemsSnapshot || []),
+          changes: [
+            { field: 'Se\u00f1a', old: currentDeposit, new: nextDeposit, isPrice: true },
+            { field: 'Abonado', old: Number(orderRecord.paidTotal || 0), new: nextPaidTotal, isPrice: true },
+            { field: 'Restante', old: Number(orderRecord.remainingAmount || 0), new: nextRemaining, isPrice: true },
+          ],
+          stockChanges: finalizedSale?.stockChanges || stockChanges,
+        },
+        'Correcci\u00f3n de se\u00f1a inicial',
+      );
+      showNotification('success', 'Se\u00f1a Actualizada', 'Se recalcularon el abonado y el saldo restante.');
+      return updatedOrder;
+    } catch (error) {
+      console.error('Error corrigiendo se\u00f1a de pedido:', error);
+      showNotification('error', 'Error', `No se pudo corregir la se\u00f1a. ${getCloudErrorMessage(error)}`);
       throw error;
     }
   };
@@ -12920,6 +13535,7 @@ export default function PartySupplyApp() {
       saveOfflineTransactionsSnapshot({
         savedAt: new Date().toISOString(),
         transactions: nextTransactionsSnapshot,
+        transactionsScope: transactionSnapshotScopeRef.current,
       });
       setModuleState('transactions', { status: 'loaded', dirty: true, lastLoadedAt: Date.now() });
 
@@ -13114,9 +13730,32 @@ export default function PartySupplyApp() {
     moduleLoadState.core.failedSources?.includes('productos') ||
     ['idle', 'loading'].includes(moduleLoadState.core.status) ||
     ['idle', 'loading'].includes(moduleLoadState.transactions.status);
+  const isRealtimeSourceBusy = (source) =>
+    ['pending', 'syncing'].includes(realtimeSourceState[source]);
+  const dashboardRefreshingSources = {
+    transactions:
+      isAuthBootLoading ||
+      isCloudLoading ||
+      isReconnectAttempting ||
+      moduleLoadState.transactions.status === 'loading' ||
+      moduleLoadState.transactions.dirty ||
+      isRealtimeSourceBusy('sales'),
+    expenses:
+      isAuthBootLoading ||
+      isCloudLoading ||
+      isReconnectAttempting ||
+      moduleLoadState.dashboard.status === 'loading' ||
+      moduleLoadState.dashboard.dirty ||
+      isRealtimeSourceBusy('expenses'),
+    inventory:
+      moduleLoadState.core.status === 'loading' ||
+      moduleLoadState.core.dirty ||
+      isRealtimeSourceBusy('products'),
+    opening: false,
+    closures: isRealtimeSourceBusy('closures'),
+  };
   const isDashboardProfitSyncing =
-    isProfitBaseDataPending ||
-    moduleLoadState.dashboard.status === 'loading';
+    dashboardRefreshingSources.transactions || dashboardRefreshingSources.expenses;
   const isMetricsProfitSyncing =
     isProfitBaseDataPending ||
     moduleLoadState.metrics.status === 'loading';
@@ -13200,6 +13839,17 @@ export default function PartySupplyApp() {
           ? `Snapshot: ${formatDateAR(offlineSnapshotAt)}`
           : 'Datos locales.',
         icon: 'offline',
+      };
+    }
+
+    if (REALTIME_DEGRADED_STATUSES.has(realtimeConnectionState.status)) {
+      return {
+        shellClass: 'is-degraded',
+        iconClass: '',
+        dotClass: '',
+        title: 'Nube parcial',
+        detail: 'Reconectando tiempo real',
+        icon: 'online',
       };
     }
 
@@ -13723,6 +14373,7 @@ export default function PartySupplyApp() {
                   expenses={expenses}
                   isLoading={isDashboardModuleLoading && transactions.length === 0 && dailyLogs.length === 0}
                   isProfitSyncing={isDashboardProfitSyncing}
+                  refreshingSources={dashboardRefreshingSources}
                   emptyStateMessage={dashboardOfflineEmptyMessage}
                   onOpenExpenseModal={() => {
                     setExpenseToEdit(null);
@@ -13764,7 +14415,7 @@ export default function PartySupplyApp() {
                 />
               </PersistentTabPanel>
             )}
-            <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} offers={offers} currentUser={currentUser} userCatalog={userCatalog} isLoading={isOrdersModuleLoading && budgets.length === 0 && orders.length === 0} emptyStateMessage={ordersOfflineEmptyMessage} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onUpdateOrder={handleUpdateOrder} onDeleteBudget={handleDeleteBudget} onDeleteOrder={handleDeleteOrder} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
+            <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} offers={offers} currentUser={currentUser} userCatalog={userCatalog} isLoading={isOrdersModuleLoading && budgets.length === 0 && orders.length === 0} emptyStateMessage={ordersOfflineEmptyMessage} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onUpdateOrder={handleUpdateOrder} onUpdateOrderDeposit={handleUpdateOrderDeposit} onDeleteBudget={handleDeleteBudget} onDeleteOrder={handleDeleteOrder} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
             <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={historyLogs} inventory={inventory} currentUser={currentUser} userCatalog={userCatalog} members={members} isLoading={isHistoryModuleLoading && transactions.length === 0 && historyLogs.length === 0} emptyStateMessage={historyOfflineEmptyMessage} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setHistoryLogs} navigationRequest={historyNavigationRequest} onSoftReload={() => Promise.all([loadHistoryCloudData({ force: true }), loadTransactionsCloudData({ force: true, full: false })])} isActive={activeTab === 'history'} enableCloudFeed={!isLocalDemoMode() && !isOfflineReadOnly} /></PersistentTabPanel>
             {canViewReports && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members} isLoading={isReportsModuleLoading && pastClosures.length === 0} emptyStateMessage={reportsOfflineEmptyMessage} onLoadReportDetail={fetchCashClosureDetailById} /></PersistentTabPanel>)}
             {canViewMetrics && (<PersistentTabPanel tab="metrics" activeTab={activeTab} className="h-full min-h-0"><MetricsView transactions={transactions} expenses={expenses} pastClosures={pastClosures} inventory={inventory} members={members} budgets={budgets} orders={orders} dailyLogs={dailyLogs} currentUser={currentUser} userCatalog={userCatalog} isLoading={isMetricsModuleLoading && transactions.length === 0 && expenses.length === 0 && pastClosures.length === 0} isProfitSyncing={isMetricsProfitSyncing} emptyStateMessage={metricsOfflineEmptyMessage} onRefresh={async () => { await loadCoreCloudData({ force: false }); return loadMetricsCloudData({ force: true, includeTransactions: true, full: false }); }} isActive={activeTab === 'metrics'} /></PersistentTabPanel>)}

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarRange, CheckCircle2, ClipboardList, CreditCard, FileText, Package, Plus, ReceiptText, Search, Trash2, Wallet, X } from 'lucide-react';
+import { CalendarRange, CheckCircle2, ClipboardList, CreditCard, FileText, Package, Pencil, Plus, ReceiptText, Search, Trash2, Wallet, X } from 'lucide-react';
 import Swal from 'sweetalert2';
 import BudgetBuilderModal from '../components/BudgetBuilderModal';
 import AsyncActionButton from '../components/AsyncActionButton';
@@ -15,6 +15,7 @@ import {
   getPaymentLineCashReceived,
   getPaymentMethodLabel,
   getPaymentSummary,
+  normalizeOrderPaymentHistory,
 } from '../utils/paymentBreakdown';
 import { hasPermission } from '../utils/userPermissions';
 import useIncrementalFeed from '../hooks/useIncrementalFeed';
@@ -83,16 +84,61 @@ const createOrderPaymentDraft = (amount = 0, preferredMethod = 'Efectivo') => ({
   ],
 });
 
+const createOrderDepositDraft = (record) => {
+  const depositAmount = Math.max(roundOrderPaymentValue(record?.depositAmount || 0), 0);
+  const paymentHistory = normalizeOrderPaymentHistory(
+    record?.paymentHistory || record?.paymentBreakdown,
+    record?.paymentMethod || 'Efectivo',
+    record?.installments || 0,
+    record?.paidTotal || 0,
+    record?.cashReceived || 0,
+    record?.cashChange || 0,
+  );
+  const depositEntry = paymentHistory.find((entry) => entry.entryType === 'deposit');
+  const sourceLines = Array.isArray(depositEntry?.lines) && depositEntry.lines.length > 0
+    ? depositEntry.lines
+    : [createPaymentLine({
+        id: 'order_deposit_primary',
+        method: record?.paymentMethod || 'Efectivo',
+        amount: depositAmount,
+        installments: record?.installments || 0,
+        cashReceived: depositAmount,
+      })];
+  const paymentLines = sourceLines.map((line, index) => createPaymentLine({
+    ...line,
+    id: line.id || `order_deposit_${index}`,
+  }));
+
+  return {
+    amountInput: depositAmount > 0 ? String(depositAmount) : '',
+    isSplitPayment: paymentLines.length > 1,
+    activeLineIndex: 0,
+    paymentLines,
+  };
+};
+
 const setOrderPaymentDraftAmount = (draft, value) => {
   const amount = Math.max(roundOrderPaymentValue(value || 0), 0);
   const paymentLines = Array.isArray(draft?.paymentLines) ? draft.paymentLines : [];
   const primaryLine = paymentLines[0] || createPaymentLine({ id: 'order_primary', method: 'Efectivo', amount });
+  const syncCashReceivedWithAmount = (line, nextAmount) => {
+    if (line.method !== 'Efectivo') return line.cashReceived;
+    const previousLineAmount = roundOrderPaymentValue(line.amount || 0);
+    const previousCashReceived = line.cashReceived === ''
+      ? previousLineAmount
+      : roundOrderPaymentValue(line.cashReceived || 0);
+    return previousCashReceived === previousLineAmount ? nextAmount : line.cashReceived;
+  };
 
   if (!draft?.isSplitPayment) {
     return {
       ...draft,
       amountInput: value,
-      paymentLines: [{ ...primaryLine, amount }],
+      paymentLines: [{
+        ...primaryLine,
+        amount,
+        cashReceived: syncCashReceivedWithAmount(primaryLine, amount),
+      }],
     };
   }
 
@@ -108,8 +154,16 @@ const setOrderPaymentDraftAmount = (draft, value) => {
     ...draft,
     amountInput: value,
     paymentLines: [
-      { ...primaryLine, amount: primaryAmount },
-      { ...secondaryLine, amount: secondaryAmount },
+      {
+        ...primaryLine,
+        amount: primaryAmount,
+        cashReceived: syncCashReceivedWithAmount(primaryLine, primaryAmount),
+      },
+      {
+        ...secondaryLine,
+        amount: secondaryAmount,
+        cashReceived: syncCashReceivedWithAmount(secondaryLine, secondaryAmount),
+      },
     ],
   };
 };
@@ -517,7 +571,7 @@ function OrderPaymentEditor({ draft, onChange, maxAmount, title = 'Abono', hint 
   );
 }
 
-export default function OrdersView({ budgets, orders, members, inventory, categories, offers, currentUser = null, isLoading = false, emptyStateMessage = '', onCreateBudget, onUpdateBudget, onUpdateOrder, onDeleteBudget, onDeleteOrder, onConvertBudgetToOrder, onRegisterOrderPayment, onCancelOrder, onMarkOrderRetired, onPrintRecord }) {
+export default function OrdersView({ budgets, orders, members, inventory, categories, offers, currentUser = null, isLoading = false, emptyStateMessage = '', onCreateBudget, onUpdateBudget, onUpdateOrder, onUpdateOrderDeposit, onDeleteBudget, onDeleteOrder, onConvertBudgetToOrder, onRegisterOrderPayment, onCancelOrder, onMarkOrderRetired, onPrintRecord }) {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -532,6 +586,9 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
   const [paymentTarget, setPaymentTarget] = useState(null);
   const [paymentDraft, setPaymentDraft] = useState(() => createOrderPaymentDraft(0));
   const [isSavingPayment, setIsSavingPayment] = useState(false);
+  const [depositEditTarget, setDepositEditTarget] = useState(null);
+  const [depositEditDraft, setDepositEditDraft] = useState(() => createOrderPaymentDraft(0));
+  const [isSavingDepositEdit, setIsSavingDepositEdit] = useState(false);
   const depositAmount = convertPaymentDraft.amountInput;
   const setDepositAmount = (value) => setConvertPaymentDraft((prev) => setOrderPaymentDraftAmount(prev, value));
   const paymentAmount = paymentDraft.amountInput;
@@ -546,6 +603,28 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
   const canDeleteOrder = hasPermission(currentUser, 'orders.deleteOrder');
   const canMarkRetired = hasPermission(currentUser, 'orders.markRetired');
   const canRegisterOrderPayment = hasPermission(currentUser, 'orders.registerPayment');
+  const depositEditAmount = Math.max(roundOrderPaymentValue(depositEditDraft.amountInput || 0), 0);
+  const depositEditAdditionalPaid = depositEditTarget
+    ? Math.max(
+        roundOrderPaymentValue(depositEditTarget.paidTotal || 0) -
+          roundOrderPaymentValue(depositEditTarget.depositAmount || 0),
+        0,
+      )
+    : 0;
+  const depositEditMaxAmount = depositEditTarget
+    ? Math.max(
+        roundOrderPaymentValue(depositEditTarget.totalAmount || 0) - depositEditAdditionalPaid,
+        0,
+      )
+    : 0;
+  const depositEditNextPaidTotal = Math.min(
+    roundOrderPaymentValue(depositEditAdditionalPaid + depositEditAmount),
+    roundOrderPaymentValue(depositEditTarget?.totalAmount || 0),
+  );
+  const depositEditNextRemaining = Math.max(
+    roundOrderPaymentValue(depositEditTarget?.totalAmount || 0) - depositEditNextPaidTotal,
+    0,
+  );
 
   const membersMap = useMemo(() => new Map((members || []).map((member) => [String(member.id), member])), [members]);
   const inventoryById = useMemo(
@@ -704,6 +783,52 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
     }
   };
 
+  const openDepositEditor = (orderRecord) => {
+    setDepositEditTarget(orderRecord);
+    setDepositEditDraft(createOrderDepositDraft(orderRecord));
+  };
+
+  const closeDepositEditor = () => {
+    setDepositEditTarget(null);
+    setDepositEditDraft(createOrderPaymentDraft(0));
+  };
+
+  const handleSaveDepositEdit = async () => {
+    if (!depositEditTarget) return;
+    const normalizedDeposit = Math.max(roundOrderPaymentValue(depositEditDraft.amountInput || 0), 0);
+    const normalizedPayment = normalizedDeposit > 0
+      ? buildOrderPaymentPayload(depositEditDraft, depositEditMaxAmount)
+      : { amount: 0, paymentBreakdown: [] };
+
+    if (normalizedPayment.error) {
+      return void Swal.fire('Se\u00f1a inv\u00e1lida', normalizedPayment.error, 'warning');
+    }
+    if (normalizedDeposit <= 0) {
+      const result = await Swal.fire({
+        title: 'Quitar se\u00f1a inicial',
+        text: depositEditAdditionalPaid > 0
+          ? 'La se\u00f1a quedar\u00e1 en cero. Los pagos posteriores se conservar\u00e1n.'
+          : 'La se\u00f1a quedar\u00e1 en cero y el pedido volver\u00e1 a quedar sin pagos.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: 'S\u00ed, quitar se\u00f1a',
+        cancelButtonText: 'Volver',
+        confirmButtonColor: '#d97706',
+        cancelButtonColor: '#64748b',
+      });
+      if (!result.isConfirmed) return;
+    }
+
+    setIsSavingDepositEdit(true);
+    try {
+      const updatedOrder = await onUpdateOrderDeposit(depositEditTarget, normalizedPayment);
+      if (!updatedOrder) return;
+      closeDepositEditor();
+    } finally {
+      setIsSavingDepositEdit(false);
+    }
+  };
+
   const handleRetireOrder = async (orderRecord) => {
     if (Number(orderRecord.remainingAmount || 0) > 0) return void Swal.fire('Saldo pendiente', 'El pedido debe estar totalmente abonado para retirarse.', 'warning');
     const result = await Swal.fire({ title: 'Marcar como retirado', text: 'El pedido quedará cerrado como entregado.', icon: 'question', showCancelButton: true, confirmButtonText: 'Sí, marcar', cancelButtonText: 'Cancelar', confirmButtonColor: '#059669', cancelButtonColor: '#94a3b8' });
@@ -831,7 +956,25 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                     <div className="rounded-[13px] border border-slate-200 bg-slate-50 p-1.5"><p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">{selectedRecord.type === 'order' ? 'Documento origen' : 'Documento'}</p><p className="mt-0.5 text-[12px] font-black text-slate-800">{selectedRecord.documentTitle || 'PRESUPUESTO'}</p></div>
                     <div className="rounded-[13px] border border-slate-200 bg-slate-50 p-1.5"><p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Creado</p><p className="mt-0.5 text-[12px] font-black text-slate-800">{formatDateAR(selectedRecord.createdAt)}</p></div>
                     <div className="rounded-[13px] border border-slate-200 bg-slate-50 p-1.5"><p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Retiro</p><p className="mt-0.5 text-[12px] font-black text-slate-800">{formatPickupDate(selectedRecord.pickupDate)}</p></div>
-                    <div className="rounded-[18px] border border-emerald-200 bg-emerald-50 p-2"><p className="text-[9px] font-black uppercase tracking-[0.12em] text-emerald-500">Sena</p><p className="mt-0.5 text-[17px] font-black text-emerald-700"><FancyPrice amount={selectedRecord.depositAmount || 0} /></p></div>
+                    <div className="rounded-[18px] border border-emerald-200 bg-emerald-50 p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-emerald-500">{'Se\u00f1a'}</p>
+                        {selectedRecord.type === 'order' &&
+                          !['Pagado', 'Retirado', 'Cancelado'].includes(selectedRecord.status) &&
+                          canEditOrder ? (
+                            <button
+                              type="button"
+                              onClick={() => openDepositEditor(selectedRecord)}
+                              className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-white/80 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] text-emerald-700 transition hover:border-emerald-300 hover:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                              aria-label={'Editar se\u00f1a inicial'}
+                            >
+                              <Pencil size={9} />
+                              Editar
+                            </button>
+                          ) : null}
+                      </div>
+                      <p className="mt-0.5 font-mono text-[17px] font-black tabular-nums text-emerald-700"><FancyPrice amount={selectedRecord.depositAmount || 0} /></p>
+                    </div>
                     <div className="rounded-[15px] border border-sky-200 bg-sky-50 p-2"><p className="text-[9px] font-black uppercase tracking-[0.12em] text-sky-500">Abonado</p><p className="mt-0.5 text-[15px] font-black text-sky-700"><FancyPrice amount={selectedRecord.paidTotal || 0} /></p></div>
                     <div className="rounded-[15px] border border-amber-200 bg-amber-50 p-2"><p className="text-[9px] font-black uppercase tracking-[0.12em] text-amber-500">Restante</p><p className="mt-0.5 text-[15px] font-black text-amber-700"><FancyPrice amount={selectedRecord.remainingAmount || 0} /></p></div>
                     <div className="rounded-[15px] border border-slate-200 bg-slate-50 p-2"><p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Total</p><p className="mt-0.5 text-[15px] font-black text-slate-800"><FancyPrice amount={selectedRecord.totalAmount || 0} /></p></div>
@@ -1007,6 +1150,63 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
           <AsyncActionButton type="button" onAction={handleConvertBudget} pending={isConverting} disabled={isConverting} loadingLabel="Convirtiendo..." className="flex-1 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-black text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60">Crear pedido</AsyncActionButton>
         </div>
       </div>}</div></MiniModal>}
+
+      {depositEditTarget && (
+        <MiniModal title={'Editar se\u00f1a inicial'} maxWidth="max-w-lg" onClose={closeDepositEditor}>
+          <div className="space-y-3">
+            <div className="rounded-[16px] border border-amber-200 bg-amber-50 px-3 py-2.5">
+              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">{'Correcci\u00f3n contable'}</p>
+              <p className="mt-1 text-[11px] font-semibold leading-relaxed text-amber-800">
+                {'Us\u00e1 esta opci\u00f3n para corregir la se\u00f1a original. Para cobrar dinero nuevo, us\u00e1 Registrar pago.'}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div className="rounded-[14px] border border-slate-200 bg-slate-50 px-2.5 py-2">
+                <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">{'Se\u00f1a actual'}</p>
+                <p className="mt-1 font-mono text-[13px] font-black tabular-nums text-slate-800">{formatCurrency(depositEditTarget.depositAmount || 0)}</p>
+              </div>
+              <div className="rounded-[14px] border border-sky-200 bg-sky-50 px-2.5 py-2">
+                <p className="text-[9px] font-black uppercase tracking-[0.1em] text-sky-500">Otros pagos</p>
+                <p className="mt-1 font-mono text-[13px] font-black tabular-nums text-sky-700">{formatCurrency(depositEditAdditionalPaid)}</p>
+              </div>
+              <div className="rounded-[14px] border border-emerald-200 bg-emerald-50 px-2.5 py-2">
+                <p className="text-[9px] font-black uppercase tracking-[0.1em] text-emerald-500">Nuevo abonado</p>
+                <p className="mt-1 font-mono text-[13px] font-black tabular-nums text-emerald-700">{formatCurrency(depositEditNextPaidTotal)}</p>
+              </div>
+              <div className="rounded-[14px] border border-amber-200 bg-amber-50 px-2.5 py-2">
+                <p className="text-[9px] font-black uppercase tracking-[0.1em] text-amber-500">Nuevo restante</p>
+                <p className="mt-1 font-mono text-[13px] font-black tabular-nums text-amber-700">{formatCurrency(depositEditNextRemaining)}</p>
+              </div>
+            </div>
+
+            <OrderPaymentEditor
+              compact
+              draft={depositEditDraft}
+              onChange={setDepositEditDraft}
+              maxAmount={depositEditMaxAmount}
+              title={'Nueva se\u00f1a'}
+              hint={'Pod\u00e9s corregir tambi\u00e9n el m\u00e9todo o dividir la se\u00f1a en dos medios de pago.'}
+            />
+
+            <div className="grid grid-cols-2 gap-2 border-t border-slate-200 pt-2">
+              <button type="button" onClick={closeDepositEditor} className="rounded-[14px] border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-100">
+                Cancelar
+              </button>
+              <AsyncActionButton
+                type="button"
+                onAction={handleSaveDepositEdit}
+                pending={isSavingDepositEdit}
+                disabled={isSavingDepositEdit}
+                loadingLabel="Guardando..."
+                className="rounded-[14px] border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-black text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {'Guardar correcci\u00f3n'}
+              </AsyncActionButton>
+            </div>
+          </div>
+        </MiniModal>
+      )}
 
       {paymentTarget && <MiniModal title="Registrar pago" onClose={() => { setPaymentTarget(null); setPaymentDraft(createOrderPaymentDraft(0)); }}><div className="space-y-3">
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-semibold text-slate-600">Restante actual: <span className="font-black text-slate-800">{formatCurrency(paymentTarget.remainingAmount)}</span></div>

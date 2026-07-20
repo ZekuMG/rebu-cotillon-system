@@ -221,6 +221,77 @@ const getPrimaryLocalIp = () => {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const MIN_VALID_PDF_BYTES = 8 * 1024;
+
+const preparePdfExportCapture = async (webContents) => {
+  const state = await webContents.executeJavaScript(`
+    (async () => {
+      const root = document.documentElement;
+      const body = document.body;
+      root.dataset.theme = 'light';
+      body.dataset.theme = 'light';
+      root.dataset.pdfTheme = 'light';
+      body.dataset.pdfTheme = 'light';
+      body.dataset.pdfCapture = 'true';
+      root.style.colorScheme = 'light';
+      body.style.colorScheme = 'light';
+
+      const exportRoot = document.querySelector('[data-pdf-export]');
+      if (!exportRoot) return { ready: false, reason: 'missing-export-root' };
+
+      if (document.fonts && document.fonts.ready) await document.fonts.ready;
+      const images = Array.from(exportRoot.querySelectorAll('img'));
+      await Promise.all(images.map(async (image) => {
+        if (!image.complete) {
+          await new Promise((resolve) => {
+            image.addEventListener('load', resolve, { once: true });
+            image.addEventListener('error', resolve, { once: true });
+          });
+        }
+        if (typeof image.decode === 'function') {
+          try { await image.decode(); } catch {}
+        }
+      }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      const rect = exportRoot.getBoundingClientRect();
+      const textLength = String(exportRoot.textContent || '').trim().length;
+      return {
+        ready: textLength >= 16 && rect.width >= 100 && rect.height >= 100,
+        textLength,
+        width: rect.width,
+        height: rect.height,
+        imageCount: images.length,
+        imagesComplete: images.every((image) => image.complete),
+      };
+    })()
+  `, true);
+
+  if (!state?.ready) {
+    throw new Error(`El documento no estaba listo para imprimir (${state?.reason || 'contenido incompleto'}).`);
+  }
+
+  return state;
+};
+
+const createValidatedPdf = async (webContents) => {
+  await preparePdfExportCapture(webContents);
+
+  let pdfData = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    pdfData = await webContents.printToPDF({
+      printBackground: true,
+      pageSize: 'A4',
+      marginsType: 0,
+    });
+    if (pdfData?.length >= MIN_VALID_PDF_BYTES) return pdfData;
+    await delay(250);
+    await preparePdfExportCapture(webContents);
+  }
+
+  throw new Error('Electron gener\u00f3 un PDF vac\u00edo. El archivo no fue guardado; intent\u00e1 nuevamente.');
+};
+
 const waitForWebContentsLoad = (webContents, timeoutMs = 10000) =>
   new Promise((resolve) => {
     let settled = false;
@@ -1550,11 +1621,7 @@ app.on('ready', () => {
 
       if (!filePath) return { success: false, canceled: true };
 
-      const pdfData = await mainWindow.webContents.printToPDF({
-        printBackground: true,
-        pageSize: 'A4',
-        marginsType: 0,
-      });
+      const pdfData = await createValidatedPdf(mainWindow.webContents);
 
       fs.writeFileSync(filePath, pdfData);
 

@@ -120,6 +120,7 @@ export default function DashboardView({
   expenses = [],
   isLoading = false,
   isProfitSyncing = false,
+  refreshingSources = null,
   emptyStateMessage = '',
   onOpenExpenseModal,
   onAlertClick,
@@ -360,7 +361,25 @@ export default function DashboardView({
     cleanTransactions.length > 0 ||
     cleanDailyLogs.length > 0 ||
     cleanExpenses.length > 0;
-  const isRefreshingDashboardData = Boolean(isProfitSyncing && hasDashboardSourceData);
+  const hasScopedRefreshingSources = Boolean(
+    refreshingSources && typeof refreshingSources === 'object',
+  );
+  const isRefreshingDashboardData = Boolean(
+    hasDashboardSourceData && (
+      hasScopedRefreshingSources
+        ? Object.values(refreshingSources).some(Boolean)
+        : isProfitSyncing
+    ),
+  );
+  const isWidgetRefreshing = (widgetKey) => {
+    if (!hasScopedRefreshingSources) return isRefreshingDashboardData;
+    if (widgetKey === 'expenses') return Boolean(refreshingSources.expenses);
+    if (widgetKey === 'opening') return Boolean(refreshingSources.opening);
+    if (widgetKey === 'net') {
+      return Boolean(refreshingSources.transactions || refreshingSources.expenses);
+    }
+    return Boolean(refreshingSources.transactions);
+  };
   const renderWidget = (widgetKey) => {
     switch (widgetKey) {
       case 'payments':
@@ -682,7 +701,7 @@ export default function DashboardView({
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-2xl font-bold text-slate-800 leading-tight">Panel de Control</h2>
             {isRefreshingDashboardData && (
-              <span className="inline-flex h-6 items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 text-[10px] font-black uppercase tracking-[0.1em] text-amber-700">
+              <span className="dashboard-refresh-status inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-[10px] font-black uppercase tracking-[0.1em]">
                 <RefreshCw size={11} className="animate-spin" />
                 Recalculando
               </span>
@@ -755,7 +774,7 @@ export default function DashboardView({
                 globalFilter={globalFilter}
                 expenses={filteredExpenses} 
                 onOpenExpenseModal={onOpenExpenseModal}
-                isRefreshing={isRefreshingDashboardData}
+                isRefreshing={isWidgetRefreshing(widgetKey)}
               />
             </div>
           </div>

@@ -1,6 +1,6 @@
 # Dashboard Context
 
-Last reviewed: 2026-05-26.
+Last reviewed: 2026-07-19.
 
 This document is a working map for future Codex/AI changes to the Rebu dashboard. Use it before modifying dashboard UI, data flows, filters, permissions, or Supabase-backed dashboard behavior.
 
@@ -33,6 +33,18 @@ Important functions:
 - `loadOfflineDashboardSnapshot` / `saveOfflineDashboardSnapshot`: read/write local dashboard snapshots.
 
 `loadDashboardCloudData` also calls `loadTransactionsCloudData`, because dashboard profit and sales metrics depend on transactions.
+
+Transaction snapshots include `transactionsScope: 'full'` only after a successful paginated load of the complete sales table. Legacy snapshots or snapshots without that marker are treated as partial and must be backfilled once before incremental synchronization is allowed. Never infer completeness from the presence or number of locally cached transactions; doing so can leave older gaps permanently hidden from week, month, and year metrics.
+
+Realtime updates are coordinated in `App.jsx` through one Supabase channel:
+
+- Sales notifications are batched by sale ID and reloaded with their items/history context before updating transactions.
+- Expenses, products, clients, closures, logs, and register state are reconciled directly by record ID for INSERT, UPDATE, and DELETE events.
+- Categories, offers, rewards, and agenda contacts use a debounced core reload as a compatibility fallback.
+- Channel and heartbeat failures mark cloud-backed modules dirty. A successful reconnect forces a catch-up of the visible module.
+- Updated state is also debounced into the corresponding offline snapshot.
+
+`DashboardView` receives `refreshingSources` from `App.jsx`. Use the specific source flags (`transactions`, `expenses`, `inventory`, `opening`, and `closures`) so only widgets backed by stale data show their loading treatment.
 
 When the dashboard filter is switched to `year`, `DashboardView` asks `App.jsx` to force a full transaction reload through `onRequireFullTransactions`. This prevents annual KPIs, payment totals, and rankings from being calculated over a recent/partial transaction slice.
 
@@ -88,7 +100,6 @@ Main outputs:
 - `expiringProducts`: products with `expiration_date` within 14 days, including already expired.
 - `filteredData`: filtered transactions for the selected time period.
 - `filteredExpenses`: filtered expenses for the selected time period.
-- `chartData` and `maxSales`: still computed, but the current dashboard layout does not mount `SalesChart`.
 
 Profit handling:
 
@@ -222,7 +233,7 @@ These components exist but are not mounted in the current dashboard layout:
 - `src/components/dashboard/SalesChart.jsx`
 - `src/components/dashboard/ExpirationAlert.jsx`
 
-`SalesChart` still receives support data from `useDashboardData`, but `chart` is in the retired widget set and is normalized out of saved layouts.
+`SalesChart` no longer receives support data from `useDashboardData`; `chart` is in the retired widget set and is normalized out of saved layouts.
 
 `ExpirationAlert` was effectively superseded by `LowStockAlert`.
 
@@ -331,6 +342,9 @@ Avoid turning dashboard widgets into generic oversized marketing cards. Keep den
 - Keep `localStorage` layout keys backward-compatible when changing widget identifiers.
 - When changing metrics, inspect `useDashboardData` and `src/utils/salesMetricsCore.js`.
 - When changing Supabase dashboard data, inspect `CLOUD_SELECTS`, mapper functions, offline snapshots, and schema fallback utilities.
+- Keep Realtime reconciliation ID-based. Do not depend on `created_at` to detect UPDATE or DELETE events.
+- Preserve targeted sale refreshes and the trailing-batch behavior in `createRealtimeIdBatcher`; they prevent dropped events during bursts.
+- Treat Realtime as an invalidation/update signal, not as the only source of truth. Recovery must retain a forced REST catch-up path.
 - Preserve the annual full-transaction reload path from dashboard `year` filter unless another complete-data strategy replaces it.
 - Preserve test-record filtering before calculations.
 - If adding a new widget, update default order, normalization, layout persistence, and `renderWidget`.

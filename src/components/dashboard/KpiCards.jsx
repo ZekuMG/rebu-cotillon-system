@@ -19,7 +19,7 @@ import { FancyPrice } from '../FancyPrice';
 import { HintIcon } from '../HintIcon';
 
 const refreshingCardClass = (isRefreshing) =>
-  isRefreshing ? 'ring-1 ring-amber-200/90' : '';
+  isRefreshing ? 'dashboard-kpi-refreshing' : '';
 
 const refreshingValueClass = (isRefreshing) =>
   isRefreshing ? ' blur-[1.5px] opacity-55 transition duration-200' : ' transition duration-200';
@@ -29,7 +29,7 @@ const RefreshingIndicator = ({ isRefreshing }) => (
     <span
       aria-hidden="true"
       title="Actualizando datos"
-      className="pointer-events-none absolute bottom-2 right-2 z-20 inline-flex h-6 w-6 items-center justify-center rounded border border-amber-200 bg-amber-50 text-amber-700 shadow-sm"
+      className="dashboard-refresh-indicator pointer-events-none absolute bottom-2 right-2 z-20 inline-flex h-6 w-6 items-center justify-center rounded"
     >
       <RefreshCw size={12} className="animate-spin" />
     </span>

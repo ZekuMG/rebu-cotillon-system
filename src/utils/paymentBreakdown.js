@@ -79,6 +79,112 @@ export const createOrderPaymentEntry = (overrides = {}) => {
   };
 };
 
+const resizeOrderPaymentEntry = (entry, targetAmount) => {
+  const normalizedTarget = roundCurrency(Math.max(Number(targetAmount) || 0, 0));
+  if (normalizedTarget <= 0) return null;
+
+  const sourceLines = (entry?.lines || [])
+    .map((line) => createOrderPaymentLine(line))
+    .filter((line) => Number(line.amount || 0) > 0);
+  const sourceTotal = roundCurrency(
+    sourceLines.reduce((sum, line) => sum + Number(line.amount || 0), 0),
+  );
+  const fallbackMethod = sourceLines[0]?.method || 'Efectivo';
+  const lines = sourceLines.length > 0
+    ? sourceLines.map((line, index) => {
+        const previousAllocated = sourceLines
+          .slice(0, index)
+          .reduce((sum, previousLine) => {
+            const ratio = sourceTotal > 0 ? Number(previousLine.amount || 0) / sourceTotal : 0;
+            return sum + roundCurrency(normalizedTarget * ratio);
+          }, 0);
+        const amount = index === sourceLines.length - 1
+          ? roundCurrency(normalizedTarget - previousAllocated)
+          : roundCurrency(normalizedTarget * (Number(line.amount || 0) / sourceTotal));
+
+        return createOrderPaymentLine({
+          ...line,
+          amount,
+          cashReceived: line.method === 'Efectivo' ? amount : 0,
+          cashChange: 0,
+        });
+      }).filter((line) => Number(line.amount || 0) > 0)
+    : [createOrderPaymentLine({ method: fallbackMethod, amount: normalizedTarget })];
+
+  return createOrderPaymentEntry({
+    ...entry,
+    amount: normalizedTarget,
+    lines,
+  });
+};
+
+export const replaceOrderDepositPaymentHistory = (
+  paymentHistory,
+  {
+    currentDepositAmount = 0,
+    nextDepositEntry = null,
+    fallbackPayment = 'Efectivo',
+    fallbackInstallments = 0,
+    fallbackPaidTotal = 0,
+    fallbackCashReceived = 0,
+    fallbackCashChange = 0,
+  } = {},
+) => {
+  const normalizedHistory = normalizeOrderPaymentHistory(
+    paymentHistory,
+    fallbackPayment,
+    fallbackInstallments,
+    fallbackPaidTotal,
+    fallbackCashReceived,
+    fallbackCashChange,
+  );
+  const depositIndex = normalizedHistory.findIndex((entry) => entry.entryType === 'deposit');
+  let previousDepositEntry = depositIndex >= 0 ? normalizedHistory[depositIndex] : null;
+  let historyWithoutDeposit = normalizedHistory.filter((_, index) => index !== depositIndex);
+
+  if (depositIndex < 0 && Number(currentDepositAmount || 0) > 0) {
+    let amountToRemove = roundCurrency(currentDepositAmount);
+    const adjustedHistory = [];
+
+    normalizedHistory.forEach((entry) => {
+      if (amountToRemove <= 0) {
+        adjustedHistory.push(entry);
+        return;
+      }
+
+      if (!previousDepositEntry) previousDepositEntry = entry;
+      const entryAmount = roundCurrency(entry.amount || 0);
+      const removedAmount = Math.min(entryAmount, amountToRemove);
+      const remainingEntryAmount = roundCurrency(entryAmount - removedAmount);
+      amountToRemove = roundCurrency(amountToRemove - removedAmount);
+      const resizedEntry = resizeOrderPaymentEntry(entry, remainingEntryAmount);
+      if (resizedEntry) adjustedHistory.push(resizedEntry);
+    });
+
+    historyWithoutDeposit = adjustedHistory;
+  }
+
+  const normalizedNextDeposit = nextDepositEntry
+    ? createOrderPaymentEntry({
+        ...nextDepositEntry,
+        id: previousDepositEntry?.id || nextDepositEntry.id,
+        createdAt: previousDepositEntry?.createdAt || nextDepositEntry.createdAt,
+        entryType: 'deposit',
+      })
+    : null;
+
+  if (!normalizedNextDeposit || Number(normalizedNextDeposit.amount || 0) <= 0) {
+    return historyWithoutDeposit;
+  }
+
+  const insertionIndex = depositIndex >= 0 ? Math.min(depositIndex, historyWithoutDeposit.length) : 0;
+  return [
+    ...historyWithoutDeposit.slice(0, insertionIndex),
+    normalizedNextDeposit,
+    ...historyWithoutDeposit.slice(insertionIndex),
+  ];
+};
+
 export const normalizeOrderPaymentHistory = (
   paymentHistory,
   fallbackPayment = 'Efectivo',

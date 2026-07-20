@@ -274,7 +274,7 @@ export const ExportPdfLayout = ({ data }) => {
             </table>
 
             {/* CONDICIONES COMERCIALES */}
-            <div className="border border-slate-300 rounded-lg p-4 break-inside-avoid shadow-sm" style={{ backgroundColor: '#f8fafc', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}>
+            <div className="border border-slate-300 rounded-lg p-4 break-inside-avoid" style={{ backgroundColor: '#f8fafc', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}>
               <h4 className="font-black mb-2 uppercase tracking-wider text-slate-800 text-[11px]">Pasos para realizar tu compra:</h4>
               <ol className="list-decimal pl-4 space-y-1 text-[11px] text-slate-700">
                 <li><strong>Reserva:</strong> Seña del 50% para confirmar y reservar mercadería. El saldo se abona al momento de la entrega o retiro.</li>

@@ -11,7 +11,6 @@ import {
   getLiveProduct,
   makeDashboardRange,
   normalizeText,
-  parseMetricDate,
 } from '../utils/salesMetricsCore';
 
 export default function useDashboardData({ 
@@ -23,7 +22,6 @@ export default function useDashboardData({
   rankingCriteria, 
   expenses = [] 
 }) {
-  const currentHour = new Date().getHours();
   const lookups = useMemo(() => buildInventoryLookups(inventory || []), [inventory]);
   const dashboardRange = useMemo(() => makeDashboardRange(globalFilter), [globalFilter]);
   const salesDataset = useMemo(() => {
@@ -42,10 +40,6 @@ export default function useDashboardData({
       },
     });
   }, [transactions, dailyLogs, expenses, inventory, dashboardRange, lookups]);
-
-  const safeParseDate = useCallback((dateStr) => {
-    return parseMetricDate(dateStr);
-  }, []);
 
   const getLiveProductForItem = useCallback((item) => getLiveProduct(item, lookups), [lookups]);
 
@@ -148,20 +142,6 @@ export default function useDashboardData({
     };
   }, [filteredExpenses]);
 
-  const getExpenseHour = useCallback((expense = {}) => {
-    const rawTime = expense.time || expense.timestamp;
-    if (typeof rawTime === 'string' && rawTime.includes(':')) {
-      const hour = parseInt(rawTime.split(':')[0], 10);
-      if (Number.isFinite(hour)) return hour;
-    }
-
-    const dateObj = safeParseDate(expense.createdAt || expense.created_at || expense.date);
-    return dateObj ? dateObj.getHours() : 0;
-  }, [safeParseDate]);
-
-  const buildDateKey = (dateObj) =>
-    dateObj ? `${dateObj.getFullYear()}-${dateObj.getMonth()}-${dateObj.getDate()}` : '';
-
   const kpiStats = useMemo(() => ({
     gross: salesDataset.stats.revenue,
     net: salesDataset.stats.profit,
@@ -171,141 +151,6 @@ export default function useDashboardData({
   }), [salesDataset]);
 
   const averageTicket = kpiStats.count > 0 ? kpiStats.gross / kpiStats.count : 0;
-
-  const chartData = useMemo(() => {
-    if (globalFilter === 'day') {
-      const ranges = [
-        { label: '9-12', start: 9, end: 12, sales: 0, net: 0, count: 0, transactions: [] },
-        { label: '12-14', start: 12, end: 14, sales: 0, net: 0, count: 0, transactions: [] },
-        { label: '14-17', start: 14, end: 17, sales: 0, net: 0, count: 0, transactions: [] },
-        { label: '17-21', start: 17, end: 21, sales: 0, net: 0, count: 0, transactions: [] },
-        { label: '21+', start: 21, end: 24, sales: 0, net: 0, count: 0, transactions: [] },
-      ];
-      filteredData.forEach(tx => {
-        if (!tx.time) return;
-        const hour = parseInt(tx.time.split(':')[0], 10);
-        const range = ranges.find(r => hour >= r.start && hour < r.end);
-        if (range) {
-          range.sales += tx.total;
-          range.net += Number(tx.net) || 0;
-          range.count += 1;
-          range.transactions.push(tx);
-        }
-      });
-
-      filteredExpenses.forEach(expense => {
-        const amount = Number(expense.amount) || 0;
-        if (amount <= 0) return;
-        const hour = getExpenseHour(expense);
-        const range =
-          ranges.find(r => hour >= r.start && hour < r.end) ||
-          (hour < ranges[0].start ? ranges[0] : ranges[ranges.length - 1]);
-        if (range) range.net -= amount;
-      });
-
-      return ranges.map(r => ({ ...r, isCurrent: currentHour >= r.start && currentHour < r.end }));
-    }
-
-    if (globalFilter === 'year') {
-      const daysMap = new Map();
-      const now = new Date();
-
-      for (let i = 364; i >= 0; i--) {
-        const d = new Date(now);
-        d.setDate(d.getDate() - i);
-        const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-        const isMonthStart = d.getDate() === 1 || i === 364;
-
-        daysMap.set(key, {
-          label: isMonthStart ? d.toLocaleDateString('es-AR', { month: 'short' }).replace('.', '') : '',
-          shortLabel: d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' }),
-          monthName: d.toLocaleDateString('es-AR', { month: 'long' }),
-          dayNum: d.getDate(),
-          year: d.getFullYear(),
-          sales: 0,
-          net: 0,
-          count: 0,
-          isToday: i === 0,
-          isCurrent: i === 0,
-          isMonthStart,
-          transactions: [],
-        });
-      }
-
-      filteredData.forEach(tx => {
-        if (!tx.date) return;
-        const key = buildDateKey(tx.date);
-        if (daysMap.has(key)) {
-          const entry = daysMap.get(key);
-          entry.sales += tx.total;
-          entry.net += Number(tx.net) || 0;
-          entry.count += 1;
-          entry.transactions.push(tx);
-        }
-      });
-
-      filteredExpenses.forEach(expense => {
-        const expenseDate = safeParseDate(expense.date || expense.created_at || expense.createdAt);
-        const key = buildDateKey(expenseDate);
-        if (daysMap.has(key)) {
-          daysMap.get(key).net -= Number(expense.amount) || 0;
-        }
-      });
-
-      return Array.from(daysMap.values());
-    }
-
-    const daysMap = new Map();
-    const now = new Date();
-    const daysToShow = globalFilter === 'week' ? 7 : 30;
-
-    for (let i = daysToShow - 1; i >= 0; i--) {
-      const d = new Date(now); d.setDate(d.getDate() - i);
-      const key = `${d.getDate()}/${d.getMonth() + 1}`;
-      const dateStr = d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-
-      daysMap.set(key, { 
-        label: key, 
-        dayName: d.toLocaleDateString('es-AR', { weekday: 'short' }), 
-        dayNum: d.getDate(),
-        monthName: d.toLocaleDateString('es-AR', { month: 'short' }),
-        sales: 0, 
-        net: 0,
-        count: 0, 
-        dateStr: dateStr, 
-        isToday: i === 0,
-        isCurrent: i === 0,
-        transactions: [] 
-      });
-    }
-
-    filteredData.forEach(tx => {
-      if (!tx.date) return;
-      const key = `${tx.date.getDate()}/${tx.date.getMonth() + 1}`;
-      if (daysMap.has(key)) { 
-        const entry = daysMap.get(key); 
-        entry.sales += tx.total;
-        entry.net += Number(tx.net) || 0;
-        entry.count += 1; 
-        entry.transactions.push(tx); 
-      }
-    });
-
-    filteredExpenses.forEach(expense => {
-      const expenseDate = safeParseDate(expense.date || expense.created_at || expense.createdAt);
-      if (!expenseDate) return;
-      const key = `${expenseDate.getDate()}/${expenseDate.getMonth() + 1}`;
-      if (daysMap.has(key)) {
-        daysMap.get(key).net -= Number(expense.amount) || 0;
-      }
-    });
-
-    return Array.from(daysMap.values());
-  }, [globalFilter, filteredData, filteredExpenses, currentHour, getExpenseHour, safeParseDate]);
-
-  const maxSales = useMemo(() => {
-    const max = Math.max(...chartData.map(d => d.sales)); return max > 0 ? max : 1;
-  }, [chartData]);
 
   const paymentStats = useMemo(() => {
     return PAYMENT_METHODS.map(method => {
@@ -437,8 +282,6 @@ export default function useDashboardData({
   return {
     kpiStats, 
     averageTicket, 
-    chartData, 
-    maxSales, 
     paymentStats, 
     rankingStats, 
     lowStockProducts, 

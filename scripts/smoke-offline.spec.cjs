@@ -40,6 +40,10 @@ test('modo demo funciona sin recursos externos', async ({ page }) => {
   await page.getByRole('button', { name: /^Ingresar$/i }).click();
   await expect(page.getByText('Modo demo local', { exact: true })).toBeVisible();
 
+  phase = 'navigation:dashboard';
+  await page.getByRole('button', { name: /Control de Caja/i }).click();
+  await expect(page.getByRole('heading', { name: /Panel de Control/i })).toBeVisible();
+
   const sections = ['Socios', 'Historial de Ventas', 'Métricas'];
   const visited = [];
   for (const section of sections) {
