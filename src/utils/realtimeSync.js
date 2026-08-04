@@ -3,6 +3,58 @@ const normalizeRecordId = (value) => {
   return String(value).trim();
 };
 
+const HEARTBEAT_DEGRADED_STATUSES = {
+  timeout: 'HEARTBEAT_TIMEOUT',
+  disconnected: 'DISCONNECTED',
+  error: 'ERROR',
+};
+
+export const reconcileRealtimeHeartbeatState = (
+  currentState,
+  { status, latency = null, observedAt = Date.now() } = {},
+) => {
+  const state = currentState && typeof currentState === 'object' ? currentState : {};
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+
+  if (normalizedStatus === 'ok') {
+    const canRecoverHeartbeatDegradation = (
+      state.degradedSource === 'heartbeat'
+      && state.channelStatus === 'SUBSCRIBED'
+    );
+
+    return {
+      ...state,
+      status: canRecoverHeartbeatDegradation ? 'SUBSCRIBED' : state.status,
+      degradedSource: canRecoverHeartbeatDegradation ? null : state.degradedSource,
+      lastError: canRecoverHeartbeatDegradation ? '' : state.lastError,
+      heartbeatStatus: 'ok',
+      heartbeatLatencyMs: Number(latency) || null,
+      lastHeartbeatAt: observedAt,
+    };
+  }
+
+  const degradedStatus = HEARTBEAT_DEGRADED_STATUSES[normalizedStatus];
+  if (!degradedStatus) return state;
+
+  const heartbeatDetails = {
+    heartbeatStatus: normalizedStatus,
+    lastHeartbeatFailureAt: observedAt,
+  };
+
+  // Un heartbeat no debe ocultar un error propio de la suscripción al canal.
+  if (state.degradedSource === 'channel') {
+    return { ...state, ...heartbeatDetails };
+  }
+
+  return {
+    ...state,
+    ...heartbeatDetails,
+    status: degradedStatus,
+    degradedSource: 'heartbeat',
+    lastError: '',
+  };
+};
+
 export const getRealtimeEventType = (payload = {}) =>
   String(payload.eventType || payload.event || '').trim().toUpperCase();
 
@@ -76,6 +128,25 @@ export const reconcileRealtimePayload = (
     : nextRecords;
 
   return { records: limitedRecords, applied: true, eventType, id };
+};
+
+export const createSingleFlightTask = (task) => {
+  if (typeof task !== 'function') {
+    throw new TypeError('task debe ser una funcion.');
+  }
+
+  let inFlight = null;
+
+  return (...args) => {
+    if (inFlight) return inFlight;
+
+    const taskPromise = Promise.resolve().then(() => task(...args));
+    const trackedPromise = taskPromise.finally(() => {
+      if (inFlight === trackedPromise) inFlight = null;
+    });
+    inFlight = trackedPromise;
+    return trackedPromise;
+  };
 };
 
 export const createRealtimeIdBatcher = ({

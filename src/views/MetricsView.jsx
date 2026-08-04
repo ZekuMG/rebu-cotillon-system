@@ -807,7 +807,9 @@ const Table = ({ columns, rows, emptyText, onRowClick, isRowSelected }) => (
 );
 
 const StatStrip = ({ items = [] }) => (
-  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+  <div className={`grid grid-cols-1 gap-2 sm:grid-cols-2 ${
+    items.length === 5 ? 'xl:grid-cols-5' : 'xl:grid-cols-4'
+  }`}>
     {items.map((item) => (
             <div
               key={item.label}
@@ -1026,6 +1028,8 @@ const buildCsvRows = ({ metrics, canViewProfit, canViewUsers, canViewClients }) 
     ['Resumen', 'Ventas', metrics.current.stats.salesCount],
     ['Resumen', 'Ticket promedio', metrics.current.stats.averageTicket],
     ['Resumen', 'Productos vendidos', metrics.current.stats.itemsSold],
+    ['Resumen', 'Bolsitas cobradas', metrics.current.posBagStats?.count || 0],
+    ['Resumen', 'Ingreso por bolsitas', metrics.current.posBagStats?.revenue || 0],
     ['Resumen', 'Gastos', metrics.current.stats.expenses],
   ];
 
@@ -2632,6 +2636,7 @@ export default function MetricsView({
           items={[
             { label: 'Productos vendidos', value: formatNumber(allSoldProductCount), sub: 'Con movimiento', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
             { label: 'Unidades/items', value: formatNumber(metrics.current.stats.itemsSold), sub: 'Cantidad total', tone: 'border-violet-200 bg-violet-50 text-violet-700' },
+            { label: 'Bolsitas', value: formatNumber(metrics.current.posBagStats?.count || 0), sub: `${formatCurrency(metrics.current.posBagStats?.revenue || 0)} cobrados`, tone: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700' },
             { label: 'Categorias', value: formatNumber(metrics.current.categoryStats.length), sub: 'Con ventas', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
             { label: 'Top producto', value: metrics.current.productStats[0]?.name || '-', sub: 'Mayor ingreso', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
           ]}

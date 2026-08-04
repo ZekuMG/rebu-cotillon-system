@@ -88,6 +88,21 @@ export const APP_PERMISSION_GROUPS = [
     ],
   },
   {
+    id: 'whatsapp',
+    label: 'WhatsApp',
+    viewKey: 'whatsapp.view',
+    actions: [
+      { key: 'whatsapp.reply', label: 'Responder y tomar conversaciones' },
+      { key: 'whatsapp.reply.outside_window', label: 'Responder conversaciones antiguas (Sistema)' },
+      { key: 'whatsapp.conversation.archive', label: 'Archivar conversaciones' },
+      { key: 'whatsapp.conversation.delete', label: 'Eliminar conversaciones definitivamente (Sistema)' },
+      { key: 'whatsapp.mode.manage', label: 'Administrar el modo global del bot' },
+      { key: 'whatsapp.budget.approve', label: 'Aprobar presupuestos y enviarlos' },
+      { key: 'whatsapp.settings.manage', label: 'Publicar datos comerciales del bot' },
+      { key: 'whatsapp.connection.manage', label: 'Administrar conexión y QR (Sistema)' },
+    ],
+  },
+  {
     id: 'reports',
     label: 'Reportes de Caja',
     viewKey: 'reports.view',
@@ -158,6 +173,7 @@ export const APP_TAB_PERMISSION_MAP = {
   clients: 'clients.view',
   agenda: 'agenda.view',
   orders: 'orders.view',
+  whatsapp: 'whatsapp.view',
   history: 'history.view',
   reports: 'reports.view',
   metrics: 'metrics.view',
@@ -209,6 +225,9 @@ const SELLER_PRESET = {
   'orders.deleteOrder': true,
   'orders.markRetired': true,
   'orders.registerPayment': true,
+  'whatsapp.view': true,
+  'whatsapp.reply': true,
+  'whatsapp.conversation.archive': true,
   'history.view': true,
   'pos.view': true,
   'extras.view': true,
@@ -244,6 +263,11 @@ const OWNER_PRESET = {
   'orders.deleteOrder': true,
   'orders.markRetired': true,
   'orders.registerPayment': true,
+  'whatsapp.view': true,
+  'whatsapp.reply': true,
+  'whatsapp.conversation.archive': true,
+  'whatsapp.mode.manage': true,
+  'whatsapp.budget.approve': true,
   'history.view': true,
   'history.editSale': true,
   'history.voidSale': true,
@@ -370,7 +394,7 @@ export const canAccessTab = (user, tabKey) => {
 };
 
 export const getDefaultTabForUser = (user) => {
-  const priority = ['dashboard', 'pos', 'inventory', 'clients', 'agenda', 'orders', 'history', 'extras', 'reports', 'metrics', 'logs', 'sessions', 'bulk-editor', 'user-management'];
+  const priority = ['dashboard', 'pos', 'whatsapp', 'inventory', 'clients', 'agenda', 'orders', 'history', 'extras', 'reports', 'metrics', 'logs', 'sessions', 'bulk-editor', 'user-management'];
   return priority.find((tabKey) => canAccessTab(user, tabKey)) || 'settings';
 };
 

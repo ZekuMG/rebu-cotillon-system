@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Search,
+  ShoppingBag,
   ShoppingCart,
   Trash2,
   Plus,
@@ -44,6 +45,11 @@ import {
 } from '../utils/paymentBreakdown';
 import { getProductImageUrl } from '../utils/productImages';
 import { getProductActiveState } from '../utils/productLifecycle';
+import {
+  createPosBagSaleItem,
+  POS_BAG_PRICE,
+} from '../utils/posSaleExtras';
+import { getPosCartItemCount } from '../utils/posCartTabs';
 import {
   couponRequiresInstagramConnection,
   formatInstagramHandle,
@@ -432,6 +438,7 @@ No lo ve el cliente; sirve para calcular margen y costo estimado."
 
 export default function POSView({
   inventory, categories, addToCart, cart, removeFromCart, updateCartItemQty,
+  cartTabs = [], activeCartId, onAddCart, onSelectCart, onCloseCart,
   selectedPayment, setSelectedPayment, installments, setInstallments,
   handleCheckout, posSearch, setPosSearch,
   selectedCategory, setSelectedCategory, posViewMode, setPosViewMode,
@@ -461,11 +468,13 @@ export default function POSView({
   const [isDiscountDrawerOpen, setIsDiscountDrawerOpen] = useState(false);
   const [customDiscountPercent, setCustomDiscountPercent] = useState('');
   const [visibleCount, setVisibleCount] = useState(POS_BATCH_SIZE);
+  const [hasPosBag, setHasPosBag] = useState(false);
   const [paymentLines, setPaymentLines] = useState([createPaymentLine({ method: selectedPayment || 'Efectivo', installments: installments || 1, cashReceived: '' })]);
   const [isSplitPaymentMode, setIsSplitPaymentMode] = useState(false);
   const [activeSplitLineIndex, setActiveSplitLineIndex] = useState(0);
   const [isWideLayout, setIsWideLayout] = useState(isWideResolution);
   const [productHoverPreview, setProductHoverPreview] = useState(null);
+  const cartTabsRailRef = useRef(null);
   const { isPending, runAction } = usePendingAction();
   const cartBounds = useMemo(() => getPosCartBounds(isWideLayout), [isWideLayout]);
   const maxGridColumns = isWideLayout ? 10 : 8;
@@ -475,6 +484,22 @@ export default function POSView({
     const storedWidth = Number(window.localStorage.getItem('rebu-pos-cart-width'));
     return Number.isFinite(storedWidth) ? clampCartWidth(storedWidth, initialBounds) : initialBounds.default;
   });
+  const hasMultipleCartTabs = cartTabs.length > 1;
+  const cartTabGap = 4;
+  const cartTabWidth = cartTabs.length > 0
+    ? `max(68px, calc(${100 / cartTabs.length}% - ${(Math.max(0, cartTabs.length - 1) * cartTabGap) / cartTabs.length}px))`
+    : '100%';
+
+  useEffect(() => {
+    const tabsRail = cartTabsRailRef.current;
+    if (!tabsRail) return;
+
+    const activeTab = Array.from(tabsRail.children).find(
+      (tabElement) => tabElement.dataset.posCartId === String(activeCartId),
+    );
+
+    activeTab?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [activeCartId, cartTabs.length]);
 
   const startCartResize = (event) => {
     event.preventDefault();
@@ -568,6 +593,7 @@ export default function POSView({
 
   useEffect(() => {
     if (cart.length === 0) {
+      setHasPosBag(false);
       setIsSplitPaymentMode(false);
       setActiveSplitLineIndex(0);
       setPaymentLines([createPaymentLine({ method: 'Efectivo', installments: 1, cashReceived: '' })]);
@@ -1177,6 +1203,7 @@ export default function POSView({
         paymentLines: normalizedPaymentLines,
         cashReceived: cashReceivedAmount || null,
         cashChange: cashChangeAmount || 0,
+        saleExtras: hasPosBag ? [createPosBagSaleItem()] : [],
       });
     }
   };
@@ -1190,12 +1217,18 @@ export default function POSView({
   const roundPaymentValue = (value) => Math.round((Number(value) || 0) * 100) / 100;
   const getDefaultSplitSecondaryMethod = (primaryMethod) => (primaryMethod === 'Efectivo' ? 'MercadoPago' : 'Efectivo');
 
-  const subtotal = cart.reduce((t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
+  const cartSubtotal = cart.reduce((t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
+  const cartItemCount = cart.reduce(
+    (acc, item) => acc + (item.product_type === 'weight' ? 1 : item.quantity),
+    0,
+  );
+  const posBagTotal = hasPosBag ? POS_BAG_PRICE : 0;
+  const subtotal = cartSubtotal + posBagTotal;
   const cartDiscountTotal = cart.reduce(
     (sum, item) => sum + ((item.isReward || item.isDiscount) ? Math.abs((Number(item.price) || 0) * (Number(item.quantity) || 0)) : 0),
     0,
   );
-  const displaySubtotal = subtotal + cartDiscountTotal;
+  const displaySubtotal = cartSubtotal + cartDiscountTotal;
   const normalizedPaymentLines = normalizePaymentBreakdown(paymentLines);
   const visiblePaymentLines = normalizedPaymentLines.filter((line) => Number(line.amount || 0) > 0.009);
   const paymentLinesForDisplay = visiblePaymentLines.length > 0 ? visiblePaymentLines : normalizedPaymentLines.slice(0, 1);
@@ -2101,26 +2134,79 @@ export default function POSView({
         className="bg-white border-l flex flex-col min-h-0 shadow-2xl z-20 shrink-0"
       >
         
-        <div className="border-b bg-white px-3 py-2 min-[1920px]:py-2.5">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="inline-flex h-5 min-w-0 items-center gap-1.5 text-[14px] font-bold leading-none text-slate-800 min-[1920px]:h-6 min-[1920px]:text-[15px]">
-              <ShoppingCart size={16} className="shrink-0 text-fuchsia-600 min-[1920px]:h-[18px] min-[1920px]:w-[18px]" /> Pedido Actual
-            </h2>
-            <div className="ml-auto flex shrink-0 items-center gap-1.5">
-              {pointsHeaderText && (
-                <span className={`inline-flex h-5 shrink-0 items-center rounded-full border px-1.5 text-[9px] font-bold leading-none min-[1920px]:h-6 min-[1920px]:px-2 min-[1920px]:text-[10px] ${pointsHeaderTone}`}>
-                  {pointsHeaderText}
-                </span>
-              )}
-              <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-fuchsia-100 px-1.5 text-[10px] font-bold leading-none text-fuchsia-700 min-[1920px]:h-6 min-[1920px]:text-[11px]">
-                {cart.reduce((acc, item) => acc + (item.product_type === 'weight' ? 1 : item.quantity), 0)} items
-              </span>
+        <div className="border-b bg-white px-3 pb-2">
+          {hasMultipleCartTabs && (
+            <div
+              className="pos-cart-tabs is-multiple -mx-3 flex min-w-0 items-end gap-1 overflow-hidden px-2 pt-1"
+              role="tablist"
+              aria-label="Carritos abiertos"
+            >
+              <div
+                ref={cartTabsRailRef}
+                className="pos-cart-tab-rail flex min-w-0 flex-1 items-end gap-1 overflow-x-auto"
+                style={{ '--pos-cart-tab-width': cartTabWidth }}
+              >
+                {cartTabs.map((tab, tabIndex) => {
+                  const isActive = String(tab.id) === String(activeCartId);
+                  const itemCount = getPosCartItemCount(tab);
+                  const visibleTabNumber = tabIndex + 1;
+                  const tabClientName = tab.selectedClient?.id === 'guest'
+                    ? 'Consumidor final'
+                    : tab.selectedClient?.name || '';
+
+                  return (
+                    <div
+                      key={tab.id}
+                      data-pos-cart-id={String(tab.id)}
+                      className={`pos-cart-tab group relative flex h-8 shrink-0 items-center border px-1 ${isActive ? 'is-active' : ''}`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onSelectCart?.(tab.id)}
+                        className="flex min-w-0 flex-1 items-center gap-1 px-1 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/50"
+                        role="tab"
+                        aria-selected={isActive}
+                        aria-label={`Carrito ${visibleTabNumber}`}
+                        title={tabClientName ? `Carrito ${visibleTabNumber} · ${tabClientName}` : `Carrito ${visibleTabNumber}`}
+                      >
+                        <span className="pos-cart-tab-label min-w-0 flex-1 truncate text-[11px] font-black tabular-nums">
+                          {visibleTabNumber}
+                        </span>
+                        {itemCount > 0 && (
+                          <span className="pos-cart-tab-count inline-flex min-w-4 items-center justify-center rounded px-1 text-[9px] font-black tabular-nums">
+                            {itemCount}
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onCloseCart?.(tab.id)}
+                        className="pos-cart-tab-close inline-flex h-5 w-5 shrink-0 items-center justify-center rounded focus:outline-none focus:ring-2 focus:ring-red-400/40"
+                        aria-label={`Cerrar carrito ${visibleTabNumber}`}
+                        title={`Cerrar carrito ${visibleTabNumber}`}
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={onAddCart}
+                className="pos-cart-add inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-t-md border focus:outline-none focus:ring-2 focus:ring-fuchsia-400/40"
+                aria-label="Abrir nuevo carrito"
+                title="Abrir nuevo carrito"
+              >
+                <Plus size={14} strokeWidth={2.5} />
+              </button>
             </div>
-          </div>
-          <div className="min-w-0">
-            {hasVisibleSelectedClient ? (
+          )}
+          <div className={`${hasMultipleCartTabs ? 'mt-1' : 'pt-1'} flex min-w-0 items-center justify-between gap-2`}>
+            <div className="min-w-0 flex-1">
+              {hasVisibleSelectedClient ? (
               isGuestSelectedClient ? (
-                <div className="mt-1 flex items-center gap-1.5 min-[1920px]:mt-1.5">
+                <div className="flex items-center gap-1.5">
                   <div className="inline-flex h-5 items-center gap-1 rounded-md border border-slate-300 bg-slate-50 px-1.5 text-[9px] font-bold text-slate-600 shadow-sm min-[1920px]:h-6 min-[1920px]:py-1 min-[1920px]:text-[10px]">
                     <User size={11} /> Consumidor final
                   </div>
@@ -2133,7 +2219,7 @@ export default function POSView({
                   </button>
                 </div>
               ) : (
-                <div className="mt-1 rounded-lg border border-fuchsia-200 bg-fuchsia-50/40 px-2 py-1 shadow-sm transition-colors min-[1920px]:py-1.5">
+                <div className="rounded-lg border border-fuchsia-200 bg-fuchsia-50/40 px-2 py-1 shadow-sm transition-colors min-[1920px]:py-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <div>
@@ -2174,7 +2260,7 @@ export default function POSView({
                 </div>
               )
             ) : (
-              <div className="mt-1 min-[1920px]:mt-1.5">
+              <div>
                 <button
                   onClick={openMemberSelectPanel}
                   className="inline-flex h-5 items-center gap-1 rounded-md border border-fuchsia-200 bg-fuchsia-50 px-1.5 text-[9px] font-bold text-fuchsia-600 transition-colors hover:bg-fuchsia-100 hover:text-fuchsia-700 min-[1920px]:h-6 min-[1920px]:py-1 min-[1920px]:text-[10px]"
@@ -2183,6 +2269,31 @@ export default function POSView({
                 </button>
               </div>
             )}
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {pointsHeaderText && (
+                <span
+                  className={`inline-flex h-5 max-w-[112px] shrink items-center truncate rounded-full border px-1.5 text-[9px] font-bold leading-none min-[1920px]:h-6 min-[1920px]:max-w-[132px] min-[1920px]:text-[10px] ${pointsHeaderTone}`}
+                  title={pointsHeaderText}
+                >
+                  {pointsHeaderText}
+                </span>
+              )}
+              <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-fuchsia-100 px-1.5 text-[10px] font-bold leading-none text-fuchsia-700 min-[1920px]:h-6 min-[1920px]:text-[11px]">
+                {cartItemCount} {cartItemCount === 1 ? 'ítem' : 'ítems'}
+              </span>
+              {!hasMultipleCartTabs && (
+                <button
+                  type="button"
+                  onClick={onAddCart}
+                  className="pos-cart-add pos-cart-add-standalone inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border focus:outline-none focus:ring-2 focus:ring-fuchsia-400/40"
+                  aria-label="Abrir nuevo carrito"
+                  title="Abrir nuevo carrito"
+                >
+                  <Plus size={13} strokeWidth={2.5} />
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -2326,6 +2437,50 @@ export default function POSView({
 
         {/* Footer */}
         <div className="space-y-1 border-t bg-slate-50/95 p-1.5 min-[1920px]:space-y-1.5 min-[1920px]:p-2">
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={hasPosBag}
+            disabled={cart.length === 0}
+            onClick={() => setHasPosBag((current) => !current)}
+            className={`group flex min-h-10 w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-fuchsia-200 disabled:cursor-not-allowed disabled:opacity-50 ${
+              hasPosBag
+                ? 'border-fuchsia-300 bg-fuchsia-50 text-fuchsia-800'
+                : 'border-slate-200 bg-white text-slate-600 hover:border-fuchsia-200 hover:bg-fuchsia-50/40'
+            }`}
+          >
+            <span
+              aria-hidden="true"
+              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors ${
+                hasPosBag
+                  ? 'border-fuchsia-500 bg-fuchsia-600 text-white'
+                  : 'border-slate-300 bg-slate-50 text-transparent group-hover:border-fuchsia-300'
+              }`}
+            >
+              <CheckCircle size={13} strokeWidth={3} />
+            </span>
+            <ShoppingBag
+              size={15}
+              aria-hidden="true"
+              className={hasPosBag ? 'text-fuchsia-600' : 'text-slate-400'}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11px] font-black leading-tight min-[1920px]:text-xs">
+                ¿Lleva bolsita?
+              </span>
+              <span className={`block text-[9px] font-bold leading-tight min-[1920px]:text-[10px] ${
+                hasPosBag ? 'text-fuchsia-500' : 'text-slate-400'
+              }`}>
+                {hasPosBag ? 'Agregada al cobro' : 'Opcional · una por venta'}
+              </span>
+            </span>
+            <span className={`shrink-0 rounded-md px-2 py-1 text-[11px] font-black tabular-nums min-[1920px]:text-xs ${
+              hasPosBag ? 'bg-fuchsia-600 text-white' : 'bg-slate-100 text-slate-600'
+            }`}>
+              +<FancyPrice amount={POS_BAG_PRICE} />
+            </span>
+          </button>
+
           <div className="grid grid-cols-5 gap-1">
             {PAYMENT_METHODS.map((method) => {
               const activeMethod = isSplitPaymentMode ? (activeSplitLineIndex === 1 ? rawSplitSecondaryLine.method : rawSplitPrimaryLine.method) : currentPaymentMethod;
@@ -2454,6 +2609,12 @@ export default function POSView({
               <div className="flex justify-between text-[11px] font-bold text-fuchsia-600 min-[1920px]:text-xs">
                 <span>Descuentos</span>
                 <span>-<FancyPrice amount={cartDiscountTotal} /></span>
+              </div>
+            )}
+            {hasPosBag && (
+              <div className="flex justify-between text-[11px] font-bold text-fuchsia-600 min-[1920px]:text-xs">
+                <span>Bolsita</span>
+                <span>+<FancyPrice amount={POS_BAG_PRICE} /></span>
               </div>
             )}
             <div className="flex justify-between text-[11px] text-slate-500 min-[1920px]:text-xs"><span>Pago</span><span>{paymentSummary}</span></div>

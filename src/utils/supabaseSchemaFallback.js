@@ -243,7 +243,10 @@ export const fetchAllCloudRowsWithSelectFallback = async (
       const page = Array.isArray(data) ? data : [];
       rows.push(...page);
 
-      if (page.length < batchSize) {
+      // PostgREST can cap the number of returned rows below the requested
+      // range size. A short page therefore does not prove that the table is
+      // exhausted; only an empty page does.
+      if (page.length === 0) {
         return { data: rows, error: null, selectColumns: safeSelect };
       }
 

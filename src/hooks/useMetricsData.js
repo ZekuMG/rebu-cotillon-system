@@ -8,6 +8,10 @@ import {
   getMetricProductKey,
   parseMetricDate,
 } from '../utils/salesMetricsCore';
+import {
+  getPosBagItemsSummary,
+  isPosBagItem,
+} from '../utils/posSaleExtras';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -542,17 +546,26 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
   let revenue = 0;
   let cost = 0;
   let itemsSold = 0;
+  let posBagCount = 0;
+  let posBagRevenue = 0;
+  let posBagSalesCount = 0;
 
   filteredTransactions.forEach((tx) => {
     const txRevenue = toNumber(tx.total);
     const txCost = toNumber(tx.cost);
     const txProfit = toNumber(tx.profit);
     const txItemsForStats = (tx.metricItems || tx.items || []).filter((item) => !(item?.isDiscount || item?.is_discount));
-    const txItemsGrossRevenue = txItemsForStats.reduce((sum, item) => sum + Math.max(0, getItemRevenue(item)), 0);
+    const txDiscountEligibleGrossRevenue = txItemsForStats.reduce((sum, item) => (
+      isPosBagItem(item) ? sum : sum + Math.max(0, getItemRevenue(item))
+    ), 0);
+    const txPosBagSummary = getPosBagItemsSummary(txItemsForStats);
     const txItemDiscountImpact = toNumber(tx.itemDiscountImpact ?? tx.discountImpact);
     const txItemCount = txItemsForStats.reduce((sum, item) => sum + getItemQty(item), 0);
     revenue += txRevenue;
     cost += txCost;
+    posBagCount += txPosBagSummary.count;
+    posBagRevenue += txPosBagSummary.revenue;
+    if (txPosBagSummary.count > 0) posBagSalesCount += 1;
 
     const periodKey = isHourlyRange ? getHourKey(tx.metricDate) : formatDateKey(tx.metricDate);
     const periodLabel = isHourlyRange ? getHourLabel(tx.metricDate) : formatShortDate(tx.metricDate);
@@ -638,8 +651,8 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
       const title = item.title || item.product_title || product?.title || 'Producto';
       const qty = getItemQty(item);
       const itemGrossRevenue = getItemRevenue(item);
-      const itemDiscountImpact = txItemsGrossRevenue > 0
-        ? txItemDiscountImpact * Math.min(1, Math.max(0, itemGrossRevenue / txItemsGrossRevenue))
+      const itemDiscountImpact = !isPosBagItem(item) && txDiscountEligibleGrossRevenue > 0
+        ? txItemDiscountImpact * Math.min(1, Math.max(0, itemGrossRevenue / txDiscountEligibleGrossRevenue))
         : 0;
       const itemRevenue = Math.max(0, itemGrossRevenue - itemDiscountImpact);
       const itemCostInfo = getItemCostInfo(item, lookups);
@@ -718,6 +731,9 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
     salesCount: filteredTransactions.length,
     averageTicket: filteredTransactions.length ? revenue / filteredTransactions.length : 0,
     itemsSold,
+    posBagCount,
+    posBagRevenue,
+    posBagSalesCount,
   };
 
   const periodSeries = [...periodMap.values()]
@@ -732,6 +748,11 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
 
   return {
     stats,
+    posBagStats: {
+      count: posBagCount,
+      revenue: posBagRevenue,
+      salesCount: posBagSalesCount,
+    },
     filteredTransactions,
     filteredExpenses,
     filteredBudgets,

@@ -11,4 +11,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   supplierImageSearch: (request) => ipcRenderer.invoke('supplier-image-search', request),
   supplierPriceSearch: (request) => ipcRenderer.invoke('supplier-price-search', request),
   openAIImageEdit: (request) => ipcRenderer.invoke('openai-image-edit', request),
+  whatsappBotRequest: (request) => ipcRenderer.invoke('whatsapp-bot-request', request),
+  generateWhatsAppBudgetPdf: (payload) => ipcRenderer.invoke('generate-whatsapp-budget-pdf', payload),
+  getUpdateStatus: () => ipcRenderer.invoke('get-update-status'),
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+  onUpdateStatus: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on('update-status', listener);
+    return () => ipcRenderer.removeListener('update-status', listener);
+  },
 });

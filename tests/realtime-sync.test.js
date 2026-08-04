@@ -3,8 +3,80 @@ import assert from 'node:assert/strict';
 
 import {
   createRealtimeIdBatcher,
+  createSingleFlightTask,
+  reconcileRealtimeHeartbeatState,
   reconcileRealtimePayload,
 } from '../src/utils/realtimeSync.js';
+
+test('un heartbeat sano recupera una degradacion de heartbeat si el canal seguia suscripto', () => {
+  const result = reconcileRealtimeHeartbeatState({
+    status: 'HEARTBEAT_TIMEOUT',
+    channelStatus: 'SUBSCRIBED',
+    degradedSource: 'heartbeat',
+    lastError: 'demora transitoria',
+  }, {
+    status: 'ok',
+    latency: 38,
+    observedAt: 1234,
+  });
+
+  assert.equal(result.status, 'SUBSCRIBED');
+  assert.equal(result.degradedSource, null);
+  assert.equal(result.lastError, '');
+  assert.equal(result.heartbeatStatus, 'ok');
+  assert.equal(result.heartbeatLatencyMs, 38);
+  assert.equal(result.lastHeartbeatAt, 1234);
+});
+
+test('un heartbeat sano no oculta una degradacion propia del canal', () => {
+  const result = reconcileRealtimeHeartbeatState({
+    status: 'CHANNEL_ERROR',
+    channelStatus: 'CHANNEL_ERROR',
+    degradedSource: 'channel',
+    lastError: 'fallo la suscripcion',
+  }, {
+    status: 'ok',
+    latency: 42,
+    observedAt: 5678,
+  });
+
+  assert.equal(result.status, 'CHANNEL_ERROR');
+  assert.equal(result.degradedSource, 'channel');
+  assert.equal(result.lastError, 'fallo la suscripcion');
+  assert.equal(result.heartbeatStatus, 'ok');
+});
+
+test('un timeout de heartbeat no reemplaza el diagnostico de un canal degradado', () => {
+  const result = reconcileRealtimeHeartbeatState({
+    status: 'TIMED_OUT',
+    channelStatus: 'TIMED_OUT',
+    degradedSource: 'channel',
+    lastError: 'timeout del canal',
+  }, {
+    status: 'timeout',
+    observedAt: 9012,
+  });
+
+  assert.equal(result.status, 'TIMED_OUT');
+  assert.equal(result.degradedSource, 'channel');
+  assert.equal(result.lastError, 'timeout del canal');
+  assert.equal(result.heartbeatStatus, 'timeout');
+  assert.equal(result.lastHeartbeatFailureAt, 9012);
+});
+
+test('un heartbeat sano no declara suscripto un canal que nunca conecto', () => {
+  const result = reconcileRealtimeHeartbeatState({
+    status: 'HEARTBEAT_TIMEOUT',
+    channelStatus: 'CONNECTING',
+    degradedSource: 'heartbeat',
+  }, {
+    status: 'ok',
+    observedAt: 3456,
+  });
+
+  assert.equal(result.status, 'HEARTBEAT_TIMEOUT');
+  assert.equal(result.degradedSource, 'heartbeat');
+});
 
 test('Realtime actualiza una fila antigua por id sin depender de created_at', () => {
   const current = [
@@ -62,6 +134,31 @@ test('un payload sin id no modifica datos existentes', () => {
 
   assert.equal(result.applied, false);
   assert.equal(result.records, current);
+});
+
+test('una reconexion comparte la reconciliacion que ya esta en curso', async () => {
+  let calls = 0;
+  let releaseTask;
+  const blockedTask = new Promise((resolve) => {
+    releaseTask = resolve;
+  });
+  const runOnce = createSingleFlightTask(async () => {
+    calls += 1;
+    await blockedTask;
+    return 'ok';
+  });
+
+  const first = runOnce();
+  const repeated = runOnce();
+
+  assert.equal(first, repeated);
+  await Promise.resolve();
+  assert.equal(calls, 1);
+
+  releaseTask();
+  assert.equal(await first, 'ok');
+  assert.equal(await runOnce(), 'ok');
+  assert.equal(calls, 2);
 });
 
 test('una rafaga de ids se agrupa y elimina duplicados', async () => {

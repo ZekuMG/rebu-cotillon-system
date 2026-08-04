@@ -46,7 +46,7 @@ Realtime updates are coordinated in `App.jsx` through one Supabase channel:
 
 `DashboardView` receives `refreshingSources` from `App.jsx`. Use the specific source flags (`transactions`, `expenses`, `inventory`, `opening`, and `closures`) so only widgets backed by stale data show their loading treatment.
 
-When the dashboard filter is switched to `year`, `DashboardView` asks `App.jsx` to force a full transaction reload through `onRequireFullTransactions`. This prevents annual KPIs, payment totals, and rankings from being calculated over a recent/partial transaction slice.
+When the dashboard filter is switched to `week`, `month`, or `year` while the transaction/dashboard scopes are still partial, `DashboardView` asks `App.jsx` to force a full reload through `onRequireFullTransactions`. If verified data for today already exists, the requested period remains selected but the widgets explicitly show today's figures until the complete period arrives. A compact amber status explains which period is still loading; incomplete period totals must never be presented as complete.
 
 If offline mode has no dashboard snapshot and no local dashboard data, `dashboardOfflineEmptyMessage` is passed to `DashboardView`.
 

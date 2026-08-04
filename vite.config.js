@@ -35,6 +35,13 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     strictPort: true,
+    proxy: {
+      '/bot-api': {
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true,
+        rewrite: (requestPath) => requestPath.replace(/^\/bot-api/, ''),
+      },
+    },
     hmr: {
       host: '127.0.0.1',
       protocol: 'ws',

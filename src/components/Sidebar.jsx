@@ -8,6 +8,7 @@ import {
   History,
   LayoutDashboard,
   LogOut,
+  MessageCircle,
   Monitor,
   Moon,
   Package,
@@ -24,10 +25,34 @@ import {
 } from '../utils/appUsers';
 import { canAccessTab } from '../utils/userPermissions';
 import { hexToRgba, resolveUserPresentation } from '../utils/userPresentation';
+import { whatsappOperator } from '../utils/whatsappOperator';
 import UserAvatar from './UserAvatar';
 import logoRebuImg from '../assets/logo-rebu.jpg';
 
 const SIDEBAR_LAYOUT_STORAGE_PREFIX = 'rebu_sidebar_layout_v1';
+const WHATSAPP_SOUND_MUTED_KEY = 'rebu_whatsapp_sound_muted_v1';
+
+const playAttentionTone = () => {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    const context = new AudioContextClass();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(660, context.currentTime);
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.06, context.currentTime + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.22);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.24);
+    oscillator.addEventListener('ended', () => void context.close(), { once: true });
+  } catch {
+    // El badge sigue funcionando aunque el navegador bloquee audio sin gesto previo.
+  }
+};
 
 const getSidebarLayoutStorageKey = (user) =>
   `${SIDEBAR_LAYOUT_STORAGE_PREFIX}:${String(user?.id || user?.name || user?.displayName || 'guest')}`;
@@ -86,6 +111,8 @@ const SidebarButton = ({
   onDragOver,
   onDrop,
   onDragEnd,
+  badge = 0,
+  tooltipDetail = null,
 }) => {
   const [showTooltip, setShowTooltip] = useState(false);
   const activeTextColor = getReadableTextColor(accentColor);
@@ -137,7 +164,7 @@ const SidebarButton = ({
         }}
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => setShowTooltip(false)}
-        aria-label={label}
+        aria-label={badge > 0 ? `${label}, ${badge} conversaciones por atender` : label}
         title={draggable ? undefined : label}
         className={`app-sidebar-button-control relative flex h-9 w-9 min-[1920px]:h-10 min-[1920px]:w-10 shrink-0 items-center justify-center rounded-lg transition-all duration-200 ${
           isActive ? 'border' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
@@ -147,11 +174,28 @@ const SidebarButton = ({
         <span className="relative z-10 flex items-center justify-center" style={activeIconGlowStyle}>
           <Icon size={18} />
         </span>
+        <span
+          aria-hidden={badge <= 0}
+          className={`absolute -right-1.5 -top-1.5 z-20 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-slate-900 bg-rose-500 px-1 text-[9px] font-black leading-none text-white tabular-nums transition-[opacity,transform] duration-150 ease-out ${
+            badge > 0 ? 'scale-100 opacity-100' : 'pointer-events-none scale-75 opacity-0'
+          }`}
+        >
+          {badge > 99 ? '99+' : Math.max(badge, 0)}
+        </span>
       </button>
 
       {showTooltip && !suppressTooltip && (
-        <div className="app-sidebar-tooltip pointer-events-none absolute left-12 min-[1920px]:left-14 top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-xs text-white shadow-lg">
-          {label}
+        <div className="app-sidebar-tooltip pointer-events-none absolute left-12 min-[1920px]:left-14 top-1/2 z-50 min-w-max -translate-y-1/2 whitespace-nowrap rounded bg-slate-800 px-2.5 py-2 text-xs text-white shadow-lg">
+          <strong className="block">{label}</strong>
+          {tooltipDetail && (
+            <span className="mt-1 grid gap-0.5 text-[10px] font-medium text-slate-300">
+              <span>{tooltipDetail.conversations || 0} conversaciones por atender</span>
+              <span>{tooltipDetail.unread_messages || 0} mensajes sin leer</span>
+              {(tooltipDetail.handoffs || 0) > 0 && <span>{tooltipDetail.handoffs} necesitan respuesta</span>}
+              {(tooltipDetail.failed_sends || 0) > 0 && <span>{tooltipDetail.failed_sends} no se enviaron</span>}
+              {(tooltipDetail.pending_budgets || 0) > 0 && <span>{tooltipDetail.pending_budgets} presupuestos</span>}
+            </span>
+          )}
           <div className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-slate-800" />
         </div>
       )}
@@ -172,6 +216,16 @@ export default function Sidebar({
   const [sidebarLayout, setSidebarLayout] = useState(() => readSidebarLayout(currentUser));
   const [draggedItemId, setDraggedItemId] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
+  const [whatsappSummary, setWhatsAppSummary] = useState(null);
+  const [whatsappSoundMuted, setWhatsAppSoundMuted] = useState(() => {
+    try {
+      return window.localStorage.getItem(WHATSAPP_SOUND_MUTED_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const previousAttentionRef = useRef(null);
+  const previousAttentionKeysRef = useRef(null);
   const menuRef = useRef(null);
   const didDragRef = useRef(false);
   const currentUserPresentation = resolveUserPresentation(currentUser);
@@ -180,6 +234,7 @@ export default function Sidebar({
   const canViewDashboard = canAccessTab(currentUser, 'dashboard');
   const canViewInventory = canAccessTab(currentUser, 'inventory');
   const canViewPos = canAccessTab(currentUser, 'pos');
+  const canViewWhatsApp = canAccessTab(currentUser, 'whatsapp');
   const canViewClients = canAccessTab(currentUser, 'clients');
   const canViewAgenda = canAccessTab(currentUser, 'agenda');
   const canViewOrders = canAccessTab(currentUser, 'orders');
@@ -196,6 +251,16 @@ export default function Sidebar({
     { id: 'dashboard', tab: 'dashboard', section: 'top', canView: canViewDashboard, icon: LayoutDashboard, label: 'Control de Caja' },
     { id: 'inventory', tab: 'inventory', section: 'top', canView: canViewInventory, icon: Package, label: 'Inventario' },
     { id: 'pos', tab: 'pos', section: 'top', canView: canViewPos, icon: ShoppingCart, label: 'Punto de Venta' },
+    {
+      id: 'whatsapp',
+      tab: 'whatsapp',
+      section: 'top',
+      canView: canViewWhatsApp,
+      icon: MessageCircle,
+      label: 'WhatsApp',
+      badge: Number(whatsappSummary?.conversations || 0),
+      tooltipDetail: whatsappSummary,
+    },
     { id: 'clients', tab: 'clients', section: 'top', canView: canViewClients, icon: Users, label: 'Socios' },
     { id: 'agenda', tab: 'agenda', section: 'top', canView: canViewAgenda, icon: Building2, label: 'Agenda' },
     { id: 'orders', tab: 'orders', section: 'top', canView: canViewOrders, icon: ClipboardList, label: 'Pedidos' },
@@ -214,8 +279,65 @@ export default function Sidebar({
     canViewOrders,
     canViewPos,
     canViewReports,
+    canViewWhatsApp,
     currentUser,
+    whatsappSummary,
   ]);
+
+  useEffect(() => {
+    if (!canViewWhatsApp || !currentUser) {
+      setWhatsAppSummary(null);
+      previousAttentionRef.current = null;
+      previousAttentionKeysRef.current = null;
+      return undefined;
+    }
+    let cancelled = false;
+    let timer = null;
+    let loading = false;
+    const applySummary = (value) => {
+      const next = value?.attention || value || null;
+      if (!next || cancelled) return;
+      const count = Number(next.conversations || 0);
+      const keys = Array.isArray(value?.attentionKeys)
+        ? new Set(value.attentionKeys.map((entry) => String(entry)))
+        : null;
+      const hasNewConversation = keys && previousAttentionKeysRef.current
+        ? [...keys].some((key) => !previousAttentionKeysRef.current.has(key))
+        : previousAttentionRef.current !== null && count > previousAttentionRef.current;
+      if (hasNewConversation && !whatsappSoundMuted) {
+        playAttentionTone();
+      }
+      previousAttentionRef.current = count;
+      if (keys) previousAttentionKeysRef.current = keys;
+      setWhatsAppSummary(next);
+    };
+    const load = async () => {
+      if (cancelled || loading) return;
+      loading = true;
+      try {
+        applySummary(await whatsappOperator.summary());
+      } catch {
+        // La navegación no se bloquea si el proceso local del bot está reiniciando.
+      } finally {
+        loading = false;
+        if (!cancelled) timer = window.setTimeout(() => void load(), 15000);
+      }
+    };
+    const onSummary = (event) => applySummary(event.detail);
+    const onSoundSetting = (event) => {
+      const muted = Boolean(event.detail?.muted);
+      setWhatsAppSoundMuted(muted);
+    };
+    void load();
+    window.addEventListener('rebu:whatsapp-summary', onSummary);
+    window.addEventListener('rebu:whatsapp-sound-setting', onSoundSetting);
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+      window.removeEventListener('rebu:whatsapp-summary', onSummary);
+      window.removeEventListener('rebu:whatsapp-sound-setting', onSoundSetting);
+    };
+  }, [canViewWhatsApp, currentUser, whatsappSoundMuted]);
 
   const visibleSidebarItems = useMemo(
     () => sidebarItems.filter((item) => item.canView),
@@ -342,6 +464,8 @@ export default function Sidebar({
           didDragRef.current = false;
         }, 150);
       }}
+      badge={item.badge || 0}
+      tooltipDetail={item.tooltipDetail || null}
     />
   );
 

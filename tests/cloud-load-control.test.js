@@ -114,6 +114,26 @@ test('la consulta paginada recibe la misma AbortSignal del intento', async () =>
   assert.equal(receivedSignal, controller.signal);
 });
 
+test('la paginacion sigue hasta una pagina vacia aunque Supabase limite cada respuesta', async () => {
+  const rows = Array.from({ length: 5 }, (_, index) => ({ id: index + 1 }));
+  const requestedRanges = [];
+  const query = {
+    async range(from, to) {
+      requestedRanges.push([from, to]);
+      return { data: rows.slice(from, Math.min(from + 2, rows.length)), error: null };
+    },
+  };
+
+  const result = await fetchAllCloudRowsWithSelectFallback(
+    () => query,
+    'id',
+    5,
+  );
+
+  assert.deepEqual(result.data, rows);
+  assert.deepEqual(requestedRanges, [[0, 4], [2, 6], [4, 8], [5, 9]]);
+});
+
 test('una fuente opcional fallida no invalida los datos criticos', () => {
   const ok = { status: 'fulfilled', value: { data: [] } };
   const failed = { status: 'fulfilled', value: { error: new Error('missing table') } };

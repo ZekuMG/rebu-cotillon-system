@@ -9,6 +9,7 @@ import {
   Package,
   Receipt,
   CreditCard,
+  ShoppingBag,
   TicketPercent,
   Gift,
 } from 'lucide-react';
@@ -16,6 +17,7 @@ import { FancyPrice } from '../FancyPrice';
 import { formatWeight } from '../../utils/helpers';
 import { TicketPrintLayout } from '../TicketPrintLayout';
 import { getPaymentBreakdownDisplayItems, getPaymentSummary } from '../../utils/paymentBreakdown';
+import { isPosBagItem } from '../../utils/posSaleExtras';
 
 const SHOW_LEGACY_PAYMENT_DETAIL_BLOCK = false;
 
@@ -359,6 +361,7 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
                 const isRewardItem = Boolean(item.isReward);
                 const isDiscountItem = Boolean(item.isDiscount);
                 const isDiscountLike = Boolean(isRewardItem || isDiscountItem);
+                const isBagItem = isPosBagItem(item);
 
                 return (
                   <div
@@ -369,7 +372,11 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-1.5">
                         <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
-                          {isDiscountLike ? (
+                          {isBagItem ? (
+                            <div className="flex h-full w-full items-center justify-center bg-fuchsia-50 text-fuchsia-500">
+                              <ShoppingBag size={19} strokeWidth={2.4} />
+                            </div>
+                          ) : isDiscountLike ? (
                             <div className={`flex h-full w-full items-center justify-center ${isRewardItem ? 'bg-violet-50 text-violet-500' : 'bg-emerald-50 text-emerald-500'}`}>
                               {isRewardItem ? <Gift size={20} strokeWidth={2.4} /> : <TicketPercent size={20} strokeWidth={2.4} />}
                             </div>
@@ -404,7 +411,11 @@ export const SaleSuccessModal = ({ transaction, onClose, onPrint }) => {
                               </span>
                             )}
                             {item.isCombo && <span className="rounded-full bg-violet-100 px-2 py-0.5 text-violet-700">Combo</span>}
-                            {item.isCustom && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">Personalizado</span>}
+                            {isBagItem ? (
+                              <span className="rounded-full bg-fuchsia-100 px-2 py-0.5 text-fuchsia-700">Extra POS</span>
+                            ) : item.isCustom ? (
+                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">Personalizado</span>
+                            ) : null}
                           </div>
                           {!isDiscountLike && (
                             <p className="mt-0.5 truncate text-[9px] font-bold leading-tight text-slate-400">

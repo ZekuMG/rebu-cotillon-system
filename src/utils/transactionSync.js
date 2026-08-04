@@ -17,3 +17,21 @@ export const shouldUseIncrementalTransactionSync = ({
   hasExistingTransactions &&
   snapshotScope === TRANSACTION_SNAPSHOT_SCOPE_FULL
 );
+
+export const shouldUseIncrementalMetricsSync = ({
+  fullRequested = false,
+  includeTransactions = true,
+  hasExistingMetricsData = false,
+  hasExistingTransactions = false,
+  transactionSnapshotScope = TRANSACTION_SNAPSHOT_SCOPE_PARTIAL,
+} = {}) => (
+  !fullRequested &&
+  hasExistingMetricsData &&
+  (
+    !includeTransactions ||
+    shouldUseIncrementalTransactionSync({
+      hasExistingTransactions,
+      snapshotScope: transactionSnapshotScope,
+    })
+  )
+);

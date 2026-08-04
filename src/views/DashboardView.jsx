@@ -12,6 +12,7 @@ import {
 
 import useDashboardData from '../hooks/useDashboardData';
 import { hasOwnerAccess } from '../utils/appUsers';
+import { resolveDashboardPeriodView } from '../utils/dashboardPeriodAvailability';
 import { canAccessTab, getAllowedDashboardFilters } from '../utils/userPermissions';
 import {
   KpiCard,
@@ -23,7 +24,13 @@ import {
 } from '../components/dashboard';
 import { FancyPrice } from '../components/FancyPrice';
 import { formatTimeAR, isTestRecord } from '../utils/helpers'; // ✨ Importado el escudo anti-test
-import { parseMetricDate } from '../utils/salesMetricsCore';
+import {
+  getRecordDate,
+  getTransactionDate,
+  isDateInRange,
+  makeDashboardRange,
+  parseMetricDate,
+} from '../utils/salesMetricsCore';
 
 const DEFAULT_BOTTOM_ORDER = ['payments', 'topProducts', 'lowStock', 'financialActivity'];
 const DEFAULT_TOP_ORDER = ['sales', 'revenue', 'net', 'opening', 'average', 'expenses'];
@@ -121,6 +128,7 @@ export default function DashboardView({
   isLoading = false,
   isProfitSyncing = false,
   refreshingSources = null,
+  isPeriodDataComplete = true,
   emptyStateMessage = '',
   onOpenExpenseModal,
   onAlertClick,
@@ -150,7 +158,8 @@ export default function DashboardView({
   const activityScrollRef = useRef(null);
   const activityDateRefs = useRef({});
   const pendingActivityDateKeyRef = useRef(null);
-  const requestedAnnualFullLoadRef = useRef(false);
+  const requestedPeriodLoadRef = useRef('');
+  const [periodLoadStatus, setPeriodLoadStatus] = useState('idle');
 
   useEffect(() => {
     if (!availableDashboardFilters.length) return;
@@ -159,16 +168,32 @@ export default function DashboardView({
     }
   }, [availableDashboardFilters, globalFilter]);
 
+  const requestCompletePeriodData = useCallback(async (requestedFilter) => {
+    if (!onRequireFullTransactions) return false;
+    setPeriodLoadStatus('loading');
+    try {
+      const result = await onRequireFullTransactions();
+      if (result === false) throw new Error('La sincronización no pudo completarse.');
+      setPeriodLoadStatus('idle');
+      return true;
+    } catch (error) {
+      console.error(`No se pudo completar el periodo ${requestedFilter}:`, error);
+      setPeriodLoadStatus('error');
+      return false;
+    }
+  }, [onRequireFullTransactions]);
+
   useEffect(() => {
-    if (globalFilter !== 'year') {
-      requestedAnnualFullLoadRef.current = false;
+    if (globalFilter === 'day' || isPeriodDataComplete) {
+      requestedPeriodLoadRef.current = '';
+      setPeriodLoadStatus('idle');
       return;
     }
 
-    if (requestedAnnualFullLoadRef.current || !onRequireFullTransactions) return;
-    requestedAnnualFullLoadRef.current = true;
-    void onRequireFullTransactions();
-  }, [globalFilter, onRequireFullTransactions]);
+    if (requestedPeriodLoadRef.current === globalFilter || !onRequireFullTransactions) return;
+    requestedPeriodLoadRef.current = globalFilter;
+    void requestCompletePeriodData(globalFilter);
+  }, [globalFilter, isPeriodDataComplete, onRequireFullTransactions, requestCompletePeriodData]);
 
   const [widgetOrder, setWidgetOrder] = useState(() => {
     const saved = safeParseDashboardOrder(localStorage.getItem('party_dashboard_order_bottom'));
@@ -232,6 +257,23 @@ export default function DashboardView({
     setHasUnsavedChanges(false);
   };
 
+  const dashboardTodayRange = makeDashboardRange('day');
+  const todayStartAt = dashboardTodayRange.start.getTime();
+  const todayEndAt = dashboardTodayRange.end.getTime();
+  const hasTodayData = useMemo(() => {
+    const todayRange = { start: new Date(todayStartAt), end: new Date(todayEndAt) };
+    return (
+      cleanTransactions.some((transaction) => isDateInRange(getTransactionDate(transaction), todayRange)) ||
+      cleanExpenses.some((expense) => isDateInRange(getRecordDate(expense), todayRange))
+    );
+  }, [cleanTransactions, cleanExpenses, todayStartAt, todayEndAt]);
+  const periodView = resolveDashboardPeriodView({
+    requestedFilter: globalFilter,
+    isPeriodDataComplete,
+    hasTodayData,
+  });
+  const effectiveFilter = periodView.effectiveFilter;
+
   // ✨ ALIMENTAMOS LOS CALCULOS SOLO CON DATA LIMPIA
   const {
     kpiStats,
@@ -247,7 +289,7 @@ export default function DashboardView({
     transactions: cleanTransactions, 
     dailyLogs: cleanDailyLogs, 
     inventory: cleanInventory, 
-    globalFilter, 
+    globalFilter: effectiveFilter,
     rankingMode, 
     rankingCriteria,
     expenses: cleanExpenses 
@@ -337,11 +379,11 @@ export default function DashboardView({
   useEffect(() => {
     setVisibleActivityCount(DASHBOARD_FEED_BATCH);
     pendingActivityDateKeyRef.current = null;
-  }, [combinedActivity, globalFilter]);
+  }, [combinedActivity, effectiveFilter]);
 
   useEffect(() => {
     setIsActivityDateMenuOpen(false);
-  }, [globalFilter]);
+  }, [effectiveFilter]);
 
   useEffect(() => {
     setVisibleLogsCount(DASHBOARD_FEED_BATCH);
@@ -371,6 +413,9 @@ export default function DashboardView({
         : isProfitSyncing
     ),
   );
+  const isRequestedPeriodLoading = periodView.isIncomplete && (
+    periodLoadStatus === 'loading' || isRefreshingDashboardData
+  );
   const isWidgetRefreshing = (widgetKey) => {
     if (!hasScopedRefreshingSources) return isRefreshingDashboardData;
     if (widgetKey === 'expenses') return Boolean(refreshingSources.expenses);
@@ -383,7 +428,7 @@ export default function DashboardView({
   const renderWidget = (widgetKey) => {
     switch (widgetKey) {
       case 'payments':
-        return <PaymentBreakdown paymentStats={paymentStats} totalGross={kpiStats.gross} globalFilter={globalFilter} />;
+        return <PaymentBreakdown paymentStats={paymentStats} totalGross={kpiStats.gross} globalFilter={effectiveFilter} />;
       case 'topProducts':
         return (
           <TopRanking 
@@ -452,23 +497,23 @@ export default function DashboardView({
                     <button
                       type="button"
                       onClick={() => {
-                        if (globalFilter !== 'day' && activityDateOptions.length > 0) {
+                        if (effectiveFilter !== 'day' && activityDateOptions.length > 0) {
                           setIsActivityDateMenuOpen((value) => !value);
                         }
                       }}
-                      disabled={globalFilter === 'day' || activityDateOptions.length === 0}
+                      disabled={effectiveFilter === 'day' || activityDateOptions.length === 0}
                       className={`flex h-6 items-center gap-1 rounded border px-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
-                        globalFilter !== 'day' && activityDateOptions.length > 0
+                        effectiveFilter !== 'day' && activityDateOptions.length > 0
                           ? 'cursor-pointer border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100'
                           : 'cursor-default border-blue-200 bg-blue-50 text-blue-600'
                       }`}
-                      title={globalFilter === 'day' ? 'Actividad de hoy' : 'Saltar a una fecha'}
+                      title={effectiveFilter === 'day' ? 'Actividad de hoy' : 'Saltar a una fecha'}
                     >
                       <CalendarDays size={10} />
-                      {{ day: 'Hoy', week: 'Semana', month: 'Mes', year: 'Año' }[globalFilter]}
-                      {globalFilter !== 'day' && activityDateOptions.length > 0 && <ChevronDown size={10} />}
+                      {{ day: 'Hoy', week: 'Semana', month: 'Mes', year: 'Año' }[effectiveFilter]}
+                      {effectiveFilter !== 'day' && activityDateOptions.length > 0 ? <ChevronDown size={10} /> : null}
                     </button>
-                    {isActivityDateMenuOpen && globalFilter !== 'day' && (
+                    {isActivityDateMenuOpen && effectiveFilter !== 'day' ? (
                       <div className="dashboard-activity-date-menu absolute right-0 top-full z-30 mt-1 max-h-48 w-40 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-[0_8px_18px_rgba(15,23,42,0.12)]">
                         {activityDateOptions.map((option) => (
                           <button
@@ -481,7 +526,7 @@ export default function DashboardView({
                           </button>
                         ))}
                       </div>
-                    )}
+                    ) : null}
                   </div>
                   <button 
                     onClick={() => onNavigate && onNavigate('history')}
@@ -507,7 +552,7 @@ export default function DashboardView({
                           const dateStr = item.activityDateLabel;
                           const dateKey = item.activityDateKey;
 
-                          if (globalFilter !== 'day' && dateStr !== lastDateStr) {
+                          if (effectiveFilter !== 'day' && dateStr !== lastDateStr) {
                             elements.push(
                               <div
                                 key={`sep-${dateKey}`}
@@ -596,7 +641,7 @@ export default function DashboardView({
                     ) : (
                       <div className="flex flex-col items-center justify-center py-8 opacity-50 h-full">
                         <Clock size={32} className="mb-2 text-slate-300" />
-                        <p className="text-xs font-bold text-slate-400 text-center">{{ day: 'Sin movimientos hoy', week: 'Sin movimientos esta semana', month: 'Sin movimientos este mes', year: 'Sin movimientos este año' }[globalFilter]}</p>
+                        <p className="text-xs font-bold text-slate-400 text-center">{{ day: 'Sin movimientos hoy', week: 'Sin movimientos esta semana', month: 'Sin movimientos este mes', year: 'Sin movimientos este año' }[effectiveFilter]}</p>
                       </div>
                     )}
                   </div>
@@ -700,17 +745,43 @@ export default function DashboardView({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-2xl font-bold text-slate-800 leading-tight">Panel de Control</h2>
-            {isRefreshingDashboardData && (
+            {periodView.isIncomplete ? (
+              <span
+                role="status"
+                className="dashboard-period-status inline-flex h-6 items-center gap-1.5 rounded-md border border-[var(--rebu-warning-border)] bg-[var(--rebu-warning-bg)] px-2 text-[10px] font-black uppercase tracking-[0.1em] text-[var(--rebu-warning)]"
+              >
+                {isRequestedPeriodLoading ? <RefreshCw size={11} className="animate-spin" /> : <CalendarDays size={11} />}
+                {periodView.isShowingDayFallback ? 'Hoy visible' : 'Datos parciales'}
+                <span aria-hidden="true">·</span>
+                {periodLoadStatus === 'error' ? 'No se completó' : 'Completando'} {periodView.requestedLabel}
+              </span>
+            ) : isRefreshingDashboardData ? (
               <span className="dashboard-refresh-status inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-[10px] font-black uppercase tracking-[0.1em]">
                 <RefreshCw size={11} className="animate-spin" />
                 Recalculando
               </span>
-            )}
+            ) : null}
+            {periodView.isIncomplete && !isRequestedPeriodLoading ? (
+              <button
+                type="button"
+                onClick={() => {
+                  requestedPeriodLoadRef.current = globalFilter;
+                  void requestCompletePeriodData(globalFilter);
+                }}
+                className="h-6 rounded-md border border-[var(--rebu-border)] bg-[var(--rebu-surface-1)] px-2 text-[10px] font-black uppercase tracking-[0.08em] text-[var(--rebu-text-secondary)] transition-colors hover:bg-[var(--rebu-surface-2)]"
+              >
+                Reintentar
+              </button>
+            ) : null}
           </div>
           <p className="text-xs text-slate-400">
-            {isRefreshingDashboardData
-              ? 'Mostrando el ultimo valor mientras llega la informacion nueva de Supabase.'
-              : 'Resumen de operaciones en tiempo real'}
+            {periodView.isShowingDayFallback
+              ? `Mostrando los datos de hoy mientras se completa la vista de ${periodView.requestedLabel.toLowerCase()}.`
+              : periodView.isIncomplete
+                ? `Mostrando la información disponible; la vista de ${periodView.requestedLabel.toLowerCase()} todavía está incompleta.`
+                : isRefreshingDashboardData
+                  ? 'Mostrando el ultimo valor mientras llega la informacion nueva de Supabase.'
+                  : 'Resumen de operaciones en tiempo real'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -771,7 +842,7 @@ export default function DashboardView({
                 currentUser={currentUser}
                 setTempOpeningBalance={setTempOpeningBalance}
                 setIsOpeningBalanceModalOpen={setIsOpeningBalanceModalOpen}
-                globalFilter={globalFilter}
+                globalFilter={effectiveFilter}
                 expenses={filteredExpenses} 
                 onOpenExpenseModal={onOpenExpenseModal}
                 isRefreshing={isWidgetRefreshing(widgetKey)}

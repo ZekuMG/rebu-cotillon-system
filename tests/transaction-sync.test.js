@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   getTransactionSnapshotScope,
+  shouldUseIncrementalMetricsSync,
   shouldUseIncrementalTransactionSync,
   TRANSACTION_SNAPSHOT_SCOPE_FULL,
   TRANSACTION_SNAPSHOT_SCOPE_PARTIAL,
@@ -58,5 +59,29 @@ test('una recarga total nunca se reemplaza por una consulta incremental', () => 
       snapshotScope: TRANSACTION_SNAPSHOT_SCOPE_FULL,
     }),
     false,
+  );
+});
+
+test('metricas no sincroniza incrementalmente sobre ventas parciales', () => {
+  assert.equal(
+    shouldUseIncrementalMetricsSync({
+      includeTransactions: true,
+      hasExistingMetricsData: true,
+      hasExistingTransactions: true,
+      transactionSnapshotScope: TRANSACTION_SNAPSHOT_SCOPE_PARTIAL,
+    }),
+    false,
+  );
+});
+
+test('metricas puede sincronizar incrementalmente cuando las ventas son completas', () => {
+  assert.equal(
+    shouldUseIncrementalMetricsSync({
+      includeTransactions: true,
+      hasExistingMetricsData: true,
+      hasExistingTransactions: true,
+      transactionSnapshotScope: TRANSACTION_SNAPSHOT_SCOPE_FULL,
+    }),
+    true,
   );
 });

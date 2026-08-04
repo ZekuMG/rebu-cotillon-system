@@ -1,6 +1,7 @@
 // src/hooks/useDashboardData.js
 import { useCallback, useMemo } from 'react';
 import { PAYMENT_METHODS } from '../data';
+import { buildDashboardTransactionSummary } from '../utils/dashboardAggregations';
 import { getPaymentMethodTotals } from '../utils/paymentBreakdown';
 import {
   buildInventoryLookups,
@@ -12,6 +13,20 @@ import {
   makeDashboardRange,
   normalizeText,
 } from '../utils/salesMetricsCore';
+
+const isLegacyWeightLikeItem = (item, liveProduct) => {
+  if (liveProduct) return liveProduct.product_type === 'weight';
+  if (item?.product_type === 'weight' || item?.isWeight) return true;
+
+  const qty = Number(item?.qty ?? item?.quantity ?? 0);
+  const price = Number(item?.price ?? 0);
+  const rawId = String(item?.id || item?.productId || '');
+  const rawTitle = String(item?.title || '').trim();
+  const isCustomLike = item?.isCustom || rawId.startsWith('custom_') || rawTitle.startsWith('*');
+  const hasLegacyQuantityMarker = !item?.product_type || item?.product_type === 'quantity';
+
+  return hasLegacyQuantityMarker && !item?.isCombo && !item?.isDiscount && isCustomLike && qty >= 20 && price > 0 && price < 50;
+};
 
 export default function useDashboardData({ 
   transactions, 
@@ -66,7 +81,7 @@ export default function useDashboardData({
     return normalizedTitle ? lookups.byTitle.get(normalizedTitle) || null : null;
   }, [getLiveProductForItem, lookups]);
 
-  const getRankingItemRevenue = useCallback((item, txTotal = 0) => {
+  const getRankingItemRevenue = useCallback((item, txTotal = 0, resolvedLiveProduct) => {
     const explicitRevenue = getItemRevenue(item);
     if (explicitRevenue > 0) return explicitRevenue;
 
@@ -74,7 +89,9 @@ export default function useDashboardData({
     const price = Number(item?.price) || Number(item?.unit_price) || Number(item?.newPrice) || 0;
     if (qty <= 0 || price <= 0) return 0;
 
-    const liveProduct = getLiveProductForItem(item);
+    const liveProduct = resolvedLiveProduct === undefined
+      ? getLiveProductForItem(item)
+      : resolvedLiveProduct;
     const isWeightItem = isLegacyWeightLikeItem(item, liveProduct);
     const subtotal =
       Number(item?.subtotal ?? item?.lineSubtotal ?? item?.line_total ?? item?.lineTotal ?? item?.total ?? 0);
@@ -152,48 +169,45 @@ export default function useDashboardData({
 
   const averageTicket = kpiStats.count > 0 ? kpiStats.gross / kpiStats.count : 0;
 
-  const paymentStats = useMemo(() => {
-    return PAYMENT_METHODS.map(method => {
-      const total = filteredData.reduce((sum, tx) => {
-        const totalsByMethod = getPaymentMethodTotals(
-          tx.paymentBreakdown,
-          tx.payment,
-          tx.installments,
-          tx.cashReceived,
-          tx.cashChange,
-          tx.total,
-        );
-        return sum + Number(totalsByMethod[method.label] || 0);
-      }, 0);
-      return { ...method, total };
-    });
-  }, [filteredData]);
+  const transactionSummary = useMemo(() => buildDashboardTransactionSummary({
+    transactions: filteredData,
+    paymentMethods: PAYMENT_METHODS,
+    resolvePaymentTotals: (tx) => getPaymentMethodTotals(
+      tx.paymentBreakdown,
+      tx.payment,
+      tx.installments,
+      tx.cashReceived,
+      tx.cashChange,
+      tx.total,
+    ),
+    resolveRankingItem: (item, tx) => {
+      if (item?.isDiscount || item?.is_discount || item?.type === 'discount') return null;
+      const liveProduct = getLiveProductForItem(item);
+      return {
+        item,
+        qty: getItemQty(item),
+        revenue: getRankingItemRevenue(item, tx.total, liveProduct),
+        liveProduct,
+        isWeightItem: isLegacyWeightLikeItem(item, liveProduct),
+      };
+    },
+  }), [filteredData, getLiveProductForItem, getRankingItemRevenue]);
 
-  function isLegacyWeightLikeItem(item, liveProduct) {
-    if (liveProduct) return liveProduct.product_type === 'weight';
-    if (item?.product_type === 'weight' || item?.isWeight) return true;
-
-    const qty = Number(item?.qty ?? item?.quantity ?? 0);
-    const price = Number(item?.price ?? 0);
-    const rawId = String(item?.id || item?.productId || '');
-    const rawTitle = String(item?.title || '').trim();
-    const isCustomLike = item?.isCustom || rawId.startsWith('custom_') || rawTitle.startsWith('*');
-    const hasLegacyQuantityMarker = !item?.product_type || item?.product_type === 'quantity';
-
-    return hasLegacyQuantityMarker && !item?.isCombo && !item?.isDiscount && isCustomLike && qty >= 20 && price > 0 && price < 50;
-  }
+  const paymentStats = useMemo(() => PAYMENT_METHODS.map((method) => ({
+    ...method,
+    total: Number(transactionSummary.paymentTotals[method.label] || 0),
+  })), [transactionSummary]);
 
   const rankingStats = useMemo(() => {
     const statsMap = {};
 
-    filteredData.forEach(tx => {
-      (tx.metricItems || tx.items || []).forEach(item => {
-        if (item?.isDiscount || item?.is_discount || item?.type === 'discount') return;
-        const qty = getItemQty(item);
-        const revenue = getRankingItemRevenue(item, tx.total);
-        
-        const liveProduct = getLiveProductForItem(item);
-        const isWeightItem = isLegacyWeightLikeItem(item, liveProduct);
+    transactionSummary.rankingItems.forEach(({
+      item,
+      qty,
+      revenue,
+      liveProduct,
+      isWeightItem,
+    }) => {
 
         let keys = [];
 
@@ -223,7 +237,6 @@ export default function useDashboardData({
           statsMap[k].revenue += revenue;
           if (isWeightItem) { statsMap[k].weightQty += qty; } else { statsMap[k].unitQty += qty; }
         });
-      });
     });
 
     return Object.values(statsMap)
@@ -236,7 +249,7 @@ export default function useDashboardData({
         return bQtyScore - aQtyScore;
       })
       .slice(0, 10); 
-  }, [filteredData, rankingMode, rankingCriteria, getCategoryProductForItem, getLiveProductForItem, getRankingItemRevenue]);
+  }, [transactionSummary, rankingMode, rankingCriteria, getCategoryProductForItem]);
 
   const lowStockProducts = useMemo(() => {
     if (!inventory) return [];

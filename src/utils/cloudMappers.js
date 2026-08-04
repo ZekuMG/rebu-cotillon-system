@@ -4,6 +4,10 @@ import {
   getPrimaryPaymentInfo,
   normalizePaymentBreakdown,
 } from './paymentBreakdown';
+import {
+  isPosBagItem,
+  POS_BAG_ITEM_KIND,
+} from './posSaleExtras';
 import { getProductActiveState } from './productLifecycle';
 
 const MODIFIED_SALE_ACTIONS = new Set([
@@ -144,7 +148,13 @@ export const mapLogRecords = (logs = []) =>
     return mappedLog;
   });
 
-const mapSaleItemRecord = (item) => ({
+const withPosBagMetadata = (item = {}) => (
+  isPosBagItem(item)
+    ? { ...item, isPosBag: true, itemKind: POS_BAG_ITEM_KIND }
+    : item
+);
+
+const mapSaleItemRecord = (item) => withPosBagMetadata({
   id: item.product_id,
   title: item.product_title,
   qty: Number(item.quantity ?? 0),
@@ -168,7 +178,7 @@ const mapSaleItemRecord = (item) => ({
   product_type: item.product_type || null,
 });
 
-const mapRecoveredSaleItem = (item) => ({
+const mapRecoveredSaleItem = (item) => withPosBagMetadata({
   id: item.id || item.productId || item.product_id || null,
   title: item.title || item.product_title || item.name || 'Producto Recuperado',
   qty: Number(item.quantity ?? item.qty ?? 1),
@@ -191,6 +201,8 @@ const mapRecoveredSaleItem = (item) => ({
   product_type: item.product_type || null,
   isCustom: Boolean(item.isCustom ?? item.is_custom ?? false),
   isCombo: Boolean(item.isCombo ?? item.is_combo ?? false),
+  isPosBag: Boolean(item.isPosBag ?? item.is_pos_bag ?? false),
+  itemKind: item.itemKind || item.item_kind || null,
   couponCode: item.couponCode || item.coupon_code || null,
   category: item.category || null,
   categories: Array.isArray(item.categories) ? item.categories : null,
@@ -262,7 +274,7 @@ const enrichSaleItemsWithSnapshot = (items = [], snapshotItems = []) => {
     usedIndexes.add(matchedSnapshotIndex);
     const snapshotItem = normalizedSnapshotItems[matchedSnapshotIndex];
 
-    return {
+    return withPosBagMetadata({
       ...item,
       id: item.id || snapshotItem.id,
       title: item.title || snapshotItem.title,
@@ -277,6 +289,8 @@ const enrichSaleItemsWithSnapshot = (items = [], snapshotItems = []) => {
       product_type: item.product_type || snapshotItem.product_type || null,
       isCustom: item.isCustom ?? snapshotItem.isCustom,
       isCombo: item.isCombo ?? snapshotItem.isCombo,
+      isPosBag: item.isPosBag ?? snapshotItem.isPosBag,
+      itemKind: item.itemKind || snapshotItem.itemKind || null,
       couponCode: item.couponCode || snapshotItem.couponCode || null,
       category: item.category || snapshotItem.category || null,
       categories: item.categories || snapshotItem.categories || null,
@@ -290,7 +304,7 @@ const enrichSaleItemsWithSnapshot = (items = [], snapshotItems = []) => {
       priceAtSale: item.priceAtSale || snapshotItem.priceAtSale || snapshotItem.price || 0,
       lineSubtotal: item.lineSubtotal || snapshotItem.lineSubtotal || snapshotItem.subtotal || undefined,
       costSource: snapshotItem.costSource || item.costSource || null,
-    };
+    });
   });
 
   const missingSnapshotItems = normalizedSnapshotItems.filter((_, snapshotIndex) => !usedIndexes.has(snapshotIndex));

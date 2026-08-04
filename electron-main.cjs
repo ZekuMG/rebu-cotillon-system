@@ -3,9 +3,17 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { autoUpdater } = require('electron-updater');
+const { createUpdateManager } = require('./electron-update-manager.cjs');
+const { normalizeWhatsAppBotRequestPath } = require('./electron-whatsapp-bridge.cjs');
 
 let mainWindow;
 let supplierImageLoginWindow;
+
+const updateManager = createUpdateManager({
+  autoUpdater,
+  app,
+  getWindow: () => mainWindow,
+});
 
 const APP_NAME = 'Rebu Cotillon System';
 const isDev = !app.isPackaged;
@@ -38,6 +46,79 @@ const readEnvFileValue = (key) => {
 
 const getOpenAIApiKey = () =>
   String(process.env.OPENAI_API_KEY || readEnvFileValue('OPENAI_API_KEY') || '').trim();
+
+const getWhatsAppBotBaseUrl = () => {
+  const configured = String(
+    process.env.REBU_WHATSAPP_BOT_URL
+    || readEnvFileValue('REBU_WHATSAPP_BOT_URL')
+    || 'http://127.0.0.1:3000',
+  ).trim();
+  const parsed = new URL(configured);
+  const isLoopback = ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname);
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopback)) {
+    throw new Error('La API de WhatsApp debe usar HTTPS o una direccion local.');
+  }
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.href.replace(/\/$/, '');
+};
+
+const requestWhatsAppBot = async (payload = {}) => {
+  const method = String(payload.method || 'GET').toUpperCase();
+  const accessToken = String(payload.accessToken || '').trim();
+  if (!['GET', 'POST', 'DELETE'].includes(method)) {
+    return { ok: false, status: 405, error: 'Metodo no permitido' };
+  }
+  const requestPath = normalizeWhatsAppBotRequestPath(payload.path);
+  if (!requestPath) {
+    return { ok: false, status: 400, error: 'Ruta del bot no permitida' };
+  }
+  if (!accessToken || accessToken.length > 12000) {
+    return { ok: false, status: 401, error: 'Sesion de Rebu requerida' };
+  }
+
+  const bodyText = payload.body === null || payload.body === undefined
+    ? ''
+    : JSON.stringify(payload.body);
+  if (Buffer.byteLength(bodyText, 'utf8') > 22 * 1024 * 1024) {
+    return { ok: false, status: 413, error: 'Solicitud demasiado grande' };
+  }
+
+  const controller = new AbortController();
+  // Un lote de catalogo descarga y valida hasta tres imagenes y despues las
+  // envia en orden. No debe compartir el limite corto de una consulta normal.
+  const requestTimeoutMs = requestPath.endsWith('/messages/catalog-media')
+    ? 120000
+    : 45000;
+  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+  try {
+    const response = await fetch(`${getWhatsAppBotBaseUrl()}${requestPath}`, {
+      method,
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        ...(payload.idempotencyKey
+          ? { 'idempotency-key': String(payload.idempotencyKey).slice(0, 180) }
+          : {}),
+      },
+      body: method === 'POST' ? bodyText || '{}' : undefined,
+    });
+    const body = await response.json().catch(() => ({}));
+    return { ok: response.ok, status: response.status, body };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      error: error?.name === 'AbortError'
+        ? 'bot_request_timeout'
+        : 'No se pudo conectar con la API del bot',
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+};
 
 const decodeImageInput = async (source) => {
   const rawSource = String(source || '').trim();
@@ -290,6 +371,120 @@ const createValidatedPdf = async (webContents) => {
   }
 
   throw new Error('Electron gener\u00f3 un PDF vac\u00edo. El archivo no fue guardado; intent\u00e1 nuevamente.');
+};
+
+const escapePdfHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#039;');
+
+const buildWhatsAppBudgetPdfHtml = (input = {}) => {
+  const budget = input?.budget && typeof input.budget === 'object' ? input.budget : {};
+  const settings = input?.settings && typeof input.settings === 'object' ? input.settings : {};
+  const items = Array.isArray(budget.items) ? budget.items.slice(0, 100) : [];
+  const currency = (value) => new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0));
+  const rows = items.map((item) => {
+    const quantity = Number(item.quantity || 0);
+    const price = Number(item.unit_price || 0);
+    const subtotal = item.product_type === 'weight'
+      ? price * quantity / 1000
+      : price * quantity;
+    const quantityLabel = item.product_type === 'weight'
+      ? `${new Intl.NumberFormat('es-AR').format(quantity)} g`
+      : `${new Intl.NumberFormat('es-AR').format(quantity)} u.`;
+    return `<tr>
+      <td>${escapePdfHtml(item.title)}</td>
+      <td class="number">${escapePdfHtml(quantityLabel)}</td>
+      <td class="number">${escapePdfHtml(currency(price))}</td>
+      <td class="number strong">${escapePdfHtml(currency(subtotal))}</td>
+    </tr>`;
+  }).join('');
+  const generatedAt = new Intl.DateTimeFormat('es-AR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(new Date());
+  return `<!doctype html>
+  <html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <style>
+      @page { size: A4; margin: 16mm; }
+      * { box-sizing: border-box; }
+      body { margin: 0; color: #102033; font: 12px/1.45 Arial, sans-serif; }
+      header { display: flex; align-items: flex-start; justify-content: space-between; border-top: 4px solid #d946ef; padding-top: 14px; }
+      h1 { margin: 0; font-size: 24px; letter-spacing: .05em; }
+      h2 { margin: 3px 0 0; color: #526277; font-size: 12px; font-weight: 600; }
+      .meta { text-align: right; color: #526277; }
+      .customer { margin-top: 22px; border: 1px solid #d8e1ec; background: #f8fbff; padding: 12px; }
+      .customer strong { display: block; color: #102033; font-size: 14px; }
+      table { width: 100%; margin-top: 18px; border-collapse: collapse; }
+      th { border-bottom: 2px solid #cbd5e1; padding: 8px 6px; color: #526277; font-size: 10px; text-align: left; text-transform: uppercase; }
+      td { border-bottom: 1px solid #e2e8f0; padding: 9px 6px; vertical-align: top; }
+      .number { text-align: right; font-variant-numeric: tabular-nums; }
+      .strong { font-weight: 700; }
+      .total { margin: 18px 0 0 auto; width: 240px; border-top: 2px solid #102033; padding-top: 10px; text-align: right; }
+      .total span { color: #526277; font-size: 11px; text-transform: uppercase; }
+      .total strong { display: block; margin-top: 2px; font-size: 23px; font-variant-numeric: tabular-nums; }
+      footer { margin-top: 28px; border-top: 1px solid #d8e1ec; padding-top: 10px; color: #526277; font-size: 10px; }
+      footer p { margin: 3px 0; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div><h1>REBU COTILLÓN</h1><h2>Presupuesto para WhatsApp</h2></div>
+      <div class="meta"><strong>N.º ${escapePdfHtml(budget.id || 'pendiente')}</strong><br>${escapePdfHtml(generatedAt)}</div>
+    </header>
+    <section class="customer">
+      <strong>${escapePdfHtml(budget.customerName || 'Cliente')}</strong>
+      <span>${escapePdfHtml(budget.customerPhone || '')}</span>
+      ${budget.notes ? `<p>${escapePdfHtml(budget.notes)}</p>` : ''}
+    </section>
+    <table>
+      <thead><tr><th>Producto</th><th class="number">Cantidad</th><th class="number">Precio</th><th class="number">Subtotal</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="total"><span>Total</span><strong>${escapePdfHtml(currency(budget.totalAmount))}</strong></div>
+    <footer>
+      ${settings.address ? `<p><strong>Dirección:</strong> ${escapePdfHtml(settings.address)}</p>` : ''}
+      ${settings.pickup ? `<p><strong>Retiro:</strong> ${escapePdfHtml(settings.pickup)}</p>` : ''}
+      ${settings.shipping ? `<p><strong>Envíos:</strong> ${escapePdfHtml(settings.shipping)}</p>` : ''}
+      ${settings.policies ? `<p>${escapePdfHtml(settings.policies)}</p>` : ''}
+    </footer>
+  </body>
+  </html>`;
+};
+
+const generateWhatsAppBudgetPdf = async (payload = {}) => {
+  const pdfWindow = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  try {
+    const html = buildWhatsAppBudgetPdfHtml(payload);
+    await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    const pdfData = await pdfWindow.webContents.printToPDF({
+      printBackground: true,
+      pageSize: 'A4',
+      marginsType: 0,
+    });
+    if (!Buffer.isBuffer(pdfData) || pdfData.length < MIN_VALID_PDF_BYTES) {
+      throw new Error('El PDF de presupuesto quedó incompleto.');
+    }
+    return { success: true, base64: pdfData.toString('base64'), sizeBytes: pdfData.length };
+  } finally {
+    if (!pdfWindow.isDestroyed()) pdfWindow.destroy();
+  }
 };
 
 const waitForWebContentsLoad = (webContents, timeoutMs = 10000) =>
@@ -1584,7 +1779,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       webSecurity: true,
     },
   });
@@ -1600,12 +1795,39 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     if (app.isPackaged) {
-      autoUpdater.checkForUpdatesAndNotify();
+      void updateManager.checkForUpdates();
     }
   });
 }
 
 app.on('ready', () => {
+  ipcMain.handle('whatsapp-bot-request', async (event, payload) => {
+    if (!isTrustedIpcSender(event)) {
+      return { ok: false, status: 403, error: 'Origen IPC no autorizado' };
+    }
+    return requestWhatsAppBot(payload);
+  });
+
+  ipcMain.handle('get-update-status', (event) => {
+    if (!isTrustedIpcSender(event)) return { phase: 'error', error: 'Origen IPC no autorizado' };
+    return updateManager.getState();
+  });
+
+  ipcMain.handle('check-for-updates', async (event) => {
+    if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+    return updateManager.checkForUpdates();
+  });
+
+  ipcMain.handle('download-update', async (event) => {
+    if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+    return updateManager.downloadUpdate();
+  });
+
+  ipcMain.handle('install-update', (event) => {
+    if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+    return updateManager.installUpdate();
+  });
+
   ipcMain.handle('save-as-pdf', async (event, defaultName) => {
     try {
       if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
@@ -1628,6 +1850,18 @@ app.on('ready', () => {
       return { success: true, filePath };
     } catch (error) {
       console.error('Error generando PDF:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('generate-whatsapp-budget-pdf', async (event, payload) => {
+    try {
+      if (!isTrustedIpcSender(event)) {
+        return { success: false, error: 'Origen IPC no autorizado' };
+      }
+      return await generateWhatsAppBudgetPdf(payload);
+    } catch (error) {
+      console.error('Error generando presupuesto de WhatsApp:', error);
       return { success: false, error: error.message };
     }
   });
@@ -1775,12 +2009,4 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
-});
-
-autoUpdater.on('update-available', () => {
-  console.log('Actualizacion disponible');
-});
-
-autoUpdater.on('update-downloaded', () => {
-  autoUpdater.quitAndInstall();
 });

@@ -1,5 +1,6 @@
 import { isTestRecord, isVentaLog, normalizeDate } from './helpers';
 import { normalizePaymentBreakdown } from './paymentBreakdown';
+import { isPosBagItem } from './posSaleExtras';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -256,7 +257,7 @@ export const getItemDiscountAmount = (item = {}) => {
 };
 
 export const shouldSkipCostItem = (item = {}) =>
-  item.isReward || item.is_reward || isDiscountItem(item);
+  item.isReward || item.is_reward || isDiscountItem(item) || isPosBagItem(item);
 
 export const getProductId = (item = {}) => item.productId || item.product_id || item.id || null;
 
@@ -591,6 +592,11 @@ export const buildSalesDataset = ({
     const grossItemsRevenue = items.reduce((sum, item) => (
       isDiscountItem(item) ? sum : sum + Math.max(0, getItemRevenue(item))
     ), 0);
+    const discountEligibleGrossRevenue = items.reduce((sum, item) => (
+      isDiscountItem(item) || isPosBagItem(item)
+        ? sum
+        : sum + Math.max(0, getItemRevenue(item))
+    ), 0);
     const totalDiscount = items.reduce((sum, item) => sum + getItemDiscountAmount(item), 0);
     const revenue = scopedItemFilters
       ? metricItems.reduce((sum, item) => sum + getItemRevenue(item), 0)
@@ -598,8 +604,15 @@ export const buildSalesDataset = ({
     const cost = scopedItemFilters
       ? metricItems.reduce((sum, item) => sum + getItemCost(item, lookups), 0)
       : getTransactionCost(tx, lookups);
-    const scopedDiscountImpact = scopedItemFilters && grossItemsRevenue > 0
-      ? totalDiscount * Math.min(1, Math.max(0, revenue / grossItemsRevenue))
+    const scopedDiscountEligibleRevenue = scopedItemFilters
+      ? metricItems.reduce((sum, item) => (
+          isDiscountItem(item) || isPosBagItem(item)
+            ? sum
+            : sum + Math.max(0, getItemRevenue(item))
+        ), 0)
+      : 0;
+    const scopedDiscountImpact = scopedItemFilters && discountEligibleGrossRevenue > 0
+      ? totalDiscount * Math.min(1, Math.max(0, scopedDiscountEligibleRevenue / discountEligibleGrossRevenue))
       : 0;
     const itemDiscountImpact = scopedItemFilters
       ? scopedDiscountImpact

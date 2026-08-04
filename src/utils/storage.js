@@ -2,10 +2,17 @@
 // ✅ Módulo de utilidades para Supabase Storage (bucket: product-images)
 
 import { supabase } from '../supabase/client';
+import {
+  buildUserAvatarStoragePaths,
+  getUserAvatarStoragePaths,
+  USER_AVATAR_STORAGE_BUCKET,
+} from './userAvatarStorage';
 
 const BUCKET = 'product-images';
 const THUMB_SIZE = 320;
 const PRODUCT_IMAGE_CACHE_CONTROL = '31536000';
+const USER_AVATAR_SIZE = 320;
+const USER_AVATAR_MAX_BYTES = 6 * 1024 * 1024;
 
 const readFileAsDataUrl = (file) =>
   new Promise((resolve, reject) => {
@@ -40,6 +47,20 @@ const readSourceAsDataUrl = async (source) => {
 
   const blob = await response.blob();
   return readFileAsDataUrl(new File([blob], 'product-image', { type: blob.type || 'image/jpeg' }));
+};
+
+const readSourceAsImageFile = async (source) => {
+  if (source instanceof File) return source;
+  if (typeof source !== 'string' || !source.startsWith('data:image/')) {
+    throw new Error('El avatar seleccionado no es una imagen valida.');
+  }
+
+  const response = await fetch(source);
+  const blob = await response.blob();
+  if (!blob.type.startsWith('image/')) {
+    throw new Error('El avatar seleccionado no es una imagen valida.');
+  }
+  return new File([blob], 'avatar-original', { type: blob.type });
 };
 
 const buildProductThumbFile = async (file, { size = THUMB_SIZE, quality = 0.82 } = {}) => {
@@ -152,6 +173,74 @@ export const uploadProductImage = async (file) => {
     image: urlData.publicUrl,
     imageThumb: thumbUrlData.publicUrl,
   };
+};
+
+export const uploadUserAvatar = async (source, { userId = 'unassigned' } = {}) => {
+  const originalFile = await readSourceAsImageFile(source);
+  if (originalFile.size > USER_AVATAR_MAX_BYTES) {
+    throw new Error('La foto de usuario supera el limite de 6 MB.');
+  }
+
+  const thumbnailFile = await buildProductThumbFile(originalFile, {
+    size: USER_AVATAR_SIZE,
+    quality: 0.84,
+  });
+  const { originalPath, thumbnailPath } = buildUserAvatarStoragePaths({ userId });
+  const [{ data: originalData, error: originalError }, { data: thumbnailData, error: thumbnailError }] =
+    await Promise.all([
+      supabase.storage
+        .from(USER_AVATAR_STORAGE_BUCKET)
+        .upload(originalPath, originalFile, {
+          cacheControl: PRODUCT_IMAGE_CACHE_CONTROL,
+          contentType: originalFile.type || 'image/jpeg',
+          upsert: false,
+        }),
+      supabase.storage
+        .from(USER_AVATAR_STORAGE_BUCKET)
+        .upload(thumbnailPath, thumbnailFile, {
+          cacheControl: PRODUCT_IMAGE_CACHE_CONTROL,
+          contentType: 'image/webp',
+          upsert: false,
+        }),
+    ]);
+
+  if (originalError || thumbnailError) {
+    const uploadedPaths = [
+      originalData?.path || null,
+      thumbnailData?.path || null,
+    ].filter(Boolean);
+    if (uploadedPaths.length > 0) {
+      await supabase.storage.from(USER_AVATAR_STORAGE_BUCKET).remove(uploadedPaths).catch(() => {});
+    }
+    const error = originalError || thumbnailError;
+    throw new Error(error?.message || 'No se pudo subir la foto de usuario.');
+  }
+
+  const { data: originalUrlData } = supabase.storage
+    .from(USER_AVATAR_STORAGE_BUCKET)
+    .getPublicUrl(originalData.path);
+  const { data: thumbnailUrlData } = supabase.storage
+    .from(USER_AVATAR_STORAGE_BUCKET)
+    .getPublicUrl(thumbnailData.path);
+
+  return {
+    avatar: thumbnailUrlData.publicUrl,
+    original: originalUrlData.publicUrl,
+  };
+};
+
+export const deleteUserAvatar = async (avatarUrl) => {
+  const paths = getUserAvatarStoragePaths(avatarUrl);
+  if (paths.length === 0) return false;
+
+  const { error } = await supabase.storage
+    .from(USER_AVATAR_STORAGE_BUCKET)
+    .remove(paths);
+  if (error) {
+    console.warn('No se pudo eliminar la foto anterior del usuario:', error);
+    return false;
+  }
+  return true;
 };
 
 /**

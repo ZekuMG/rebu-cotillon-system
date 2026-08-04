@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarRange, CheckCircle2, ClipboardList, CreditCard, FileText, Package, Pencil, Plus, ReceiptText, Search, Trash2, Wallet, X } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { CalendarRange, CheckCircle2, ChevronDown, ClipboardList, CreditCard, FileText, Package, Pencil, Plus, ReceiptText, Search, Trash2, Wallet, X } from 'lucide-react';
 import Swal from 'sweetalert2';
 import BudgetBuilderModal from '../components/BudgetBuilderModal';
 import AsyncActionButton from '../components/AsyncActionButton';
@@ -30,6 +30,28 @@ const STATUS_STYLES = {
   Cancelado: 'bg-rose-50 text-rose-700 border-rose-200',
   Retirado: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200',
 };
+const STATUS_TONES = {
+  Creado: 'info',
+  Pendiente: 'warning',
+  'Se\u00f1ado': 'info',
+  Pagado: 'success',
+  Cancelado: 'danger',
+  Retirado: 'brand',
+};
+const ORDER_TYPE_FILTER_OPTIONS = [
+  { value: 'all', label: 'Todos' },
+  { value: 'budget', label: 'Presupuestos' },
+  { value: 'order', label: 'Pedidos' },
+];
+const ORDER_STATUS_FILTER_OPTIONS = [
+  { value: 'all', label: 'Todos' },
+  { value: 'Presupuesto', label: 'Presupuesto' },
+  { value: 'Pendiente', label: 'Pendiente' },
+  { value: 'Señado', label: 'Señado' },
+  { value: 'Pagado', label: 'Pagado' },
+  { value: 'Cancelado', label: 'Cancelado' },
+  { value: 'Retirado', label: 'Retirado' },
+];
 const PRIMARY_BUTTON_CLASS = 'inline-flex items-center gap-1 rounded-xl border border-sky-200 bg-sky-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-40';
 const NEUTRAL_BUTTON_CLASS = 'inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40';
 const DANGER_BUTTON_CLASS = 'inline-flex items-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40';
@@ -275,30 +297,118 @@ function MiniModal({ title, children, onClose, maxWidth = 'max-w-md' }) {
   );
 }
 
+function FilterSelect({ label, value, options, onChange }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const controlRef = useRef(null);
+  const selectedOption = options.find((option) => option.value === value) || options[0];
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    const closeOnOutsideClick = (event) => {
+      if (!controlRef.current?.contains(event.target)) setIsOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key !== 'Escape') return;
+      setIsOpen(false);
+      controlRef.current?.querySelector('.orders-filter-trigger')?.focus();
+    };
+
+    document.addEventListener('pointerdown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [isOpen]);
+
+  return (
+    <div ref={controlRef} className={`orders-filter-control ${isOpen ? 'is-open' : ''}`}>
+      <button
+        type="button"
+        className="orders-filter-trigger"
+        onClick={() => setIsOpen((current) => !current)}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        aria-label={`${label}: ${selectedOption.label}`}
+      >
+        <span>{label}</span>
+        <strong>{selectedOption.label}</strong>
+        <ChevronDown size={13} aria-hidden="true" />
+      </button>
+
+      {isOpen && (
+        <div className="orders-filter-menu" role="listbox" aria-label={`Opciones de ${label.toLowerCase()}`}>
+          {options.map((option) => {
+            const isSelected = option.value === value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                className={`orders-filter-option ${isSelected ? 'is-selected' : ''}`}
+                onClick={() => {
+                  onChange(option.value);
+                  setIsOpen(false);
+                }}
+              >
+                <span>{option.label}</span>
+                {isSelected && <CheckCircle2 size={12} aria-hidden="true" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RecordCard({ record, isActive, onSelect }) {
   const statusLabel = record.type === 'budget' ? 'Creado' : record.status;
   const itemCount = record.items?.length || record.itemsSnapshot?.length || 0;
+  const recordTitle = record.documentTitle || (record.type === 'order' ? 'PEDIDO' : 'PRESUPUESTO');
   return (
-    <button type="button" onClick={onSelect} className={`w-full rounded-[14px] border px-2.5 py-1.5 text-left transition ${isActive ? 'border-sky-200 bg-white shadow-[0_3px_12px_rgba(148,163,184,0.1)] ring-1 ring-sky-100' : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'}`}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.1em] text-slate-600">{RECORD_TYPE_LABELS[record.type]}</span>
-            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.1em] ${STATUS_STYLES[statusLabel] || STATUS_STYLES.Pendiente}`}>{statusLabel}</span>
-            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 font-mono text-[10px] font-black text-slate-500">{formatRecordCode(record)}</span>
-          </div>
-          <p className="mt-0.5 truncate text-[12px] font-black leading-tight text-slate-800">{record.customerName}</p>
-          <p className="text-[11px] font-semibold text-slate-500">{record.customerKind} · {record.customerPhone}</p>
-          {record.eventLabel && <p className="mt-1 truncate text-[10px] font-semibold text-slate-500">{record.eventLabel}</p>}
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={isActive}
+      className={`order-record-card ${isActive ? 'is-active' : ''}`}
+    >
+      <div className="order-record-topline">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] text-slate-600">{RECORD_TYPE_LABELS[record.type]}</span>
+          <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] ${STATUS_STYLES[statusLabel] || STATUS_STYLES.Pendiente}`}>{statusLabel}</span>
         </div>
-        <div className="text-right">
-          <p className="text-[11px] font-semibold text-slate-400">{formatDateAR(record.createdAt)}</p>
-          <p className="mt-1 text-[13px] font-black text-slate-800"><FancyPrice amount={record.totalAmount} /></p>
+        <div className="order-record-reference">
+          <span>{formatDateAR(record.createdAt)}</span>
+          <span>{formatRecordCode(record)}</span>
         </div>
       </div>
-      <div className="mt-1 grid gap-x-2 gap-y-0.5 text-[10px] font-semibold text-slate-500 sm:grid-cols-3">
-        <span>Total: {formatCurrency(record.totalAmount)}</span>
-        {record.type === 'budget' ? <><span>Items: {itemCount}</span><span className="truncate">Doc: {record.documentTitle || 'PRESUPUESTO'}</span></> : <><span>Seña: {formatCurrency(record.depositAmount || 0)}</span><span>Restante: {formatCurrency(record.remainingAmount || 0)}</span></>}
+
+      <div className="order-record-main">
+        <div className="min-w-0">
+          <p className="order-record-customer">{record.customerName}</p>
+          <p className="order-record-title" title={recordTitle}>
+            <span>Título:</span> {recordTitle}
+          </p>
+        </div>
+        <p className="order-record-amount"><FancyPrice amount={record.totalAmount} /></p>
+      </div>
+
+      <p className="order-record-client">{record.customerKind} · {record.customerPhone}</p>
+      {record.eventLabel && <p className="order-record-note">{record.eventLabel}</p>}
+
+      <div className="order-record-footer">
+        <div className="order-record-stats">
+          {record.type === 'budget' ? <span>Items: {itemCount}</span> : <><span>Seña: {formatCurrency(record.depositAmount || 0)}</span><span>Restante: {formatCurrency(record.remainingAmount || 0)}</span></>}
+        </div>
+        {isActive && (
+          <span className="order-record-selected">
+            <CheckCircle2 size={10} />
+            Seleccionado
+          </span>
+        )}
       </div>
     </button>
   );
@@ -702,6 +812,8 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
     );
   }
   const linkedOrderForBudget = selectedRecord?.type === 'budget' ? orders.find((order) => String(order.budgetId) === String(selectedRecord.id) && order.isActive !== false) : null;
+  const selectedRecordStatus = selectedRecord ? (selectedRecord.type === 'budget' ? 'Creado' : selectedRecord.status) : '';
+  const selectedRecordStatusTone = STATUS_TONES[selectedRecordStatus] || 'warning';
   const selectedRecordPaymentItems = selectedRecord ? getPaymentBreakdownDisplayItems(selectedRecord.paymentBreakdown, selectedRecord.paymentMethod || 'Efectivo', selectedRecord.installments || 0, 0, 0, selectedRecord.totalAmount || 0) : [];
   const selectedRecordPaymentSummary = selectedRecord ? getPaymentSummary(selectedRecord.paymentBreakdown, selectedRecord.paymentMethod || 'Efectivo', selectedRecord.installments || 0) : 'Efectivo';
   const selectedOrderPaymentHistory = selectedRecord?.type === 'order' ? (selectedRecord.paymentHistory || []) : [];
@@ -881,31 +993,52 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
       <div className="orders-view grid h-full min-h-0 gap-0 xl:grid-cols-[356px_minmax(0,1fr)]">
         <div className="min-h-0 border-b border-slate-200 bg-white xl:border-b-0 xl:border-r">
           <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-slate-200 px-2.5 py-1.5">
-                <div className="flex items-start justify-between gap-3">
-                  <div><p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Pedidos y presupuestos</p><p className="text-xs font-medium text-slate-400">Seguimiento operativo de seña, saldo y retiro.</p></div>
-                  {canCreateBudget && <button
+            <div className="orders-rail-toolbar">
+              <div className="orders-rail-heading">
+                <div className="min-w-0">
+                  <p className="orders-rail-title">Pedidos y presupuestos</p>
+                  <p className="orders-rail-subtitle">Seña, saldo y retiro en un solo lugar.</p>
+                </div>
+                {canCreateBudget && <button
                     type="button"
                     onClick={() => { setEditingBudget(null); setIsBudgetModalOpen(true); }}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-2xl border border-sky-200 bg-sky-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-sky-700 transition hover:bg-sky-100"
-                >
-                  <Plus size={11} />
-                  Crear presupuesto
-                </button>}
+                    className="orders-create-budget"
+                  >
+                    <Plus size={12} />
+                    Nuevo presupuesto
+                  </button>}
               </div>
-              <div className="mt-2 flex items-center gap-2 rounded-[16px] border border-slate-200 bg-white px-3 py-2 transition focus-within:border-sky-300 focus-within:ring-2 focus-within:ring-sky-100">
-                <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
-                  <Search size={14} />
+
+              <label className="orders-search-control">
+                <Search size={14} aria-hidden="true" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Buscar cliente, título, teléfono o ID..."
+                  aria-label="Buscar pedidos y presupuestos"
+                />
+              </label>
+
+              <div className="orders-filter-heading">
+                <span>Organizar listado</span>
+                <div>
+                  <span>{filteredRecords.length} resultado(s)</span>
+                  {(search || typeFilter !== 'all' || statusFilter !== 'all') && (
+                    <button type="button" onClick={() => { setSearch(''); setTypeFilter('all'); setStatusFilter('all'); }}>
+                      Limpiar
+                    </button>
+                  )}
                 </div>
-                <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar pedido, cliente o teléfono..." className="w-full bg-transparent text-[14px] font-semibold text-slate-700 outline-none placeholder:font-medium placeholder:text-slate-400" />
               </div>
-              <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
-                <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 outline-none"><option value="all">Todos</option><option value="budget">Presupuestos</option><option value="order">Pedidos</option></select>
-                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 outline-none"><option value="all">Todos</option><option value="Presupuesto">Presupuesto</option><option value="Pendiente">Pendiente</option><option value="Señado">Señado</option><option value="Pagado">Pagado</option><option value="Cancelado">Cancelado</option><option value="Retirado">Retirado</option></select>
+
+              <div className="orders-filter-grid">
+                <FilterSelect label="Tipo" value={typeFilter} options={ORDER_TYPE_FILTER_OPTIONS} onChange={setTypeFilter} />
+                <FilterSelect label="Estado" value={statusFilter} options={ORDER_STATUS_FILTER_OPTIONS} onChange={setStatusFilter} />
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/70 px-2 py-1.5 scrollbar-hide" onScroll={visibleRecordsFeed.handleScroll}>
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 {visibleRecordsFeed.visibleItems.map((record) => <RecordCard key={`${record.type}-${record.id}`} record={record} isActive={`${record.type}-${record.id}` === selectedKey} onSelect={() => setSelectedKey(`${record.type}-${record.id}`)} />)}
                 {filteredRecords.length === 0 && <div className="rounded-[24px] border border-dashed border-slate-300 bg-slate-50 px-4 py-12 text-center"><p className="text-sm font-bold text-slate-500">No hay registros que coincidan con la búsqueda.</p></div>}
               </div>
@@ -922,16 +1055,21 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
             <div className="flex h-full min-h-0 flex-col">
               <div className="border-b border-slate-200 bg-white px-2.5 py-2">
                 <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-[14px] font-black text-slate-800">{selectedRecord.customerName}</h2>
-                      <span className={`rounded-full border px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${STATUS_STYLES[selectedRecord.type === 'budget' ? 'Creado' : selectedRecord.status] || STATUS_STYLES.Pendiente}`}>{selectedRecord.type === 'budget' ? 'Creado' : selectedRecord.status}</span>
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">{RECORD_TYPE_LABELS[selectedRecord.type]}</span>
-                      <span className="rounded-full border border-slate-200 bg-white px-2 py-1 font-mono text-[10px] font-black text-slate-500">{formatRecordCode(selectedRecord)}</span>
+                  <div className="order-detail-identity">
+                    <h2>{selectedRecord.customerName}</h2>
+                    <p className="order-detail-title">{selectedRecord.documentTitle || (selectedRecord.type === 'order' ? 'PEDIDO' : 'PRESUPUESTO')}</p>
+                    <div className="order-detail-meta">
+                      <span className={`order-detail-status is-${selectedRecordStatusTone}`}>
+                        <i aria-hidden="true" />
+                        {selectedRecordStatus}
+                      </span>
+                      <span>{RECORD_TYPE_LABELS[selectedRecord.type]}</span>
+                      <span className="order-detail-id">{formatRecordCode(selectedRecord)}</span>
+                      <span>{selectedRecord.customerKind} · {selectedRecord.customerPhone}</span>
+                      {selectedRecord.eventLabel && <span>{selectedRecord.eventLabel}</span>}
                     </div>
-                    <p className="mt-1 text-xs font-medium text-slate-500">{selectedRecord.customerKind} · {selectedRecord.customerPhone}{selectedRecord.eventLabel ? ` · ${selectedRecord.eventLabel}` : ''}</p>
                   </div>
-                  <div className="flex flex-wrap gap-1">
+                  <div className="order-detail-actions">
                     <button type="button" onClick={() => onPrintRecord(selectedRecord)} className={NEUTRAL_BUTTON_CLASS}><FileText size={12} />Generar PDF</button>
                     {selectedRecord.type === 'budget' && <>
                       {canEditBudget && <button type="button" onClick={() => { setEditingBudget(selectedRecord); setIsBudgetModalOpen(true); }} className={NEUTRAL_BUTTON_CLASS}><FileText size={12} />Editar</button>}
@@ -948,54 +1086,97 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                   </div>
                 </div>
               </div>
-              <div className="grid min-h-0 flex-1 gap-1.5 p-2 lg:grid-cols-[0.56fr_1.44fr]">
-                <div className="min-h-0 overflow-y-auto rounded-[18px] border border-slate-200 bg-white p-2 scrollbar-hide">
-                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Resumen operativo</p>
-                  <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
-                    <div className="rounded-[13px] border border-slate-200 bg-slate-50 p-1.5"><p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">ID</p><p className="mt-0.5 font-mono text-[12px] font-black text-slate-800">{formatRecordCode(selectedRecord)}</p></div>
-                    <div className="rounded-[13px] border border-slate-200 bg-slate-50 p-1.5"><p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">{selectedRecord.type === 'order' ? 'Documento origen' : 'Documento'}</p><p className="mt-0.5 text-[12px] font-black text-slate-800">{selectedRecord.documentTitle || 'PRESUPUESTO'}</p></div>
-                    <div className="rounded-[13px] border border-slate-200 bg-slate-50 p-1.5"><p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Creado</p><p className="mt-0.5 text-[12px] font-black text-slate-800">{formatDateAR(selectedRecord.createdAt)}</p></div>
-                    <div className="rounded-[13px] border border-slate-200 bg-slate-50 p-1.5"><p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Retiro</p><p className="mt-0.5 text-[12px] font-black text-slate-800">{formatPickupDate(selectedRecord.pickupDate)}</p></div>
-                    <div className="rounded-[18px] border border-emerald-200 bg-emerald-50 p-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-emerald-500">{'Se\u00f1a'}</p>
+              <div className="grid min-h-0 flex-1 gap-1.5 p-2 lg:grid-cols-[1.44fr_0.56fr]">
+                <aside className="order-summary-panel scrollbar-hide lg:order-2">
+                  <div className="order-summary-heading">
+                    <p>Resumen operativo</p>
+                    <span>{RECORD_TYPE_LABELS[selectedRecord.type]}</span>
+                  </div>
+
+                  <dl className="order-summary-facts">
+                    <div>
+                      <dt>ID</dt>
+                      <dd className="is-mono">{formatRecordCode(selectedRecord)}</dd>
+                    </div>
+                    <div>
+                      <dt>Creado</dt>
+                      <dd>{formatDateAR(selectedRecord.createdAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>Retiro</dt>
+                      <dd>{formatPickupDate(selectedRecord.pickupDate)}</dd>
+                    </div>
+                  </dl>
+
+                  <div className="order-summary-money">
+                    <div className="order-summary-metric is-success">
+                      <div>
+                        <span className="order-summary-metric-label">{'Se\u00f1a'}</span>
                         {selectedRecord.type === 'order' &&
                           !['Pagado', 'Retirado', 'Cancelado'].includes(selectedRecord.status) &&
                           canEditOrder ? (
-                            <button
-                              type="button"
-                              onClick={() => openDepositEditor(selectedRecord)}
-                              className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-white/80 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] text-emerald-700 transition hover:border-emerald-300 hover:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-300"
-                              aria-label={'Editar se\u00f1a inicial'}
-                            >
+                            <button type="button" onClick={() => openDepositEditor(selectedRecord)} className="order-summary-edit" aria-label={'Editar se\u00f1a inicial'}>
                               <Pencil size={9} />
                               Editar
                             </button>
                           ) : null}
                       </div>
-                      <p className="mt-0.5 font-mono text-[17px] font-black tabular-nums text-emerald-700"><FancyPrice amount={selectedRecord.depositAmount || 0} /></p>
+                      <strong><FancyPrice amount={selectedRecord.depositAmount || 0} /></strong>
                     </div>
-                    <div className="rounded-[15px] border border-sky-200 bg-sky-50 p-2"><p className="text-[9px] font-black uppercase tracking-[0.12em] text-sky-500">Abonado</p><p className="mt-0.5 text-[15px] font-black text-sky-700"><FancyPrice amount={selectedRecord.paidTotal || 0} /></p></div>
-                    <div className="rounded-[15px] border border-amber-200 bg-amber-50 p-2"><p className="text-[9px] font-black uppercase tracking-[0.12em] text-amber-500">Restante</p><p className="mt-0.5 text-[15px] font-black text-amber-700"><FancyPrice amount={selectedRecord.remainingAmount || 0} /></p></div>
-                    <div className="rounded-[15px] border border-slate-200 bg-slate-50 p-2"><p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Total</p><p className="mt-0.5 text-[15px] font-black text-slate-800"><FancyPrice amount={selectedRecord.totalAmount || 0} /></p></div>
+                    <div className="order-summary-metric is-info">
+                      <span className="order-summary-metric-label">Abonado</span>
+                      <strong><FancyPrice amount={selectedRecord.paidTotal || 0} /></strong>
+                    </div>
+                    <div className="order-summary-metric is-warning">
+                      <span className="order-summary-metric-label">Restante</span>
+                      <strong><FancyPrice amount={selectedRecord.remainingAmount || 0} /></strong>
+                    </div>
+                    <div className="order-summary-metric">
+                      <span className="order-summary-metric-label">Total</span>
+                      <strong><FancyPrice amount={selectedRecord.totalAmount || 0} /></strong>
+                    </div>
                   </div>
-                  <div className="mt-1.5 rounded-[13px] border border-slate-200 bg-slate-50 p-2">
-                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Cliente</p>
-                    <p className="mt-0.5 text-[13px] font-black text-slate-800">{selectedRecord.customerName}</p>
-                    <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{selectedRecord.customerPhone}</p>
-                    <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{selectedRecord.customerKind}</p>
-                    {selectedRecord.type === 'budget' && <><p className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Pago previsto</p><p className="mt-0.5 text-[12px] font-black text-slate-800">{selectedRecordPaymentSummary}</p>{selectedRecordPaymentItems.length > 1 && <div className="mt-1 flex flex-wrap gap-1">{selectedRecordPaymentItems.map((item, itemIndex) => (<span key={`${item.key || 'payment'}_${itemIndex}`} className="rounded-full border border-fuchsia-200 bg-fuchsia-50 px-2 py-0.5 text-[9px] font-black text-fuchsia-700">{item.title}</span>))}</div>}</>}
-                    {selectedRecord.type === 'order' && <>
-                      <p className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Pagos registrados</p>
-                      <p className="mt-0.5 text-[12px] font-black text-slate-800">{selectedRecordPaymentSummary}</p>
-                      {selectedRecordPaymentItems.length > 0 && <div className="mt-1 flex flex-wrap gap-1">{selectedRecordPaymentItems.map((item, itemIndex) => (<span key={`${item.key || 'payment'}_${itemIndex}`} className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] font-black text-sky-700">{item.title}</span>))}</div>}
-                      {selectedOrderPaymentHistory.length > 0 && <div className="mt-2 space-y-1.5">{selectedOrderPaymentHistory.map((entry) => (<div key={entry.id} className="rounded-xl border border-slate-200 bg-white px-2.5 py-2"><div className="flex items-center justify-between gap-2"><p className="text-[10px] font-black uppercase tracking-[0.08em] text-slate-500">{entry.entryType === 'deposit' ? 'Seña inicial' : entry.entryType === 'legacy' ? 'Pago previo' : 'Pago'}</p><p className="text-[10px] font-black text-slate-700">{entry.createdAt ? formatDateAR(entry.createdAt) : 'Sin fecha'}</p></div><p className="mt-1 text-[12px] font-black text-slate-800">{formatCurrency(entry.amount || 0)}</p><div className="mt-1 flex flex-wrap gap-1">{(entry.lines || []).map((line, lineIndex) => (<span key={line.id || `${entry.id}_${lineIndex}`} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-black text-slate-600">{getPaymentMethodLabel(line.method)}{line.method === 'Credito' && Number(line.installments) > 1 ? ` · ${line.installments} cuotas` : ''}{line.method === 'Efectivo' && Number(line.cashChange || 0) > 0 ? ` · cambio ${formatCurrency(line.cashChange || 0)}` : ''}</span>))}</div></div>))}</div>}
-                    </>}
-                    {selectedRecord.customerNote && <><p className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Nota</p><p className="mt-0.5 text-[12px] font-medium text-slate-600">{selectedRecord.customerNote}</p></>}
-                    {linkedOrderForBudget && <><p className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Pedido vinculado</p><p className="mt-0.5 font-mono text-[12px] font-semibold text-slate-600">{formatRecordCode(linkedOrderForBudget)}</p></>}
-                  </div>
-                </div>
-                <div className="order-items-ledger min-h-0 overflow-y-auto rounded-[18px] border border-slate-200 bg-white p-2 scrollbar-hide">
+
+                  <section className="order-summary-customer">
+                    <p className="order-summary-label">Cliente</p>
+                    <p className="order-summary-customer-name">{selectedRecord.customerName}</p>
+                    <p className="order-summary-customer-meta">{selectedRecord.customerKind} · {selectedRecord.customerPhone}</p>
+
+                    {selectedRecord.type === 'budget' && (
+                      <div className="order-summary-subsection">
+                        <span>Pago previsto</span>
+                        <strong>{selectedRecordPaymentSummary}</strong>
+                        {selectedRecordPaymentItems.length > 1 && <div className="order-summary-methods">{selectedRecordPaymentItems.map((item, itemIndex) => (<span key={`${item.key || 'payment'}_${itemIndex}`}>{item.title}</span>))}</div>}
+                      </div>
+                    )}
+
+                    {selectedRecord.type === 'order' && (
+                      <div className="order-summary-subsection">
+                        <span>Pagos registrados</span>
+                        <strong>{selectedRecordPaymentSummary}</strong>
+                        {selectedRecordPaymentItems.length > 0 && <div className="order-summary-methods">{selectedRecordPaymentItems.map((item, itemIndex) => (<span key={`${item.key || 'payment'}_${itemIndex}`}>{item.title}</span>))}</div>}
+                        {selectedOrderPaymentHistory.length > 0 && (
+                          <div className="order-summary-history">
+                            {selectedOrderPaymentHistory.map((entry) => (
+                              <div key={entry.id} className="order-summary-history-entry">
+                                <div>
+                                  <span>{entry.entryType === 'deposit' ? 'Seña inicial' : entry.entryType === 'legacy' ? 'Pago previo' : 'Pago'}</span>
+                                  <time>{entry.createdAt ? formatDateAR(entry.createdAt) : 'Sin fecha'}</time>
+                                </div>
+                                <strong>{formatCurrency(entry.amount || 0)}</strong>
+                                <p>{(entry.lines || []).map((line) => `${getPaymentMethodLabel(line.method)}${line.method === 'Credito' && Number(line.installments) > 1 ? ` · ${line.installments} cuotas` : ''}${line.method === 'Efectivo' && Number(line.cashChange || 0) > 0 ? ` · cambio ${formatCurrency(line.cashChange || 0)}` : ''}`).join(' · ')}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {selectedRecord.customerNote && <div className="order-summary-subsection"><span>Nota</span><p>{selectedRecord.customerNote}</p></div>}
+                    {linkedOrderForBudget && <div className="order-summary-subsection"><span>Pedido vinculado</span><strong className="is-mono">{formatRecordCode(linkedOrderForBudget)}</strong></div>}
+                  </section>
+                </aside>
+                <div className="order-items-ledger min-h-0 overflow-y-auto rounded-[18px] border border-slate-200 bg-white p-2 scrollbar-hide lg:order-1">
                   <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Artículos del {selectedRecord.type === 'budget' ? 'presupuesto' : 'pedido'}</p>
                   <div className="order-items-ledger-head">
                     <div className="min-w-0">
