@@ -92,6 +92,8 @@ export const SCHEMA_OPTIONAL_COLUMNS = {
     'user_id',
     'user_role',
     'user_name',
+    'order_id',
+    'points_source',
     'payment_methods_summary',
     'items_sold_list',
     'new_clients_list',
@@ -133,6 +135,9 @@ export const SCHEMA_OPTIONAL_COLUMNS = {
     'payment_method',
     'payment_breakdown',
     'installments',
+    'points_credited',
+    'points_accounting_mode',
+    'version',
     'is_active',
   ]),
 };

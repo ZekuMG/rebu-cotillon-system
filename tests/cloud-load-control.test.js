@@ -2,12 +2,54 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  doesCloudLoadCoverRequest,
   fetchCloudPayloadWithRetries,
+  resolveCoveredCloudLoadResult,
   summarizeCloudResults,
 } from '../src/utils/cloudLoadControl.js';
 import { fetchAllCloudRowsWithSelectFallback } from '../src/utils/supabaseSchemaFallback.js';
 
 const recoverableNetworkError = Object.assign(new Error('Failed to fetch'), { code: 'NETWORK' });
+
+test('una carga activa cubre otra solicitud si ya incluye todo su alcance', () => {
+  assert.equal(
+    doesCloudLoadCoverRequest(
+      { full: true, includeTransactions: true },
+      { full: false, includeTransactions: true },
+      ['full', 'includeTransactions'],
+    ),
+    true,
+  );
+  assert.equal(
+    doesCloudLoadCoverRequest(
+      { full: false, includeTransactions: true },
+      { full: true, includeTransactions: true },
+      ['full', 'includeTransactions'],
+    ),
+    false,
+  );
+  assert.equal(
+    doesCloudLoadCoverRequest(
+      { full: true, includeTransactions: false },
+      { full: true, includeTransactions: true },
+      ['full', 'includeTransactions'],
+    ),
+    false,
+  );
+});
+
+test('quien exige nube recibe fallo aunque la carga compartida conserve el cache', () => {
+  assert.equal(resolveCoveredCloudLoadResult({
+    loaded: true,
+    requireCloud: true,
+    cloudRefreshFailed: true,
+  }), false);
+  assert.equal(resolveCoveredCloudLoadResult({
+    loaded: true,
+    requireCloud: false,
+    cloudRefreshFailed: true,
+  }), true);
+});
 
 test('un timeout aborta la consulta y no inicia otra superpuesta', async () => {
   let calls = 0;

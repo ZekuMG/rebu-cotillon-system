@@ -31,6 +31,26 @@ export const summarizeCloudResults = (namedResults = [], { optionalSources = [] 
   };
 };
 
+export const doesCloudLoadCoverRequest = (
+  activeRequest,
+  requestedRequest,
+  requiredFlags = [],
+) => {
+  if (!activeRequest || !requestedRequest) return false;
+
+  return requiredFlags.every((flag) => (
+    requestedRequest[flag] !== true || activeRequest[flag] === true
+  ));
+};
+
+export const resolveCoveredCloudLoadResult = ({
+  loaded,
+  requireCloud = false,
+  cloudRefreshFailed = false,
+} = {}) => (
+  requireCloud && cloudRefreshFailed ? false : loaded
+);
+
 export const fetchCloudPayloadWithRetries = async ({
   fetchPayload,
   label = 'Carga en la nube',

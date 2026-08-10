@@ -23,6 +23,7 @@ import {
   FileAudio,
   FileText,
   FileVideo,
+  FlaskConical,
   Forward,
   Hand,
   Image as ImageIcon,
@@ -63,6 +64,7 @@ import {
   WHATSAPP_TIME_ZONE,
   withDaySeparators,
 } from '../utils/whatsappMessageGroups';
+import WhatsAppBotSettingsPanel from '../components/WhatsAppBotSettingsPanel';
 import './WhatsAppInboxView.css';
 
 const MODES = [
@@ -144,6 +146,7 @@ const ERROR_COPY = {
   attachment_unavailable: 'El archivo no está disponible en esta PC.',
   invalid_connection_action: 'No se pudo realizar esa acción con WhatsApp.',
   quick_replies_unavailable: 'Las respuestas rápidas no están disponibles en este momento.',
+  test_mode_other_phone: 'Modo test está activo. Sólo podés responder en la conversación autorizada.',
   invalid_suggestion_output: 'No pudimos preparar respuestas claras. Intentá generarlas nuevamente.',
   bot_request_timeout: 'WhatsApp tardó demasiado en responder. Intentá nuevamente.',
   operator_request_failed: 'No se pudo comunicar con WhatsApp. Intentá nuevamente.',
@@ -1507,6 +1510,10 @@ export default function WhatsAppInboxView({
   const [error, setError] = useState('');
   const [contextMode, setContextMode] = useState('');
   const [businessSettings, setBusinessSettings] = useState(null);
+  const [botSettings, setBotSettings] = useState(null);
+  const [botSettingsOpen, setBotSettingsOpen] = useState(false);
+  const [botSettingsLoading, setBotSettingsLoading] = useState(false);
+  const [botSettingsLoadError, setBotSettingsLoadError] = useState(false);
   const [connectionInfo, setConnectionInfo] = useState(null);
   const [profiles, setProfiles] = useState({});
   const [mainMenuOpen, setMainMenuOpen] = useState(false);
@@ -1560,6 +1567,7 @@ export default function WhatsAppInboxView({
   const activeActionRef = useRef('');
   const draftsByPhoneRef = useRef(new Map());
   const preserveScrollRef = useRef(false);
+  const openingScrollPhoneRef = useRef('');
   const nearBottomRef = useRef(true);
   const latestVisibleMessageRef = useRef({ phone: '', id: '' });
   const manualListRef = useRef(false);
@@ -1857,14 +1865,16 @@ export default function WhatsAppInboxView({
   }, [isActive, loadDetail, phone]);
 
   const current = phone
-    ? overview?.conversations?.find((row) => row.phone === phone) || detail?.conversation || null
+    ? detail?.conversation || overview?.conversations?.find((row) => row.phone === phone) || null
     : null;
   const messages = useMemo(() => detail?.messages || [], [detail?.messages]);
   const displayedMessages = useMemo(
-    () => [...messages].sort((left, right) => (
-      new Date(left.created_at).getTime() - new Date(right.created_at).getTime()
-      || Number(left.id) - Number(right.id)
-    )),
+    () => messages
+      .filter((row) => String(row?.status || '').toLowerCase() !== 'suggested')
+      .sort((left, right) => (
+        new Date(left.created_at).getTime() - new Date(right.created_at).getTime()
+        || Number(left.id) - Number(right.id)
+      )),
     [messages],
   );
   const messageBlocks = useMemo(
@@ -1917,7 +1927,13 @@ export default function WhatsAppInboxView({
   const scrollToLatest = useCallback((behavior = 'smooth') => {
     nearBottomRef.current = true;
     setNewMessageCount(0);
-    bottomRef.current?.scrollIntoView?.({ block: 'end', behavior });
+    const stream = streamRef.current;
+    if (!stream) return;
+    if (behavior === 'smooth' && typeof stream.scrollTo === 'function') {
+      stream.scrollTo({ top: stream.scrollHeight, behavior: 'smooth' });
+      return;
+    }
+    stream.scrollTop = stream.scrollHeight;
   }, []);
   const handleStreamScroll = useCallback(() => {
     const stream = streamRef.current;
@@ -1942,6 +1958,8 @@ export default function WhatsAppInboxView({
   }, [phone]);
 
   useEffect(() => {
+    preserveScrollRef.current = false;
+    openingScrollPhoneRef.current = phone;
     setDraft(phone ? draftsByPhoneRef.current.get(phone) || '' : '');
     setSelectedFile(null);
     setSelectedCatalogMedia([]);
@@ -1971,9 +1989,40 @@ export default function WhatsAppInboxView({
     if (!phone || !latest) return;
     const previous = latestVisibleMessageRef.current;
     if (previous.phone !== phone || !previous.id) {
+      const openedPhone = phone;
+      let cancelled = false;
+      let firstFrame = 0;
+      let secondFrame = 0;
+      const stream = streamRef.current;
+      const pinToLatest = (force = false) => {
+        if (
+          cancelled
+          || openingScrollPhoneRef.current !== openedPhone
+          || (!force && !nearBottomRef.current)
+        ) return;
+        scrollToLatest('auto');
+      };
+      const pinAfterMediaReady = () => {
+        window.requestAnimationFrame(pinToLatest);
+      };
       latestVisibleMessageRef.current = { phone, id: String(latest.id) };
-      window.requestAnimationFrame(() => scrollToLatest('auto'));
-      return;
+      firstFrame = window.requestAnimationFrame(() => {
+        pinToLatest(true);
+        secondFrame = window.requestAnimationFrame(() => pinToLatest(true));
+      });
+      stream?.addEventListener('load', pinAfterMediaReady, true);
+      stream?.addEventListener('loadedmetadata', pinAfterMediaReady, true);
+      const settleTimer = window.setTimeout(() => {
+        pinToLatest();
+      }, 1200);
+      return () => {
+        cancelled = true;
+        window.cancelAnimationFrame(firstFrame);
+        window.cancelAnimationFrame(secondFrame);
+        window.clearTimeout(settleTimer);
+        stream?.removeEventListener('load', pinAfterMediaReady, true);
+        stream?.removeEventListener('loadedmetadata', pinAfterMediaReady, true);
+      };
     }
     if (String(latest.id) === previous.id) return;
 
@@ -1993,10 +2042,13 @@ export default function WhatsAppInboxView({
     }
   }, [displayedMessages, phone, scrollToLatest]);
 
-  const latestInboundMessageId = useMemo(
-    () => [...displayedMessages].reverse().find((row) => row.direction === 'inbound')?.id || '',
+  const latestInboundMessage = useMemo(
+    () => [...displayedMessages].reverse().find((row) => (
+      row.direction === 'inbound' && String(row.content || '').trim()
+    )) || null,
     [displayedMessages],
   );
+  const latestInboundMessageId = latestInboundMessage?.id || '';
 
   useEffect(() => {
     let cancelled = false;
@@ -2041,6 +2093,15 @@ export default function WhatsAppInboxView({
   const mode = overview?.mode || 'shadow';
   const off = mode === 'off';
   const selectedMode = off ? overview?.lastActiveMode || 'copilot' : mode;
+  const testModeEnabled = Boolean(overview?.testMode?.enabled);
+  const testModePhone = String(overview?.testMode?.phone || '');
+  const testModeTarget = (overview?.conversations || []).find((row) => (
+    String(row.phone || '') === testModePhone
+  ));
+  const testModeTargetName = testModeTarget ? contactName(testModeTarget) : formatPhone(testModePhone);
+  const testModeAllowsCurrent = !testModeEnabled || (
+    Boolean(phone) && Boolean(testModePhone) && phone === testModePhone
+  );
   const connected = ['open', 'connected'].includes(
     String(overview?.runtime?.whatsapp_connection_state).toLowerCase(),
   );
@@ -2081,9 +2142,11 @@ export default function WhatsAppInboxView({
     && mode !== 'auto'
     && !current?.opted_out
     && !testChat
+    && testModeAllowsCurrent
     && quickReplyMessageKey,
   );
-  const quickRepliesVisible = quickRepliesAvailable || Boolean(manualQuickReplyTarget);
+  const quickRepliesVisible = testModeAllowsCurrent
+    && (quickRepliesAvailable || Boolean(manualQuickReplyTarget));
 
   const loadQuickReplies = useCallback(async (
     selectedPhone,
@@ -2480,6 +2543,30 @@ export default function WhatsAppInboxView({
     });
   };
 
+  const openBotSettings = async () => {
+    setMainMenuOpen(false);
+    setContextMode('');
+    setBotSettingsOpen(true);
+    setBotSettingsLoading(true);
+    setBotSettingsLoadError(false);
+    const loaded = await action('load-bot-settings', async () => {
+      const rows = await whatsappOperator.botSettings();
+      const latest = rows?.[0] || null;
+      setBotSettings(latest);
+      return latest;
+    }, { refresh: false });
+    setBotSettingsLoading(false);
+    if (!loaded) setBotSettingsLoadError(true);
+  };
+
+  const saveBotSettings = (data) => {
+    void action('save-bot-settings', async () => {
+      const saved = await whatsappOperator.publishBotSettings(data);
+      setBotSettings(saved);
+      return saved;
+    });
+  };
+
   const openConnection = async (actionName = 'status') => {
     setMainMenuOpen(false);
     setContextMode('connection');
@@ -2500,6 +2587,10 @@ export default function WhatsAppInboxView({
 
   const approveBudget = async (entry, value) => {
     if (!canApproveBudget) return;
+    if (!testModeAllowsCurrent) {
+      setError(ERROR_COPY.test_mode_other_phone);
+      return;
+    }
     await action('approve-budget', async () => {
       const operationKey = entry.operation_key || `whatsapp-budget:${entry.id}`;
       const itemsSnapshot = value.items.map((item, index) => ({
@@ -2675,6 +2766,12 @@ export default function WhatsAppInboxView({
           <em>{Number(attention.conversations || 0)} por atender</em>
         </div>
         <div className="wa-command-actions">
+          {testModeEnabled && (
+            <div className="wa-test-mode-chip" title={`Blacky sólo puede trabajar con ${testModeTargetName}`}>
+              <FlaskConical />
+              <span><small>Modo test</small><strong>{testModeTargetName || testModePhone}</strong></span>
+            </div>
+          )}
           <div className="wa-mode-summary">
             <span>Bot</span>
             <strong>
@@ -2692,7 +2789,9 @@ export default function WhatsAppInboxView({
             aria-checked={!off}
             className={`wa-switch ${off ? '' : 'on'}`}
             disabled={!canMode || Boolean(busy)}
-            onClick={() => void action('power', () => whatsappOperator.setMode(off ? overview?.lastActiveMode || 'copilot' : 'off'))}
+            onClick={() => void action('power', () => whatsappOperator.setMode(
+              off ? overview?.lastActiveMode || 'copilot' : 'off',
+            ))}
           ><span><Power /></span></button>
           <button
             className="wa-refresh"
@@ -2720,25 +2819,6 @@ export default function WhatsAppInboxView({
           </button>
           {mainMenuOpen && (
             <div className="wa-control-menu">
-              {canMode && (
-                <section>
-                  <header><Bot /><span><strong>Respuestas del bot</strong><small>Elegí cuándo puede responder</small></span></header>
-                  <div className="wa-mode-options" role="group" aria-label="Modo de respuesta del bot">
-                    {MODES.map(([id, label, help]) => (
-                      <button
-                        key={id}
-                        type="button"
-                        className={selectedMode === id ? 'active' : ''}
-                        aria-pressed={selectedMode === id}
-                        title={help}
-                        disabled={off || Boolean(busy)}
-                        onClick={() => void action(`mode-${id}`, () => whatsappOperator.setMode(id))}
-                      >{label}</button>
-                    ))}
-                  </div>
-                  {off && <p className="wa-mode-disabled-hint"><Info />Encendé el bot para cambiar este modo.</p>}
-                </section>
-              )}
               <section>
                 <header><SlidersHorizontal /><span><strong>Apariencia</strong><small>Se guarda en este equipo</small></span></header>
                 <label>Mensajes</label>
@@ -2769,6 +2849,7 @@ export default function WhatsAppInboxView({
               </section>
               <section className="wa-menu-actions">
                 {canSettings && <button type="button" className="wa-menu-action-wide" onClick={() => void openSettings()}><Settings2 />Datos del negocio</button>}
+                {canSettings && <button type="button" className="wa-menu-action-wide" onClick={() => void openBotSettings()}><Bot />Configurar bot</button>}
                 <button type="button" onClick={toggleSound}>
                   {soundMuted ? <VolumeX /> : <Volume2 />}
                   {soundMuted ? 'Activar sonido' : 'Silenciar sonido'}
@@ -2848,12 +2929,16 @@ export default function WhatsAppInboxView({
                   key={row.phone}
                   className={`wa-row ${phone === row.phone ? 'selected' : ''}`}
                   onClick={() => {
+                    const alreadySelected = phone === row.phone;
                     void releaseTyping();
                     if (phone) draftsByPhoneRef.current.set(phone, draft);
                     manualListRef.current = false;
                     setFilterMenuOpen(false);
                     setPhone(row.phone);
                     setContextMode('');
+                    if (alreadySelected) {
+                      window.requestAnimationFrame(() => scrollToLatest('auto'));
+                    }
                   }}
                 >
                   <i className={row.failed_message ? 'failed' : row.handoff ? 'handoff' : status.tone} />
@@ -2937,6 +3022,7 @@ export default function WhatsAppInboxView({
                   <span><strong>{contactName(current)}</strong><small>{formatPhone(current.phone)}</small></span>
                 </button>
                 <nav>
+                  {testModeEnabled && !testModeAllowsCurrent && <em className="test-locked"><FlaskConical />Fuera de la prueba</em>}
                   {lockedByOther && <em className="typing"><UserRound />{typingLock.actor_name || 'Otra persona'} está escribiendo</em>}
                   {automaticContext && (
                     <button
@@ -2948,6 +3034,8 @@ export default function WhatsAppInboxView({
                         ? <><CircleDollarSign />Revisar presupuesto</>
                         : automaticContext === 'failure'
                           ? <><AlertCircle />Revisar envío</>
+                        : current.status === 'human'
+                          ? <><Hand />Atención manual</>
                           : <><Sparkles />Revisar</>}
                     </button>
                   )}
@@ -3049,9 +3137,9 @@ export default function WhatsAppInboxView({
                         key={block.key}
                         row={block.rows[0]}
                         groupRows={block.rows}
-                        canRetry={canReply}
+                        canRetry={canReply && testModeAllowsCurrent}
                         canMutate={canReply && !testChat}
-                        canGenerate={canReply && !testChat}
+                        canGenerate={canReply && !testChat && testModeAllowsCurrent}
                         menuOpen={messageMenuId === String(block.rows[0].id)}
                         onToggleMenu={(id) => setMessageMenuId((currentId) => (
                           currentId === id ? '' : id
@@ -3103,6 +3191,12 @@ export default function WhatsAppInboxView({
                 )}
               </div>
               <footer className="wa-compose">
+                {testModeEnabled && !testModeAllowsCurrent && (
+                  <div className="wa-test-mode-lock" role="status">
+                    <FlaskConical />
+                    <span><strong>Chat bloqueado por Modo test</strong><small>Durante la prueba sólo se puede responder a {testModeTargetName || formatPhone(testModePhone)}.</small></span>
+                  </div>
+                )}
                 {quickRepliesVisible && (
                   <section className="wa-quick-replies" aria-label="Respuestas rápidas">
                     <header>
@@ -3217,7 +3311,7 @@ export default function WhatsAppInboxView({
                   <button
                     type="button"
                     className="wa-attach"
-                    disabled={!canReply || testChat || lockedByOther || busy === 'send'}
+                    disabled={!canReply || testChat || !testModeAllowsCurrent || lockedByOther || busy === 'send'}
                     onClick={() => fileRef.current?.click()}
                     title="Adjuntar imagen"
                   ><Paperclip /></button>
@@ -3232,10 +3326,12 @@ export default function WhatsAppInboxView({
                     }}
                     placeholder={testChat
                       ? 'Chat de prueba: el envío está deshabilitado'
+                      : !testModeAllowsCurrent
+                        ? 'Modo test: esta conversación está bloqueada'
                       : lockedByOther
                       ? `${typingLock.actor_name || 'Otra persona'} está respondiendo…`
                       : canReply ? 'Escribí una respuesta…' : 'No tenés permiso para responder'}
-                    disabled={!canReply || testChat || current.opted_out || busy === 'send' || lockedByOther}
+                    disabled={!canReply || testChat || !testModeAllowsCurrent || current.opted_out || busy === 'send' || lockedByOther}
                     onKeyDown={(event) => {
                       if (
                         event.key === 'Enter'
@@ -3253,7 +3349,7 @@ export default function WhatsAppInboxView({
                     aria-label="Enviar mensaje"
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => void send(draft, quickReplySourceId)}
-                    disabled={!canReply || testChat || (!draft.trim() && !selectedFile && selectedCatalogMedia.length === 0) || current.opted_out || busy === 'send' || lockedByOther}
+                    disabled={!canReply || testChat || !testModeAllowsCurrent || (!draft.trim() && !selectedFile && selectedCatalogMedia.length === 0) || current.opted_out || busy === 'send' || lockedByOther}
                   >
                     {busy === 'send' ? <Loader2 className="animate-spin" /> : <Send />}
                     <span>Enviar</span>
@@ -3261,6 +3357,8 @@ export default function WhatsAppInboxView({
                 </div>
                 <small>{testChat
                   ? 'Conversación aislada: no se enviará nada a WhatsApp'
+                  : !testModeAllowsCurrent
+                    ? 'Modo test activo: los envíos están permitidos sólo en el número autorizado'
                   : 'Enter para enviar · Shift + Enter para una nueva línea'}</small>
               </footer>
             </>
@@ -3428,8 +3526,8 @@ export default function WhatsAppInboxView({
                 )}
                 {proposed ? (
                   <div className="wa-suggestion">
-                    <label>Respuesta sugerida<textarea value={suggestion} onChange={(event) => setSuggestion(event.target.value)} disabled={!canReply || mode === 'shadow' || busy === 'send'} /></label>
-                    <button type="button" className="wa-primary-action" onClick={() => void send(suggestion, proposed.id)} disabled={!canReply || mode === 'shadow' || !suggestion.trim() || busy === 'send'}>
+                    <label>Respuesta sugerida<textarea value={suggestion} onChange={(event) => setSuggestion(event.target.value)} disabled={!canReply || !testModeAllowsCurrent || mode === 'shadow' || busy === 'send'} /></label>
+                    <button type="button" className="wa-primary-action" onClick={() => void send(suggestion, proposed.id)} disabled={!canReply || !testModeAllowsCurrent || mode === 'shadow' || !suggestion.trim() || busy === 'send'}>
                       <Send />{suggestion === proposed.content ? 'Enviar sugerencia' : 'Enviar respuesta editada'}
                     </button>
                     {mode === 'shadow' && <p>En “Solo observar” podés revisar la sugerencia, pero no enviarla desde aquí. Cambiá a “Ayuda para responder” si querés usarla.</p>}
@@ -3499,6 +3597,32 @@ export default function WhatsAppInboxView({
           attachment={documentViewer.attachment}
           data={documentViewer.data}
           onClose={() => setDocumentViewer(null)}
+        />
+      )}
+      {botSettingsOpen && (
+        <WhatsAppBotSettingsPanel
+          key={botSettings?.version || 'bot-settings'}
+          value={botSettings?.data || {}}
+          version={botSettings?.version || null}
+          mode={selectedMode}
+          botOff={off}
+          canManageMode={canMode}
+          modeBusy={String(busy || '').startsWith('mode-')}
+          businessProfileReady={overview?.businessProfileReady !== false}
+          testMode={overview?.testMode || { enabled: false, phone: '' }}
+          selectedPhone={phone}
+          selectedContactName={current ? contactName(current) : ''}
+          testModeBusy={busy === 'test-mode'}
+          initialTestMessage={String(latestInboundMessage?.content || '')}
+          loading={botSettingsLoading}
+          loadError={botSettingsLoadError}
+          busy={busy === 'save-bot-settings'}
+          onModeChange={(nextMode) => void action(`mode-${nextMode}`, () => whatsappOperator.setMode(nextMode))}
+          onTestModeChange={(next) => void action('test-mode', () => whatsappOperator.setTestMode(next))}
+          onPreview={(options) => whatsappOperator.previewBotReply(options)}
+          onRetry={() => void openBotSettings()}
+          onSave={saveBotSettings}
+          onClose={() => setBotSettingsOpen(false)}
         />
       )}
     </section>

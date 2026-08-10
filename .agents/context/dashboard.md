@@ -1,6 +1,6 @@
 # Dashboard Context
 
-Last reviewed: 2026-07-19.
+Last reviewed: 2026-08-09.
 
 This document is a working map for future Codex/AI changes to the Rebu dashboard. Use it before modifying dashboard UI, data flows, filters, permissions, or Supabase-backed dashboard behavior.
 
@@ -32,7 +32,7 @@ Important functions:
 - `applyDashboardPayload`: applies daily logs, expenses, and cash closures to React state.
 - `loadOfflineDashboardSnapshot` / `saveOfflineDashboardSnapshot`: read/write local dashboard snapshots.
 
-`loadDashboardCloudData` also calls `loadTransactionsCloudData`, because dashboard profit and sales metrics depend on transactions.
+`loadDashboardCloudData` calls `loadTransactionsCloudData` by default because profit and activity metrics need both sources. It accepts `includeTransactions: false` for expense-only widget refreshes; do not couple an expense refresh back to the complete sales history.
 
 Transaction snapshots include `transactionsScope: 'full'` only after a successful paginated load of the complete sales table. Legacy snapshots or snapshots without that marker are treated as partial and must be backfilled once before incremental synchronization is allowed. Never infer completeness from the presence or number of locally cached transactions; doing so can leave older gaps permanently hidden from week, month, and year metrics.
 
@@ -44,9 +44,11 @@ Realtime updates are coordinated in `App.jsx` through one Supabase channel:
 - Channel and heartbeat failures mark cloud-backed modules dirty. A successful reconnect forces a catch-up of the visible module.
 - Updated state is also debounced into the corresponding offline snapshot.
 
-`DashboardView` receives `refreshingSources` from `App.jsx`. Use the specific source flags (`transactions`, `expenses`, `inventory`, `opening`, and `closures`) so only widgets backed by stale data show their loading treatment.
+`DashboardView` receives `sourceState` and `periodCoverage` from `App.jsx`. `getDashboardWidgetDataState` maps only the six top KPI cards to their required sources (`transactions` or `expenses`). Top KPIs always retain their normal card and current figure: loading animates only the result, while a stale idle KPI exposes a small refresh control in its header. A failed cloud refresh keeps the cached value visible, marks the source stale, and leaves the retry control available. Lower operational widgets remain visible and do not receive this state treatment.
 
-When the dashboard filter is switched to `week`, `month`, or `year` while the transaction/dashboard scopes are still partial, `DashboardView` asks `App.jsx` to force a full reload through `onRequireFullTransactions`. If verified data for today already exists, the requested period remains selected but the widgets explicitly show today's figures until the complete period arrives. A compact amber status explains which period is still loading; incomplete period totals must never be presented as complete.
+The `day` filter may use a verified recent/partial snapshot: it does not require complete historical scope. The `week`, `month`, and `year` filters require full coverage only for the sources used by each widget. For example, an expenses widget does not wait for transaction history, while net profit requires both sources.
+
+Do not automatically backfill the complete dashboard when entering the view or switching periods. A stale top KPI exposes a compact refresh button and calls `onRefreshWidget(widgetKey, { filter })`. `App.jsx` then refreshes only the needed module: transaction-backed cards load transactions, expenses load dashboard records without transactions, and net profit loads both. Concurrent requests reuse an in-flight load when it already covers the requested scope; widgets backed by the same source cannot start duplicate targeted refreshes. Only the explicitly refreshed KPI receives the targeted loading animation, while unrelated Realtime/module activity remains visible on its own KPI.
 
 If offline mode has no dashboard snapshot and no local dashboard data, `dashboardOfflineEmptyMessage` is passed to `DashboardView`.
 

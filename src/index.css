@@ -5728,18 +5728,25 @@ p {
   background-clip: padding-box;
 }
 
-.dashboard-refresh-status,
-.dashboard-refresh-indicator {
+.dashboard-refresh-status {
   border: 1px solid var(--rebu-warning-border);
   background: var(--rebu-warning-bg);
   color: var(--rebu-warning);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.dashboard-view .dashboard-kpi-refreshing.shadow-sm {
-  box-shadow:
-    0 0 0 1px var(--rebu-warning-border),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+@keyframes dashboard-kpi-value-loading {
+  0%,
+  100% {
+    opacity: 0.42;
+  }
+  50% {
+    opacity: 0.78;
+  }
+}
+
+.dashboard-view .dashboard-kpi-value-loading {
+  animation: dashboard-kpi-value-loading 1.15s ease-in-out infinite;
 }
 
 .dashboard-view,
@@ -5760,7 +5767,7 @@ p {
   svg,
   path
 ) {
-  transition-property: background-color, border-color, color, box-shadow, opacity, filter, fill, stroke !important;
+  transition-property: background-color, border-color, color, box-shadow, opacity, fill, stroke !important;
 }
 
 .dashboard-view .custom-scrollbar,
@@ -5772,6 +5779,11 @@ p {
   .dashboard-view,
   .dashboard-view * {
     transition-duration: 0ms !important;
+  }
+
+  .dashboard-view .dashboard-kpi-value-loading {
+    animation: none;
+    opacity: 0.58;
   }
 }
 

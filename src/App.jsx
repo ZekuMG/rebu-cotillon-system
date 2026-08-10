@@ -55,7 +55,9 @@ import {
   isHistoryLogAction,
 } from './utils/cloudSelects';
 import {
+  doesCloudLoadCoverRequest,
   fetchCloudPayloadWithRetries,
+  resolveCoveredCloudLoadResult,
   summarizeCloudResults,
 } from './utils/cloudLoadControl';
 import {
@@ -76,9 +78,9 @@ import {
   DASHBOARD_SNAPSHOT_SCOPE_FULL,
   DASHBOARD_SNAPSHOT_SCOPE_PARTIAL,
   getDashboardSnapshotScope,
-  needsDashboardFullBackfill,
   shouldUseIncrementalDashboardSync,
 } from './utils/dashboardSync';
+import { isDashboardSourceStale } from './utils/dashboardPeriodAvailability';
 import {
   createTransactionSnapshotPersistence,
   isTransactionHistorySnapshotFresh,
@@ -103,6 +105,11 @@ import {
   runSelectWithSchemaFallback,
 } from './utils/supabaseSchemaFallback';
 import { buildBudgetExportConfig, buildExportItemsFromSnapshot, deriveOrderStatus, hydrateBudgetSnapshot } from './utils/budgetHelpers';
+import {
+  buildOrderOperationKey,
+  getFinalizationPointsToCredit,
+  isIncrementalOrderPoints,
+} from './utils/orderPoints';
 import { buildLegacyOfferPayload } from './utils/offerHelpers';
 import { buildPointExpirationReport, normalizeMemberName } from './utils/memberPointsExpiration';
 import {
@@ -185,6 +192,10 @@ import {
   upsertCasaAlbertoPriceTracking,
   upsertExcelImportAlias,
 } from './utils/productLifecycle';
+import {
+  getExcelImportUndoConflicts,
+  runExcelImportBatch,
+} from './utils/excelImportOperations';
 
 import {
   INITIAL_CATEGORIES,
@@ -686,8 +697,8 @@ const shouldIgnoreNestedTestDetectionForLog = (action) => {
 
 const MODULE_LOAD_DEFAULT_STATE = {
   core: { status: 'idle', lastLoadedAt: 0, dirty: false, failedSources: [] },
-  transactions: { status: 'idle', lastLoadedAt: 0, dirty: false },
-  dashboard: { status: 'idle', lastLoadedAt: 0, dirty: false },
+  transactions: { status: 'idle', lastLoadedAt: 0, dirty: false, cloudRefreshFailed: false },
+  dashboard: { status: 'idle', lastLoadedAt: 0, dirty: false, cloudRefreshFailed: false },
   history: { status: 'idle', lastLoadedAt: 0, dirty: false },
   orders: { status: 'idle', lastLoadedAt: 0, dirty: false },
   reports: { status: 'idle', lastLoadedAt: 0, dirty: false },
@@ -2981,6 +2992,10 @@ export default function PartySupplyApp() {
     reports: null,
     metrics: null,
   });
+  const moduleLoadRequestOptionsRef = useRef({
+    transactions: null,
+    dashboard: null,
+  });
   const moduleLoadRequestSeqRef = useRef({
     core: 0,
     transactions: 0,
@@ -2995,7 +3010,6 @@ export default function PartySupplyApp() {
   const registerStateSnapshotRef = useRef(null);
   const transactionSnapshotScopeRef = useRef(TRANSACTION_SNAPSHOT_SCOPE_PARTIAL);
   const dashboardSnapshotScopeRef = useRef(DASHBOARD_SNAPSHOT_SCOPE_PARTIAL);
-  const dashboardFullBackfillPromiseRef = useRef(null);
   const indexedTransactionHydrationPromiseRef = useRef(null);
 
   const [openingBalance, setOpeningBalance] = useState(0);
@@ -3276,6 +3290,7 @@ export default function PartySupplyApp() {
         setModuleState('transactions', {
           status: 'loaded',
           dirty: !isFresh,
+          cloudRefreshFailed: false,
           lastLoadedAt: Date.parse(snapshot.savedAt),
         });
         setOfflineSnapshotAt((current) => {
@@ -3297,6 +3312,9 @@ export default function PartySupplyApp() {
     setModuleState(moduleKey, {
       status: 'loaded',
       dirty: false,
+      ...(['transactions', 'dashboard'].includes(moduleKey)
+        ? { cloudRefreshFailed: false }
+        : {}),
       lastLoadedAt: Date.now(),
       ...(moduleKey === 'core' ? { failedSources: [] } : {}),
     });
@@ -3754,8 +3772,24 @@ export default function PartySupplyApp() {
 
     await hydrateTransactionsFromIndexedDb();
 
+    const requestedLoad = {
+      full: Boolean(full),
+      nonProgressive: !progressive,
+    };
+
     if (moduleLoadPromisesRef.current.transactions) {
-      if (!force) return moduleLoadPromisesRef.current.transactions;
+      if (doesCloudLoadCoverRequest(
+        moduleLoadRequestOptionsRef.current.transactions,
+        requestedLoad,
+        ['full', 'nonProgressive'],
+      )) {
+        const loaded = await moduleLoadPromisesRef.current.transactions;
+        return resolveCoveredCloudLoadResult({
+          loaded,
+          requireCloud,
+          cloudRefreshFailed: moduleLoadStateRef.current.transactions.cloudRefreshFailed,
+        });
+      }
       await withTimeout(
         moduleLoadPromisesRef.current.transactions,
         FORCE_RELOAD_TIMEOUT_MS,
@@ -3778,7 +3812,11 @@ export default function PartySupplyApp() {
     const run = async () => {
       const requestId = beginModuleLoadRequest('transactions');
       const requestStartedAt = Date.now();
-      setModuleState('transactions', { status: 'loading', dirty: false });
+      setModuleState('transactions', {
+        status: 'loading',
+        dirty: false,
+        cloudRefreshFailed: false,
+      });
       const latestTransactionCreatedAt = getLatestCreatedAt(dataStateRef.current.transactions);
       const hasExistingTransactions =
         Array.isArray(dataStateRef.current.transactions) &&
@@ -3803,8 +3841,13 @@ export default function PartySupplyApp() {
 
         if (!payload?.hasCloudConnection) {
           if (Number(localDataMutationRef.current.transactions || 0) > requestStartedAt) {
-            setModuleState('transactions', { status: 'loaded', dirty: true, lastLoadedAt: Date.now() });
-            return true;
+            setModuleState('transactions', {
+              status: 'loaded',
+              dirty: true,
+              cloudRefreshFailed: true,
+              lastLoadedAt: Date.now(),
+            });
+            return !requireCloud;
           }
 
           const cachedSnapshot =
@@ -3813,17 +3856,27 @@ export default function PartySupplyApp() {
             setModuleState('transactions', {
               status: 'loaded',
               dirty: transactionSnapshotScopeRef.current !== TRANSACTION_SNAPSHOT_SCOPE_FULL,
+              cloudRefreshFailed: true,
               lastLoadedAt: Date.now(),
             });
             return !requireCloud;
           }
 
-          setModuleState('transactions', { status: 'error', dirty: true });
+          setModuleState('transactions', {
+            status: 'error',
+            dirty: true,
+            cloudRefreshFailed: true,
+          });
           return false;
         }
 
         if (Number(localDataMutationRef.current.transactions || 0) > requestStartedAt) {
-          setModuleState('transactions', { status: 'loaded', dirty: true, lastLoadedAt: Date.now() });
+          setModuleState('transactions', {
+            status: 'loaded',
+            dirty: true,
+            cloudRefreshFailed: false,
+            lastLoadedAt: Date.now(),
+          });
           return true;
         }
 
@@ -3851,6 +3904,7 @@ export default function PartySupplyApp() {
         setModuleState('transactions', {
           status: 'loaded',
           dirty: transactionSnapshotScopeRef.current !== TRANSACTION_SNAPSHOT_SCOPE_FULL,
+          cloudRefreshFailed: false,
           lastLoadedAt: Date.now(),
         });
         return true;
@@ -3858,8 +3912,13 @@ export default function PartySupplyApp() {
         if (!isCurrentModuleLoadRequest('transactions', requestId)) return true;
         console.error('Error general de conexión (metrics):', error);
         if (Number(localDataMutationRef.current.transactions || 0) > requestStartedAt) {
-          setModuleState('transactions', { status: 'loaded', dirty: true, lastLoadedAt: Date.now() });
-          return true;
+          setModuleState('transactions', {
+            status: 'loaded',
+            dirty: true,
+            cloudRefreshFailed: true,
+            lastLoadedAt: Date.now(),
+          });
+          return !requireCloud;
         }
 
         const cachedSnapshot =
@@ -3868,20 +3927,27 @@ export default function PartySupplyApp() {
           setModuleState('transactions', {
             status: 'loaded',
             dirty: transactionSnapshotScopeRef.current !== TRANSACTION_SNAPSHOT_SCOPE_FULL,
+            cloudRefreshFailed: true,
             lastLoadedAt: Date.now(),
           });
           return !requireCloud;
         }
 
-        setModuleState('transactions', { status: 'error', dirty: true });
+        setModuleState('transactions', {
+          status: 'error',
+          dirty: true,
+          cloudRefreshFailed: true,
+        });
         return false;
       } finally {
         if (moduleLoadPromisesRef.current.transactions === currentPromise) {
           moduleLoadPromisesRef.current.transactions = null;
+          moduleLoadRequestOptionsRef.current.transactions = null;
         }
       }
     };
 
+    moduleLoadRequestOptionsRef.current.transactions = requestedLoad;
     currentPromise = run();
     moduleLoadPromisesRef.current.transactions = currentPromise;
     return currentPromise;
@@ -3892,11 +3958,33 @@ export default function PartySupplyApp() {
     requireCloud = false,
     full = false,
     background = false,
+    includeTransactions = true,
   } = {}) => {
     if (isLocalDemoMode()) return completeLocalDemoModuleLoad('dashboard');
 
+    const requestedLoad = {
+      full: Boolean(full),
+      includeTransactions: Boolean(includeTransactions),
+    };
+
     if (moduleLoadPromisesRef.current.dashboard) {
-      if (!force) return moduleLoadPromisesRef.current.dashboard;
+      if (doesCloudLoadCoverRequest(
+        moduleLoadRequestOptionsRef.current.dashboard,
+        requestedLoad,
+        ['full', 'includeTransactions'],
+      )) {
+        const loaded = await moduleLoadPromisesRef.current.dashboard;
+        return resolveCoveredCloudLoadResult({
+          loaded,
+          requireCloud,
+          cloudRefreshFailed:
+            moduleLoadStateRef.current.dashboard.cloudRefreshFailed ||
+            (
+              includeTransactions &&
+              moduleLoadStateRef.current.transactions.cloudRefreshFailed
+            ),
+        });
+      }
       await withTimeout(
         moduleLoadPromisesRef.current.dashboard,
         FORCE_RELOAD_TIMEOUT_MS,
@@ -3914,7 +4002,7 @@ export default function PartySupplyApp() {
       const requestId = beginModuleLoadRequest('dashboard');
       setModuleState('dashboard', background
         ? { status: 'loaded', dirty: true }
-        : { status: 'loading', dirty: false });
+        : { status: 'loading', dirty: false, cloudRefreshFailed: false });
       const latestDashboardLogCreatedAt = getLatestCreatedAt(dataStateRef.current.dailyLogs);
       const latestExpenseCreatedAt = getLatestCreatedAt(dataStateRef.current.expenses);
       const latestClosureCreatedAt = getLatestCreatedAt(dataStateRef.current.pastClosures);
@@ -3930,12 +4018,14 @@ export default function PartySupplyApp() {
       const useProgressiveBootstrap = !full && !useRecentSync;
 
       try {
-        const transactionsPromise = loadTransactionsCloudData({
-          force,
-          requireCloud,
-          full,
-          progressive: !full,
-        });
+        const transactionsPromise = includeTransactions
+          ? loadTransactionsCloudData({
+              force,
+              requireCloud,
+              full,
+              progressive: !full,
+            })
+          : Promise.resolve(true);
         const dashboardPayloadPromise = useRecentSync
           ? latestDashboardLogCreatedAt || latestExpenseCreatedAt || latestClosureCreatedAt
             ? fetchDashboardCloudPayloadSince({
@@ -3952,8 +4042,12 @@ export default function PartySupplyApp() {
           dashboardPayloadPromise,
         ]);
         if (!isCurrentModuleLoadRequest('dashboard', requestId)) return true;
-        if (!transactionsLoaded) {
-          setModuleState('dashboard', { status: 'error', dirty: true });
+        if (includeTransactions && !transactionsLoaded) {
+          setModuleState('dashboard', {
+            status: 'error',
+            dirty: true,
+            cloudRefreshFailed: true,
+          });
           return false;
         }
 
@@ -3962,11 +4056,20 @@ export default function PartySupplyApp() {
         if (!payload?.hasCloudConnection) {
           const cachedSnapshot = loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
           if (applyDashboardSnapshot(cachedSnapshot)) {
-            setModuleState('dashboard', { status: 'loaded', dirty: true, lastLoadedAt: Date.now() });
+            setModuleState('dashboard', {
+              status: 'loaded',
+              dirty: true,
+              cloudRefreshFailed: true,
+              lastLoadedAt: Date.now(),
+            });
             return !requireCloud;
           }
 
-          setModuleState('dashboard', { status: 'error', dirty: true });
+          setModuleState('dashboard', {
+            status: 'error',
+            dirty: true,
+            cloudRefreshFailed: true,
+          });
           return false;
         }
 
@@ -4011,10 +4114,8 @@ export default function PartySupplyApp() {
         saveOfflineDashboardSnapshot(nextSnapshot);
         setModuleState('dashboard', {
           status: 'loaded',
-          dirty: needsDashboardFullBackfill({
-            dashboardScope: dashboardSnapshotScopeRef.current,
-            transactionScope: transactionSnapshotScopeRef.current,
-          }),
+          dirty: dashboardSnapshotScopeRef.current !== DASHBOARD_SNAPSHOT_SCOPE_FULL,
+          cloudRefreshFailed: false,
           lastLoadedAt: Date.now(),
         });
         return true;
@@ -4023,54 +4124,32 @@ export default function PartySupplyApp() {
         console.error('Error general de conexión (metrics):', error);
         const cachedSnapshot = loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
         if (applyDashboardSnapshot(cachedSnapshot)) {
-          setModuleState('dashboard', { status: 'loaded', dirty: true, lastLoadedAt: Date.now() });
+          setModuleState('dashboard', {
+            status: 'loaded',
+            dirty: true,
+            cloudRefreshFailed: true,
+            lastLoadedAt: Date.now(),
+          });
           return !requireCloud;
         }
 
-        setModuleState('dashboard', { status: 'error', dirty: true });
+        setModuleState('dashboard', {
+          status: 'error',
+          dirty: true,
+          cloudRefreshFailed: true,
+        });
         return false;
       } finally {
         if (moduleLoadPromisesRef.current.dashboard === currentPromise) {
           moduleLoadPromisesRef.current.dashboard = null;
+          moduleLoadRequestOptionsRef.current.dashboard = null;
         }
       }
     };
 
+    moduleLoadRequestOptionsRef.current.dashboard = requestedLoad;
     currentPromise = run();
     moduleLoadPromisesRef.current.dashboard = currentPromise;
-    if (!full) {
-      void currentPromise.then((loaded) => {
-        if (
-          !loaded ||
-          isBrowserOffline() ||
-          dashboardFullBackfillPromiseRef.current ||
-          !needsDashboardFullBackfill({
-            dashboardScope: dashboardSnapshotScopeRef.current,
-            transactionScope: transactionSnapshotScopeRef.current,
-          })
-        ) {
-          return;
-        }
-
-        const backfillPromise = Promise.resolve()
-          .then(() => loadDashboardCloudData({
-            force: true,
-            requireCloud: false,
-            full: true,
-            background: true,
-          }))
-          .catch((error) => {
-            console.warn('No se pudo completar el historial del Dashboard en segundo plano:', error);
-            return false;
-          })
-          .finally(() => {
-            if (dashboardFullBackfillPromiseRef.current === backfillPromise) {
-              dashboardFullBackfillPromiseRef.current = null;
-            }
-          });
-        dashboardFullBackfillPromiseRef.current = backfillPromise;
-      });
-    }
     return currentPromise;
   };
 
@@ -6629,6 +6708,15 @@ export default function PartySupplyApp() {
         throw new Error('No se encontró el pedido a actualizar.');
       }
 
+      if (transactions.some((tx) => String(tx.orderId || '') === String(id))) {
+        showNotification(
+          'warning',
+          'Pedido ya facturado',
+          'CancelÃ¡ este pedido y generÃ¡ uno nuevo para cambiar productos, importe o socio.',
+        );
+        return;
+      }
+
       const nextTotalAmount = Number(orderData.totalAmount || 0);
       if (nextTotalAmount < Number(previousOrder.paidTotal || 0)) {
         showNotification('warning', 'Total inválido', 'El total del pedido no puede quedar por debajo del dinero ya registrado.');
@@ -6699,8 +6787,21 @@ export default function PartySupplyApp() {
         status: nextStatus,
       };
 
-      const { data } = await updateWithSchemaFallback('orders', id, payload, CLOUD_SELECTS.orders);
+      const rpcOrder = await saveOrderWithPointsCloud({
+        operationKey: buildOrderOperationKey('edit', id, previousOrder.version || 1),
+        action: 'edit',
+        orderId: id,
+        orderPayload: payload,
+        expectedVersion: previousOrder.version || 1,
+      });
+      const data = rpcOrder || (
+        await updateWithSchemaFallback('orders', id, payload, CLOUD_SELECTS.orders)
+      ).data;
       const updatedOrder = mapOrderRecords([data])[0];
+
+      if (rpcOrder) {
+        await syncMemberPointBalancesCloud(previousOrder.memberId, updatedOrder.memberId);
+      }
 
       setOrders((prev) =>
         prev.map((order) => (String(order.id) === String(id) ? updatedOrder : order))
@@ -7050,6 +7151,116 @@ export default function PartySupplyApp() {
     ].filter(Boolean).join(' ');
 
     return /register_sale_transaction|edit_sale_transaction|void_sale_transaction|function .* does not exist|schema cache|PGRST202|permission denied|42501/i.test(errorText);
+  };
+
+  const isIncrementalPointsRpcMissing = (error, functionName) => {
+    const errorText = [error?.message, error?.details, error?.hint, error?.code]
+      .filter(Boolean)
+      .join(' ');
+    const requestedName = String(functionName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(
+      `PGRST202|42883|42P01|schema cache|could not find[^.]*${requestedName}|${requestedName}[^.]*does not exist`,
+      'i',
+    ).test(errorText);
+  };
+
+  const saveOrderWithPointsCloud = async ({
+    operationKey,
+    action,
+    orderId = null,
+    orderPayload = {},
+    expectedVersion = null,
+    stockDeltaByProduct = {},
+  }) => {
+    if (isLocalDemoMode() || !ENABLE_AUTHENTICATED_TRANSACTION_RPCS) return null;
+    if (!(await canUseAuthenticatedTransactionRpcs())) {
+      throw createTransactionRpcRequiredError('guardar pedidos y puntos');
+    }
+
+    const { data, error } = await supabase.rpc('save_order_with_points_once', {
+      p_operation_key: operationKey,
+      p_action: action,
+      p_order_id: orderId,
+      p_order: orderPayload,
+      p_expected_version: expectedVersion,
+      p_stock_deltas: stockDeltaByProduct || {},
+    });
+    if (error) {
+      if (isIncrementalPointsRpcMissing(error, 'save_order_with_points_once')) return null;
+      throw error;
+    }
+    return Array.isArray(data) ? data[0] : data;
+  };
+
+  const registerOrderSaleCloud = async ({
+    operationKey,
+    orderId,
+    salePayload,
+    itemsPayload,
+    stockDeltaByProduct,
+  }) => {
+    if (isLocalDemoMode()) return null;
+    if (!ENABLE_AUTHENTICATED_TRANSACTION_RPCS || !(await canUseAuthenticatedTransactionRpcs())) {
+      throw createTransactionRpcRequiredError('finalizar la venta de un pedido');
+    }
+
+    const { data, error } = await supabase.rpc('register_order_sale_once', {
+      p_operation_key: operationKey,
+      p_order_id: orderId,
+      p_sale: salePayload,
+      p_items: itemsPayload,
+      p_stock_deltas: stockDeltaByProduct || {},
+    });
+    if (error) {
+      if (isIncrementalPointsRpcMissing(error, 'register_order_sale_once')) {
+        throw createTransactionRpcRequiredError('finalizar la venta incremental del pedido', error);
+      }
+      throw error;
+    }
+    const saleId = data?.id || data?.sale_id || (Array.isArray(data) ? data[0]?.id : null);
+    if (!saleId) throw new Error('La RPC register_order_sale_once no devolviÃ³ la venta.');
+    return { id: saleId, orderId, pointsSource: 'order' };
+  };
+
+  const adjustMemberPointsCloud = async ({
+    operationKey,
+    clientId,
+    delta,
+    reason,
+    entryType = 'manual_adjustment',
+    earnedAt = new Date().toISOString(),
+  }) => {
+    if (!delta || isLocalDemoMode() || !ENABLE_AUTHENTICATED_TRANSACTION_RPCS) return null;
+    if (!(await canUseAuthenticatedTransactionRpcs())) {
+      throw createTransactionRpcRequiredError('ajustar puntos del socio');
+    }
+
+    const { data, error } = await supabase.rpc('adjust_member_points_once', {
+      p_operation_key: operationKey,
+      p_client_id: clientId,
+      p_delta: Math.trunc(Number(delta) || 0),
+      p_reason: reason || '',
+      p_entry_type: entryType,
+      p_earned_at: earnedAt,
+    });
+    if (error) {
+      if (isIncrementalPointsRpcMissing(error, 'adjust_member_points_once')) return null;
+      throw error;
+    }
+    return Array.isArray(data) ? data[0] : data;
+  };
+
+  const syncMemberPointBalancesCloud = async (...memberIds) => {
+    const ids = [...new Set(memberIds.filter((id) => id !== null && id !== undefined).map(String))];
+    if (ids.length === 0 || isLocalDemoMode()) return;
+    const { data, error } = await supabase.from('clients').select('id,points').in('id', ids);
+    if (error) throw error;
+    const balances = new Map((data || []).map((client) => [String(client.id), Number(client.points || 0)]));
+    setMembers((prev) => prev.map((member) => (
+      balances.has(String(member.id))
+        ? { ...member, points: balances.get(String(member.id)), currentPoints: balances.get(String(member.id)) }
+        : member
+    )));
   };
 
   const registerSaleTransactionCloud = async ({
@@ -7715,6 +7926,8 @@ export default function PartySupplyApp() {
     const totalAmount = Number(orderRecord.totalAmount || 0);
     const clientId = toOptionalDbId(orderRecord.memberId);
     const pointsEarned = clientId ? Math.floor(totalAmount / 500) : 0;
+    const orderOwnsPoints = isIncrementalOrderPoints(orderRecord);
+    const pointsToCreditAtFinalization = getFinalizationPointsToCredit(orderRecord, pointsEarned);
     const pointsSpent = 0;
     const actor = getActorContext();
     const paymentState = getOrderPaymentState(orderRecord);
@@ -7736,7 +7949,7 @@ export default function PartySupplyApp() {
       cash_received: Number(paymentInfo.cashReceived || 0),
       cash_change: Number(paymentInfo.cashChange || 0),
       client_id: clientId,
-      points_earned: clientId ? pointsEarned : 0,
+      points_earned: clientId && !orderOwnsPoints ? pointsEarned : 0,
       points_spent: 0,
       user_id: toOptionalDbId(actor.userId),
       user_role: actor.userRole,
@@ -7762,11 +7975,11 @@ export default function PartySupplyApp() {
     let updatedClientForHistory = null;
     let pointsChange = null;
     const clientPointUpdates = [];
-    if (clientId) {
+    if (clientId && pointsToCreditAtFinalization > 0) {
       const linkedMember = members.find((member) => String(member.id) === String(clientId));
       if (linkedMember) {
         const previousPoints = Number(linkedMember.points || 0);
-        const newPoints = previousPoints + pointsEarned;
+        const newPoints = previousPoints + pointsToCreditAtFinalization;
         pointsChange = { previous: previousPoints, new: newPoints, diff: newPoints - previousPoints };
         clientPointUpdates.push({
           client_id: String(clientId),
@@ -7777,12 +7990,20 @@ export default function PartySupplyApp() {
       }
     }
 
-    let sale = await registerSaleTransactionCloud({
-      salePayload,
-      itemsPayload,
-      stockDeltaByProduct: deltaByProduct,
-      clientPointUpdates,
-    });
+    let sale = orderOwnsPoints
+      ? await registerOrderSaleCloud({
+          operationKey: buildOrderOperationKey('sale', orderRecord.id, orderRecord.version || 1, 'final'),
+          orderId: orderRecord.id,
+          salePayload,
+          itemsPayload,
+          stockDeltaByProduct: deltaByProduct,
+        })
+      : await registerSaleTransactionCloud({
+          salePayload,
+          itemsPayload,
+          stockDeltaByProduct: deltaByProduct,
+          clientPointUpdates,
+        });
     let stockChanges = [];
 
     if (sale) {
@@ -7865,7 +8086,8 @@ export default function PartySupplyApp() {
       items: historyItems,
       status: 'completed',
       client: txClient,
-      pointsEarned: clientId ? pointsEarned : 0,
+      pointsEarned: clientId && !orderOwnsPoints ? pointsEarned : 0,
+      pointsSource: orderOwnsPoints ? 'order' : 'sale',
       pointsSpent,
       orderId: orderRecord.id,
       budgetId: orderRecord.budgetId || null,
@@ -7914,7 +8136,8 @@ export default function PartySupplyApp() {
         cashChange: Number(paymentInfo.cashChange || 0),
         client: clientId ? (txClient?.name || fallbackClientName || null) : null,
         memberNumber: clientId ? (txClient?.memberNumber || null) : null,
-        pointsEarned: clientId ? pointsEarned : 0,
+        pointsEarned: clientId && !orderOwnsPoints ? pointsEarned : 0,
+        orderPointsCredited: clientId && orderOwnsPoints ? Number(orderRecord.pointsCredited || 0) : 0,
         pointsSpent,
         pointsChange,
         stockChanges,
@@ -7986,9 +8209,17 @@ export default function PartySupplyApp() {
         is_active: true,
       };
 
-      const { data } = await insertWithSchemaFallback('orders', payload, CLOUD_SELECTS.orders);
+      const rpcOrder = await saveOrderWithPointsCloud({
+        operationKey: buildOrderOperationKey('create', budgetRecord.id, 0, 'conversion'),
+        action: 'create',
+        orderPayload: payload,
+      });
+      const data = rpcOrder || (
+        await insertWithSchemaFallback('orders', payload, CLOUD_SELECTS.orders)
+      ).data;
 
       const newOrder = mapOrderRecords([data])[0];
+      if (rpcOrder) await syncMemberPointBalancesCloud(newOrder.memberId);
       setOrders((prev) => [newOrder, ...prev]);
       let finalizedSale = null;
       let reservationChanges = [];
@@ -8031,6 +8262,7 @@ export default function PartySupplyApp() {
           paymentMethod: newOrder.paymentMethod || null,
           paymentBreakdown: newOrder.paymentBreakdown || null,
           paymentHistory: newOrder.paymentHistory || [],
+          pointsCredited: Number(newOrder.pointsCredited || 0),
           pickupDate: newOrder.pickupDate,
           stockChanges: finalizedSale?.stockChanges || reservationChanges,
         },
@@ -8146,22 +8378,32 @@ export default function PartySupplyApp() {
       }
 
       let data;
+      let rpcOrder = null;
       try {
-        const result = await updateWithSchemaFallback(
-          'orders',
-          orderRecord.id,
-          {
-            payment_method: nextPaymentState.paymentMethod || null,
-            payment_breakdown: nextPaymentHistory,
-            installments: nextPaymentState.installments || 0,
-            deposit_amount: nextDeposit,
-            paid_total: nextPaidTotal,
-            remaining_amount: nextRemaining,
-            status: nextStatus,
-          },
-          CLOUD_SELECTS.orders,
-        );
-        data = result.data;
+        const orderPatch = {
+          payment_method: nextPaymentState.paymentMethod || null,
+          payment_breakdown: nextPaymentHistory,
+          installments: nextPaymentState.installments || 0,
+          deposit_amount: nextDeposit,
+          paid_total: nextPaidTotal,
+          remaining_amount: nextRemaining,
+          status: nextStatus,
+        };
+        rpcOrder = await saveOrderWithPointsCloud({
+          operationKey: buildOrderOperationKey(
+            'deposit',
+            orderRecord.id,
+            orderRecord.version || 1,
+            nextDeposit,
+          ),
+          action: 'deposit',
+          orderId: orderRecord.id,
+          orderPayload: orderPatch,
+          expectedVersion: orderRecord.version || 1,
+        });
+        data = rpcOrder || (
+          await updateWithSchemaFallback('orders', orderRecord.id, orderPatch, CLOUD_SELECTS.orders)
+        ).data;
       } catch (updateError) {
         try {
           if (stockTransition === 'reserved') await restoreOrderStock(orderRecord);
@@ -8173,6 +8415,7 @@ export default function PartySupplyApp() {
       }
 
       const updatedOrder = mapOrderRecords([data])[0];
+      if (rpcOrder) await syncMemberPointBalancesCloud(orderRecord.memberId, updatedOrder.memberId);
       setOrders((prev) =>
         prev.map((order) => (String(order.id) === String(orderRecord.id) ? updatedOrder : order))
       );
@@ -8206,6 +8449,10 @@ export default function PartySupplyApp() {
           remainingAmount: nextRemaining,
           paymentMethod: nextPaymentState.paymentMethod || null,
           paymentHistory: nextPaymentHistory,
+          previousPointsCredited: Number(orderRecord.pointsCredited || 0),
+          pointsCredited: Number(updatedOrder.pointsCredited || 0),
+          pointsDelta:
+            Number(updatedOrder.pointsCredited || 0) - Number(orderRecord.pointsCredited || 0),
           pickupDate: updatedOrder.pickupDate || null,
           itemsSnapshot: buildOrderLogItems(updatedOrder.itemsSnapshot || []),
           changes: [
@@ -8287,18 +8534,28 @@ export default function PartySupplyApp() {
         status,
       };
 
-      const { data } = await updateWithSchemaFallback(
-        'orders',
-        orderRecord.id,
-        payload,
-        CLOUD_SELECTS.orders,
-      );
-
-      setOrders((prev) =>
-        prev.map((order) => (order.id === orderRecord.id ? mapOrderRecords([data])[0] : order))
-      );
+      const rpcOrder = await saveOrderWithPointsCloud({
+        operationKey: buildOrderOperationKey(
+          'payment',
+          orderRecord.id,
+          orderRecord.version || 1,
+          paymentEntry.id,
+        ),
+        action: 'payment',
+        orderId: orderRecord.id,
+        orderPayload: payload,
+        expectedVersion: orderRecord.version || 1,
+      });
+      const data = rpcOrder || (
+        await updateWithSchemaFallback('orders', orderRecord.id, payload, CLOUD_SELECTS.orders)
+      ).data;
 
       const updatedOrder = mapOrderRecords([data])[0];
+      if (rpcOrder) await syncMemberPointBalancesCloud(orderRecord.memberId, updatedOrder.memberId);
+      setOrders((prev) =>
+        prev.map((order) => (order.id === orderRecord.id ? updatedOrder : order))
+      );
+
       let finalizedSale = null;
       let reservationChanges = [];
 
@@ -8337,6 +8594,10 @@ export default function PartySupplyApp() {
           paymentHistory: updatedOrder.paymentHistory || nextPaymentHistory,
           paidTotal: nextPaidTotal,
           remainingAmount: nextRemaining,
+          previousPointsCredited: Number(orderRecord.pointsCredited || 0),
+          pointsCredited: Number(updatedOrder.pointsCredited || 0),
+          pointsDelta:
+            Number(updatedOrder.pointsCredited || 0) - Number(orderRecord.pointsCredited || 0),
           pickupDate: updatedOrder.pickupDate || null,
           itemsSnapshot: buildOrderLogItems(updatedOrder.itemsSnapshot || []),
           stockChanges: finalizedSale?.stockChanges || reservationChanges,
@@ -8354,12 +8615,17 @@ export default function PartySupplyApp() {
   const handleMarkOrderRetired = async (orderRecord) => {
     if (blockIfOfflineReadonly('marcar pedidos como retirados')) return;
     try {
-      const { data } = await updateWithSchemaFallback(
-        'orders',
-        orderRecord.id,
-        { status: 'Retirado' },
-        CLOUD_SELECTS.orders,
-      );
+      const retirePatch = { status: 'Retirado' };
+      const rpcOrder = await saveOrderWithPointsCloud({
+        operationKey: buildOrderOperationKey('retire', orderRecord.id, orderRecord.version || 1),
+        action: 'retire',
+        orderId: orderRecord.id,
+        orderPayload: retirePatch,
+        expectedVersion: orderRecord.version || 1,
+      });
+      const data = rpcOrder || (
+        await updateWithSchemaFallback('orders', orderRecord.id, retirePatch, CLOUD_SELECTS.orders)
+      ).data;
       const retiredOrder = mapOrderRecords([data])[0];
 
       setOrders((prev) =>
@@ -8397,7 +8663,21 @@ export default function PartySupplyApp() {
     if (blockIfOfflineReadonly('cancelar pedidos')) return;
     try {
       let restoredStockChanges = [];
-      if (isOrderStockReserved(orderRecord)) {
+      const linkedOrderSale = transactions.find((tx) =>
+        String(tx.orderId || '') === String(orderRecord.id) &&
+        tx.status === 'completed'
+      );
+      const linkedSaleStockDelta = linkedOrderSale
+        ? buildSaleStockDelta(buildSaleRequiredStock(linkedOrderSale.items || []), 1)
+        : {};
+      if (linkedOrderSale) {
+        const stockPreview = getSaleStockDeltaPreview(linkedSaleStockDelta);
+        if (stockPreview.stockIssues.length > 0) {
+          showNotification('error', 'Stock', `No se pudo preparar la devoluciÃ³n: ${stockPreview.stockIssues.join(', ')}`);
+          return;
+        }
+        restoredStockChanges = stockPreview.stockChanges;
+      } else if (isOrderStockReserved(orderRecord)) {
         const { stockIssues, stockChanges } = await restoreOrderStock(orderRecord);
         if (stockIssues.length > 0) {
           showNotification('error', 'Stock', `No se pudo restaurar el stock del pedido: ${stockIssues.join(', ')}`);
@@ -8445,23 +8725,61 @@ export default function PartySupplyApp() {
         retainedDeposit,
       );
 
-      const { data } = await updateWithSchemaFallback(
-        'orders',
-        orderRecord.id,
-        {
-          status: 'Cancelado',
-          payment_method: retainedPaymentState.paymentMethod || null,
-          payment_breakdown: retainedPaymentHistory,
-          installments: retainedPaymentState.installments || 0,
-          deposit_amount: retainedDeposit,
-          paid_total: retainedDeposit,
-          remaining_amount: 0,
-        },
-        CLOUD_SELECTS.orders,
-      );
+      const cancelPatch = {
+        status: 'Cancelado',
+        payment_method: retainedPaymentState.paymentMethod || null,
+        payment_breakdown: retainedPaymentHistory,
+        installments: retainedPaymentState.installments || 0,
+        deposit_amount: retainedDeposit,
+        paid_total: retainedDeposit,
+        remaining_amount: 0,
+      };
+      let data;
+      let rpcOrder = null;
+      try {
+        rpcOrder = await saveOrderWithPointsCloud({
+          operationKey: buildOrderOperationKey(
+            keepDeposit ? 'cancel-keep' : 'cancel-refund',
+            orderRecord.id,
+            orderRecord.version || 1,
+          ),
+          action: keepDeposit ? 'cancel_keep_deposit' : 'cancel_refund',
+          orderId: orderRecord.id,
+          orderPayload: cancelPatch,
+          expectedVersion: orderRecord.version || 1,
+          stockDeltaByProduct: linkedSaleStockDelta,
+        });
+        if (!rpcOrder && linkedOrderSale) {
+          throw createTransactionRpcRequiredError('cancelar un pedido ya facturado');
+        }
+        data = rpcOrder || (
+          await updateWithSchemaFallback('orders', orderRecord.id, cancelPatch, CLOUD_SELECTS.orders)
+        ).data;
+      } catch (updateError) {
+        if (!linkedOrderSale && restoredStockChanges.length > 0) {
+          try {
+            await reserveOrderStock(orderRecord);
+          } catch (rollbackError) {
+            console.error('No se pudo volver a reservar el stock tras fallar la cancelaciÃ³n:', rollbackError);
+          }
+        }
+        throw updateError;
+      }
 
+      const cancelledOrder = mapOrderRecords([data])[0];
+      if (rpcOrder) await syncMemberPointBalancesCloud(orderRecord.memberId, cancelledOrder.memberId);
+      if (rpcOrder && linkedOrderSale) {
+        setInventory((prev) => prev.map((product) => {
+          const delta = linkedSaleStockDelta[String(product.id)];
+          return delta ? { ...product, stock: Number(product.stock || 0) + Number(delta || 0) } : product;
+        }));
+        setTransactions((prev) => prev.map((tx) => (
+          String(tx.id) === String(linkedOrderSale.id) ? { ...tx, status: 'voided' } : tx
+        )));
+        void syncStockLifecycleForDeltas(linkedSaleStockDelta);
+      }
       setOrders((prev) =>
-        prev.map((order) => (order.id === orderRecord.id ? mapOrderRecords([data])[0] : order))
+        prev.map((order) => (order.id === orderRecord.id ? cancelledOrder : order))
       );
 
       addLog(
@@ -8481,6 +8799,10 @@ export default function PartySupplyApp() {
           refundedAmount,
           totalAmount: Number(orderRecord.totalAmount || 0),
           paidTotal: Number(orderRecord.paidTotal || 0),
+          previousPointsCredited: Number(orderRecord.pointsCredited || 0),
+          pointsCredited: Number(cancelledOrder.pointsCredited || 0),
+          pointsDelta:
+            Number(cancelledOrder.pointsCredited || 0) - Number(orderRecord.pointsCredited || 0),
           pickupDate: orderRecord.pickupDate || null,
           itemsSnapshot: buildOrderLogItems(orderRecord.itemsSnapshot || []),
           stockChanges: restoredStockChanges,
@@ -8503,7 +8825,21 @@ export default function PartySupplyApp() {
     if (blockIfOfflineReadonly('eliminar pedidos')) return;
     try {
       let restoredStockChanges = [];
-      if (isOrderStockReserved(orderRecord)) {
+      const linkedOrderSale = transactions.find((tx) =>
+        String(tx.orderId || '') === String(orderRecord.id) &&
+        tx.status === 'completed'
+      );
+      const linkedSaleStockDelta = linkedOrderSale
+        ? buildSaleStockDelta(buildSaleRequiredStock(linkedOrderSale.items || []), 1)
+        : {};
+      if (linkedOrderSale) {
+        const stockPreview = getSaleStockDeltaPreview(linkedSaleStockDelta);
+        if (stockPreview.stockIssues.length > 0) {
+          showNotification('error', 'Stock', `No se pudo preparar la devoluciÃ³n: ${stockPreview.stockIssues.join(', ')}`);
+          return;
+        }
+        restoredStockChanges = stockPreview.stockChanges;
+      } else if (isOrderStockReserved(orderRecord)) {
         const { stockIssues, stockChanges } = await restoreOrderStock(orderRecord);
         if (stockIssues.length > 0) {
           showNotification('error', 'Stock', `No se pudo restaurar el stock del pedido: ${stockIssues.join(', ')}`);
@@ -8512,14 +8848,47 @@ export default function PartySupplyApp() {
         restoredStockChanges = stockChanges;
       }
 
-      const { data } = await updateWithSchemaFallback(
-        'orders',
-        orderRecord.id,
-        { is_active: false },
-        CLOUD_SELECTS.orders,
-      );
+      const deletePatch = { is_active: false };
+      let data;
+      let rpcOrder = null;
+      try {
+        rpcOrder = await saveOrderWithPointsCloud({
+          operationKey: buildOrderOperationKey('delete', orderRecord.id, orderRecord.version || 1),
+          action: 'delete',
+          orderId: orderRecord.id,
+          orderPayload: deletePatch,
+          expectedVersion: orderRecord.version || 1,
+          stockDeltaByProduct: linkedSaleStockDelta,
+        });
+        if (!rpcOrder && linkedOrderSale) {
+          throw createTransactionRpcRequiredError('eliminar un pedido ya facturado');
+        }
+        data = rpcOrder || (
+          await updateWithSchemaFallback('orders', orderRecord.id, deletePatch, CLOUD_SELECTS.orders)
+        ).data;
+      } catch (updateError) {
+        if (!linkedOrderSale && restoredStockChanges.length > 0) {
+          try {
+            await reserveOrderStock(orderRecord);
+          } catch (rollbackError) {
+            console.error('No se pudo volver a reservar el stock tras fallar la baja:', rollbackError);
+          }
+        }
+        throw updateError;
+      }
 
       const deletedOrder = mapOrderRecords([data])[0];
+      if (rpcOrder) await syncMemberPointBalancesCloud(orderRecord.memberId, deletedOrder.memberId);
+      if (rpcOrder && linkedOrderSale) {
+        setInventory((prev) => prev.map((product) => {
+          const delta = linkedSaleStockDelta[String(product.id)];
+          return delta ? { ...product, stock: Number(product.stock || 0) + Number(delta || 0) } : product;
+        }));
+        setTransactions((prev) => prev.map((tx) => (
+          String(tx.id) === String(linkedOrderSale.id) ? { ...tx, status: 'voided' } : tx
+        )));
+        void syncStockLifecycleForDeltas(linkedSaleStockDelta);
+      }
       setOrders((prev) => prev.filter((order) => order.id !== orderRecord.id));
 
       addLog(
@@ -8540,6 +8909,9 @@ export default function PartySupplyApp() {
           remainingAmount: Number(deletedOrder?.remainingAmount ?? orderRecord.remainingAmount ?? 0),
           pickupDate: deletedOrder?.pickupDate || orderRecord.pickupDate || null,
           status: deletedOrder?.status || orderRecord.status,
+          previousPointsCredited: Number(orderRecord.pointsCredited || 0),
+          pointsCredited: Number(deletedOrder?.pointsCredited || 0),
+          pointsDelta: Number(deletedOrder?.pointsCredited || 0) - Number(orderRecord.pointsCredited || 0),
           itemsSnapshot: buildOrderLogItems(deletedOrder?.itemsSnapshot || orderRecord.itemsSnapshot || []),
           stockChanges: restoredStockChanges,
         },
@@ -9113,7 +9485,7 @@ export default function PartySupplyApp() {
            email: normalizedData.email,
            extraInfo: normalizedData.extraInfo,
            social_connections: socialConnections,
-           points: normalizedData.points,
+           points: 0,
            member_number: memberNum
          };
 
@@ -9130,6 +9502,29 @@ export default function PartySupplyApp() {
        }
 
        if (!newClient?.id) throw new Error('Supabase no devolvio el socio creado.');
+
+       const initialPoints = Math.max(0, Math.trunc(Number(normalizedData.points) || 0));
+       if (initialPoints > 0) {
+         const pointResult = await adjustMemberPointsCloud({
+           operationKey: `member:initial:${String(newClient.id).slice(0, 120)}`,
+           clientId: newClient.id,
+           delta: initialPoints,
+           reason: 'Saldo inicial al crear el socio',
+           entryType: 'initial_balance',
+           earnedAt: new Date().toISOString(),
+         });
+         if (pointResult) {
+           newClient = { ...newClient, points: Number(pointResult.points || 0) };
+         } else {
+           const { data: clientWithInitialPoints } = await updateWithSchemaFallback(
+             'clients',
+             newClient.id,
+             { points: initialPoints },
+             CLOUD_SELECTS.clients,
+           );
+           newClient = clientWithInitialPoints;
+         }
+       }
        
        const clientFormatted = formatClientRecordAsMember(newClient, {
          extraInfo: normalizedData.extraInfo,
@@ -9227,7 +9622,6 @@ export default function PartySupplyApp() {
       if (normalizedInput.email !== undefined) dbUpdates.email = normalizedInput.email;
       if (normalizedInput.extraInfo !== undefined) dbUpdates.extraInfo = normalizedInput.extraInfo;
       
-      if (normalizedInput.points !== undefined) dbUpdates.points = normalizedInput.points;
       if (normalizedInput.memberNumber !== undefined) dbUpdates.member_number = normalizedInput.memberNumber;
 
       const hasInstagramUpdate =
@@ -9268,7 +9662,33 @@ export default function PartySupplyApp() {
 
       if (hasInstagramUpdate || hasCouponUsageOverrideUpdate) dbUpdates.social_connections = nextSocialConnections;
       
-      await updateWithSchemaFallback('clients', id, dbUpdates, CLOUD_SELECTS.clients);
+      if (Object.keys(dbUpdates).length > 0) {
+        await updateWithSchemaFallback('clients', id, dbUpdates, CLOUD_SELECTS.clients);
+      }
+
+      const requestedPointsDelta = normalizedInput.points !== undefined
+        ? Number(normalizedInput.points) - Number(oldMember.points || 0)
+        : 0;
+      if (requestedPointsDelta !== 0) {
+        const pointResult = await adjustMemberPointsCloud({
+          operationKey: `member:adjust:${String(id).slice(0, 80)}:${Number(oldMember.points || 0)}-${Number(normalizedInput.points || 0)}`,
+          clientId: id,
+          delta: requestedPointsDelta,
+          reason: `Ajuste manual: ${Number(oldMember.points || 0)} a ${Number(normalizedInput.points || 0)}`,
+          entryType: 'manual_adjustment',
+          earnedAt: new Date().toISOString(),
+        });
+        if (pointResult) {
+          normalizedInput.points = Number(pointResult.points || 0);
+        } else {
+          await updateWithSchemaFallback(
+            'clients',
+            id,
+            { points: Number(normalizedInput.points || 0) },
+            CLOUD_SELECTS.clients,
+          );
+        }
+      }
       
       // ?? Normalizar updates: convertir points a número antes de actualizar estado
       const normalizedUpdates = normalizedInput;
@@ -9383,7 +9803,23 @@ export default function PartySupplyApp() {
   const handleCheckMemberPointExpirations = async () => {
     if (blockIfOfflineReadonly('auditar puntos de socios')) return null;
 
-    const report = buildPointExpirationReport(members, transactions, { upcomingDays: 30 });
+    let pointEntries = [];
+    if (!isLocalDemoMode() && ENABLE_AUTHENTICATED_TRANSACTION_RPCS) {
+      const ledgerResult = await supabase
+        .from('member_point_entries')
+        .select(CLOUD_SELECTS.memberPointEntries)
+        .order('earned_at', { ascending: true });
+      if (!ledgerResult.error) {
+        pointEntries = ledgerResult.data || [];
+      } else if (!isIncrementalPointsRpcMissing(ledgerResult.error, 'member_point_entries')) {
+        console.warn('No se pudo cargar el libro mayor de puntos:', ledgerResult.error);
+      }
+    }
+
+    const report = buildPointExpirationReport(members, transactions, {
+      upcomingDays: 30,
+      pointEntries,
+    });
     const expiredMembers = report.expiredMembers.filter((member) => member.expiredPoints > 0);
 
     if (expiredMembers.length === 0) {
@@ -9403,6 +9839,26 @@ export default function PartySupplyApp() {
         const nextPoints = Math.max(0, previousPoints - expiredPoints);
 
         if (expiredPoints <= 0 || nextPoints === previousPoints) continue;
+
+        const pointResult = await adjustMemberPointsCloud({
+          operationKey: `member:expiration:${String(currentMember.id).slice(0, 80)}:${report.generatedAt.slice(0, 10)}:${expiredPoints}`,
+          clientId: currentMember.id,
+          delta: -expiredPoints,
+          reason: `Vencimiento automÃ¡tico de ${expiredPoints} puntos`,
+          entryType: 'expiration',
+          earnedAt: new Date().toISOString(),
+        });
+        if (pointResult) {
+          updates.push({
+            id: currentMember.id,
+            name: currentMember.name || expiredMember.name,
+            memberNumber: currentMember.memberNumber || currentMember.member_number || expiredMember.memberNumber,
+            previousPoints,
+            expiredPoints,
+            newPoints: Number(pointResult.points || nextPoints),
+          });
+          continue;
+        }
 
         await updateWithSchemaFallback('clients', currentMember.id, { points: nextPoints }, CLOUD_SELECTS.clients);
 
@@ -12036,7 +12492,7 @@ export default function PartySupplyApp() {
         didOpen: () => Swal.showLoading()
       });
 
-      const updates = await Promise.all(safeRows.map(async (row) => {
+      const batchResult = await runExcelImportBatch(safeRows, async (row) => {
         const product = inventory.find((entry) => String(entry.id) === String(row.productId));
         if (!product) {
           throw new Error(`No se encontro el producto ${row.productTitle || row.productId}.`);
@@ -12073,61 +12529,123 @@ export default function PartySupplyApp() {
 
         let clearedProduct = null;
         let clearedProductBefore = null;
-        if (row.shouldAssignBarcode && row.importedCode) {
-          const currentBarcodeOwner = inventory.find(
-            (entry) =>
-              String(entry.barcode || '') === String(row.importedCode) &&
-              String(entry.id) !== String(row.productId)
-          );
-
-          if (currentBarcodeOwner) {
-            clearedProductBefore = currentBarcodeOwner;
-            const { data: clearedData } = await updateWithSchemaFallback(
-              'products',
-              currentBarcodeOwner.id,
-              { barcode: null },
-              CLOUD_SELECTS.products
-            );
-            clearedProduct = mapInventoryRecords([clearedData || { ...currentBarcodeOwner, barcode: null }])[0] || null;
-          }
-        }
-
-        if (Object.keys(payload).length === 0 && stockDelta === 0) {
-          return { rowId: row.rowId, product, clearedProduct, clearedProductBefore };
-        }
-
+        let targetUpdated = false;
+        let stockApplied = false;
         let updatedProduct = product;
-        if (Object.keys(payload).length > 0) {
-          const { data } = await updateWithSchemaFallback('products', product.id, payload, CLOUD_SELECTS.products);
-          updatedProduct = mapInventoryRecords([data || { ...product, ...payload }])[0] || { ...product, ...payload };
-        }
+        try {
+          if (row.shouldAssignBarcode && row.importedCode) {
+            const currentBarcodeOwner = inventory.find(
+              (entry) =>
+                String(entry.barcode || '') === String(row.importedCode) &&
+                String(entry.id) !== String(row.productId)
+            );
 
-        if (stockDelta !== 0) {
-          const nextStock = isLocalDemoMode()
-            ? Number(localDemoUpdateRow('products', product.id, { stock: currentStock + stockDelta })?.stock || currentStock + stockDelta)
-            : await applyProductStockDeltaCloud(product, stockDelta);
-          updatedProduct = { ...updatedProduct, stock: nextStock };
-        }
+            if (currentBarcodeOwner) {
+              clearedProductBefore = currentBarcodeOwner;
+              const { data: clearedData } = await updateWithSchemaFallback(
+                'products',
+                currentBarcodeOwner.id,
+                { barcode: null },
+                CLOUD_SELECTS.products
+              );
+              clearedProduct = mapInventoryRecords([clearedData || { ...currentBarcodeOwner, barcode: null }])[0] || null;
+            }
+          }
 
-        return {
-          rowId: row.rowId,
-          product: updatedProduct,
-          clearedProduct,
-          clearedProductBefore,
-          payload: {
-            ...payload,
-            ...(stockDelta !== 0 ? { stock: currentStock + stockDelta } : {}),
-          },
-          before: {
-            stock: currentStock,
-            purchasePrice: currentCost,
-            price: currentPrice,
-            barcode: product.barcode || '',
-            supplierLinks: currentSupplierLinks,
-            isActive: getProductActiveState(product),
-          },
-          source: row,
-        };
+          if (Object.keys(payload).length === 0 && stockDelta === 0) {
+            return { rowId: row.rowId, product, clearedProduct, clearedProductBefore };
+          }
+
+          if (Object.keys(payload).length > 0) {
+            const { data } = await updateWithSchemaFallback('products', product.id, payload, CLOUD_SELECTS.products);
+            targetUpdated = true;
+            updatedProduct = mapInventoryRecords([data || { ...product, ...payload }])[0] || { ...product, ...payload };
+          }
+
+          if (stockDelta !== 0) {
+            const nextStock = isLocalDemoMode()
+              ? Number(localDemoUpdateRow('products', product.id, { stock: currentStock + stockDelta })?.stock || currentStock + stockDelta)
+              : await applyProductStockDeltaCloud(product, stockDelta);
+            stockApplied = true;
+            updatedProduct = { ...updatedProduct, stock: nextStock };
+          }
+
+          return {
+            rowId: row.rowId,
+            product: updatedProduct,
+            clearedProduct,
+            clearedProductBefore,
+            payload: {
+              ...payload,
+              ...(stockDelta !== 0 ? { stock: updatedProduct.stock } : {}),
+            },
+            before: {
+              stock: currentStock,
+              purchasePrice: currentCost,
+              price: currentPrice,
+              barcode: product.barcode || '',
+              supplierLinks: currentSupplierLinks,
+              isActive: getProductActiveState(product),
+            },
+            source: row,
+          };
+        } catch (error) {
+          const rollbackErrors = [];
+
+          if (stockApplied) {
+            try {
+              if (isLocalDemoMode()) {
+                localDemoUpdateRow('products', product.id, { stock: currentStock });
+              } else {
+                await applyProductStockDeltaCloud(
+                  { ...product, stock: currentStock + stockDelta },
+                  -stockDelta,
+                );
+              }
+            } catch (rollbackError) {
+              rollbackErrors.push(`stock: ${rollbackError.message}`);
+            }
+          }
+
+          if (targetUpdated) {
+            const rollbackPayload = {};
+            if (payload.purchasePrice !== undefined) rollbackPayload.purchasePrice = currentCost;
+            if (payload.price !== undefined) rollbackPayload.price = currentPrice;
+            if (payload.barcode !== undefined) rollbackPayload.barcode = product.barcode || null;
+            if (payload.supplier_links !== undefined) rollbackPayload.supplier_links = currentSupplierLinks;
+            if (payload.is_active !== undefined) rollbackPayload.is_active = getProductActiveState(product);
+
+            try {
+              await updateWithSchemaFallback('products', product.id, rollbackPayload, CLOUD_SELECTS.products);
+            } catch (rollbackError) {
+              rollbackErrors.push(`producto: ${rollbackError.message}`);
+            }
+          }
+
+          if (clearedProductBefore) {
+            try {
+              await updateWithSchemaFallback(
+                'products',
+                clearedProductBefore.id,
+                { barcode: clearedProductBefore.barcode || null },
+                CLOUD_SELECTS.products,
+              );
+            } catch (rollbackError) {
+              rollbackErrors.push(`codigo anterior: ${rollbackError.message}`);
+            }
+          }
+
+          if (rollbackErrors.length > 0) {
+            throw new Error(`${error?.message || 'Fallo la fila.'} No se pudo revertir: ${rollbackErrors.join('; ')}`);
+          }
+          throw error;
+        }
+      }, { concurrency: 4 });
+      const updates = batchResult.succeeded;
+      const failedRows = batchResult.failed.map(({ item, error }) => ({
+        rowId: item.rowId,
+        productTitle: item.productTitle,
+        error: getCloudErrorMessage(error, 'No se pudo aplicar esta fila.'),
       }));
 
       const updatedById = new Map();
@@ -12200,9 +12718,18 @@ export default function PartySupplyApp() {
       }, 'Productos Avanzado');
 
       Swal.close();
-      showNotification('success', 'Importacion aplicada', `Se actualizaron ${appliedUpdates.length} producto(s).`);
+      if (failedRows.length > 0) {
+        showNotification(
+          appliedUpdates.length > 0 ? 'warning' : 'error',
+          appliedUpdates.length > 0 ? 'Importacion parcial' : 'No se aplicaron cambios',
+          `${appliedUpdates.length} producto(s) actualizado(s) y ${failedRows.length} fila(s) pendiente(s).`,
+        );
+      } else {
+        showNotification('success', 'Importacion aplicada', `Se actualizaron ${appliedUpdates.length} producto(s).`);
+      }
       return {
         appliedRowIds: updates.map((update) => update.rowId),
+        failed: failedRows,
         undoItems: appliedUpdates.map((update) => ({
           rowId: update.rowId,
           productId: update.product.id,
@@ -12227,7 +12754,14 @@ export default function PartySupplyApp() {
     } catch (error) {
       console.error('Error importando productos desde Excel:', error);
       Swal.fire('Error', error?.message || 'No se pudo aplicar la importacion.', 'error');
-      return { appliedRowIds: [] };
+      return {
+        appliedRowIds: [],
+        failed: safeRows.map((row) => ({
+          rowId: row.rowId,
+          productTitle: row.productTitle,
+          error: getCloudErrorMessage(error, 'No se pudo aplicar esta fila.'),
+        })),
+      };
     }
   };
 
@@ -12256,16 +12790,30 @@ export default function PartySupplyApp() {
         didOpen: () => Swal.showLoading(),
       });
 
-      const restoredProducts = [];
-      const restoredBarcodeOwners = [];
-
-      for (const item of safeItems) {
+      const batchResult = await runExcelImportBatch(safeItems, async (item) => {
         const product = inventory.find((entry) => String(entry.id) === String(item.productId));
         if (!product) {
           throw new Error(`No se encontro el producto ${item.productTitle || item.productId}.`);
         }
 
         const before = item.before || {};
+        const after = item.after || {};
+        const conflicts = getExcelImportUndoConflicts({
+          before,
+          after,
+          current: {
+            stock: Number(product.stock || 0),
+            purchasePrice: Number(product.purchasePrice || 0),
+            price: Number(product.price || 0),
+            barcode: product.barcode || '',
+            supplierLinks: getProductSupplierLinks(product),
+            isActive: getProductActiveState(product),
+          },
+        });
+        if (conflicts.length > 0) {
+          throw new Error(`El producto cambio despues de aplicar el Excel (${conflicts.join(', ')}).`);
+        }
+
         const restorePayload = {
           stock: Number(before.stock || 0),
           purchasePrice: Number(before.purchasePrice ?? before.cost ?? 0),
@@ -12276,31 +12824,60 @@ export default function PartySupplyApp() {
         if (before.isActive !== undefined) restorePayload.is_active = before.isActive !== false;
 
         const { data } = await updateWithSchemaFallback('products', product.id, restorePayload, CLOUD_SELECTS.products);
-        restoredProducts.push(mapInventoryRecords([data || { ...product, ...restorePayload }])[0]);
+        const restoredProduct = mapInventoryRecords([data || { ...product, ...restorePayload }])[0];
+        let restoredBarcodeOwner = null;
 
         if (item.clearedBarcodeOwner?.id) {
           const owner = inventory.find((entry) => String(entry.id) === String(item.clearedBarcodeOwner.id));
           const ownerPayload = { barcode: item.clearedBarcodeOwner.barcode || null };
-          const { data: ownerData } = await updateWithSchemaFallback(
-            'products',
-            item.clearedBarcodeOwner.id,
-            ownerPayload,
-            CLOUD_SELECTS.products,
-          );
-          restoredBarcodeOwners.push(mapInventoryRecords([ownerData || { ...(owner || {}), id: item.clearedBarcodeOwner.id, ...ownerPayload }])[0]);
+          try {
+            const { data: ownerData } = await updateWithSchemaFallback(
+              'products',
+              item.clearedBarcodeOwner.id,
+              ownerPayload,
+              CLOUD_SELECTS.products,
+            );
+            restoredBarcodeOwner = mapInventoryRecords([ownerData || { ...(owner || {}), id: item.clearedBarcodeOwner.id, ...ownerPayload }])[0];
+          } catch (ownerError) {
+            const appliedPayload = {
+              stock: Number(after.stock || 0),
+              purchasePrice: Number(after.purchasePrice ?? after.cost ?? 0),
+              price: Number(after.price || 0),
+              barcode: after.barcode || null,
+            };
+            if (after.supplierLinks) appliedPayload.supplier_links = after.supplierLinks;
+            if (after.isActive !== undefined) appliedPayload.is_active = after.isActive !== false;
+
+            try {
+              await updateWithSchemaFallback('products', product.id, appliedPayload, CLOUD_SELECTS.products);
+            } catch (rollbackError) {
+              throw new Error(`${ownerError.message} No se pudo restaurar el producto aplicado: ${rollbackError.message}`);
+            }
+            throw ownerError;
+          }
         }
-      }
+
+        return { item, restoredProduct, restoredBarcodeOwner };
+      }, { concurrency: 4 });
+      const restoredRows = batchResult.succeeded;
+      const failedRows = batchResult.failed.map(({ item, error }) => ({
+        rowId: item.rowId,
+        productTitle: item.productTitle,
+        error: getCloudErrorMessage(error, 'No se pudo deshacer esta fila.'),
+      }));
 
       const restoredById = new Map();
-      [...restoredProducts, ...restoredBarcodeOwners].filter(Boolean).forEach((product) => {
+      restoredRows.flatMap(({ restoredProduct, restoredBarcodeOwner }) => (
+        [restoredProduct, restoredBarcodeOwner]
+      )).filter(Boolean).forEach((product) => {
         restoredById.set(String(product.id), product);
       });
       setInventory((prev) => prev.map((product) => restoredById.get(String(product.id)) || product));
 
       addLog('Deshacer Importacion Excel', {
-        count: safeItems.length,
-        undoneRowIds: safeItems.map((item) => item.rowId),
-        items: safeItems.map((item) => ({
+        count: restoredRows.length,
+        undoneRowIds: restoredRows.map(({ item }) => item.rowId),
+        items: restoredRows.map(({ item }) => ({
           id: item.productId,
           title: item.productTitle,
           beforeUndo: item.after,
@@ -12310,8 +12887,19 @@ export default function PartySupplyApp() {
       }, 'Productos Avanzado');
 
       Swal.close();
-      showNotification('success', 'Importacion deshecha', `Se restauraron ${safeItems.length} producto(s).`);
-      return { undoneRowIds: safeItems.map((item) => item.rowId) };
+      if (failedRows.length > 0) {
+        showNotification(
+          restoredRows.length > 0 ? 'warning' : 'error',
+          restoredRows.length > 0 ? 'Restauracion parcial' : 'No se pudo deshacer',
+          `${restoredRows.length} producto(s) restaurado(s) y ${failedRows.length} pendiente(s).`,
+        );
+      } else {
+        showNotification('success', 'Importacion deshecha', `Se restauraron ${restoredRows.length} producto(s).`);
+      }
+      return {
+        undoneRowIds: restoredRows.map(({ item }) => item.rowId),
+        failed: failedRows,
+      };
     } catch (error) {
       console.error('Error deshaciendo importacion desde Excel:', error);
       Swal.fire('Error', error?.message || 'No se pudo deshacer la importacion.', 'error');
@@ -13672,6 +14260,14 @@ export default function PartySupplyApp() {
     e?.preventDefault?.();
     const tx = transactionToRefund;
     if (!tx) return;
+    if (tx.orderId) {
+      showNotification(
+        'warning',
+        'Venta vinculada a un pedido',
+        'CancelÃ¡ el pedido desde Pedidos para revertir pagos, puntos y stock de forma consistente.',
+      );
+      return;
+    }
     
     try {
       // ==========================================
@@ -13893,6 +14489,14 @@ export default function PartySupplyApp() {
   
   const handleRestoreTransaction = async (tx) => {
     if (blockIfOfflineReadonly('restaurar ventas')) return;
+    if (tx?.orderId) {
+      showNotification(
+        'warning',
+        'Venta vinculada a un pedido',
+        'Las ventas generadas por pedidos deben gestionarse desde el pedido original.',
+      );
+      return;
+    }
     const result = await Swal.fire({
       title: '¿Restaurar Venta?',
       text: 'Se volverá a registrar la venta en el sistema, ocupará su fecha original, se descontará el stock nuevamente y se le devolverán los puntos al socio. ¿Estás seguro?',
@@ -14185,6 +14789,14 @@ export default function PartySupplyApp() {
     const originalTx =
       transactions.find((t) => String(t.id) === String(editingTransaction.id)) ||
       editingTransaction;
+    if (originalTx?.orderId) {
+      showNotification(
+        'warning',
+        'Venta vinculada a un pedido',
+        'EditÃ¡ el pedido original; esta venta no administra puntos de forma independiente.',
+      );
+      return;
+    }
     const editedBaseTotal = getEditedTransactionTotal(editingTransaction.items, 'Efectivo');
     const editedPaymentBreakdown = buildEditedTransactionPaymentBreakdown(editingTransaction, editedBaseTotal);
     const editedPaymentTotals = getPaymentBreakdownTotals(editedPaymentBreakdown);
@@ -14621,30 +15233,76 @@ export default function PartySupplyApp() {
     ['idle', 'loading'].includes(moduleLoadState.transactions.status);
   const isRealtimeSourceBusy = (source) =>
     ['pending', 'syncing'].includes(realtimeSourceState[source]);
-  const dashboardRefreshingSources = {
-    transactions:
-      isAuthBootLoading ||
-      isCloudLoading ||
-      isReconnectAttempting ||
-      moduleLoadState.transactions.status === 'loading' ||
-      moduleLoadState.transactions.dirty ||
-      isRealtimeSourceBusy('sales'),
-    expenses:
-      isAuthBootLoading ||
-      isCloudLoading ||
-      isReconnectAttempting ||
-      moduleLoadState.dashboard.status === 'loading' ||
-      moduleLoadState.dashboard.dirty ||
-      isRealtimeSourceBusy('expenses'),
-    inventory:
-      moduleLoadState.core.status === 'loading' ||
-      moduleLoadState.core.dirty ||
-      isRealtimeSourceBusy('products'),
-    opening: false,
-    closures: isRealtimeSourceBusy('closures'),
+  const dashboardSourceState = {
+    transactions: {
+      loading:
+        moduleLoadState.transactions.status === 'loading' ||
+        isRealtimeSourceBusy('sales'),
+      stale: isDashboardSourceStale({
+        status: moduleLoadState.transactions.status,
+        dirty: moduleLoadState.transactions.dirty,
+        cloudRefreshFailed: moduleLoadState.transactions.cloudRefreshFailed,
+        snapshotComplete: transactionSnapshotScopeRef.current === TRANSACTION_SNAPSHOT_SCOPE_FULL,
+        offline: isOfflineReadOnly,
+      }),
+    },
+    expenses: {
+      loading:
+        moduleLoadState.dashboard.status === 'loading' ||
+        isRealtimeSourceBusy('expenses'),
+      stale: isDashboardSourceStale({
+        status: moduleLoadState.dashboard.status,
+        dirty: moduleLoadState.dashboard.dirty,
+        cloudRefreshFailed: moduleLoadState.dashboard.cloudRefreshFailed,
+        snapshotComplete: dashboardSnapshotScopeRef.current === DASHBOARD_SNAPSHOT_SCOPE_FULL,
+        offline: isOfflineReadOnly,
+      }),
+    },
+    inventory: {
+      loading:
+        moduleLoadState.core.status === 'loading' ||
+        isRealtimeSourceBusy('products'),
+      stale:
+        ['idle', 'error'].includes(moduleLoadState.core.status) ||
+        moduleLoadState.core.dirty ||
+        isOfflineReadOnly,
+    },
+    opening: { loading: false, stale: false },
+    closures: {
+      loading: isRealtimeSourceBusy('closures'),
+      stale: false,
+    },
   };
   const isDashboardProfitSyncing =
-    dashboardRefreshingSources.transactions || dashboardRefreshingSources.expenses;
+    dashboardSourceState.transactions.loading || dashboardSourceState.expenses.loading;
+  const refreshDashboardWidget = async (widgetKey, { filter = 'day' } = {}) => {
+    const full = filter !== 'day';
+
+    if (widgetKey === 'opening') return true;
+    if (widgetKey === 'expenses') {
+      return loadDashboardCloudData({
+        force: true,
+        requireCloud: true,
+        full,
+        includeTransactions: false,
+      });
+    }
+    if (widgetKey === 'net') {
+      return loadDashboardCloudData({
+        force: true,
+        requireCloud: true,
+        full,
+        includeTransactions: true,
+      });
+    }
+
+    return loadTransactionsCloudData({
+      force: true,
+      requireCloud: true,
+      full,
+      progressive: !full,
+    });
+  };
   const isMetricsProfitSyncing =
     isProfitBaseDataPending ||
     moduleLoadState.metrics.status === 'loading';
@@ -15275,11 +15933,11 @@ export default function PartySupplyApp() {
                   expenses={expenses}
                   isLoading={isDashboardModuleLoading && transactions.length === 0 && dailyLogs.length === 0}
                   isProfitSyncing={isDashboardProfitSyncing}
-                  refreshingSources={dashboardRefreshingSources}
-                  isPeriodDataComplete={
-                    transactionSnapshotScopeRef.current === TRANSACTION_SNAPSHOT_SCOPE_FULL &&
-                    dashboardSnapshotScopeRef.current === DASHBOARD_SNAPSHOT_SCOPE_FULL
-                  }
+                  sourceState={dashboardSourceState}
+                  periodCoverage={{
+                    transactions: transactionSnapshotScopeRef.current === TRANSACTION_SNAPSHOT_SCOPE_FULL,
+                    expenses: dashboardSnapshotScopeRef.current === DASHBOARD_SNAPSHOT_SCOPE_FULL,
+                  }}
                   emptyStateMessage={dashboardOfflineEmptyMessage}
                   onOpenExpenseModal={() => {
                     setExpenseToEdit(null);
@@ -15302,10 +15960,7 @@ export default function PartySupplyApp() {
                     setExpenseToEdit(expense);
                     setIsExpenseModalOpen(true);
                   }}
-                  onRequireFullTransactions={() => (
-                    dashboardFullBackfillPromiseRef.current ||
-                    loadDashboardCloudData({ force: true, full: true })
-                  )}
+                  onRefreshWidget={refreshDashboardWidget}
                 />
               </PersistentTabPanel>
             )}

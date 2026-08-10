@@ -20,6 +20,13 @@ import {
 } from 'lucide-react';
 import AsyncActionButton from './AsyncActionButton';
 import { FancyPrice } from './FancyPrice';
+import usePendingAction from '../hooks/usePendingAction';
+import { areDuplicatePricesEqual, mergeDuplicateEntries } from '../utils/excelImportDuplicates';
+import { parseExcelMoney } from '../utils/excelImportNumbers';
+import {
+  canApplyExcelImportRow,
+  mergeExcelImportProductResult,
+} from '../utils/excelImportOperations';
 import { getExcelImportAliases, productMatchesExcelAlias } from '../utils/productLifecycle';
 
 const REQUIRED_COLUMNS = ['codigo', 'descripcion', 'cantidad', 'precio', 'descuento', 'costo', 'venta'];
@@ -131,10 +138,10 @@ const buildImportEntry = (row, rowNumber) => {
   const description = String(getFirstValue(row, 'Descripcion') ?? '').trim();
   const category = String(getFirstValue(row, 'Categoria') ?? '').trim();
   const quantity = parseNumber(getFirstValue(row, 'Cantidad'));
-  const providerPrice = parseNumber(getFirstValue(row, 'Precio'));
-  const discount = parseNumber(getFirstValue(row, 'Descuento'));
-  const lotCost = parseNumber(getFirstValue(row, 'Costo'));
-  const lotSalePrice = parseNumber(getFirstValue(row, 'Venta'));
+  const providerPrice = parseExcelMoney(getFirstValue(row, 'Precio'));
+  const discount = parseExcelMoney(getFirstValue(row, 'Descuento'));
+  const lotCost = parseExcelMoney(getFirstValue(row, 'Costo'));
+  const lotSalePrice = parseExcelMoney(getFirstValue(row, 'Venta'));
   const multiplier = 1;
   const cost = divideLotValue(lotCost, multiplier);
   const salePrice = divideLotValue(lotSalePrice, multiplier);
@@ -163,37 +170,6 @@ const buildImportEntry = (row, rowNumber) => {
     salePriceEdited: false,
   };
 };
-
-const areDuplicatePricesEqual = (entries) => {
-  if (!entries || entries.length <= 1) return true;
-  const first = entries[0];
-  return entries.every((entry) => entry.cost === first.cost && entry.salePrice === first.salePrice);
-};
-
-const mergeDuplicateEntries = (entries) => ({
-  ...entries[0],
-  rowNumber: entries.map((entry) => entry.rowNumber).join(', '),
-  quantity: entries.reduce((sum, entry) => sum + Number(entry.quantity || 0), 0),
-  lotCost: entries.reduce((sum, entry) => sum + Number(entry.lotCost || entry.cost || 0), 0),
-  lotSalePrice: entries.reduce((sum, entry) => sum + Number(entry.lotSalePrice || entry.salePrice || 0), 0),
-  cost: divideLotValue(
-    entries.reduce((sum, entry) => sum + Number(entry.lotCost || entry.cost || 0), 0),
-    entries[0]?.multiplier || 1,
-  ),
-  salePrice: divideLotValue(
-    entries.reduce((sum, entry) => sum + Number(entry.lotSalePrice || entry.salePrice || 0), 0),
-    entries[0]?.multiplier || 1,
-  ),
-  costInput: String(divideLotValue(
-    entries.reduce((sum, entry) => sum + Number(entry.lotCost || entry.cost || 0), 0),
-    entries[0]?.multiplier || 1,
-  ) || ''),
-  salePriceInput: String(divideLotValue(
-    entries.reduce((sum, entry) => sum + Number(entry.lotSalePrice || entry.salePrice || 0), 0),
-    entries[0]?.multiplier || 1,
-  ) || ''),
-  duplicateMerged: true,
-});
 
 const getEntryInputKey = (field) => {
   if (field === 'salePrice') return 'salePriceInput';
@@ -289,7 +265,7 @@ const getRowStatus = (row) => {
 };
 
 const isFieldEligible = (row, field) => {
-  if (!row.product) return false;
+  if (!row.product || row.applied) return false;
   if (field === 'stock') return Number(row.entry.quantity || 0) > 0 && Number(row.entry.multiplier || 0) >= 0;
   if (field === 'cost') return Number(row.entry.cost || 0) > 0 && Number(row.product.purchasePrice || 0) !== Number(row.entry.cost || 0);
   if (field === 'price') return Number(row.entry.salePrice || 0) > 0 && Number(row.product.price || 0) !== Number(row.entry.salePrice || 0);
@@ -339,12 +315,16 @@ const hasBarcodeAssignmentChange = (row) =>
       normalizeCode(row.product.barcode) !== normalizeCode(row.entry.code),
   );
 
-const isRowApplicable = (row) =>
-  Boolean(
-    row.product &&
-      !hasBlockingErrorsForApply(row) &&
-      (hasSelectedFieldChange(row) || hasBarcodeAssignmentChange(row) || shouldSaveExcelLinkForRow(row)),
-  );
+const isRowApplicable = (row) => canApplyExcelImportRow({
+  applied: row?.applied,
+  hasProduct: Boolean(row?.product),
+  hasBlockingErrors: hasBlockingErrorsForApply(row),
+  hasApplicableChanges: Boolean(
+    hasSelectedFieldChange(row)
+    || hasBarcodeAssignmentChange(row)
+    || shouldSaveExcelLinkForRow(row)
+  ),
+});
 
 const getRowErrorHints = (errors = []) =>
   errors.map((error) => {
@@ -430,6 +410,7 @@ export default function BulkExcelImportView({
   const [isCreatingProducts, setIsCreatingProducts] = useState(false);
   const [lastApplyBatch, setLastApplyBatch] = useState(null);
   const [isUndoingImport, setIsUndoingImport] = useState(false);
+  const { runAction: runImportAction } = usePendingAction();
 
   const barcodeLookup = useMemo(() => {
     const map = new Map();
@@ -461,7 +442,14 @@ export default function BulkExcelImportView({
     const barcode = normalizeCode(entry?.code);
     if (barcode) {
       const barcodeOwner = barcodeLookup.get(barcode);
-      if (barcodeOwner) return { product: barcodeOwner, reason: 'Mismo codigo de barras' };
+      if (barcodeOwner) {
+        return {
+          product: barcodeOwner,
+          reason: 'Mismo codigo de barras',
+          matchType: 'barcode',
+          blocking: true,
+        };
+      }
     }
 
     const title = String(entry?.description || '').trim();
@@ -477,6 +465,8 @@ export default function BulkExcelImportView({
       ? {
           product: bestMatch.product,
           reason: `Nombre similar (${Math.round(bestMatch.similarity * 100)}%)`,
+          matchType: 'name',
+          blocking: false,
         }
       : null;
   };
@@ -510,8 +500,8 @@ export default function BulkExcelImportView({
 
   const getCreateDraftErrors = (draft) => {
     const errors = [];
-    const purchasePrice = parseNumber(draft.purchasePrice);
-    const price = parseNumber(draft.price);
+    const purchasePrice = parseExcelMoney(draft.purchasePrice);
+    const price = parseExcelMoney(draft.price);
     if (!String(draft.title || '').trim()) errors.push('Falta nombre');
     if (!String(draft.category || '').trim()) errors.push('Falta categoria');
     if (!purchasePrice || purchasePrice <= 0) errors.push('Falta costo');
@@ -519,7 +509,7 @@ export default function BulkExcelImportView({
     if (price > 0 && purchasePrice > price) {
       errors.push('Precio menor al costo');
     }
-    if (draft.duplicate) errors.push('Posible duplicado');
+    if (draft.duplicate?.blocking) errors.push('Codigo ya existente');
     return errors;
   };
 
@@ -825,7 +815,9 @@ export default function BulkExcelImportView({
   };
 
   const updateRowEntryValue = (rowId, field, value) => {
-    const numericValue = parseNumber(value);
+    const numericValue = field === 'cost' || field === 'salePrice'
+      ? parseExcelMoney(value)
+      : parseNumber(value);
     const inputKey = getEntryInputKey(field);
     setRows((prev) =>
       prev.map((row, index) => {
@@ -931,11 +923,17 @@ export default function BulkExcelImportView({
 
   const updateCreateDraft = (rowId, field, value) => {
     setCreateDrafts((prev) =>
-      prev.map((draft) => (
-        draft.rowId === rowId
-          ? { ...draft, [field]: value, error: '' }
-          : draft
-      )),
+      prev.map((draft) => {
+        if (draft.rowId !== rowId) return draft;
+        const nextDraft = { ...draft, [field]: value, error: '' };
+        if (field === 'title' || field === 'barcode') {
+          nextDraft.duplicate = getDuplicateCandidate({
+            code: nextDraft.barcode,
+            description: nextDraft.title,
+          });
+        }
+        return nextDraft;
+      }),
     );
   };
 
@@ -948,20 +946,21 @@ export default function BulkExcelImportView({
 
   const handleCreateProducts = async () => {
     if (!onCreateProducts || validCreateDrafts.length === 0) return;
-    const submittedDraftByRowId = new Map(
-      validCreateDrafts.map((draft) => [String(draft.rowId), draft]),
-    );
-    setIsCreatingProducts(true);
-    setFileError('');
-    try {
+    return runImportAction('excel-create-products', async () => {
+      const submittedDraftByRowId = new Map(
+        validCreateDrafts.map((draft) => [String(draft.rowId), draft]),
+      );
+      setIsCreatingProducts(true);
+      setFileError('');
+      try {
       const result = await onCreateProducts(validCreateDrafts.map((draft) => ({
         rowId: draft.rowId,
         title: String(draft.title || '').trim(),
         barcode: normalizeCode(draft.barcode) || null,
         category: draft.category,
         stock: 0,
-        purchasePrice: parseNumber(draft.purchasePrice),
-        price: parseNumber(draft.price),
+        purchasePrice: parseExcelMoney(draft.purchasePrice),
+        price: parseExcelMoney(draft.price),
         sourceCode: draft.sourceCode,
         sourceDescription: draft.sourceDescription,
         sourceRowNumber: draft.sourceRowNumber,
@@ -978,8 +977,8 @@ export default function BulkExcelImportView({
           const product = createdByRowId.get(String(row.id));
           if (!product) return row;
           const submittedDraft = submittedDraftByRowId.get(String(row.id));
-          const draftCost = parseNumber(submittedDraft?.purchasePrice ?? row.entry.cost);
-          const draftPrice = parseNumber(submittedDraft?.price ?? row.entry.salePrice);
+          const draftCost = parseExcelMoney(submittedDraft?.purchasePrice ?? row.entry.cost);
+          const draftPrice = parseExcelMoney(submittedDraft?.price ?? row.entry.salePrice);
           const syncedEntry = {
             ...row.entry,
             cost: draftCost,
@@ -1031,11 +1030,12 @@ export default function BulkExcelImportView({
       if (failedByRowId.size === 0) {
         setIsCreatePanelOpen(false);
       }
-    } catch (error) {
-      setFileError(error?.message || 'No se pudieron crear los productos seleccionados.');
-    } finally {
-      setIsCreatingProducts(false);
-    }
+      } catch (error) {
+        setFileError(error?.message || 'No se pudieron crear los productos seleccionados.');
+      } finally {
+        setIsCreatingProducts(false);
+      }
+    });
   };
 
   const setActiveTarget = (sourceRowId, targetId) => {
@@ -1132,27 +1132,25 @@ export default function BulkExcelImportView({
       return;
     }
 
-    setIsApplying(true);
-    try {
-      setFileError('');
-      const payload = buildApplyPayload(rowsToApply);
+    return runImportAction('excel-apply', async () => {
+      setIsApplying(true);
+      try {
+        setFileError('');
+        const payload = buildApplyPayload(rowsToApply);
       const result = await onApplyImport(payload);
       const appliedIds = new Set(result?.appliedRowIds || payload.map((row) => row.rowId));
       const undoItems = normalizeUndoItems(result?.undoItems || payload).filter((item) => appliedIds.has(item.rowId));
+      const appliedResultByRowId = new Map(undoItems.map((item) => [item.rowId, item]));
 
       setRows((prev) =>
         prev.map((row) => {
           if (!appliedIds.has(row.id)) return row;
           const payloadRow = payload.find((item) => item.rowId === row.id);
+          const appliedResult = appliedResultByRowId.get(row.id);
+          const actualAfter = appliedResult?.after;
           return {
             ...row,
-            product: {
-              ...row.product,
-              stock: payloadRow.after.stock,
-              purchasePrice: payloadRow.after.cost,
-              price: payloadRow.after.price,
-              barcode: payloadRow.after.barcode,
-            },
+            product: mergeExcelImportProductResult(row.product, payloadRow.after, actualAfter),
             approvals: { stock: false, cost: false, price: false },
             applied: true,
             manualAssigned: false,
@@ -1171,23 +1169,31 @@ export default function BulkExcelImportView({
           count: undoItems.length,
         });
       }
-    } finally {
-      setIsApplying(false);
-    }
+      if (result?.failed?.length > 0) {
+        setFileError(result.failed
+          .map((failure) => `${failure.productTitle || 'Producto'}: ${failure.error}`)
+          .join(' '));
+      }
+      } finally {
+        setIsApplying(false);
+      }
+    });
   };
 
   const handleApply = async () => handleApplyRows(applicableRows);
 
   const handleUndoLastApply = async () => {
     if (!lastApplyBatch?.items?.length || !onUndoImport) return;
-    setIsUndoingImport(true);
-    try {
-      setFileError('');
+    return runImportAction('excel-undo', async () => {
+      setIsUndoingImport(true);
+      try {
+        setFileError('');
       const result = await onUndoImport(lastApplyBatch.items);
       if (result?.cancelled) return;
 
       const undoneIds = new Set(result?.undoneRowIds || lastApplyBatch.items.map((item) => item.rowId));
       const itemByRowId = new Map(lastApplyBatch.items.map((item) => [item.rowId, item]));
+      const remainingItems = lastApplyBatch.items.filter((item) => !undoneIds.has(item.rowId));
 
       setRows((prev) =>
         prev.map((row) => {
@@ -1203,6 +1209,10 @@ export default function BulkExcelImportView({
                   purchasePrice: undoItem.before.purchasePrice,
                   price: undoItem.before.price,
                   barcode: undoItem.before.barcode,
+                  supplierLinks: undoItem.before.supplierLinks,
+                  supplier_links: undoItem.before.supplierLinks,
+                  isActive: undoItem.before.isActive,
+                  is_active: undoItem.before.isActive,
                 }
               : row.product,
             approvals: {
@@ -1214,12 +1224,24 @@ export default function BulkExcelImportView({
           };
         }),
       );
-      setLastApplyBatch(null);
-    } catch (error) {
-      setFileError(error?.message || 'No se pudo deshacer la ultima aplicacion.');
-    } finally {
-      setIsUndoingImport(false);
-    }
+      setLastApplyBatch(remainingItems.length > 0
+        ? {
+            ...lastApplyBatch,
+            items: remainingItems,
+            count: remainingItems.length,
+          }
+        : null);
+      if (result?.failed?.length > 0) {
+        setFileError(result.failed
+          .map((failure) => `${failure.productTitle || 'Producto'}: ${failure.error}`)
+          .join(' '));
+      }
+      } catch (error) {
+        setFileError(error?.message || 'No se pudo deshacer la ultima aplicacion.');
+      } finally {
+        setIsUndoingImport(false);
+      }
+    });
   };
 
   return (
@@ -2119,17 +2141,19 @@ export default function BulkExcelImportView({
                   const errors = getCreateDraftErrors(draft);
                   const needsTitle = !String(draft.title || '').trim();
                   const needsCategory = !String(draft.category || '').trim();
-                  const needsCost = !parseNumber(draft.purchasePrice) || parseNumber(draft.purchasePrice) <= 0;
-                  const needsPrice = !parseNumber(draft.price) || parseNumber(draft.price) <= 0;
+                  const needsCost = !parseExcelMoney(draft.purchasePrice) || parseExcelMoney(draft.purchasePrice) <= 0;
+                  const needsPrice = !parseExcelMoney(draft.price) || parseExcelMoney(draft.price) <= 0;
+                  const duplicateBlocksCreation = Boolean(draft.duplicate?.blocking);
+                  const hasSimilarNameSuggestion = Boolean(draft.duplicate && !duplicateBlocksCreation);
                   const isComplete = errors.length === 0;
 
                   return (
                     <article
                       key={draft.rowId}
                       className={`rounded-lg border border-slate-600/60 border-l-2 bg-[#102139] px-3 py-3 ${
-                        draft.duplicate || draft.error
+                        duplicateBlocksCreation || draft.error
                           ? 'border-l-red-400/90'
-                          : errors.length > 0
+                          : errors.length > 0 || hasSimilarNameSuggestion
                             ? 'border-l-amber-300/90'
                             : 'border-l-emerald-300/90'
                       }`}
@@ -2149,7 +2173,11 @@ export default function BulkExcelImportView({
                               <p className="truncate text-[12px] font-black text-slate-50" title={draft.title}>
                                 {draft.title}
                               </p>
-                              {isComplete && <CheckCircle2 size={13} className="shrink-0 text-emerald-300" />}
+                              {isComplete && (
+                                hasSimilarNameSuggestion
+                                  ? <AlertTriangle size={13} className="shrink-0 text-amber-300" />
+                                  : <CheckCircle2 size={13} className="shrink-0 text-emerald-300" />
+                              )}
                             </div>
                           )}
                           <p className="mt-0.5 text-[9px] font-bold text-slate-400">
@@ -2157,32 +2185,60 @@ export default function BulkExcelImportView({
                           </p>
                         </div>
                         <span className={`shrink-0 rounded-md border px-2 py-1 text-[9px] font-black uppercase ${
-                          isComplete
+                          duplicateBlocksCreation
+                            ? 'border-red-300/25 bg-red-400/12 text-red-200'
+                            : hasSimilarNameSuggestion
+                              ? 'border-amber-300/25 bg-amber-400/12 text-amber-200'
+                              : isComplete
                             ? 'border-emerald-300/25 bg-emerald-400/12 text-emerald-200'
                             : 'border-amber-300/25 bg-amber-400/12 text-amber-200'
                         }`}>
-                          {isComplete ? 'Listo' : `${errors.length} pendiente${errors.length > 1 ? 's' : ''}`}
+                          {duplicateBlocksCreation
+                            ? 'Ya existe'
+                            : hasSimilarNameSuggestion
+                              ? 'Listo con aviso'
+                              : isComplete
+                                ? 'Listo'
+                                : `${errors.length} pendiente${errors.length > 1 ? 's' : ''}`}
                         </span>
                       </div>
 
                       {draft.duplicate && (
-                        <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-red-300/30 bg-red-400/10 px-3 py-2">
+                        <div className={`mt-2 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${
+                          duplicateBlocksCreation
+                            ? 'border-red-300/30 bg-red-400/10'
+                            : 'border-amber-300/30 bg-amber-400/10'
+                        }`}>
                           <div className="min-w-0">
-                            <p className="text-[9px] font-black uppercase tracking-wider text-red-200">{draft.duplicate.reason}</p>
-                            <p className="truncate text-[11px] font-black text-red-50">{draft.duplicate.product.title}</p>
-                            <p className="text-[9px] font-bold text-red-200/80">Codigo {draft.duplicate.product.barcode || 'sin codigo'}</p>
+                            <p className={`text-[9px] font-black uppercase tracking-wider ${
+                              duplicateBlocksCreation ? 'text-red-200' : 'text-amber-200'
+                            }`}>{draft.duplicate.reason}</p>
+                            <p className={`truncate text-[11px] font-black ${
+                              duplicateBlocksCreation ? 'text-red-50' : 'text-amber-50'
+                            }`}>{draft.duplicate.product.title}</p>
+                            <p className={`text-[9px] font-bold ${
+                              duplicateBlocksCreation ? 'text-red-200/80' : 'text-amber-200/80'
+                            }`}>
+                              {duplicateBlocksCreation
+                                ? `Codigo ${draft.duplicate.product.barcode || 'sin codigo'}`
+                                : 'Podes vincularlo o crear este producto como uno nuevo.'}
+                            </p>
                           </div>
                           <button
                             type="button"
                             onClick={() => linkDuplicateDraft(draft)}
-                            className="shrink-0 rounded-lg border border-red-300/40 bg-slate-950/25 px-3 py-2 text-[10px] font-black text-red-100 transition hover:bg-red-400/15"
+                            className={`shrink-0 rounded-lg border bg-slate-950/25 px-3 py-2 text-[10px] font-black transition ${
+                              duplicateBlocksCreation
+                                ? 'border-red-300/40 text-red-100 hover:bg-red-400/15'
+                                : 'border-amber-300/40 text-amber-100 hover:bg-amber-400/15'
+                            }`}
                           >
                             Vincular existente
                           </button>
                         </div>
                       )}
 
-                      {!draft.duplicate && (
+                      {!duplicateBlocksCreation && (
                         <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(220px,1.45fr)_84px_minmax(112px,0.75fr)_minmax(112px,0.75fr)]">
                           <CreateSelect
                             label="Categoria"
@@ -2213,7 +2269,7 @@ export default function BulkExcelImportView({
                         </div>
                       )}
 
-                      {(draft.error || (!draft.duplicate && errors.includes('Precio menor al costo'))) && (
+                      {(draft.error || (!duplicateBlocksCreation && errors.includes('Precio menor al costo'))) && (
                         <p className="mt-2 rounded-md border border-red-300/25 bg-red-400/10 px-2 py-1.5 text-[10px] font-bold text-red-100">
                           {draft.error || 'El precio de venta no puede ser menor al costo.'}
                         </p>

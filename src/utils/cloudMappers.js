@@ -381,6 +381,8 @@ export const mapSaleRecords = (sales = [], parsedLogs = []) =>
         : null,
       pointsEarned: sale.points_earned,
       pointsSpent: sale.points_spent,
+      orderId: sale.order_id || snapshotLog?.details?.orderId || null,
+      pointsSource: sale.points_source || 'sale',
       pointsChange: snapshotLog?.details?.pointsChange || null,
       user: sale.user_name || snapshotLog?.details?.userName || 'Desconocido',
       userId: sale.user_id || snapshotLog?.details?.userId || null,
@@ -558,6 +560,12 @@ export const mapOrderRecords = (orders = []) =>
       totalAmount: Number(order.total_amount || 0),
       depositAmount: Number(order.deposit_amount || 0),
       paidTotal,
+      pointsCredited:
+        order.points_credited === undefined || order.points_credited === null
+          ? null
+          : Math.max(0, Number(order.points_credited) || 0),
+      pointsAccountingMode: order.points_accounting_mode || 'legacy',
+      version: Math.max(1, Number(order.version) || 1),
       remainingAmount: Number(order.remaining_amount || 0),
       pickupDate: order.pickup_date || null,
       status: order.status || 'Pendiente',

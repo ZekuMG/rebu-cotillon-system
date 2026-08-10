@@ -87,7 +87,7 @@ const reconcileLotsToCurrentBalance = (lots, currentPoints, fallbackEarnedAt, no
     const safeFallbackEarnedAt =
       fallbackEarnedAt && !Number.isNaN(fallbackEarnedAt.getTime())
         ? fallbackEarnedAt
-        : addMonths(now, -POINT_EXPIRATION_MONTHS);
+        : now;
 
     return [
       ...lots,
@@ -151,6 +151,7 @@ export const buildPointExpirationReport = (members = [], transactions = [], opti
   });
 
   const transactionsByMember = new Map();
+  const pointEntriesByMember = new Map();
   const pushTransactionForReport = (report, tx, date) => {
     if (!transactionsByMember.has(report)) transactionsByMember.set(report, []);
     transactionsByMember.get(report).push({ tx, date });
@@ -174,14 +175,61 @@ export const buildPointExpirationReport = (members = [], transactions = [], opti
     if (report) pushTransactionForReport(report, tx, date);
   });
 
+  (Array.isArray(options.pointEntries) ? options.pointEntries : []).forEach((entry) => {
+    const memberId = entry?.clientId ?? entry?.client_id ?? null;
+    const report = memberId !== null && memberId !== undefined
+      ? reportsById.get(String(memberId))
+      : null;
+    const rawDate = entry?.earnedAt ?? entry?.earned_at ?? entry?.createdAt ?? entry?.created_at;
+    const date = rawDate ? new Date(rawDate) : null;
+    if (!report || !date || Number.isNaN(date.getTime())) return;
+    if (!pointEntriesByMember.has(report)) pointEntriesByMember.set(report, []);
+    pointEntriesByMember.get(report).push({ entry, date });
+  });
+
   const memberReports = memberReportsSeed.map((seed) => {
     const member = seed.member;
     const lots = [];
-    const memberTransactions = (transactionsByMember.get(seed) || [])
-      .sort((a, b) => a.date.getTime() - b.date.getTime());
+    const pointEvents = [
+      ...(transactionsByMember.get(seed) || []).map(({ tx, date }) => ({ type: 'sale', tx, date })),
+      ...(pointEntriesByMember.get(seed) || []).map(({ entry, date }) => ({ type: 'ledger', entry, date })),
+    ].sort((a, b) => a.date.getTime() - b.date.getTime());
 
-    memberTransactions.forEach(({ tx, date }) => {
-      const pointsEarned = Math.max(0, Number(tx.pointsEarned ?? tx.points_earned ?? 0));
+    const consumeOldestLots = (points) => {
+      let pointsToSpend = Math.max(0, Number(points || 0));
+      if (pointsToSpend <= 0) return;
+      lots.sort((a, b) => (a.expiresAt?.getTime() || 0) - (b.expiresAt?.getTime() || 0));
+      lots.forEach((lot) => {
+        if (pointsToSpend <= 0) return;
+        const remaining = Number(lot.remaining || 0);
+        const consumed = Math.min(remaining, pointsToSpend);
+        lot.remaining = remaining - consumed;
+        pointsToSpend -= consumed;
+      });
+    };
+
+    pointEvents.forEach((event) => {
+      if (event.type === 'ledger') {
+        const delta = Number(event.entry?.delta || 0);
+        if (delta > 0) {
+          lots.push({
+            earnedAt: event.date,
+            expiresAt: addMonths(event.date, POINT_EXPIRATION_MONTHS),
+            remaining: delta,
+            sourceId: event.entry.id || event.entry.operation_key,
+            sourceType: event.entry.entry_type || 'ledger',
+          });
+        } else if (delta < 0) {
+          consumeOldestLots(Math.abs(delta));
+        }
+        return;
+      }
+
+      const { tx, date } = event;
+      const saleOwnsPoints = (tx.pointsSource ?? tx.points_source ?? 'sale') !== 'order';
+      const pointsEarned = saleOwnsPoints
+        ? Math.max(0, Number(tx.pointsEarned ?? tx.points_earned ?? 0))
+        : 0;
       const pointsSpent = Math.max(0, Number(tx.pointsSpent ?? tx.points_spent ?? 0));
 
       if (pointsEarned > 0) {
@@ -193,23 +241,13 @@ export const buildPointExpirationReport = (members = [], transactions = [], opti
         });
       }
 
-      let pointsToSpend = pointsSpent;
-      if (pointsToSpend > 0) {
-        lots.sort((a, b) => (a.expiresAt?.getTime() || 0) - (b.expiresAt?.getTime() || 0));
-        lots.forEach((lot) => {
-          if (pointsToSpend <= 0) return;
-          const remaining = Number(lot.remaining || 0);
-          const consumed = Math.min(remaining, pointsToSpend);
-          lot.remaining = remaining - consumed;
-          pointsToSpend -= consumed;
-        });
-      }
+      consumeOldestLots(pointsSpent);
     });
 
     const reconciledLots = reconcileLotsToCurrentBalance(
       lots.filter((lot) => Number(lot.remaining || 0) > 0),
       member.points,
-      seed.createdAt,
+      null,
       now,
     );
 

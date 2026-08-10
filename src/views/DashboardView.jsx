@@ -12,7 +12,10 @@ import {
 
 import useDashboardData from '../hooks/useDashboardData';
 import { hasOwnerAccess } from '../utils/appUsers';
-import { resolveDashboardPeriodView } from '../utils/dashboardPeriodAvailability';
+import {
+  dashboardWidgetsShareSources,
+  getDashboardWidgetDataState,
+} from '../utils/dashboardPeriodAvailability';
 import { canAccessTab, getAllowedDashboardFilters } from '../utils/userPermissions';
 import {
   KpiCard,
@@ -24,13 +27,7 @@ import {
 } from '../components/dashboard';
 import { FancyPrice } from '../components/FancyPrice';
 import { formatTimeAR, isTestRecord } from '../utils/helpers'; // ✨ Importado el escudo anti-test
-import {
-  getRecordDate,
-  getTransactionDate,
-  isDateInRange,
-  makeDashboardRange,
-  parseMetricDate,
-} from '../utils/salesMetricsCore';
+import { parseMetricDate } from '../utils/salesMetricsCore';
 
 const DEFAULT_BOTTOM_ORDER = ['payments', 'topProducts', 'lowStock', 'financialActivity'];
 const DEFAULT_TOP_ORDER = ['sales', 'revenue', 'net', 'opening', 'average', 'expenses'];
@@ -127,15 +124,15 @@ export default function DashboardView({
   expenses = [],
   isLoading = false,
   isProfitSyncing = false,
-  refreshingSources = null,
-  isPeriodDataComplete = true,
+  sourceState = null,
+  periodCoverage = null,
   emptyStateMessage = '',
   onOpenExpenseModal,
   onAlertClick,
   onNavigate,
   onViewTransaction,
   onViewExpense,
-  onRequireFullTransactions,
+  onRefreshWidget,
 }) {
   const isAdmin = hasOwnerAccess(currentUser);
   const canViewHistory = canAccessTab(currentUser, 'history');
@@ -155,11 +152,12 @@ export default function DashboardView({
   const [visibleLogsCount, setVisibleLogsCount] = useState(DASHBOARD_FEED_BATCH);
   const [showOnlyActivityExpenses, setShowOnlyActivityExpenses] = useState(false);
   const [isActivityDateMenuOpen, setIsActivityDateMenuOpen] = useState(false);
+  const [refreshingWidgets, setRefreshingWidgets] = useState(() => new Set());
+  const [refreshErrors, setRefreshErrors] = useState({});
+  const refreshingWidgetsRef = useRef(new Set());
   const activityScrollRef = useRef(null);
   const activityDateRefs = useRef({});
   const pendingActivityDateKeyRef = useRef(null);
-  const requestedPeriodLoadRef = useRef('');
-  const [periodLoadStatus, setPeriodLoadStatus] = useState('idle');
 
   useEffect(() => {
     if (!availableDashboardFilters.length) return;
@@ -167,33 +165,6 @@ export default function DashboardView({
       setGlobalFilter(availableDashboardFilters[0]);
     }
   }, [availableDashboardFilters, globalFilter]);
-
-  const requestCompletePeriodData = useCallback(async (requestedFilter) => {
-    if (!onRequireFullTransactions) return false;
-    setPeriodLoadStatus('loading');
-    try {
-      const result = await onRequireFullTransactions();
-      if (result === false) throw new Error('La sincronización no pudo completarse.');
-      setPeriodLoadStatus('idle');
-      return true;
-    } catch (error) {
-      console.error(`No se pudo completar el periodo ${requestedFilter}:`, error);
-      setPeriodLoadStatus('error');
-      return false;
-    }
-  }, [onRequireFullTransactions]);
-
-  useEffect(() => {
-    if (globalFilter === 'day' || isPeriodDataComplete) {
-      requestedPeriodLoadRef.current = '';
-      setPeriodLoadStatus('idle');
-      return;
-    }
-
-    if (requestedPeriodLoadRef.current === globalFilter || !onRequireFullTransactions) return;
-    requestedPeriodLoadRef.current = globalFilter;
-    void requestCompletePeriodData(globalFilter);
-  }, [globalFilter, isPeriodDataComplete, onRequireFullTransactions, requestCompletePeriodData]);
 
   const [widgetOrder, setWidgetOrder] = useState(() => {
     const saved = safeParseDashboardOrder(localStorage.getItem('party_dashboard_order_bottom'));
@@ -257,23 +228,6 @@ export default function DashboardView({
     setHasUnsavedChanges(false);
   };
 
-  const dashboardTodayRange = makeDashboardRange('day');
-  const todayStartAt = dashboardTodayRange.start.getTime();
-  const todayEndAt = dashboardTodayRange.end.getTime();
-  const hasTodayData = useMemo(() => {
-    const todayRange = { start: new Date(todayStartAt), end: new Date(todayEndAt) };
-    return (
-      cleanTransactions.some((transaction) => isDateInRange(getTransactionDate(transaction), todayRange)) ||
-      cleanExpenses.some((expense) => isDateInRange(getRecordDate(expense), todayRange))
-    );
-  }, [cleanTransactions, cleanExpenses, todayStartAt, todayEndAt]);
-  const periodView = resolveDashboardPeriodView({
-    requestedFilter: globalFilter,
-    isPeriodDataComplete,
-    hasTodayData,
-  });
-  const effectiveFilter = periodView.effectiveFilter;
-
   // ✨ ALIMENTAMOS LOS CALCULOS SOLO CON DATA LIMPIA
   const {
     kpiStats,
@@ -289,7 +243,7 @@ export default function DashboardView({
     transactions: cleanTransactions, 
     dailyLogs: cleanDailyLogs, 
     inventory: cleanInventory, 
-    globalFilter: effectiveFilter,
+    globalFilter,
     rankingMode, 
     rankingCriteria,
     expenses: cleanExpenses 
@@ -379,11 +333,11 @@ export default function DashboardView({
   useEffect(() => {
     setVisibleActivityCount(DASHBOARD_FEED_BATCH);
     pendingActivityDateKeyRef.current = null;
-  }, [combinedActivity, effectiveFilter]);
+  }, [combinedActivity, globalFilter]);
 
   useEffect(() => {
     setIsActivityDateMenuOpen(false);
-  }, [effectiveFilter]);
+  }, [globalFilter]);
 
   useEffect(() => {
     setVisibleLogsCount(DASHBOARD_FEED_BATCH);
@@ -403,32 +357,64 @@ export default function DashboardView({
     cleanTransactions.length > 0 ||
     cleanDailyLogs.length > 0 ||
     cleanExpenses.length > 0;
-  const hasScopedRefreshingSources = Boolean(
-    refreshingSources && typeof refreshingSources === 'object',
-  );
-  const isRefreshingDashboardData = Boolean(
-    hasDashboardSourceData && (
-      hasScopedRefreshingSources
-        ? Object.values(refreshingSources).some(Boolean)
-        : isProfitSyncing
-    ),
-  );
-  const isRequestedPeriodLoading = periodView.isIncomplete && (
-    periodLoadStatus === 'loading' || isRefreshingDashboardData
-  );
-  const isWidgetRefreshing = (widgetKey) => {
-    if (!hasScopedRefreshingSources) return isRefreshingDashboardData;
-    if (widgetKey === 'expenses') return Boolean(refreshingSources.expenses);
-    if (widgetKey === 'opening') return Boolean(refreshingSources.opening);
-    if (widgetKey === 'net') {
-      return Boolean(refreshingSources.transactions || refreshingSources.expenses);
-    }
-    return Boolean(refreshingSources.transactions);
+  const normalizedSourceState = sourceState && typeof sourceState === 'object'
+    ? sourceState
+    : {
+        transactions: { loading: isProfitSyncing, stale: false },
+        expenses: { loading: isProfitSyncing, stale: false },
+        inventory: { loading: false, stale: false },
+      };
+  const isRefreshingDashboardData = Object.values(normalizedSourceState)
+    .some((state) => state?.loading);
+  const targetedWidgetKeys = Array.from(refreshingWidgets);
+  const getWidgetDataState = (widgetKey) => {
+    return getDashboardWidgetDataState({
+      widgetKey,
+      filter: globalFilter,
+      sourceState: normalizedSourceState,
+      periodCoverage,
+      targetedWidgetKeys,
+    });
   };
-  const renderWidget = (widgetKey) => {
+  const refreshWidget = async (widgetKey) => {
+    const activeWidgetKeys = Array.from(refreshingWidgetsRef.current);
+    if (
+      !onRefreshWidget ||
+      refreshingWidgetsRef.current.has(widgetKey) ||
+      dashboardWidgetsShareSources(widgetKey, activeWidgetKeys)
+    ) {
+      return;
+    }
+
+    const nextRefreshingWidgets = new Set(refreshingWidgetsRef.current).add(widgetKey);
+    refreshingWidgetsRef.current = nextRefreshingWidgets;
+    setRefreshingWidgets(nextRefreshingWidgets);
+    setRefreshErrors((current) => ({ ...current, [widgetKey]: '' }));
+    try {
+      const refreshed = await onRefreshWidget(widgetKey, { filter: globalFilter });
+      if (refreshed === false) {
+        setRefreshErrors((current) => ({
+          ...current,
+          [widgetKey]: 'No se pudo actualizar desde la nube. El valor anterior se conserva.',
+        }));
+      }
+    } catch (error) {
+      console.error(`No se pudo actualizar el widget ${widgetKey}:`, error);
+      setRefreshErrors((current) => ({
+        ...current,
+        [widgetKey]: 'No se pudo actualizar desde la nube. El valor anterior se conserva.',
+      }));
+    } finally {
+      const next = new Set(refreshingWidgetsRef.current);
+      next.delete(widgetKey);
+      refreshingWidgetsRef.current = next;
+      setRefreshingWidgets(next);
+    }
+  };
+  const renderWidgetContent = (widgetKey) => {
     switch (widgetKey) {
       case 'payments':
-        return <PaymentBreakdown paymentStats={paymentStats} totalGross={kpiStats.gross} globalFilter={effectiveFilter} />;
+        return <PaymentBreakdown paymentStats={paymentStats} totalGross={kpiStats.gross} globalFilter={globalFilter} />;
       case 'topProducts':
         return (
           <TopRanking 
@@ -497,23 +483,23 @@ export default function DashboardView({
                     <button
                       type="button"
                       onClick={() => {
-                        if (effectiveFilter !== 'day' && activityDateOptions.length > 0) {
+                        if (globalFilter !== 'day' && activityDateOptions.length > 0) {
                           setIsActivityDateMenuOpen((value) => !value);
                         }
                       }}
-                      disabled={effectiveFilter === 'day' || activityDateOptions.length === 0}
+                      disabled={globalFilter === 'day' || activityDateOptions.length === 0}
                       className={`flex h-6 items-center gap-1 rounded border px-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
-                        effectiveFilter !== 'day' && activityDateOptions.length > 0
+                        globalFilter !== 'day' && activityDateOptions.length > 0
                           ? 'cursor-pointer border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100'
                           : 'cursor-default border-blue-200 bg-blue-50 text-blue-600'
                       }`}
-                      title={effectiveFilter === 'day' ? 'Actividad de hoy' : 'Saltar a una fecha'}
+                      title={globalFilter === 'day' ? 'Actividad de hoy' : 'Saltar a una fecha'}
                     >
                       <CalendarDays size={10} />
-                      {{ day: 'Hoy', week: 'Semana', month: 'Mes', year: 'Año' }[effectiveFilter]}
-                      {effectiveFilter !== 'day' && activityDateOptions.length > 0 ? <ChevronDown size={10} /> : null}
+                      {{ day: 'Hoy', week: 'Semana', month: 'Mes', year: 'Año' }[globalFilter]}
+                      {globalFilter !== 'day' && activityDateOptions.length > 0 ? <ChevronDown size={10} /> : null}
                     </button>
-                    {isActivityDateMenuOpen && effectiveFilter !== 'day' ? (
+                    {isActivityDateMenuOpen && globalFilter !== 'day' ? (
                       <div className="dashboard-activity-date-menu absolute right-0 top-full z-30 mt-1 max-h-48 w-40 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-[0_8px_18px_rgba(15,23,42,0.12)]">
                         {activityDateOptions.map((option) => (
                           <button
@@ -552,7 +538,7 @@ export default function DashboardView({
                           const dateStr = item.activityDateLabel;
                           const dateKey = item.activityDateKey;
 
-                          if (effectiveFilter !== 'day' && dateStr !== lastDateStr) {
+                          if (globalFilter !== 'day' && dateStr !== lastDateStr) {
                             elements.push(
                               <div
                                 key={`sep-${dateKey}`}
@@ -641,7 +627,7 @@ export default function DashboardView({
                     ) : (
                       <div className="flex flex-col items-center justify-center py-8 opacity-50 h-full">
                         <Clock size={32} className="mb-2 text-slate-300" />
-                        <p className="text-xs font-bold text-slate-400 text-center">{{ day: 'Sin movimientos hoy', week: 'Sin movimientos esta semana', month: 'Sin movimientos este mes', year: 'Sin movimientos este año' }[effectiveFilter]}</p>
+                        <p className="text-xs font-bold text-slate-400 text-center">{{ day: 'Sin movimientos hoy', week: 'Sin movimientos esta semana', month: 'Sin movimientos este mes', year: 'Sin movimientos este año' }[globalFilter]}</p>
                       </div>
                     )}
                   </div>
@@ -714,6 +700,7 @@ export default function DashboardView({
       default: return null;
     }
   };
+  const renderWidget = (widgetKey) => renderWidgetContent(widgetKey);
 
   if (isLoading && !hasDashboardSourceData) {
     return (
@@ -745,43 +732,17 @@ export default function DashboardView({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-2xl font-bold text-slate-800 leading-tight">Panel de Control</h2>
-            {periodView.isIncomplete ? (
-              <span
-                role="status"
-                className="dashboard-period-status inline-flex h-6 items-center gap-1.5 rounded-md border border-[var(--rebu-warning-border)] bg-[var(--rebu-warning-bg)] px-2 text-[10px] font-black uppercase tracking-[0.1em] text-[var(--rebu-warning)]"
-              >
-                {isRequestedPeriodLoading ? <RefreshCw size={11} className="animate-spin" /> : <CalendarDays size={11} />}
-                {periodView.isShowingDayFallback ? 'Hoy visible' : 'Datos parciales'}
-                <span aria-hidden="true">·</span>
-                {periodLoadStatus === 'error' ? 'No se completó' : 'Completando'} {periodView.requestedLabel}
-              </span>
-            ) : isRefreshingDashboardData ? (
+            {isRefreshingDashboardData ? (
               <span className="dashboard-refresh-status inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-[10px] font-black uppercase tracking-[0.1em]">
                 <RefreshCw size={11} className="animate-spin" />
-                Recalculando
+                Cargando widgets
               </span>
-            ) : null}
-            {periodView.isIncomplete && !isRequestedPeriodLoading ? (
-              <button
-                type="button"
-                onClick={() => {
-                  requestedPeriodLoadRef.current = globalFilter;
-                  void requestCompletePeriodData(globalFilter);
-                }}
-                className="h-6 rounded-md border border-[var(--rebu-border)] bg-[var(--rebu-surface-1)] px-2 text-[10px] font-black uppercase tracking-[0.08em] text-[var(--rebu-text-secondary)] transition-colors hover:bg-[var(--rebu-surface-2)]"
-              >
-                Reintentar
-              </button>
             ) : null}
           </div>
           <p className="text-xs text-slate-400">
-            {periodView.isShowingDayFallback
-              ? `Mostrando los datos de hoy mientras se completa la vista de ${periodView.requestedLabel.toLowerCase()}.`
-              : periodView.isIncomplete
-                ? `Mostrando la información disponible; la vista de ${periodView.requestedLabel.toLowerCase()} todavía está incompleta.`
-                : isRefreshingDashboardData
-                  ? 'Mostrando el ultimo valor mientras llega la informacion nueva de Supabase.'
-                  : 'Resumen de operaciones en tiempo real'}
+            {isRefreshingDashboardData
+              ? 'Cada módulo se habilita cuando termina de validar su información.'
+              : 'Resumen de operaciones en tiempo real'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -834,19 +795,28 @@ export default function DashboardView({
                   />
                 </div>
               )}
-              <KpiCard
-                widgetKey={widgetKey}
-                kpiStats={kpiStats}
-                averageTicket={averageTicket}
-                openingBalance={openingBalance}
-                currentUser={currentUser}
-                setTempOpeningBalance={setTempOpeningBalance}
-                setIsOpeningBalanceModalOpen={setIsOpeningBalanceModalOpen}
-                globalFilter={effectiveFilter}
-                expenses={filteredExpenses} 
-                onOpenExpenseModal={onOpenExpenseModal}
-                isRefreshing={isWidgetRefreshing(widgetKey)}
-              />
+              {(() => {
+                const dataState = getWidgetDataState(widgetKey);
+                return (
+                  <KpiCard
+                    widgetKey={widgetKey}
+                    kpiStats={kpiStats}
+                    averageTicket={averageTicket}
+                    openingBalance={openingBalance}
+                    currentUser={currentUser}
+                    setTempOpeningBalance={setTempOpeningBalance}
+                    setIsOpeningBalanceModalOpen={setIsOpeningBalanceModalOpen}
+                    globalFilter={globalFilter}
+                    expenses={filteredExpenses}
+                    onOpenExpenseModal={onOpenExpenseModal}
+                    isRefreshing={dataState.isLoading}
+                    isStale={dataState.isStale}
+                    isRefreshBlocked={dataState.isRefreshBlocked}
+                    refreshError={refreshErrors[widgetKey] || ''}
+                    onRefreshData={() => refreshWidget(widgetKey)}
+                  />
+                );
+              })()}
             </div>
           </div>
         ))}

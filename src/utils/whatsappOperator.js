@@ -168,6 +168,16 @@ export const whatsappOperator = {
   attachment: (id) => request(`/attachments/${encodeURIComponent(id)}`),
   settings: () => request('/settings'),
   publishSettings: (data) => request('/settings', { method: 'POST', body: { data } }),
+  botSettings: () => request('/bot-settings'),
+  publishBotSettings: (data) => request('/bot-settings', { method: 'POST', body: { data } }),
+  previewBotReply: ({ message, behavior, phone }) => request('/bot-settings/preview', {
+    method: 'POST',
+    body: { message, behavior, phone },
+  }),
+  setTestMode: ({ enabled, phone = '' }) => request('/test-mode', {
+    method: 'POST',
+    body: { enabled, phone },
+  }),
   updateBudgetDraft: (id, payload) => request(`/budgets/${encodeURIComponent(id)}`, {
     method: 'POST',
     body: payload,
