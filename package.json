@@ -1,7 +1,7 @@
 {
   "name": "cotillon-rebu-system",
   "productName": "Rebu Cotillón",
-  "version": "1.2.2",
+  "version": "1.2.20",
   "private": true,
   "main": "electron-main.cjs",
   "type": "module",
@@ -11,11 +11,11 @@
     "lint": "eslint .",
     "audit:realtime": "node scripts/audit-supabase-realtime.mjs",
     "audit:queries": "node scripts/audit-supabase-query-latency.mjs",
-    "test:regression": "node --test tests/data-integrity.test.js tests/cloud-load-control.test.js tests/realtime-sync.test.js tests/realtime-publication.test.js tests/realtime-payload-budget.test.js tests/database-indexes.test.js tests/transaction-sync.test.js tests/dashboard-sync.test.js tests/dashboard-aggregations.test.js tests/dashboard-period-availability.test.js tests/transaction-history-cache.test.js tests/app-user-load-control.test.js tests/user-avatar-storage.test.js tests/pos-cart-tabs.test.js tests/order-deposit.test.js tests/order-points.test.js tests/member-points-expiration.test.js tests/order-points-migration.test.js tests/updater-control.test.js tests/whatsapp-inbox.test.js tests/excel-import-numbers.test.js tests/excel-import-duplicates.test.js tests/excel-import-operations.test.js",
-    "test:smoke:offline": "playwright test scripts/smoke-offline.spec.cjs scripts/dashboard-dark-loading.spec.cjs scripts/excel-import-flow.spec.cjs --reporter=line --workers=1",
+    "test:regression": "node --test tests/data-integrity.test.js tests/cloud-load-control.test.js tests/realtime-sync.test.js tests/realtime-publication.test.js tests/realtime-payload-budget.test.js tests/budget-flow.test.js tests/database-indexes.test.js tests/logs-storage-optimization.test.js tests/transaction-sync.test.js tests/dashboard-sync.test.js tests/dashboard-aggregations.test.js tests/dashboard-period-availability.test.js tests/transaction-history-cache.test.js tests/app-user-load-control.test.js tests/user-avatar-storage.test.js tests/pos-cart-tabs.test.js tests/order-deposit.test.js tests/order-stock-policy.test.js tests/order-points.test.js tests/member-points-expiration.test.js tests/order-points-migration.test.js tests/updater-control.test.js tests/whatsapp-inbox.test.js tests/qr-freshness.test.js tests/excel-import-numbers.test.js tests/excel-import-duplicates.test.js tests/excel-import-operations.test.js",
+    "test:smoke:offline": "playwright test scripts/smoke-offline.spec.cjs scripts/dashboard-dark-loading.spec.cjs scripts/excel-import-flow.spec.cjs scripts/budget-pdf-smoke.spec.cjs --reporter=line --workers=1",
     "preview": "vite preview",
     "electron:dev": "concurrently -k -s first \"cross-env BROWSER=none npm run dev -- --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on tcp:127.0.0.1:5173 && cross-env ELECTRON_START_URL=http://127.0.0.1:5173 electron .\"",
-    "electron:build": "vite build && electron-builder -w --publish always",
+    "electron:build": "vite build && dotenv -e .env -- electron-builder -w --publish always",
     "publish": "dotenv electron-builder -- --publish always",
     "dev:fresh": "npm run build && npm run electron:dev"
   },

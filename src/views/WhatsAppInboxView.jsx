@@ -6,6 +6,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import Swal from 'sweetalert2';
 import {
   AlertCircle,
   Archive,
@@ -28,7 +29,9 @@ import {
   Hand,
   Image as ImageIcon,
   Info,
+  Laptop,
   Loader2,
+  LockKeyhole,
   Mail,
   MessageCircle,
   Mic2,
@@ -56,6 +59,11 @@ import {
 } from 'lucide-react';
 import { whatsappOperator } from '../utils/whatsappOperator';
 import {
+  claimCentralMachineForDevice,
+  reconcileCentralOverride,
+} from '../utils/whatsappCentralMachine';
+import { describeWhatsAppConnection } from '../utils/whatsappConnection';
+import {
   compareConversationActivity,
   compareConversationAttention,
 } from '../utils/whatsappConversationOrder';
@@ -65,6 +73,8 @@ import {
   withDaySeparators,
 } from '../utils/whatsappMessageGroups';
 import WhatsAppBotSettingsPanel from '../components/WhatsAppBotSettingsPanel';
+import { whatsappDeviceAccess } from '../utils/whatsappDeviceAccess';
+import { qrFreshness, shouldDropStaleQr } from '../utils/qrFreshness';
 import './WhatsAppInboxView.css';
 
 const MODES = [
@@ -145,10 +155,20 @@ const ERROR_COPY = {
   unsupported_attachment_type: 'Ese tipo de archivo no está permitido.',
   attachment_unavailable: 'El archivo no está disponible en esta PC.',
   invalid_connection_action: 'No se pudo realizar esa acción con WhatsApp.',
+  invalid_central_machine: 'No pudimos identificar esta PC. Reiniciá Rebu e intentá nuevamente.',
+  local_whatsapp_service_unavailable: 'El servidor local de WhatsApp todavía no está listo en esta PC.',
+  central_machine_changed: 'Otra PC cambió la central de WhatsApp. Actualizá el estado antes de continuar.',
+  central_machine_unavailable: 'No se pudo guardar la máquina central en este momento.',
+  central_machine_inactive: 'Esta PC perdió el pulso central y ya no puede enviar mensajes. Actualizá el estado.',
+  central_whatsapp_disconnected: 'Conectá WhatsApp en esta PC antes de establecerla como central.',
+  central_machine_local_reset_failed: 'La transferencia falló y Rebu no pudo restaurar el servidor remoto. Reiniciá la app antes de volver a intentar.',
+  central_machine_local_restore_failed: 'Esta PC figura como central, pero no pudo restaurar su ruta local. Reiniciá Rebu.',
   quick_replies_unavailable: 'Las respuestas rápidas no están disponibles en este momento.',
   test_mode_other_phone: 'Modo test está activo. Sólo podés responder en la conversación autorizada.',
   invalid_suggestion_output: 'No pudimos preparar respuestas claras. Intentá generarlas nuevamente.',
   bot_request_timeout: 'WhatsApp tardó demasiado en responder. Intentá nuevamente.',
+  bot_central_unreachable: 'No pudimos llegar a la PC central. Abrí Tailscale en esta PC y comprobá que figure conectada.',
+  whatsapp_device_not_authorized: 'Esta PC todavía no está habilitada para usar WhatsApp.',
   operator_request_failed: 'No se pudo comunicar con WhatsApp. Intentá nuevamente.',
   invalid_cursor: 'La lista cambió mientras la estabas viendo. Actualizala para continuar.',
 };
@@ -190,6 +210,7 @@ const rememberAttachment = (id, data) => {
     attachmentDataCache.delete(oldestKey);
     attachmentDataCacheBytes -= oldest?.sizeBytes || 0;
   }
+  attachmentDataCacheBytes = Math.max(0, attachmentDataCacheBytes);
   return data;
 };
 
@@ -1482,8 +1503,71 @@ function BudgetPanel({
   );
 }
 
+function DeviceAccessGate({ access, error, busy, onRequest, onDownload, onRefresh }) {
+  const status = String(access?.status || 'loading');
+  const approved = status === 'approved' || access?.approved === true;
+  const requested = ['pending', 'approved', 'rejected', 'revoked'].includes(status) || approved;
+  const title = status === 'loading'
+    ? 'Comprobando este dispositivo'
+    : status === 'pending'
+      ? 'Solicitud enviada a la PC central'
+      : status === 'approved'
+        ? 'Esta PC ya fue aprobada'
+        : status === 'rejected'
+          ? 'La solicitud no fue aprobada'
+          : status === 'revoked'
+            ? 'El acceso de esta PC fue revocado'
+            : 'No estás habilitado para usar WhatsApp en este dispositivo';
+  const copy = status === 'pending'
+    ? 'Sistema verá el nombre de esta PC y podrá aprobarla desde la máquina central.'
+    : status === 'approved'
+      ? 'Descargá Tailscale, ingresá a la red de Rebu y la bandeja se conectará automáticamente.'
+      : status === 'rejected'
+        ? 'Podés volver a solicitar el acceso si necesitás usar esta computadora.'
+        : status === 'revoked'
+          ? 'Sistema debe aprobar nuevamente este dispositivo antes de conectarlo.'
+          : status === 'loading'
+            ? 'Rebu está validando la identidad local y su autorización.'
+            : 'Solicitá acceso. No hace falta instalar Docker: el servicio permanece en la PC central.';
+
+  return (
+    <section className="wa-device-access-gate" aria-live="polite">
+      <div className="wa-device-access-icon">{status === 'loading' ? <Loader2 className="animate-spin" /> : <LockKeyhole />}</div>
+      <div className="wa-device-access-copy">
+        <small>Acceso por dispositivo</small>
+        <strong>{title}</strong>
+        <p>{copy}</p>
+        {error && <span className="wa-device-access-error"><AlertCircle />{error}</span>}
+        {access?.device?.deviceName && <em>{access.device.deviceName} · {access.device.platform || 'Windows'}</em>}
+      </div>
+      <ol className="wa-device-access-route" aria-label="Progreso de acceso">
+        <li className={requested ? 'done' : 'active'}><span>1</span><small>Solicitud</small></li>
+        <li className={approved ? 'done' : requested ? 'active' : ''}><span>2</span><small>Aprobación</small></li>
+        <li className={approved ? 'active' : ''}><span>3</span><small>Conexión</small></li>
+      </ol>
+      <div className="wa-device-access-actions">
+        {approved ? (
+          <>
+            <button type="button" className="wa-primary-action" disabled={busy} onClick={onDownload}><Download />Descargar Tailscale</button>
+            <button type="button" className="wa-secondary-action" disabled={busy} onClick={onRefresh}><RefreshCw />Comprobar conexión</button>
+          </>
+        ) : status === 'pending' || status === 'loading' ? (
+          <button type="button" className="wa-secondary-action" disabled={busy || status === 'loading'} onClick={onRefresh}>
+            {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}Actualizar estado
+          </button>
+        ) : (
+          <button type="button" className="wa-primary-action" disabled={busy} onClick={onRequest}>
+            {busy ? <Loader2 className="animate-spin" /> : <Laptop />}{busy ? 'Enviando…' : 'Solicitar acceso a la central'}
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function WhatsAppInboxView({
   isActive = false,
+  currentUser = null,
   inventory = [],
   members = [],
   onCreateBudget,
@@ -1514,7 +1598,17 @@ export default function WhatsAppInboxView({
   const [botSettingsOpen, setBotSettingsOpen] = useState(false);
   const [botSettingsLoading, setBotSettingsLoading] = useState(false);
   const [botSettingsLoadError, setBotSettingsLoadError] = useState(false);
+  const [centralMachine, setCentralMachine] = useState(null);
+  const [centralCandidate, setCentralCandidate] = useState(null);
+  const [centralMachineLoading, setCentralMachineLoading] = useState(false);
+  const [centralMachineActionError, setCentralMachineActionError] = useState('');
   const [connectionInfo, setConnectionInfo] = useState(null);
+  const [connectionIssue, setConnectionIssue] = useState(null);
+  const [deviceAccess, setDeviceAccess] = useState({ status: 'loading', approved: false, device: null });
+  const [deviceAccessRequests, setDeviceAccessRequests] = useState([]);
+  const [deviceAccessLoading, setDeviceAccessLoading] = useState(false);
+  const [deviceAccessBusy, setDeviceAccessBusy] = useState('');
+  const [deviceAccessError, setDeviceAccessError] = useState('');
   const [profiles, setProfiles] = useState({});
   const [mainMenuOpen, setMainMenuOpen] = useState(false);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
@@ -1635,6 +1729,7 @@ export default function WhatsAppInboxView({
       });
       if (requestId !== overviewRequestRef.current) return;
       setOverview(data);
+      setConnectionIssue(null);
       emitSummary(data);
       setError('');
       setPhone((current) => {
@@ -1647,7 +1742,15 @@ export default function WhatsAppInboxView({
         ))?.phone || data.conversations?.[0]?.phone || '';
       });
     } catch (requestError) {
-      if (requestId === overviewRequestRef.current) setError(errorCopy(requestError));
+      if (requestId === overviewRequestRef.current) {
+        setError(errorCopy(requestError));
+        if (['bot_central_unreachable', 'bot_request_timeout'].includes(requestError?.code)) {
+          setConnectionIssue({
+            code: String(requestError.code),
+            message: errorCopy(requestError),
+          });
+        }
+      }
     } finally {
       if (!quiet && requestId === overviewRequestRef.current) setLoading(false);
     }
@@ -1765,8 +1868,11 @@ export default function WhatsAppInboxView({
     }
   };
 
+  // Fix 4: No cargar overview si el device access todavía no se resolvió.
+  const deviceAccessResolved = deviceAccess?.approved === true || deviceAccess?.status === 'unsupported';
+
   useEffect(() => {
-    if (!isActive) return undefined;
+    if (!isActive || !deviceAccessResolved) return undefined;
     let cancelled = false;
     let timer = null;
     let refreshing = false;
@@ -1793,7 +1899,7 @@ export default function WhatsAppInboxView({
       if (timer) window.clearTimeout(timer);
       overviewRequestRef.current += 1;
     };
-  }, [isActive, loadOverview]);
+  }, [isActive, deviceAccessResolved, loadOverview]);
 
   useEffect(() => {
     if (!isActive || !profilePhonesKey) return undefined;
@@ -2082,11 +2188,25 @@ export default function WhatsAppInboxView({
     phone,
   ]);
 
+  const currentUserRole = String(currentUser?.role || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+  const isSystemAccount = ['system', 'sistema'].includes(currentUserRole);
+  const isOwnerRole = ['owner', 'dueno'].includes(currentUserRole);
+  const isAdmin = isSystemAccount || isOwnerRole;
+
   const permissions = overview?.actor?.permissions || {};
-  const canReply = Boolean(permissions['whatsapp.reply']);
-  const canMode = Boolean(permissions['whatsapp.mode.manage']);
-  const canSettings = Boolean(permissions['whatsapp.settings.manage']);
-  const canConnection = Boolean(permissions['whatsapp.connection.manage']);
+  const canReply = isAdmin || Boolean(permissions['whatsapp.reply']);
+  const canMode = isAdmin || Boolean(permissions['whatsapp.mode.manage']);
+  const canSettings = isAdmin || Boolean(permissions['whatsapp.settings.manage']);
+  const canConnection = isAdmin || Boolean(permissions['whatsapp.connection.manage']);
+  const isSystemRole = isSystemAccount || String(overview?.actor?.role || '').toLowerCase() === 'system';
+  const canReviewDeviceAccess = Boolean(
+    isSystemAccount
+    && deviceAccess?.device?.centralMachineActive === true,
+  );
   const canArchiveConversation = Boolean(permissions['whatsapp.conversation.archive']);
   const canDeleteConversation = Boolean(permissions['whatsapp.conversation.delete']);
   const canApproveBudget = Boolean(permissions['whatsapp.budget.approve']) && typeof onCreateBudget === 'function';
@@ -2104,7 +2224,7 @@ export default function WhatsAppInboxView({
   );
   const connected = ['open', 'connected'].includes(
     String(overview?.runtime?.whatsapp_connection_state).toLowerCase(),
-  );
+  ) || connectionInfo?.state === 'open' || connectionInfo?.state?.instance?.state === 'open';
   const testChat = Boolean(
     isTestConversation(current)
     || messages.some((row) => row?.metadata?.test_fixture === true),
@@ -2116,6 +2236,104 @@ export default function WhatsAppInboxView({
     () => linkedMembersForPhone(members, current?.phone),
     [current?.phone, members],
   );
+
+  const refreshDeviceAccess = useCallback(async ({ quiet = false } = {}) => {
+    if (!quiet) setDeviceAccessLoading(true);
+    try {
+      const access = await whatsappDeviceAccess.ensureCentral(currentUser);
+      setDeviceAccess(access || { status: 'approved', approved: true });
+      setDeviceAccessError('');
+      if (access?.approved) {
+        setConnectionIssue(null);
+      }
+      if (
+        access?.device?.centralMachineActive === true
+        && ['system', 'sistema'].includes(currentUserRole)
+      ) {
+        setDeviceAccessRequests(await whatsappDeviceAccess.list().catch(() => []));
+      } else {
+        setDeviceAccessRequests([]);
+      }
+      return access;
+    } catch {
+      setDeviceAccessError('');
+      setDeviceAccess((prev) => ({
+        ...prev,
+        approved: prev?.approved === true ? true : false,
+      }));
+      return null;
+    } finally {
+      if (!quiet) setDeviceAccessLoading(false);
+    }
+  }, [currentUser, currentUserRole]);
+
+  useEffect(() => {
+    if (!isActive) return undefined;
+    let active = true;
+    const tick = async () => {
+      if (!active) return;
+      await refreshDeviceAccess({ quiet: true });
+    };
+    void refreshDeviceAccess();
+    const timer = window.setInterval(() => void tick(), 15000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [isActive, refreshDeviceAccess]);
+
+  const requestDeviceAccess = async () => {
+    if (deviceAccessBusy) return;
+    setDeviceAccessBusy('request');
+    setDeviceAccessError('');
+    try {
+      const requested = await whatsappDeviceAccess.request(deviceAccess?.device || null);
+      if (
+        requested?.id
+        && isSystemAccount
+        && requested.status !== 'approved'
+      ) {
+        const approved = await whatsappDeviceAccess.review(requested.id, 'approved');
+        setDeviceAccess({ ...approved, device: deviceAccess?.device || null });
+        setConnectionIssue(null);
+        setError('');
+        setDeviceAccessError('');
+        void loadOverview();
+        return;
+      }
+      setDeviceAccess(requested || { status: 'approved', approved: true });
+      // Fix 6: Limpiar connectionIssue al recibir respuesta exitosa.
+      setConnectionIssue(null);
+      setError('');
+      setDeviceAccessError('');
+      if (requested?.approved || requested?.status === 'approved') {
+        void loadOverview();
+      }
+    } catch {
+      setDeviceAccessError('No pudimos enviar la solicitud. Revisá la conexión e intentá nuevamente.');
+    } finally {
+      setDeviceAccessBusy('');
+    }
+  };
+
+  const reviewDeviceAccess = async (requestId, decision) => {
+    if (!canReviewDeviceAccess || deviceAccessBusy) return;
+    setDeviceAccessBusy(`${decision}:${requestId}`);
+    setDeviceAccessError('');
+    try {
+      await whatsappDeviceAccess.review(requestId, decision);
+      setDeviceAccessRequests(await whatsappDeviceAccess.list());
+    } catch {
+      setDeviceAccessError('No pudimos guardar la decisión. Actualizá las solicitudes e intentá nuevamente.');
+    } finally {
+      setDeviceAccessBusy('');
+    }
+  };
+
+  const downloadTailscale = async () => {
+    const result = await window.electronAPI?.openExternalUrl?.('https://tailscale.com/download/windows');
+    if (result?.success === false) setDeviceAccessError('No pudimos abrir la descarga oficial de Tailscale.');
+  };
   const linkedMember = linkedMemberMatches.length === 1 ? linkedMemberMatches[0] : null;
   const typingLock = detail?.typingLock;
   const lockedByOther = Boolean(
@@ -2236,7 +2454,7 @@ export default function WhatsAppInboxView({
     ]),
   ), [conversations, members]);
 
-  const action = async (key, callback, { refresh = true } = {}) => {
+  const action = async (key, callback, { refresh = true, onError = null } = {}) => {
     // El estado de React no cambia de forma sincrónica: esta referencia evita
     // dos envíos si se hace doble clic o se presiona Enter dos veces muy rápido.
     if (activeActionRef.current) return null;
@@ -2260,6 +2478,7 @@ export default function WhatsAppInboxView({
         ]).catch(() => null);
       }
       setError(errorCopy(requestError));
+      onError?.(requestError);
       return null;
     } finally {
       if (activeActionRef.current === key) activeActionRef.current = '';
@@ -2553,6 +2772,7 @@ export default function WhatsAppInboxView({
       const rows = await whatsappOperator.botSettings();
       const latest = rows?.[0] || null;
       setBotSettings(latest);
+      if (isSystemRole) await refreshCentralMachineState({ showError: false });
       return latest;
     }, { refresh: false });
     setBotSettingsLoading(false);
@@ -2567,16 +2787,97 @@ export default function WhatsAppInboxView({
     });
   };
 
-  const openConnection = async (actionName = 'status') => {
-    setMainMenuOpen(false);
-    setContextMode('connection');
-    await action(`connection-${actionName}`, async () => {
-      const data = actionName === 'status'
-        ? await whatsappOperator.connection()
-        : await whatsappOperator.connectionAction(actionName);
-      setConnectionInfo(data);
-    }, { refresh: false });
+  const refreshCentralMachineState = useCallback(async ({
+    showError = true,
+    preserveActionError = false,
+    background = false,
+  } = {}) => {
+    if (!isSystemRole) return null;
+    if (!background) setCentralMachineLoading(true);
+    if (!preserveActionError) setCentralMachineActionError('');
+    try {
+      const [centralResult, candidateResult] = await Promise.allSettled([
+        whatsappOperator.centralMachine(),
+        window.electronAPI?.getWhatsAppCentralCandidate
+          ? window.electronAPI.getWhatsAppCentralCandidate()
+          : Promise.resolve({ supported: false }),
+      ]);
+      if (centralResult.status === 'fulfilled') {
+        setCentralMachine(centralResult.value);
+      } else {
+        setCentralMachine({ configured: false, machine: null, error: centralResult.reason?.code || 'operator_request_failed' });
+        if (showError) setError(errorCopy(centralResult.reason));
+      }
+      if (candidateResult.status === 'fulfilled') {
+        setCentralCandidate(candidateResult.value || { supported: false });
+      } else {
+        setCentralCandidate({ supported: false, error: candidateResult.reason?.message || 'desktop_unavailable' });
+        if (showError) setError(errorCopy(candidateResult.reason));
+      }
+      if (centralResult.status === 'fulfilled' && candidateResult.status === 'fulfilled') {
+        await reconcileCentralOverride({
+          desktop: window.electronAPI,
+          centralMachine: centralResult.value,
+          candidate: candidateResult.value,
+        }).catch((resetError) => {
+          setCentralMachineActionError(errorCopy(resetError));
+        });
+      }
+      return centralResult.status === 'fulfilled' ? centralResult.value : null;
+    } finally {
+      if (!background) setCentralMachineLoading(false);
+    }
+  }, [isSystemRole]);
+
+  useEffect(() => {
+    if (!isSystemRole) return undefined;
+    void refreshCentralMachineState({
+      showError: false,
+      preserveActionError: true,
+      background: true,
+    });
+    const timer = window.setInterval(() => {
+      void refreshCentralMachineState({
+        showError: false,
+        preserveActionError: true,
+        background: true,
+      });
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [isSystemRole, refreshCentralMachineState]);
+
+  const claimCentralMachine = async () => {
+    if (!isSystemRole) return;
+    let claimFailure = '';
+    setCentralMachineActionError('');
+    await action('claim-central-machine', async () => {
+      if (!window.electronAPI?.getWhatsAppCentralCandidate) {
+        const desktopError = new Error('Esta opción necesita la app de escritorio.');
+        desktopError.code = 'invalid_central_machine';
+        throw desktopError;
+      }
+      const candidate = await window.electronAPI.getWhatsAppCentralCandidate();
+      setCentralCandidate(candidate);
+      const transfer = await claimCentralMachineForDevice({
+        desktop: window.electronAPI,
+        operator: whatsappOperator,
+        candidate,
+        currentCentralMachine: centralMachine,
+      });
+      setCentralCandidate(transfer.candidate);
+      setCentralMachine({ configured: true, machine: transfer.claimed?.machine || null });
+      return transfer.claimed;
+    }, {
+      refresh: false,
+      onError: (requestError) => {
+        claimFailure = errorCopy(requestError);
+        setCentralMachineActionError(claimFailure);
+      },
+    });
+    await refreshCentralMachineState({ showError: false });
+    if (claimFailure) setCentralMachineActionError(claimFailure);
   };
+
 
   const rejectBudget = (entry) => {
     void action('reject-budget', () => whatsappOperator.updateBudgetDraft(entry.id, {
@@ -2728,6 +3029,147 @@ export default function WhatsAppInboxView({
     }));
   };
 
+  const openConnection = async (actionName = 'status') => {
+    setMainMenuOpen(false);
+
+    if (actionName === 'logout') {
+      const confirmResult = await Swal.fire({
+        title: '¿Desconectar número de WhatsApp?',
+        html: `
+          <div style="font-size: 0.925rem; color: #475569; text-align: left; line-height: 1.5; margin-top: 0.5rem;">
+            <p style="margin-bottom: 0.75rem;">Se cerrará la sesión actual del bot de WhatsApp en la máquina central.</p>
+            <p style="font-weight: 600; color: #1e293b; margin-bottom: 0.25rem;">¿Qué querés hacer con la caché y los mensajes locales?</p>
+          </div>
+        `,
+        icon: 'warning',
+        showCancelButton: true,
+        showDenyButton: true,
+        confirmButtonText: 'Desconectar y borrar caché',
+        denyButtonText: 'Solo desconectar',
+        cancelButtonText: 'Cancelar',
+        confirmButtonColor: '#dc2626',
+        denyButtonColor: '#0284c7',
+        cancelButtonColor: '#64748b',
+        reverseButtons: true,
+      });
+
+      if (confirmResult.isDismissed) {
+        return;
+      }
+
+      const shouldClearCache = confirmResult.isConfirmed;
+
+      await action('connection-logout', async () => {
+        const data = await whatsappOperator.connectionAction('logout');
+        setConnectionInfo(data || { state: 'close', status: 'close' });
+        setConnectionIssue(null);
+        setOverview(null);
+        setDetail(null);
+        setProfiles({});
+        setPhone('');
+        setDraft('');
+        attachmentDataCache.clear();
+        attachmentRequestCache.clear();
+        attachmentDataCacheBytes = 0;
+        setContextMode('');
+
+        if (shouldClearCache) {
+          try {
+            sessionStorage.removeItem('rebu_wa_overview_cache');
+            localStorage.removeItem('rebu_wa_overview_cache');
+          } catch {
+            // ignore
+          }
+        }
+
+        await Swal.fire({
+          title: 'WhatsApp Desconectado',
+          text: shouldClearCache
+            ? 'Se cerró la sesión y se limpió la caché local correctamente.'
+            : 'Se cerró la sesión del bot de WhatsApp.',
+          icon: 'success',
+          timer: 2000,
+          showConfirmButton: false,
+        });
+
+        try {
+          const qrData = await whatsappOperator.connectionAction('qr');
+          setConnectionInfo(qrData);
+        } catch {
+          void loadOverview();
+        }
+      }, { refresh: false });
+      return;
+    }
+
+    if (actionName !== 'logout') {
+      setContextMode('connection');
+    }
+    await action(`connection-${actionName}`, async () => {
+      const data = actionName === 'status'
+        ? await whatsappOperator.connection()
+        : await whatsappOperator.connectionAction(actionName);
+      setConnectionInfo(data);
+      setConnectionIssue(null);
+    }, { refresh: false });
+  };
+
+  // Fix 3: No iniciar polling de /connection si el device access está bloqueado.
+  useEffect(() => {
+    if (!isActive || !deviceAccessResolved) return undefined;
+    let active = true;
+    let connectedStreak = 0;
+    const tick = async () => {
+      try {
+        const data = await whatsappOperator.connection();
+        if (active) {
+          setConnectionIssue(null);
+          setConnectionInfo((prev) => {
+            const isConnected = data?.state === 'open' || data?.state?.instance?.state === 'open';
+            if (isConnected) {
+              connectedStreak += 1;
+            } else {
+              connectedStreak = 0;
+            }
+            // El QR de WhatsApp vence en segundos. Sólo se conserva el anterior
+            // ante un hueco puntual de la respuesta; si Evolution avisa que no
+            // está disponible hay que soltarlo, porque ya no sirve para nada.
+            const serviceDown = data?.evolution_available === false;
+            if (!data?.qr && prev?.qr && !isConnected && !serviceDown) {
+              // Conservar el anterior sólo mientras siga siendo escaneable. Sin
+              // este límite un código muerto quedaba en pantalla para siempre.
+              if (shouldDropStaleQr({ ageSeconds: prev.qr.age_seconds })) return data;
+              return { ...data, qr: prev.qr };
+            }
+            return data;
+          });
+        }
+      } catch (requestError) {
+        if (active) {
+          setConnectionIssue({
+            code: String(requestError?.code || 'operator_request_failed'),
+            message: errorCopy(requestError),
+          });
+        }
+      }
+    };
+    void tick();
+    const schedule = () => {
+      // Cuando ya está conectado de forma estable, reducir la frecuencia
+      const delay = connectedStreak >= 3 ? 30000 : 3000;
+      return window.setTimeout(() => {
+        void tick().finally(() => {
+          if (active) timer = schedule();
+        });
+      }, delay);
+    };
+    let timer = schedule();
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [isActive, deviceAccessResolved]);
+
   const automaticContext = budgetDraft
     ? 'budget'
     : failedMessage ? 'failure'
@@ -2736,26 +3178,83 @@ export default function WhatsAppInboxView({
   const contextOpen = Boolean(activeContext);
   const closeContext = () => setContextMode('');
   const attention = overview?.attention || {};
-  const qrRaw = connectionInfo?.qr?.base64
-    || connectionInfo?.qr?.data?.base64
-    || connectionInfo?.qr?.code
-    || '';
-  const qrSource = qrRaw && String(qrRaw).startsWith('data:')
-    ? qrRaw
-    : qrRaw ? `data:image/png;base64,${qrRaw}` : '';
+  const connectionView = describeWhatsAppConnection({ connectionInfo, connectionIssue });
+  const qrSource = connectionView.qrSource;
+
+  const qrCode = connectionInfo?.qr?.code || connectionInfo?.qr?.qrcode?.code || '';
+  const qrGeneratedAt = connectionInfo?.qr?.generated_at || '';
+  const [qrExtraSeconds, setQrExtraSeconds] = useState(0);
+  const qrForcedForCodeRef = useRef('');
+
+  // El contador arranca de la edad que informa el bot (no del reloj de esta PC,
+  // que en un puesto remoto puede estar corrido) y le suma el tiempo local desde
+  // que llegó la respuesta. Cada código nuevo lo reinicia.
+  useEffect(() => {
+    setQrExtraSeconds(0);
+    if (!qrGeneratedAt) return undefined;
+    const timer = window.setInterval(() => {
+      setQrExtraSeconds((value) => value + 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [qrGeneratedAt]);
+
+  const qrStatus = qrFreshness({
+    ageSeconds: Number(connectionInfo?.qr?.age_seconds || 0) + qrExtraSeconds,
+  });
+
+  // Cuando se vence, pedir uno nuevo UNA sola vez por código: forzar reinicia la
+  // conexión de Evolution, y hacerlo en bucle no le daría tiempo al celular a
+  // completar el escaneo.
+  useEffect(() => {
+    if (connected || !qrSource || !qrStatus.shouldForce) return;
+    if (!qrCode || qrForcedForCodeRef.current === qrCode) return;
+    qrForcedForCodeRef.current = qrCode;
+    void openConnection('qr');
+    // openConnection se recrea en cada render; el ref ya evita el bucle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, qrSource, qrStatus.shouldForce, qrCode]);
+  const centralTransportUnavailable = Boolean(
+    !connected
+    && ['bot_central_unreachable', 'bot_request_timeout'].includes(connectionIssue?.code),
+  );
+  const connectionManagedBySystem = Boolean(
+    !connected
+    && overview
+    && !canConnection,
+  );
+  const centralLeaseExpired = Boolean(
+    isSystemRole
+    && centralMachine?.configured
+    && centralMachine?.lease_active !== true,
+  );
+  const centralWhatsappUnavailable = Boolean(
+    isSystemRole
+    && centralMachine?.lease_active === true
+    && centralMachine?.machine?.whatsapp_connected === false,
+  );
+  // Fix 1: approved === true siempre desbloquea, sin importar connectionIssue residual.
+  const deviceAccessBlocked = deviceAccess?.approved !== true
+    && !['approved', 'unsupported'].includes(String(deviceAccess?.status || 'loading'));
+  const isBrowserMode = typeof window.electronAPI?.getWhatsAppAccessDevice !== 'function';
 
   return (
     <section
       className={`wa-inbox ${contextOpen ? 'context-open' : ''} ${phone ? 'has-selection' : ''} density-${appearance.density}`}
       style={{ '--wa-message-font-size': `${appearance.messageSize}px` }}
       onClick={(event) => {
-        if (!messageMenuId) return;
         const target = event.target instanceof Element ? event.target : event.target?.parentElement;
-        if (!target?.closest?.('.wa-message-menu')) setMessageMenuId('');
+        if (messageMenuId && !target?.closest?.('.wa-message-menu')) setMessageMenuId('');
+        if (mainMenuOpen && !target?.closest?.('.wa-menu-trigger, .wa-control-menu')) setMainMenuOpen(false);
+        if (filterMenuOpen && !target?.closest?.('.wa-filter-menu-wrap')) setFilterMenuOpen(false);
       }}
     >
       <header className="wa-command">
-        <div className="wa-live">
+        <div
+          className="wa-live"
+          onClick={canConnection ? () => void openConnection('status') : undefined}
+          style={{ cursor: canConnection ? 'pointer' : 'default' }}
+          title={canConnection ? 'Ver estado de conexión a WhatsApp' : 'Estado compartido desde la PC central'}
+        >
           <span className={connected ? 'online' : 'offline'}>
             {connected ? <Wifi /> : <WifiOff />}
           </span>
@@ -2861,14 +3360,150 @@ export default function WhatsAppInboxView({
         </div>
       </header>
 
-      {error && (
+      {/* Fix 5: Ocultar error banner genérico cuando el gate de acceso está activo. */}
+      {error && !deviceAccessBlocked && (
         <div className="wa-error">
           <AlertCircle /><span>{error}</span><button type="button" onClick={() => setError('')}>Cerrar</button>
         </div>
       )}
 
+      {(centralLeaseExpired || (centralWhatsappUnavailable && connected)) && (
+        <div className="wa-central-lease-alert" role="alert">
+          <ShieldAlert />
+          <span><strong>{centralLeaseExpired ? 'La máquina central perdió el pulso' : 'WhatsApp se desconectó en la máquina central'}</strong><small>{centralLeaseExpired
+            ? 'El procesamiento automático está pausado hasta reactivar o transferir la central.'
+            : 'La central sigue asignada, pero no podrá enviar hasta recuperar la conexión.'}</small></span>
+          <button type="button" onClick={() => void openBotSettings()}>Revisar central</button>
+        </div>
+      )}
+
+      {!connected && qrSource && current && (
+        <div className="wa-error" style={{ background: 'var(--amber-50, #fffbeb)', color: 'var(--amber-800, #92400e)', borderColor: 'var(--amber-300, #fcd34d)' }}>
+          <WifiOff /><span>WhatsApp se desconectó. <strong style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => { setPhone(''); }}>Escaneá el nuevo QR</strong> para reconectar.</span>
+        </div>
+      )}
+
       <div className="wa-line">
-        <aside className="wa-list">
+        {deviceAccessBlocked ? (
+          <DeviceAccessGate
+            access={deviceAccess}
+            error={deviceAccessError}
+            busy={Boolean(deviceAccessBusy || deviceAccessLoading)}
+            onRequest={() => void requestDeviceAccess()}
+            onDownload={() => void downloadTailscale()}
+            onRefresh={() => void refreshDeviceAccess().then((access) => {
+              if (access?.approved) void loadOverview();
+            })}
+          />
+        ) : ((!connected && !loading) || (qrSource && !current)) ? (
+          <div className="wa-empty wa-qr-center-container" style={{ gridColumn: '1 / -1', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '2rem', textAlign: 'center' }}>
+            <WifiOff size={48} style={{ marginBottom: '1rem', color: 'var(--red-500, #ef4444)' }} />
+            <strong style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+              {centralTransportUnavailable
+                ? 'No se puede llegar a la PC central'
+                : connectionManagedBySystem ? 'WhatsApp necesita atención en la central' : connectionView.title}
+            </strong>
+            <span style={{ fontSize: '0.875rem', opacity: 0.8, maxWidth: '440px', marginBottom: '1.5rem' }}>
+              {centralTransportUnavailable
+                ? 'Abrí Tailscale en esta PC e ingresá a la misma red de la central. Docker no hace falta aquí: sólo se ejecuta en la PC central.'
+                : connectionManagedBySystem
+                  ? 'Esta PC es un puesto remoto. Pedile a un usuario Sistema que reconecte WhatsApp; no instales Docker ni vincules otra sesión aquí.'
+                : connectionView.detail}
+            </span>
+            {isBrowserMode ? (
+              <div className="wa-bot-mode-notice warning" role="alert" style={{ maxWidth: '520px', marginBottom: '1.5rem', textAlign: 'left' }}>
+                <AlertCircle />
+                <span>
+                  <strong>Estás usando el navegador web (Google Chrome / Edge)</strong>
+                  <small>El control de WhatsApp y los dispositivos requiren la <strong>Aplicación de Escritorio de Rebu</strong>. Abrí la ventana de Rebu desde la barra de tareas de Windows para operar normalmente.</small>
+                </span>
+              </div>
+            ) : centralTransportUnavailable ? (
+              <div className="wa-bot-mode-notice warning" role="alert" style={{ maxWidth: '520px', marginBottom: '1.5rem', textAlign: 'left' }}>
+                <AlertCircle />
+                <span><strong>La central no está accesible desde esta PC</strong><small>{connectionIssue?.message}</small></span>
+              </div>
+            ) : connectionManagedBySystem ? (
+              <div className="wa-bot-mode-notice" role="status" style={{ maxWidth: '520px', marginBottom: '1.5rem', textAlign: 'left' }}>
+                <Info />
+                <span><strong>El QR está reservado para Sistema</strong><small>Cuando la central vuelva a conectarse, la bandeja aparecerá automáticamente en esta PC.</small></span>
+              </div>
+            ) : qrSource ? (
+              <div style={{ marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem' }}>
+                <div style={{ background: '#ffffff', padding: '20px', borderRadius: '20px', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.3)' }}>
+                  <img
+                    key={qrCode || qrGeneratedAt}
+                    src={qrSource}
+                    alt="Código QR de WhatsApp"
+                    style={{ width: '260px', height: '260px', display: 'block', borderRadius: '8px' }}
+                  />
+                </div>
+                <span
+                  role="status"
+                  style={{
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    color: qrStatus.level === 'fresh' ? 'inherit' : '#f59e0b',
+                    opacity: qrStatus.level === 'fresh' ? 0.7 : 1,
+                  }}
+                >
+                  {qrStatus.label}
+                </span>
+              </div>
+            ) : connectionView.status === 'service_down' ? (
+              <div className="wa-bot-mode-notice warning" role="alert" style={{ maxWidth: '520px', marginBottom: '1.5rem', textAlign: 'left' }}>
+                <AlertCircle />
+                <span>
+                  <strong>El servicio de WhatsApp no responde en esta PC</strong>
+                  <small>
+                    Evolution dejó de contestar ({connectionView.code}). Levantá el stack en la
+                    central con <strong>npm run stack:up</strong> y el código QR aparece solo.
+                  </small>
+                </span>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '24px', opacity: 0.7, marginBottom: '1.5rem' }}>
+                <Loader2 className="animate-spin" size={24} />
+                <span>Pidiendo un código nuevo a WhatsApp...</span>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+              {canSettings && (
+                <button
+                  type="button"
+                  className="wa-secondary-action"
+                  disabled={Boolean(busy)}
+                  onClick={() => void openBotSettings()}
+                >
+                  <Bot /> Configurar bot
+                </button>
+              )}
+              {centralTransportUnavailable && deviceAccess?.status === 'approved' && (
+                <button
+                  type="button"
+                  className="wa-primary-action"
+                  disabled={Boolean(busy)}
+                  onClick={() => void downloadTailscale()}
+                >
+                  <Download /> Descargar Tailscale
+                </button>
+              )}
+              <button
+                type="button"
+                className="wa-primary-action"
+                disabled={Boolean(busy)}
+                onClick={() => {
+                  if (connectionManagedBySystem) void loadOverview();
+                  else void openConnection(centralTransportUnavailable ? 'status' : 'qr');
+                }}
+              >
+                <RefreshCw /> {centralTransportUnavailable || connectionManagedBySystem ? 'Volver a comprobar' : 'Generar nuevo QR'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <aside className="wa-list">
           <div className="wa-list-tools">
             <label><Search /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar contacto o mensaje" /></label>
             <div className="wa-filter-control">
@@ -3448,10 +4083,19 @@ export default function WhatsAppInboxView({
                   {connected ? <Wifi /> : <WifiOff />}
                   <span><strong>{connected ? 'Conectado' : 'Sin conexión'}</strong><small>{connectionStateCopy(overview?.runtime?.whatsapp_connection_state)}</small></span>
                 </div>
+                {centralTransportUnavailable && (
+                  <div className="wa-bot-mode-notice warning" role="alert">
+                    <AlertCircle />
+                    <span><strong>No se puede consultar la central</strong><small>Abrí Tailscale en esta PC. Docker sólo debe estar instalado en la máquina central.</small></span>
+                  </div>
+                )}
                 {qrSource && <img className="wa-qr" src={qrSource} alt="QR para vincular WhatsApp" />}
-                <button type="button" className="wa-secondary-action" disabled={Boolean(busy)} onClick={() => void openConnection('qr')}>Mostrar QR</button>
-                <button type="button" className="wa-primary-action" disabled={Boolean(busy)} onClick={() => void openConnection('restart')}>
-                  {busy === 'connection-restart' ? <Loader2 className="animate-spin" /> : <RefreshCw />}Reiniciar conexión
+                <button type="button" className="wa-secondary-action" disabled={Boolean(busy) || centralTransportUnavailable} onClick={() => void openConnection('qr')}>Obtener / Mostrar QR</button>
+                <button type="button" className="wa-secondary-action" disabled={Boolean(busy) || centralTransportUnavailable} onClick={() => void openConnection('logout')} style={{ color: '#ef4444', borderColor: '#fca5a5' }}>
+                  <Power /> Desconectar (Cambiar número)
+                </button>
+                <button type="button" className="wa-primary-action" disabled={Boolean(busy) || centralTransportUnavailable} onClick={() => void openConnection('restart')}>
+                  {busy === 'connection-restart' ? <Loader2 className="animate-spin" /> : <RefreshCw />}Reiniciar servicio del bot
                 </button>
                 <p>Estas acciones sólo están disponibles para Sistema. Las claves y los datos sensibles permanecen ocultos.</p>
               </section>
@@ -3544,6 +4188,8 @@ export default function WhatsAppInboxView({
             )}
           </aside>
         )}
+          </>
+        )}
       </div>
       {messageInfo && (
         <MessageInfoDialog
@@ -3607,6 +4253,17 @@ export default function WhatsAppInboxView({
           mode={selectedMode}
           botOff={off}
           canManageMode={canMode}
+          canManageCentralMachine={isSystemRole}
+          centralMachine={centralMachine}
+          centralCandidate={centralCandidate}
+          centralMachineLoading={centralMachineLoading}
+          centralMachineBusy={busy === 'claim-central-machine'}
+          centralMachineError={centralMachineActionError}
+          canReviewDeviceAccess={canReviewDeviceAccess}
+          deviceAccessRequests={deviceAccessRequests}
+          deviceAccessLoading={deviceAccessLoading}
+          deviceAccessBusy={deviceAccessBusy}
+          deviceAccessError={deviceAccessError}
           modeBusy={String(busy || '').startsWith('mode-')}
           businessProfileReady={overview?.businessProfileReady !== false}
           testMode={overview?.testMode || { enabled: false, phone: '' }}
@@ -3619,6 +4276,10 @@ export default function WhatsAppInboxView({
           busy={busy === 'save-bot-settings'}
           onModeChange={(nextMode) => void action(`mode-${nextMode}`, () => whatsappOperator.setMode(nextMode))}
           onTestModeChange={(next) => void action('test-mode', () => whatsappOperator.setTestMode(next))}
+          onClaimCentralMachine={() => void claimCentralMachine()}
+          onRefreshCentralMachine={() => void refreshCentralMachineState()}
+          onRefreshDeviceAccess={() => void refreshDeviceAccess()}
+          onReviewDeviceAccess={(requestId, decision) => void reviewDeviceAccess(requestId, decision)}
           onPreview={(options) => whatsappOperator.previewBotReply(options)}
           onRetry={() => void openBotSettings()}
           onSave={saveBotSettings}
