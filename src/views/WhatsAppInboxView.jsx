@@ -75,6 +75,7 @@ import {
 import WhatsAppBotSettingsPanel from '../components/WhatsAppBotSettingsPanel';
 import { whatsappDeviceAccess } from '../utils/whatsappDeviceAccess';
 import { qrFreshness, shouldDropStaleQr } from '../utils/qrFreshness';
+import { describeAccountChange, readStoredAccount, writeStoredAccount } from '../utils/whatsappAccountChange';
 import './WhatsAppInboxView.css';
 
 const MODES = [
@@ -3181,6 +3182,24 @@ export default function WhatsAppInboxView({
   const connectionView = describeWhatsAppConnection({ connectionInfo, connectionIssue });
   const qrSource = connectionView.qrSource;
 
+  // Cambio de numero vinculado. Sin este aviso, el dia que se cambia de numero
+  // la bandeja aparece vacia y parece que se perdieron las conversaciones.
+  const linkedAccountId = overview?.runtime?.whatsapp_account_id || '';
+  const [accountChange, setAccountChange] = useState(null);
+  const [accountNoticeDismissed, setAccountNoticeDismissed] = useState(false);
+
+  useEffect(() => {
+    if (!linkedAccountId) return;
+    const storage = typeof window !== 'undefined' ? window.localStorage : null;
+    const previous = readStoredAccount(storage);
+    const change = describeAccountChange({ current: linkedAccountId, previous });
+    if (change) {
+      setAccountChange(change);
+      setAccountNoticeDismissed(false);
+    }
+    writeStoredAccount(storage, linkedAccountId);
+  }, [linkedAccountId]);
+
   const qrCode = connectionInfo?.qr?.code || connectionInfo?.qr?.qrcode?.code || '';
   const qrGeneratedAt = connectionInfo?.qr?.generated_at || '';
   const [qrExtraSeconds, setQrExtraSeconds] = useState(0);
@@ -3364,6 +3383,17 @@ export default function WhatsAppInboxView({
       {error && !deviceAccessBlocked && (
         <div className="wa-error">
           <AlertCircle /><span>{error}</span><button type="button" onClick={() => setError('')}>Cerrar</button>
+        </div>
+      )}
+
+      {accountChange && !accountNoticeDismissed && (
+        <div className="wa-central-lease-alert" role="status">
+          <Info />
+          <span>
+            <strong>{accountChange.title}</strong>
+            <small>{accountChange.detail}</small>
+          </span>
+          <button type="button" onClick={() => setAccountNoticeDismissed(true)}>Entendido</button>
         </div>
       )}
 
