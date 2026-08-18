@@ -1,4 +1,12 @@
 import { supabase } from '../supabase/client';
+import {
+  APROBAR,
+  NADA,
+  REGISTRAR,
+  primerPaso,
+  resultadoDeAcceso,
+  siguientePaso,
+} from './whatsappDeviceAccessPlan';
 
 const rpc = async (name, payload = {}) => {
   const { data, error } = await supabase.rpc(name, payload);
@@ -23,12 +31,6 @@ const statusFor = async (device) => {
   });
   return { ...status, device };
 };
-
-const normalizeRole = (value) => String(value || '')
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .trim()
-  .toLowerCase();
 
 const requestAccess = async (device) => {
   if (!device?.supported || !device?.deviceId || !device?.tokenHash) {
@@ -55,6 +57,9 @@ export const whatsappDeviceAccess = {
     return requestAccess(device);
   },
 
+  // El estado SIEMPRE sale de la base. Que esta PC se crea la central no la
+  // habilita: el bot valida contra la base igual y contesta 403. Ver el detalle
+  // del callejon sin salida en whatsappDeviceAccessPlan.js.
   async ensureCentral(currentUser) {
     let device = null;
     try {
@@ -62,36 +67,35 @@ export const whatsappDeviceAccess = {
     } catch {
       device = { supported: false };
     }
-    if (device?.centralMachineActive === true) {
-      return { status: 'approved', approved: true, device };
+    if (primerPaso(device) === NADA) {
+      return resultadoDeAcceso({ device, estado: null });
     }
-    if (!device?.supported) {
-      return { status: 'unsupported', approved: false, device };
-    }
-    const role = normalizeRole(currentUser?.role);
-    try {
-      let result = await statusFor(device);
-      if (result?.approved || result?.status === 'approved') {
-        return { ...result, status: 'approved', approved: true, device };
-      }
 
-      if (['system', 'sistema'].includes(role)) {
-        const requested = await requestAccess(device);
-        if (requested?.id) {
-          const approved = await rpc('review_whatsapp_device_access', {
-            p_request_id: requested.id,
+    const rol = currentUser?.role;
+    try {
+      let estado = await statusFor(device);
+
+      let paso = siguientePaso({ device, rol, estado });
+      if (paso === REGISTRAR) {
+        estado = await requestAccess(device);
+        paso = siguientePaso({ device, rol, estado });
+      }
+      if (paso === APROBAR) {
+        const pedido = estado?.id ? estado : await requestAccess(device);
+        if (pedido?.id) {
+          estado = await rpc('review_whatsapp_device_access', {
+            p_request_id: pedido.id,
             p_decision: 'approved',
           });
-          return { ...approved, status: 'approved', approved: true, device };
         }
       }
-      return result;
+
+      return resultadoDeAcceso({ device, estado });
     } catch (err) {
+      // Nunca devolver "aprobado" desde acá: tapaba un 403 real detrás de una
+      // pantalla que decía estar habilitada, y dejaba sin salida a la central.
       console.warn('ensureCentral check notice:', err);
-      if (device?.centralMachineActive === true) {
-        return { status: 'approved', approved: true, device };
-      }
-      return { status: 'unsupported', approved: false, device };
+      return resultadoDeAcceso({ device, estado: null, error: err });
     }
   },
 
