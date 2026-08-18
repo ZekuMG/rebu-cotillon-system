@@ -17,10 +17,20 @@ import {
   messageDayLabel,
   withDaySeparators,
 } from '../src/utils/whatsappMessageGroups.js';
+import {
+  claimCentralMachineForDevice,
+  deactivateStaleCentralOverride,
+  reconcileCentralOverride,
+} from '../src/utils/whatsappCentralMachine.js';
+import { describeWhatsAppConnection } from '../src/utils/whatsappConnection.js';
 
 const root = resolve(import.meta.dirname, '..');
 const require = createRequire(import.meta.url);
-const { normalizeWhatsAppBotRequestPath } = require('../electron-whatsapp-bridge.cjs');
+const {
+  DEFAULT_WHATSAPP_BOT_URL,
+  normalizeWhatsAppBotRequestPath,
+  resolveWhatsAppBotBaseUrl,
+} = require('../electron-whatsapp-bridge.cjs');
 
 test('el puente Electron acepta paginación y rechaza rutas externas o parámetros inesperados', () => {
   assert.equal(
@@ -30,6 +40,33 @@ test('el puente Electron acepta paginación y rechaza rutas externas o parámetr
   assert.equal(normalizeWhatsAppBotRequestPath('https://evil.test/api/operator/overview'), null);
   assert.equal(normalizeWhatsAppBotRequestPath('/api/operator/overview?token=secret'), null);
   assert.equal(normalizeWhatsAppBotRequestPath('/api/operator/../health'), null);
+});
+
+test('las PCs remotas usan Tailscale y la central conserva el acceso local', () => {
+  assert.equal(
+    DEFAULT_WHATSAPP_BOT_URL,
+    'https://rebu-whatsapp-central.tailbdf1e7.ts.net',
+  );
+  assert.equal(
+    resolveWhatsAppBotBaseUrl(),
+    'https://rebu-whatsapp-central.tailbdf1e7.ts.net',
+  );
+  assert.equal(
+    resolveWhatsAppBotBaseUrl({ localOverride: 'http://127.0.0.1:3000/' }),
+    'http://127.0.0.1:3000',
+  );
+  assert.equal(
+    resolveWhatsAppBotBaseUrl({ environmentOverride: 'https://bot.example.com/?ignored=true' }),
+    'https://bot.example.com',
+  );
+  assert.throws(
+    () => resolveWhatsAppBotBaseUrl({ environmentOverride: 'http://192.168.1.20:3000' }),
+    /HTTPS/i,
+  );
+  assert.throws(
+    () => resolveWhatsAppBotBaseUrl({ environmentOverride: 'https://user:secret@bot.example.com' }),
+    /HTTPS/i,
+  );
 });
 
 test('vendedores pueden atender WhatsApp sin administrar el modo global', () => {
@@ -82,7 +119,15 @@ test('el renderer usa Supabase Auth y el puente Electron sin claves administrati
   assert.doesNotMatch(service, /service[_-]?role/i);
   assert.doesNotMatch(service, /EVOLUTION_API_KEY/);
   assert.match(preload, /whatsapp-bot-request/);
+  assert.match(preload, /get-whatsapp-central-candidate/);
+  assert.match(preload, /activate-whatsapp-central-machine/);
+  assert.match(preload, /deactivate-whatsapp-central-machine/);
   assert.match(main, /normalizeWhatsAppBotRequestPath/);
+  assert.match(main, /getWhatsAppCentralCandidate/);
+  assert.match(main, /localWhatsAppHealth\('\/health\/live'\)/);
+  assert.match(main, /live\.body\?\.service === 'rebu-whatsapp-node'/);
+  assert.match(main, /centralMachineActive === true/);
+  assert.match(main, /bot_central_unreachable/);
   assert.match(bridge, /\/api\\\/operator/);
   assert.match(main, /https:/);
   assert.match(main, /127\.0\.0\.1/);
@@ -93,6 +138,233 @@ test('el renderer usa Supabase Auth y el puente Electron sin claves administrati
   assert.match(main, /\['GET', 'POST', 'DELETE'\]/);
   assert.match(service, /const controller = new AbortController\(\)/);
   assert.match(service, /bot_request_timeout/);
+});
+
+test('la interfaz remota distingue Tailscale desconectado de un QR pendiente', async () => {
+  const view = await readFile(resolve(root, 'src/views/WhatsAppInboxView.jsx'), 'utf8');
+  const centralPanel = await readFile(resolve(root, 'src/components/WhatsAppBotSettingsPanel.jsx'), 'utf8');
+
+  assert.match(view, /bot_central_unreachable/);
+  assert.match(view, /No se puede llegar a la PC central/);
+  assert.match(view, /Docker no hace falta aquí/);
+  assert.match(view, /centralTransportUnavailable \? 'status' : 'qr'/);
+  assert.match(view, /WhatsApp necesita atención en la central/);
+  assert.match(view, /El QR está reservado para Sistema/);
+  assert.match(view, /if \(!isActive\) return undefined;[\s\S]{0,3000}conversationActivity\(phone\)/);
+  assert.match(view, /if \(!isActive\) return undefined;[\s\S]{0,700}refreshDeviceAccess/);
+  assert.match(view, /if \(!isActive \|\| !deviceAccessResolved\) return undefined;[\s\S]{0,300}connectedStreak/);
+  assert.match(centralPanel, /Esta PC funciona como puesto remoto/);
+  assert.match(centralPanel, /No necesita Docker ni Evolution/);
+});
+
+test('el acceso por dispositivo se solicita, se aprueba en la central y nunca expone el secreto al renderer', async () => {
+  const view = await readFile(resolve(root, 'src/views/WhatsAppInboxView.jsx'), 'utf8');
+  const centralPanel = await readFile(resolve(root, 'src/components/WhatsAppBotSettingsPanel.jsx'), 'utf8');
+  const accessService = await readFile(resolve(root, 'src/utils/whatsappDeviceAccess.js'), 'utf8');
+  const preload = await readFile(resolve(root, 'preload.cjs'), 'utf8');
+  const main = await readFile(resolve(root, 'electron-main.cjs'), 'utf8');
+  const migration = await readFile(
+    resolve(root, 'supabase/migrations/20260816234500_whatsapp_device_access.sql'),
+    'utf8',
+  );
+
+  assert.match(view, /No estás habilitado para usar WhatsApp en este dispositivo/);
+  assert.match(view, /Solicitar acceso a la central/);
+  assert.match(view, /Descargar Tailscale/);
+  assert.match(view, /deviceAccessBlocked/);
+  assert.match(centralPanel, /Dispositivos autorizados/);
+  assert.match(centralPanel, /onReviewDeviceAccess\?\.\(request\.id, 'approved'\)/);
+  assert.match(centralPanel, /onReviewDeviceAccess\?\.\(request\.id, 'revoked'\)/);
+
+  assert.match(accessService, /get_my_whatsapp_device_access/);
+  assert.match(accessService, /request_whatsapp_device_access/);
+  assert.match(accessService, /review_whatsapp_device_access/);
+  assert.match(preload, /getWhatsAppAccessDevice/);
+  assert.match(main, /X-Rebu-Device-Id/);
+  assert.match(main, /X-Rebu-Device-Token/);
+  assert.match(main, /tokenHash: createHash\('sha256'\)/);
+  assert.doesNotMatch(preload, /accessToken/);
+
+  assert.match(migration, /create table if not exists public\.whatsapp_device_access_requests/);
+  assert.match(migration, /alter table public\.whatsapp_device_access_requests enable row level security/);
+  assert.match(migration, /revoke all on table public\.whatsapp_device_access_requests from public, anon, authenticated/);
+  assert.match(migration, /actor_role not in \('system', 'sistema'\)/);
+  assert.match(migration, /authorize_whatsapp_device_access/);
+  assert.match(migration, /last_authorized_at < now\(\) - interval '5 minutes'/);
+  assert.match(migration, /where public\.whatsapp_device_access_requests\.token_hash = excluded\.token_hash/);
+  const tableDefinition = migration.match(/create table if not exists public\.whatsapp_device_access_requests[\s\S]+?\n\);/)?.[0] || '';
+  assert.doesNotMatch(tableDefinition, /device_token/i);
+});
+
+test('la transferencia central activa local, reclama y conserva el candidato verificado', async () => {
+  const calls = [];
+  const verifiedCandidate = {
+    deviceId: '4f671f4a-513c-4c53-85ad-b04a6f9ca20a',
+    deviceName: 'CAJA-CENTRAL',
+    localServiceRunning: true,
+    localServiceReady: true,
+    whatsappConnected: true,
+    checkedAt: 'verified',
+  };
+  const result = await claimCentralMachineForDevice({
+    desktop: {
+      activateWhatsAppCentralMachine: async (deviceId) => {
+        calls.push(['activate', deviceId]);
+        return { success: true, candidate: verifiedCandidate };
+      },
+      deactivateWhatsAppCentralMachine: async () => {
+        calls.push(['deactivate']);
+        return { success: true };
+      },
+    },
+    operator: {
+      claimCentralMachine: async (payload) => {
+        calls.push(['claim', payload.checkedAt, payload.expectedDeviceId]);
+        return { claimed: true, machine: { device_id: payload.deviceId } };
+      },
+    },
+    candidate: { ...verifiedCandidate, checkedAt: 'initial' },
+    currentCentralMachine: { machine: { device_id: 'f47ac10b-58cc-4372-a567-0e02b2c3d479' } },
+  });
+
+  assert.deepEqual(calls, [
+    ['activate', verifiedCandidate.deviceId],
+    ['claim', 'verified', 'f47ac10b-58cc-4372-a567-0e02b2c3d479'],
+  ]);
+  assert.equal(result.candidate.checkedAt, 'verified');
+  assert.equal(result.claimed.claimed, true);
+});
+
+test('una PC sin WhatsApp conectado no puede iniciar la transferencia central', async () => {
+  let activated = 0;
+  await assert.rejects(
+    claimCentralMachineForDevice({
+      desktop: {
+        activateWhatsAppCentralMachine: async () => {
+          activated += 1;
+          return { success: true };
+        },
+        deactivateWhatsAppCentralMachine: async () => ({ success: true }),
+      },
+      operator: { claimCentralMachine: async () => ({ claimed: true }) },
+      candidate: {
+        deviceId: '4f671f4a-513c-4c53-85ad-b04a6f9ca20a',
+        localServiceRunning: true,
+        localServiceReady: true,
+        whatsappConnected: false,
+      },
+      currentCentralMachine: null,
+    }),
+    { code: 'central_whatsapp_disconnected' },
+  );
+  assert.equal(activated, 0);
+});
+
+test('la transferencia revierte el endpoint local si la reclamación falla', async () => {
+  const calls = [];
+  const conflict = Object.assign(new Error('central changed'), { code: 'central_machine_changed' });
+  await assert.rejects(
+    claimCentralMachineForDevice({
+      desktop: {
+        activateWhatsAppCentralMachine: async () => {
+          calls.push('activate');
+          return { success: true };
+        },
+        deactivateWhatsAppCentralMachine: async () => {
+          calls.push('deactivate');
+          return { success: true, changed: true };
+        },
+      },
+      operator: {
+        claimCentralMachine: async () => {
+          calls.push('claim');
+          throw conflict;
+        },
+      },
+      candidate: {
+        deviceId: '4f671f4a-513c-4c53-85ad-b04a6f9ca20a',
+        localServiceRunning: true,
+        localServiceReady: true,
+        whatsappConnected: true,
+      },
+      currentCentralMachine: null,
+    }),
+    (error) => error === conflict,
+  );
+  assert.deepEqual(calls, ['activate', 'claim', 'deactivate']);
+});
+
+test('un rollback local fallido se informa como estado recuperable específico', async () => {
+  await assert.rejects(
+    claimCentralMachineForDevice({
+      desktop: {
+        activateWhatsAppCentralMachine: async () => ({ success: true }),
+        deactivateWhatsAppCentralMachine: async () => ({ success: false }),
+      },
+      operator: {
+        claimCentralMachine: async () => {
+          throw new Error('claim failed');
+        },
+      },
+      candidate: {
+        deviceId: '4f671f4a-513c-4c53-85ad-b04a6f9ca20a',
+        localServiceRunning: true,
+        localServiceReady: true,
+        whatsappConnected: true,
+      },
+      currentCentralMachine: null,
+    }),
+    (error) => error?.code === 'central_machine_local_reset_failed',
+  );
+});
+
+test('una PC que perdió la centralidad desactiva su override local', async () => {
+  const calls = [];
+  const candidate = { deviceId: '4f671f4a-513c-4c53-85ad-b04a6f9ca20a' };
+  const desktop = {
+    deactivateWhatsAppCentralMachine: async (deviceId) => {
+      calls.push(deviceId);
+      return { success: true, changed: true };
+    },
+  };
+  await deactivateStaleCentralOverride({
+    desktop,
+    candidate,
+    centralMachine: { available: true, machine: { device_id: 'f47ac10b-58cc-4372-a567-0e02b2c3d479' } },
+  });
+  await deactivateStaleCentralOverride({
+    desktop,
+    candidate,
+    centralMachine: { available: true, machine: { device_id: candidate.deviceId } },
+  });
+  assert.deepEqual(calls, [candidate.deviceId]);
+});
+
+test('la PC central restaura su ruta local después de una respuesta de transferencia perdida', async () => {
+  const calls = [];
+  const candidate = {
+    deviceId: '4f671f4a-513c-4c53-85ad-b04a6f9ca20a',
+    centralMachineActive: false,
+    localServiceRunning: true,
+    localServiceReady: true,
+    whatsappConnected: true,
+  };
+  const result = await reconcileCentralOverride({
+    desktop: {
+      activateWhatsAppCentralMachine: async (deviceId) => {
+        calls.push(deviceId);
+        return { success: true };
+      },
+    },
+    candidate,
+    centralMachine: {
+      available: true,
+      lease_active: true,
+      machine: { device_id: candidate.deviceId },
+    },
+  });
+  assert.equal(result.changed, true);
+  assert.deepEqual(calls, [candidate.deviceId]);
 });
 
 test('la bandeja expone atención, lectura, bloqueos, adjuntos y recuperación', async () => {
@@ -133,6 +405,8 @@ test('la bandeja expone atención, lectura, bloqueos, adjuntos y recuperación',
   assert.match(service, /\/bot-settings\/preview/);
   assert.match(service, /setTestMode:/);
   assert.match(service, /\/test-mode/);
+  assert.match(service, /centralMachine:/);
+  assert.match(service, /claimCentralMachine:/);
   assert.match(service, /cursor=/);
   assert.match(view, /Por atender/);
   assert.match(view, /Sin leer/);
@@ -163,7 +437,11 @@ test('la bandeja expone atención, lectura, bloqueos, adjuntos y recuperación',
   assert.match(view, /function DeleteConversationDialog/);
   assert.match(view, /whatsappOperator\.archiveConversation/);
   assert.match(view, /whatsappOperator\.deleteConversation/);
-  assert.match(view, /confirmation\.trim\(\)\.toUpperCase\(\) === 'ELIMINAR'/);
+  // Ya no se escribe "ELIMINAR" a mano (pedido de Mikkel, 17-ago-2026): alcanza
+  // con confirmar en el diálogo. La confirmación que espera el bot la manda la
+  // app, así que el borrado tiene que seguir enviándola.
+  assert.match(view, /onConfirm\('ELIMINAR'\)/);
+  assert.doesNotMatch(view, /Para confirmar, escribí/);
   assert.match(view, /canDeleteConversation/);
   assert.match(styles, /\.wa-chat-menu > button\.danger/);
   assert.match(styles, /\.wa-destructive-confirmation input/);
@@ -180,6 +458,7 @@ test('la bandeja expone atención, lectura, bloqueos, adjuntos y recuperación',
   assert.match(view, /\{botSettingsOpen && \(/);
   assert.doesNotMatch(view, /activeContext === 'bot-settings'/);
   const botSettingsPanel = await readFile(resolve(root, 'src/components/WhatsAppBotSettingsPanel.jsx'), 'utf8');
+  const centralMachineHelper = await readFile(resolve(root, 'src/utils/whatsappCentralMachine.js'), 'utf8');
   assert.match(botSettingsPanel, /createPortal/);
   assert.match(botSettingsPanel, /aria-modal="true"/);
   assert.match(botSettingsPanel, /Probar a Blacky/);
@@ -189,6 +468,26 @@ test('la bandeja expone atención, lectura, bloqueos, adjuntos y recuperación',
   assert.match(botSettingsPanel, /Generar otra/);
   assert.match(botSettingsPanel, /Modo test/);
   assert.match(botSettingsPanel, /Activar o desactivar Modo test/);
+  assert.match(botSettingsPanel, /Máquina central de WhatsApp/);
+  assert.match(botSettingsPanel, /canManageCentralMachine && section === 'central'/);
+  assert.match(botSettingsPanel, /Establecer esta PC como central/);
+  assert.match(botSettingsPanel, /El servidor local todavía no está listo/);
+  assert.match(botSettingsPanel, /role="alertdialog"/);
+  assert.match(botSettingsPanel, /centralMachineError/);
+  assert.match(botSettingsPanel, /centralLeaseActive/);
+  assert.match(botSettingsPanel, /centralLeaseExpired/);
+  assert.match(botSettingsPanel, /centralWhatsappConnected/);
+  assert.match(botSettingsPanel, /wa-central-pulse/);
+  assert.match(botSettingsPanel, /La asignación de la máquina se aplica inmediatamente/);
+  assert.match(view, /overview\?\.actor\?\.role \|\| ''\)\.toLowerCase\(\) === 'system'/);
+  assert.match(centralMachineHelper, /expectedDeviceId: currentCentralMachine\?\.machine\?\.device_id \|\| ''/);
+  assert.match(view, /claimCentralMachineForDevice/);
+  assert.match(view, /reconcileCentralOverride/);
+  assert.match(centralMachineHelper, /activateWhatsAppCentralMachine\(candidate\.deviceId\)/);
+  assert.match(centralMachineHelper, /deactivateWhatsAppCentralMachine/);
+  assert.match(view, /central_machine_local_reset_failed/);
+  assert.match(view, /preserveActionError: true/);
+  assert.match(view, /background: true/);
   assert.match(botSettingsPanel, /Número autorizado/);
   assert.match(botSettingsPanel, /onTestModeChange/);
   assert.match(botSettingsPanel, /Permisos y respuestas automáticas/);
@@ -214,6 +513,13 @@ test('la bandeja expone atención, lectura, bloqueos, adjuntos y recuperación',
   assert.match(styles, /\.wa-bot-choice-menu\s*\{[\s\S]*?position:\s*absolute/);
   assert.match(styles, /\.wa-bot-modal-body\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) 340px/);
   assert.match(styles, /\.wa-bot-settings-nav\s*\{[\s\S]*?grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /\.wa-bot-settings-nav\.with-central\s*\{[\s\S]*?repeat\(6, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /\.wa-central-station\.current\s*\{/);
+  assert.match(styles, /\.wa-central-pulse\.active\s*\{/);
+  assert.match(styles, /\.wa-central-pulse\.expired\s*\{/);
+  assert.match(styles, /grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /\.wa-bot-modal-body\.central-focus\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(styles, /\.wa-bot-modal-body\.central-focus \.wa-bot-modal-preview\s*\{[\s\S]*?display:\s*none/);
   assert.match(styles, /\.wa-bot-test-result\s*\{/);
   assert.match(styles, /\.wa-bot-test-mode\s*\{/);
   assert.match(styles, /\.wa-test-mode-chip\s*\{/);
@@ -301,7 +607,9 @@ test('la bandeja expone atención, lectura, bloqueos, adjuntos y recuperación',
   assert.match(view, /ATTACHMENT_CACHE_MAX_BYTES/);
   assert.match(view, /conversationActivity/);
   assert.match(view, /activity\.revision !== detailRevisionRef\.current/);
-  assert.match(view, /Preparando la bandeja/);
+  // La bandeja ya no muestra un spinner mudo: ahora va una barra con avance real.
+  assert.doesNotMatch(view, /Preparando la bandeja/);
+  assert.match(view, /<InboxLoadingBar progress=\{inboxProgress\} \/>/);
   assert.match(view, /Abriendo la conversaci.n/);
   assert.match(styles, /\.wa-attachment > button\.wa-media-loader,[\s\S]*?width:\s*100%/);
   assert.match(view, /hasImage \? 'has-image'/);
@@ -501,4 +809,85 @@ test('Electron genera el PDF del presupuesto sin diálogo de guardado', async ()
   assert.match(main, /generate-whatsapp-budget-pdf/);
   assert.match(main, /printToPDF/);
   assert.match(main, /show:\s*false/);
+});
+
+test('mientras WhatsApp espera el escaneo se muestra el QR, no un cartel de éxito', () => {
+  const view = describeWhatsAppConnection({
+    connectionInfo: {
+      state: { instance: { state: 'connecting' } },
+      qr: { base64: 'data:image/png;base64,AAAA' },
+      connected: false,
+      evolution_available: true,
+    },
+  });
+
+  assert.equal(view.status, 'qr');
+  assert.equal(view.qrSource, 'data:image/png;base64,AAAA');
+});
+
+test('"connecting" sin QR no se anuncia como cuenta ya vinculada', () => {
+  // En Baileys "connecting" significa que WhatsApp espera el escaneo, no que la
+  // vinculación ya ocurrió. Anunciarlo como éxito tapa el QR para siempre.
+  const view = describeWhatsAppConnection({
+    connectionInfo: {
+      state: { instance: { state: 'connecting' } },
+      qr: null,
+      connected: false,
+      evolution_available: true,
+    },
+  });
+
+  assert.equal(view.status, 'waiting');
+});
+
+test('el servicio local caído se distingue de estar esperando el escaneo', () => {
+  const view = describeWhatsAppConnection({
+    connectionInfo: {
+      state: null,
+      qr: null,
+      connected: false,
+      evolution_available: false,
+      evolution_error: 'evolution_unreachable',
+    },
+  });
+
+  assert.equal(view.status, 'service_down');
+  assert.equal(view.code, 'evolution_unreachable');
+});
+
+test('si no se llega a la PC central, ese problema tiene prioridad', () => {
+  const view = describeWhatsAppConnection({
+    connectionInfo: null,
+    connectionIssue: { code: 'bot_central_unreachable' },
+  });
+
+  assert.equal(view.status, 'unreachable');
+});
+
+test('una sesión abierta no pide QR', () => {
+  const view = describeWhatsAppConnection({
+    connectionInfo: {
+      state: { instance: { state: 'open' } },
+      connected: true,
+      evolution_available: true,
+    },
+  });
+
+  assert.equal(view.status, 'connected');
+  assert.equal(view.qrSource, '');
+});
+
+test('un QR crudo sin encabezado se convierte en imagen mostrable', () => {
+  const view = describeWhatsAppConnection({
+    connectionInfo: { qr: { base64: 'AAAA' }, evolution_available: true },
+  });
+
+  assert.equal(view.qrSource, 'data:image/png;base64,AAAA');
+});
+
+test('la bandeja ya no anuncia "QR Detectado" mientras espera el escaneo', async () => {
+  const view = await readFile(resolve(root, 'src/views/WhatsAppInboxView.jsx'), 'utf8');
+
+  assert.doesNotMatch(view, /QR Detectado/);
+  assert.match(view, /describeWhatsAppConnection/);
 });
