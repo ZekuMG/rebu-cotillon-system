@@ -36,6 +36,14 @@ Important functions:
 
 Transaction snapshots include `transactionsScope: 'full'` only after a successful paginated load of the complete sales table. Legacy snapshots or snapshots without that marker are treated as partial and must be backfilled once before incremental synchronization is allowed. Never infer completeness from the presence or number of locally cached transactions; doing so can leave older gaps permanently hidden from week, month, and year metrics.
 
+Complete chronological reads for `sales`, sale-history `logs`, `expenses`, and `cash_closures` paginate by the numeric primary-key cursor instead of deep `range` offsets. After every complete read, `sortCloudRowsNewestFirst` restores the established `created_at desc, id desc` order before records are mapped or persisted. Keep the empty-page termination rule because the Data API may return fewer rows than requested, and never mark a snapshot as complete if cursor pagination cannot advance.
+
+Transaction and dashboard cloud requests run inside a 30-second abortable attempt. A fast recoverable network failure may retry once; a timeout aborts the whole attempt and falls back to the existing local snapshot instead of leaving the module promise locked. Every Supabase page and schema-fallback retry must receive the same `AbortSignal`.
+
+Complete replacement loads also capture per-source mutation versions before paging. Realtime events and local writes increment the corresponding version (`sales`, `logs`, `expenses`, or `closures`). If a source changes while the snapshot is being assembled, the complete read is repeated once; if it changes again, keep the current local state, leave the module dirty, and never persist or label that result as a complete snapshot.
+
+Sale-history logs are conditionally critical. Current sale rows that already contain all payment, user, status, voiding, item subtotal/cost, and item-type fields can load without logs. Legacy or incomplete sale rows require logs for reconstruction; if that log query fails, the transaction/metrics payload is incomplete and must retain the cached data rather than mapping partial sales.
+
 Realtime updates are coordinated in `App.jsx` through one Supabase channel:
 
 - Sales notifications are batched by sale ID and reloaded with their items/history context before updating transactions.

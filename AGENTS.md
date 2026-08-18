@@ -14,3 +14,7 @@ Dashboard work usually crosses three layers:
 - `src/hooks/useDashboardData.js`: derived metrics, filtered sales/expenses, rankings, payment totals, and alerts.
 
 Keep dashboard changes aligned with the current operative-counter design direction in `.interface-design/system.md`.
+
+## Release versioning
+
+- Do NOT automatically change the version on every edit or batch. Only change the version in `package.json` and `package-lock.json` when the user explicitly requests a version change.

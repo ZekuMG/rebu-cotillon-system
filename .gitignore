@@ -61,3 +61,6 @@ database supabas/
 # Local and private files that must not be versioned
 /archivos-locales/
 output/pdf/BANDERIN LACTANCIA - Daniela Retamal - corregido.pdf
+
+# Scripts sueltos de analisis de otras sesiones. No son parte de la app.
+_rebu_analysis_temp/
