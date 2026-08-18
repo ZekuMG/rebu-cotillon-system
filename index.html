@@ -5,9 +5,103 @@
     <link rel="icon" type="image/png" href="./rebu-logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Rebu Cotillón</title>
+    <!--
+      Splash de arranque: HTML + CSS puro, sin JS ni recursos externos, para que el
+      navegador lo pinte apenas parsea el documento. Antes el #root arrancaba vacío
+      y quedaba blanco puro hasta que React montaba por primera vez.
+      No hace falta borrarlo a mano: ReactDOM.createRoot() limpia el contenido del
+      contenedor en su primer commit, así que React lo reemplaza solo.
+    -->
+    <style>
+      #rebu-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        background: #f8fafc;
+        color: #0f172a;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        text-align: center;
+        z-index: 2147483647;
+      }
+
+      #rebu-splash .rebu-splash-logo {
+        width: 96px;
+        height: 96px;
+        object-fit: contain;
+        animation: rebu-splash-latido 1.6s ease-in-out infinite;
+      }
+
+      #rebu-splash .rebu-splash-titulo {
+        margin: 0;
+        font-size: 26px;
+        font-weight: 800;
+        letter-spacing: -0.01em;
+      }
+
+      #rebu-splash .rebu-splash-estado {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+        color: #64748b;
+        animation: rebu-splash-respira 1.6s ease-in-out infinite;
+      }
+
+      #rebu-splash .rebu-splash-barra {
+        width: 180px;
+        height: 4px;
+        border-radius: 999px;
+        background: #e2e8f0;
+        overflow: hidden;
+      }
+
+      #rebu-splash .rebu-splash-barra::after {
+        content: "";
+        display: block;
+        width: 40%;
+        height: 100%;
+        border-radius: 999px;
+        background: #0f172a;
+        animation: rebu-splash-corre 1.2s ease-in-out infinite;
+      }
+
+      @keyframes rebu-splash-latido {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.06); }
+      }
+
+      @keyframes rebu-splash-respira {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.45; }
+      }
+
+      @keyframes rebu-splash-corre {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(350%); }
+      }
+
+      /* Si el sistema pide menos movimiento, dejamos el splash quieto. */
+      @media (prefers-reduced-motion: reduce) {
+        #rebu-splash .rebu-splash-logo,
+        #rebu-splash .rebu-splash-estado,
+        #rebu-splash .rebu-splash-barra::after {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="rebu-splash">
+        <img class="rebu-splash-logo" src="./rebu-logo.png" alt="" />
+        <p class="rebu-splash-titulo">Rebu Cotillón</p>
+        <p class="rebu-splash-estado">Iniciando…</p>
+        <div class="rebu-splash-barra"></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

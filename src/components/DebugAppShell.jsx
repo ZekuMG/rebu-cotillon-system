@@ -1,9 +1,23 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import App from '../App.jsx';
+// El umbral y la regla de "¿esto es pantalla blanca?" viven en el util para
+// poder testearlos sin montar React. Subió de 4500 a 8000 ms: el arranque real
+// (auth, consultas iniciales, primer pintado del árbol) tranquilamente pasa los
+// 4,5 s en una PC lenta, y con el umbral corto le tapábamos la app con la
+// pantalla de crash a un usuario que estaba cargando bien.
+import { BLANK_SCREEN_TIMEOUT_MS, shouldReportBlankScreen } from '../utils/bootSplash.js';
 
 const DEBUG_LOG_LIMIT = 40;
-const BLANK_SCREEN_TIMEOUT_MS = 4500;
+
+// El flag arranca en false acá, al importar el módulo, y NO dentro del useEffect
+// de abajo. Los efectos corren de hijo a padre: el useEffect de App lo pone en
+// true y, justo después, el de este componente (que es el padre) lo volvía a
+// pisar con false. Resultado: quedaba en false para siempre y el detector
+// acusaba pantalla blanca sobre una app que había cargado bien.
+if (typeof window !== 'undefined') {
+  window.__REBU_APP_READY__ = false;
+}
 
 const serializeDebugValue = (value, depth = 0) => {
   if (value instanceof Error) {
@@ -183,8 +197,6 @@ export default function DebugAppShell() {
   const lastLogRef = useRef({ key: '', at: 0 });
 
   useEffect(() => {
-    window.__REBU_APP_READY__ = false;
-
     const pushLog = (level, args) => {
       const message = formatDebugArgs(args);
       const now = Date.now();
@@ -257,8 +269,22 @@ export default function DebugAppShell() {
       });
     };
 
+    // Reloj monótono: con Date.now() un ajuste de hora o una suspensión de la PC
+    // podía dar un "elapsed" menor al real y desactivar el detector sin que se
+    // notara. Se redondea para arriba porque la resolución del reloj puede
+    // devolver 7999,6 ms en un timer que ya venció.
+    const ahora = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const bootStartedAt = ahora();
+
     const timeoutId = window.setTimeout(() => {
-      if (!window.__REBU_APP_READY__ && !pushedCrashRef.current) {
+      const reportar = shouldReportBlankScreen({
+        appReady: window.__REBU_APP_READY__,
+        crashed: pushedCrashRef.current,
+        elapsedMs: Math.ceil(ahora() - bootStartedAt),
+        timeoutMs: BLANK_SCREEN_TIMEOUT_MS,
+      });
+
+      if (reportar) {
         raiseCrash({
           type: 'blank-screen-timeout',
           message: 'La app no terminó de dibujarse y detectamos una posible pantalla blanca.',
