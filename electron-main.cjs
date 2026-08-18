@@ -2,9 +2,13 @@ const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electro
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { createHash, randomBytes, randomUUID } = require('crypto');
 const { autoUpdater } = require('electron-updater');
 const { createUpdateManager } = require('./electron-update-manager.cjs');
-const { normalizeWhatsAppBotRequestPath } = require('./electron-whatsapp-bridge.cjs');
+const {
+  normalizeWhatsAppBotRequestPath,
+  resolveWhatsAppBotBaseUrl,
+} = require('./electron-whatsapp-bridge.cjs');
 
 let mainWindow;
 let supplierImageLoginWindow;
@@ -47,21 +51,114 @@ const readEnvFileValue = (key) => {
 const getOpenAIApiKey = () =>
   String(process.env.OPENAI_API_KEY || readEnvFileValue('OPENAI_API_KEY') || '').trim();
 
-const getWhatsAppBotBaseUrl = () => {
-  const configured = String(
-    process.env.REBU_WHATSAPP_BOT_URL
-    || readEnvFileValue('REBU_WHATSAPP_BOT_URL')
-    || 'http://127.0.0.1:3000',
-  ).trim();
-  const parsed = new URL(configured);
-  const isLoopback = ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname);
-  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopback)) {
-    throw new Error('La API de WhatsApp debe usar HTTPS o una direccion local.');
+const readLocalJson = (fileName) => {
+  try {
+    const filePath = path.join(app.getPath('userData'), fileName);
+    if (!fs.existsSync(filePath)) return {};
+    const value = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return value && typeof value === 'object' ? value : {};
+  } catch {
+    return {};
   }
-  parsed.pathname = parsed.pathname.replace(/\/+$/, '');
-  parsed.search = '';
-  parsed.hash = '';
-  return parsed.href.replace(/\/$/, '');
+};
+
+const writeLocalJson = (fileName, value) => {
+  const filePath = path.join(app.getPath('userData'), fileName);
+  const temporaryPath = `${filePath}.${process.pid}.tmp`;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  fs.renameSync(temporaryPath, filePath);
+};
+
+const CENTRAL_DEVICE_FILE = 'whatsapp-central-device.json';
+const WHATSAPP_RUNTIME_FILE = 'whatsapp-runtime.json';
+const UUID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+const DEVICE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{40,180}$/;
+
+const getCentralDeviceIdentity = () => {
+  const current = readLocalJson(CENTRAL_DEVICE_FILE);
+  const currentDeviceId = String(current.deviceId || '');
+  const currentAccessToken = String(current.accessToken || '');
+  if (UUID_PATTERN.test(currentDeviceId) && DEVICE_TOKEN_PATTERN.test(currentAccessToken)) return current;
+  const identity = {
+    deviceId: UUID_PATTERN.test(currentDeviceId) ? currentDeviceId : randomUUID(),
+    accessToken: DEVICE_TOKEN_PATTERN.test(currentAccessToken)
+      ? currentAccessToken
+      : randomBytes(32).toString('base64url'),
+    createdAt: current.createdAt || new Date().toISOString(),
+    accessTokenCreatedAt: current.accessTokenCreatedAt || new Date().toISOString(),
+  };
+  writeLocalJson(CENTRAL_DEVICE_FILE, identity);
+  return identity;
+};
+
+const getWhatsAppAccessDevice = () => {
+  const identity = getCentralDeviceIdentity();
+  const runtime = readLocalJson(WHATSAPP_RUNTIME_FILE);
+  return {
+    supported: true,
+    deviceId: identity.deviceId,
+    tokenHash: createHash('sha256').update(identity.accessToken).digest('hex'),
+    deviceName: os.hostname?.() || 'Equipo desconocido',
+    platform: `${os.platform?.() || 'desktop'} ${os.release?.() || ''}`.trim(),
+    centralMachineActive: runtime.centralMachineActive === true
+      && runtime.centralMachineId === identity.deviceId,
+  };
+};
+
+const localWhatsAppHealth = async (healthPath) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3500);
+  try {
+    const response = await fetch(`http://127.0.0.1:3000${healthPath}`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    const body = await response.json().catch(() => ({}));
+    return { ok: response.ok, status: response.status, body };
+  } catch {
+    return { ok: false, status: 0, body: {} };
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const getWhatsAppCentralCandidate = async () => {
+  const identity = getCentralDeviceIdentity();
+  const runtime = readLocalJson(WHATSAPP_RUNTIME_FILE);
+  const [live, ready, whatsapp] = await Promise.all([
+    localWhatsAppHealth('/health/live'),
+    localWhatsAppHealth('/health/ready'),
+    localWhatsAppHealth('/health/whatsapp'),
+  ]);
+  return {
+    supported: true,
+    deviceId: identity.deviceId,
+    deviceName: os.hostname?.() || 'Equipo desconocido',
+    ipAddress: getPrimaryLocalIp() || 'No disponible',
+    platform: `${os.platform?.() || 'desktop'} ${os.release?.() || ''}`.trim(),
+    runtime: 'Electron',
+    centralMachineActive: runtime.centralMachineActive === true
+      && runtime.centralMachineId === identity.deviceId,
+    localServiceRunning: live.ok
+      && live.body?.ok === true
+      && live.body?.service === 'rebu-whatsapp-node',
+    localServiceReady: ready.ok && ready.body?.ready === true,
+    whatsappConnected: whatsapp.ok && whatsapp.body?.connected === true,
+    checkedAt: new Date().toISOString(),
+  };
+};
+
+const getWhatsAppBotBaseUrl = () => {
+  const runtime = readLocalJson(WHATSAPP_RUNTIME_FILE);
+  const localOverride = runtime.centralMachineActive === true
+    ? String(runtime.whatsappBotUrl || '').trim()
+    : '';
+  return resolveWhatsAppBotBaseUrl({
+    localOverride,
+    environmentOverride: process.env.REBU_WHATSAPP_BOT_URL,
+    fileOverride: readEnvFileValue('REBU_WHATSAPP_BOT_URL'),
+  });
 };
 
 const requestWhatsAppBot = async (payload = {}) => {
@@ -93,27 +190,38 @@ const requestWhatsAppBot = async (payload = {}) => {
     : 45000;
   const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
   try {
-    const response = await fetch(`${getWhatsAppBotBaseUrl()}${requestPath}`, {
+    const botBaseUrl = getWhatsAppBotBaseUrl();
+    const deviceIdentity = getCentralDeviceIdentity();
+    const response = await fetch(`${botBaseUrl}${requestPath}`, {
       method,
       signal: controller.signal,
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
+        'X-Rebu-Device-Id': deviceIdentity.deviceId,
+        'X-Rebu-Device-Token': deviceIdentity.accessToken,
         ...(payload.idempotencyKey
           ? { 'idempotency-key': String(payload.idempotencyKey).slice(0, 180) }
           : {}),
       },
-      body: method === 'POST' ? bodyText || '{}' : undefined,
+      // DELETE también lleva cuerpo: la confirmación de borrado viaja ahí.
+      // Cuando esto sólo contemplaba POST, el bot recibía el pedido sin cuerpo
+      // y respondía "confirmation_required" — el botón de eliminar no andaba.
+      body: ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(method).toUpperCase())
+        ? bodyText || '{}'
+        : undefined,
     });
     const body = await response.json().catch(() => ({}));
     return { ok: response.ok, status: response.status, body };
   } catch (error) {
+    const code = error?.name === 'AbortError'
+      ? 'bot_request_timeout'
+      : 'bot_central_unreachable';
     return {
       ok: false,
       status: 0,
-      error: error?.name === 'AbortError'
-        ? 'bot_request_timeout'
-        : 'No se pudo conectar con la API del bot',
+      error: code,
+      body: { error: code },
     };
   } finally {
     clearTimeout(timeout);
@@ -324,10 +432,13 @@ const preparePdfExportCapture = async (webContents) => {
       const images = Array.from(exportRoot.querySelectorAll('img'));
       await Promise.all(images.map(async (image) => {
         if (!image.complete) {
-          await new Promise((resolve) => {
-            image.addEventListener('load', resolve, { once: true });
-            image.addEventListener('error', resolve, { once: true });
-          });
+          await Promise.race([
+            new Promise((resolve) => {
+              image.addEventListener('load', resolve, { once: true });
+              image.addEventListener('error', resolve, { once: true });
+            }),
+            new Promise((resolve) => setTimeout(resolve, 2000)),
+          ]);
         }
         if (typeof image.decode === 'function') {
           try { await image.decode(); } catch {}
@@ -1806,6 +1917,68 @@ app.on('ready', () => {
       return { ok: false, status: 403, error: 'Origen IPC no autorizado' };
     }
     return requestWhatsAppBot(payload);
+  });
+
+  ipcMain.handle('get-whatsapp-central-candidate', async (event) => {
+    if (!isTrustedIpcSender(event)) return { supported: false, error: 'Origen IPC no autorizado' };
+    return getWhatsAppCentralCandidate();
+  });
+
+  ipcMain.handle('get-whatsapp-access-device', (event) => {
+    if (!isTrustedIpcSender(event)) return { supported: false, error: 'Origen IPC no autorizado' };
+    return getWhatsAppAccessDevice();
+  });
+
+  ipcMain.handle('activate-whatsapp-central-machine', async (event, deviceId) => {
+    if (!isTrustedIpcSender(event)) {
+      return { success: false, error: 'Origen IPC no autorizado' };
+    }
+    const identity = getCentralDeviceIdentity();
+    if (String(deviceId || '') !== identity.deviceId) {
+      return { success: false, error: 'La identidad de esta PC cambió. Volvé a comprobarla.' };
+    }
+    const candidate = await getWhatsAppCentralCandidate();
+    if (!candidate.localServiceRunning || !candidate.localServiceReady) {
+      return {
+        success: false,
+        code: 'local_whatsapp_service_unavailable',
+        error: 'El servicio local de WhatsApp todavía no está listo en esta PC.',
+        candidate,
+      };
+    }
+    if (!candidate.whatsappConnected) {
+      return {
+        success: false,
+        code: 'central_whatsapp_disconnected',
+        error: 'WhatsApp todavía no está conectado en esta PC.',
+        candidate,
+      };
+    }
+    writeLocalJson(WHATSAPP_RUNTIME_FILE, {
+      centralMachineActive: true,
+      centralMachineId: identity.deviceId,
+      whatsappBotUrl: 'http://127.0.0.1:3000',
+      activatedAt: new Date().toISOString(),
+    });
+    return { success: true, candidate };
+  });
+
+  ipcMain.handle('deactivate-whatsapp-central-machine', async (event, deviceId) => {
+    if (!isTrustedIpcSender(event)) {
+      return { success: false, error: 'Origen IPC no autorizado' };
+    }
+    const identity = getCentralDeviceIdentity();
+    if (String(deviceId || '') !== identity.deviceId) {
+      return { success: false, error: 'La identidad de esta PC cambió. Volvé a comprobarla.' };
+    }
+    const runtime = readLocalJson(WHATSAPP_RUNTIME_FILE);
+    if (runtime.centralMachineActive !== true) return { success: true, changed: false };
+    writeLocalJson(WHATSAPP_RUNTIME_FILE, {
+      centralMachineActive: false,
+      centralMachineId: identity.deviceId,
+      deactivatedAt: new Date().toISOString(),
+    });
+    return { success: true, changed: true };
   });
 
   ipcMain.handle('get-update-status', (event) => {
