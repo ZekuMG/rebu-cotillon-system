@@ -445,8 +445,12 @@ export default function LogsView({
 
   const searchFilteredLogs = useMemo(() => {
     return processedLogs.filter((log) => {
-      const matchesSearch = logMatchesScopedSearch(log, appliedFilters.search, appliedFilters.searchScope);
-      const matchesProduct = effectiveProductSearch
+      const matchesSearch = log.searchVerified
+        ? true
+        : logMatchesScopedSearch(log, appliedFilters.search, appliedFilters.searchScope);
+      const matchesProduct = log.searchVerified
+        ? true
+        : effectiveProductSearch
         ? logMatchesProductSearch(log, productSearchTerms)
         : true;
       return matchesSearch && matchesProduct;

@@ -5,7 +5,6 @@ import { CLOUD_SELECTS, LOGS_PAGE_SIZE } from '../utils/cloudSelects';
 import {
   extractSchemaMissingColumn,
   removeColumnFromSelect,
-  runSelectWithSchemaFallback,
 } from '../utils/supabaseSchemaFallback';
 
 const EMPTY_ARRAY = [];
@@ -360,7 +359,7 @@ export default function useLogsFeed({
         const fetchServerSearchRows = async () => {
           const rpcSortColumn =
             orderColumn === 'user_name' ? 'user' : orderColumn === 'action' ? 'action' : 'created_at';
-          const { data: rpcData, error: rpcError } = await supabase.rpc('search_logs', {
+          const rpcParams = {
             p_search: normalizedFilters.search || '',
             p_search_scope: normalizedFilters.searchScope || 'all',
             p_product_terms: normalizedFilters.productSearch ? normalizedFilters.productSearchTerms : [],
@@ -374,7 +373,20 @@ export default function useLogsFeed({
             p_ascending: ascending,
             p_offset: offset,
             p_limit: fetchLimit,
-          });
+          };
+
+          // Prefer the summary RPC so a search page does not download every JSON
+          // detail. Older databases transparently fall back to the legacy RPC.
+          const summaryResult = await supabase.rpc('search_logs_summary', rpcParams);
+          if (!summaryResult.error) {
+            return Array.isArray(summaryResult.data) ? summaryResult.data : [];
+          }
+
+          if (!isSearchLogsRpcUnavailable(summaryResult.error)) {
+            throw summaryResult.error;
+          }
+
+          const { data: rpcData, error: rpcError } = await supabase.rpc('search_logs', rpcParams);
 
           if (rpcError) {
             if (isSearchLogsRpcUnavailable(rpcError)) return null;
@@ -521,33 +533,9 @@ export default function useLogsFeed({
 
         const pageRows = Array.isArray(data) ? data : [];
         const currentRows = pageRows.slice(0, pageSize);
-        let finalRows = currentRows;
 
-        if (!includeDetails && !normalizedFilters.search) {
-          const rowIds = currentRows.map((row) => row?.id).filter(Boolean);
-
-          if (rowIds.length > 0) {
-            const detailResult = await runSelectWithSchemaFallback(
-              (detailSelect) =>
-                supabase
-                  .from('logs')
-                  .select(detailSelect)
-                  .in('id', rowIds)
-                  .abortSignal(abortController.signal),
-              CLOUD_SELECTS.logs
-            );
-
-            if (!detailResult?.error && Array.isArray(detailResult?.data)) {
-              const detailMap = new Map(
-                detailResult.data.map((row) => [String(row?.id), row])
-              );
-
-              finalRows = currentRows.map((row) => detailMap.get(String(row?.id)) || row);
-            }
-          }
-        }
-
-        const mappedRows = mapLogRecords(finalRows).filter(
+        // Details remain lazy and are fetched only when the user opens a row.
+        const mappedRows = mapLogRecords(currentRows).filter(
           (log) => !normalizedExcludedActions.has(normalizeActionName(log?.action)),
         );
 
