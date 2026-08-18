@@ -305,6 +305,12 @@ const responderFor = (row) => {
   if (!message || message.direction !== 'outbound') {
     return { label: 'Sin responder', tone: 'unanswered', Icon: Clock3 };
   }
+  // El mensaje de ausencia de WhatsApp Business sale solo, 3 segundos despues
+  // del primer mensaje del cliente. Mostrarlo como respuesta de una persona
+  // hace creer que la conversacion esta atendida cuando no la vio nadie.
+  if (message.metadata?.origin === 'whatsapp_business_auto') {
+    return { label: 'Automático', tone: 'bot', Icon: Bot };
+  }
   const actorName = String(message.metadata?.operator?.actor_name || '').trim();
   if (actorName) return { label: actorName, tone: 'human', Icon: UserRound };
   if (message.metadata?.origin === 'linked_whatsapp') {
