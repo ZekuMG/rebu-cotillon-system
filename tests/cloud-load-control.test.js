@@ -3,11 +3,18 @@ import assert from 'node:assert/strict';
 
 import {
   doesCloudLoadCoverRequest,
+  fetchCloudPayloadWithMutationGuard,
   fetchCloudPayloadWithRetries,
+  recordCloudSourceMutations,
   resolveCoveredCloudLoadResult,
   summarizeCloudResults,
 } from '../src/utils/cloudLoadControl.js';
-import { fetchAllCloudRowsWithSelectFallback } from '../src/utils/supabaseSchemaFallback.js';
+import {
+  fetchAllCloudRowsByIdCursorWithSelectFallback,
+  fetchAllCloudRowsWithSelectFallback,
+  runSelectWithSchemaFallback,
+  sortCloudRowsNewestFirst,
+} from '../src/utils/supabaseSchemaFallback.js';
 
 const recoverableNetworkError = Object.assign(new Error('Failed to fetch'), { code: 'NETWORK' });
 
@@ -132,6 +139,82 @@ test('un error permanente no se reintenta', async () => {
   assert.equal(calls, 1);
 });
 
+test('una mutacion durante la carga completa repite el snapshot una sola vez', async () => {
+  const versions = { sales: 0, logs: 0 };
+  let calls = 0;
+
+  const result = await fetchCloudPayloadWithMutationGuard({
+    getMutationVersions: () => versions,
+    sources: ['sales', 'logs'],
+    retryCount: 1,
+    fetchPayload: async () => {
+      calls += 1;
+      if (calls === 1) recordCloudSourceMutations(versions, ['sales']);
+      return { hasCloudConnection: true, transactions: [{ id: calls }] };
+    },
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.mutationConsistent, true);
+  assert.deepEqual(result.concurrentMutationSources, []);
+  assert.deepEqual(result.transactions, [{ id: 2 }]);
+});
+
+test('un snapshot que vuelve a mutar nunca se declara consistente', async () => {
+  const versions = { expenses: 0 };
+  let calls = 0;
+
+  const result = await fetchCloudPayloadWithMutationGuard({
+    getMutationVersions: () => versions,
+    sources: ['expenses'],
+    retryCount: 1,
+    fetchPayload: async () => {
+      calls += 1;
+      recordCloudSourceMutations(versions, ['expenses']);
+      return { hasCloudConnection: true, expenses: [{ id: calls }] };
+    },
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.mutationConsistent, false);
+  assert.deepEqual(result.concurrentMutationSources, ['expenses']);
+});
+
+test('un fallo de conexion no se repite por la barrera de mutaciones', async () => {
+  let calls = 0;
+  const result = await fetchCloudPayloadWithMutationGuard({
+    getMutationVersions: () => ({ sales: 0 }),
+    sources: ['sales'],
+    retryCount: 2,
+    fetchPayload: async () => {
+      calls += 1;
+      return { hasCloudConnection: false, failedSources: ['ventas'] };
+    },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(result.mutationConsistent, true);
+});
+
+test('un fallo de conexion no permite restaurar cache sobre una mutacion concurrente', async () => {
+  const versions = { expenses: 0 };
+  let calls = 0;
+  const result = await fetchCloudPayloadWithMutationGuard({
+    getMutationVersions: () => versions,
+    sources: ['expenses'],
+    retryCount: 2,
+    fetchPayload: async () => {
+      calls += 1;
+      recordCloudSourceMutations(versions, ['expenses']);
+      return { hasCloudConnection: false, failedSources: ['gastos'] };
+    },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(result.mutationConsistent, false);
+  assert.deepEqual(result.concurrentMutationSources, ['expenses']);
+});
+
 test('la consulta paginada recibe la misma AbortSignal del intento', async () => {
   const controller = new AbortController();
   let receivedSignal = null;
@@ -149,6 +232,29 @@ test('la consulta paginada recibe la misma AbortSignal del intento', async () =>
     () => query,
     'id,title',
     100,
+    { signal: controller.signal },
+  );
+
+  assert.equal(result.error, null);
+  assert.equal(receivedSignal, controller.signal);
+});
+
+test('una consulta simple con fallback recibe la AbortSignal del intento', async () => {
+  const controller = new AbortController();
+  let receivedSignal = null;
+  const query = {
+    abortSignal(signal) {
+      receivedSignal = signal;
+      return this;
+    },
+    then(resolve, reject) {
+      return Promise.resolve({ data: [], error: null }).then(resolve, reject);
+    },
+  };
+
+  const result = await runSelectWithSchemaFallback(
+    () => query,
+    'id,title',
     { signal: controller.signal },
   );
 
@@ -174,6 +280,100 @@ test('la paginacion sigue hasta una pagina vacia aunque Supabase limite cada res
 
   assert.deepEqual(result.data, rows);
   assert.deepEqual(requestedRanges, [[0, 4], [2, 6], [4, 8], [5, 9]]);
+});
+
+test('la paginacion historica avanza por cursor sin omitir filas', async () => {
+  const rows = [
+    { id: 5, created_at: '2026-08-05T10:00:00Z' },
+    { id: 4, created_at: '2026-08-04T10:00:00Z' },
+    { id: 3, created_at: '2026-08-03T10:00:00Z' },
+    { id: 2, created_at: '2026-08-02T10:00:00Z' },
+    { id: 1, created_at: '2026-08-01T10:00:00Z' },
+  ];
+  const requestedCursors = [];
+
+  const result = await fetchAllCloudRowsByIdCursorWithSelectFallback(
+    () => {
+      let cursor = null;
+      return {
+        order() { return this; },
+        limit() { return this; },
+        lt(_column, value) { cursor = value; return this; },
+        then(resolve, reject) {
+          requestedCursors.push(cursor);
+          const page = rows
+            .filter((row) => cursor === null || row.id < cursor)
+            .slice(0, 2);
+          return Promise.resolve({ data: page, error: null }).then(resolve, reject);
+        },
+      };
+    },
+    'id,created_at',
+    5,
+  );
+
+  assert.deepEqual(result.data, rows);
+  assert.deepEqual(requestedCursors, [null, 4, 2, 1]);
+});
+
+test('la carga por cursor restaura el orden cronologico exacto al terminar', () => {
+  const rows = [
+    { id: 9, created_at: '2026-08-11T09:00:00Z' },
+    { id: 12, created_at: '2026-08-10T09:00:00Z' },
+    { id: 8, created_at: '2026-08-11T09:00:00Z' },
+  ];
+
+  assert.deepEqual(
+    sortCloudRowsNewestFirst(rows).map((row) => row.id),
+    [9, 8, 12],
+  );
+  assert.deepEqual(rows.map((row) => row.id), [9, 12, 8]);
+});
+
+test('la paginacion por cursor reinicia limpia al retirar una columna ausente', async () => {
+  const rows = [
+    { id: 3, created_at: '2026-08-03T10:00:00Z' },
+    { id: 2, created_at: '2026-08-02T10:00:00Z' },
+    { id: 1, created_at: '2026-08-01T10:00:00Z' },
+  ];
+  const requestedSelects = [];
+
+  const result = await fetchAllCloudRowsByIdCursorWithSelectFallback(
+    (selectColumns) => {
+      requestedSelects.push(selectColumns);
+      let cursor = null;
+      return {
+        order() { return this; },
+        limit() { return this; },
+        lt(_column, value) { cursor = value; return this; },
+        then(resolve, reject) {
+          if (selectColumns.includes('user_name')) {
+            return Promise.resolve({
+              data: null,
+              error: { message: 'column user_name does not exist' },
+            }).then(resolve, reject);
+          }
+
+          const page = rows
+            .filter((row) => cursor === null || row.id < cursor)
+            .slice(0, 2);
+          return Promise.resolve({ data: page, error: null }).then(resolve, reject);
+        },
+      };
+    },
+    'id,created_at,user_name',
+    5,
+  );
+
+  assert.deepEqual(result.data, rows);
+  assert.equal(result.error, null);
+  assert.equal(result.selectColumns, 'id,created_at');
+  assert.deepEqual(requestedSelects, [
+    'id,created_at,user_name',
+    'id,created_at',
+    'id,created_at',
+    'id,created_at',
+  ]);
 });
 
 test('una fuente opcional fallida no invalida los datos criticos', () => {

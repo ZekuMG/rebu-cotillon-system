@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   getTransactionSnapshotScope,
+  saleRowsRequireHistoryLogs,
   shouldUseIncrementalMetricsSync,
   shouldUseIncrementalTransactionSync,
   TRANSACTION_SNAPSHOT_SCOPE_FULL,
@@ -82,6 +83,57 @@ test('metricas puede sincronizar incrementalmente cuando las ventas son completa
       hasExistingTransactions: true,
       transactionSnapshotScope: TRANSACTION_SNAPSHOT_SCOPE_FULL,
     }),
+    true,
+  );
+});
+
+test('una venta autocontenida no depende de los logs historicos', () => {
+  assert.equal(
+    saleRowsRequireHistoryLogs([{
+      total: 100,
+      payment_breakdown: { cash: 100 },
+      cash_received: 100,
+      cash_change: 0,
+      user_id: 'user-1',
+      user_role: 'seller',
+      status: 'completed',
+      voided_at: null,
+      sale_items: [{
+        subtotal: 100,
+        cost: 40,
+        is_custom: false,
+        is_discount: false,
+        is_combo: false,
+        product_type: 'unit',
+      }],
+    }]),
+    false,
+  );
+});
+
+test('una venta antigua sin columnas criticas exige los logs historicos', () => {
+  assert.equal(
+    saleRowsRequireHistoryLogs([{
+      total: 100,
+      sale_items: [{ subtotal: 100 }],
+    }]),
+    true,
+  );
+});
+
+test('una venta con total pero sin items exige reconstruccion desde logs', () => {
+  assert.equal(
+    saleRowsRequireHistoryLogs([{
+      total: 100,
+      payment_breakdown: {},
+      cash_received: null,
+      cash_change: null,
+      user_id: null,
+      user_role: null,
+      status: 'completed',
+      voided_at: null,
+      sale_items: [],
+    }]),
     true,
   );
 });

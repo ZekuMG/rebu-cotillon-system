@@ -131,6 +131,7 @@ export const mapLogRecords = (logs = []) =>
       user: log.user_name || log.user || details?.userName || 'Sistema',
       userId: log.user_id || details?.userId || null,
       userRole: log.user_role || details?.userRole || details?.role || null,
+      searchVerified: Boolean(log.search_verified),
       reason: log.reason,
       created_at: log.created_at || null,
       date: formatDateAR(getSafeDate(log.created_at)),

@@ -51,6 +51,77 @@ export const resolveCoveredCloudLoadResult = ({
   requireCloud && cloudRefreshFailed ? false : loaded
 );
 
+export const recordCloudSourceMutations = (versions = {}, sources = []) => {
+  (Array.isArray(sources) ? sources : [sources]).filter(Boolean).forEach((source) => {
+    versions[source] = Number(versions[source] || 0) + 1;
+  });
+  return versions;
+};
+
+const captureCloudMutationVersions = (versions = {}, sources = []) =>
+  Object.fromEntries(sources.map((source) => [source, Number(versions[source] || 0)]));
+
+const getChangedCloudSources = (before = {}, after = {}, sources = []) =>
+  sources.filter((source) => Number(after[source] || 0) !== Number(before[source] || 0));
+
+export const fetchCloudPayloadWithMutationGuard = async ({
+  fetchPayload,
+  getMutationVersions = () => ({}),
+  sources = [],
+  retryCount = 1,
+} = {}) => {
+  if (typeof fetchPayload !== 'function') {
+    throw new TypeError('fetchPayload debe ser una funcion.');
+  }
+
+  const guardedSources = Array.from(new Set((Array.isArray(sources) ? sources : [sources]).filter(Boolean)));
+  const normalizedRetryCount = Math.max(0, Math.trunc(Number(retryCount) || 0));
+
+  for (let attempt = 0; attempt <= normalizedRetryCount; attempt += 1) {
+    const before = captureCloudMutationVersions(getMutationVersions(), guardedSources);
+    const payload = await fetchPayload({ attempt });
+
+    if (guardedSources.length === 0) {
+      return {
+        ...payload,
+        mutationConsistent: true,
+        concurrentMutationSources: [],
+      };
+    }
+
+    const changedSources = getChangedCloudSources(before, getMutationVersions(), guardedSources);
+    if (!payload?.hasCloudConnection) {
+      return {
+        ...payload,
+        mutationConsistent: changedSources.length === 0,
+        concurrentMutationSources: changedSources,
+      };
+    }
+
+    if (changedSources.length === 0) {
+      return {
+        ...payload,
+        mutationConsistent: true,
+        concurrentMutationSources: [],
+      };
+    }
+
+    if (attempt === normalizedRetryCount) {
+      return {
+        ...payload,
+        mutationConsistent: false,
+        concurrentMutationSources: changedSources,
+      };
+    }
+  }
+
+  return {
+    hasCloudConnection: false,
+    mutationConsistent: false,
+    concurrentMutationSources: guardedSources,
+  };
+};
+
 export const fetchCloudPayloadWithRetries = async ({
   fetchPayload,
   label = 'Carga en la nube',

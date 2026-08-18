@@ -173,6 +173,7 @@ export default function BulkEditorView({
 
   // --- Estado de Vista Previa de Exportación ---
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isImageImportModalOpen, setIsImageImportModalOpen] = useState(false);
   const [imageImportRows, setImageImportRows] = useState([]);
   const [isSearchingImages, setIsSearchingImages] = useState(false);
@@ -478,7 +479,9 @@ export default function BulkEditorView({
            cost: getOriginalVal(p, 'purchasePrice'),
            price: getOriginalVal(p, 'price'),
            newPrice: Number(edits[p.id]?.price) || getOriginalVal(p, 'price'),
-           stock: Number(edits[p.id]?.stock) || getOriginalVal(p, 'stock'),
+           stock: edits[p.id]?.stock !== '' && Number.isFinite(Number(edits[p.id]?.stock))
+             ? Number(edits[p.id].stock)
+             : getOriginalVal(p, 'stock'),
            qty: p.product_type === 'weight' ? 1000 : 1, 
            product_type: p.product_type,
            isTemporary: false
@@ -525,7 +528,9 @@ export default function BulkEditorView({
            cost: getOriginalVal(product, 'purchasePrice'),
            price: getOriginalVal(product, 'price'),
            newPrice: Number(edits[product.id]?.price) || getOriginalVal(product, 'price'),
-           stock: Number(edits[product.id]?.stock) || getOriginalVal(product, 'stock'),
+           stock: edits[product.id]?.stock !== '' && Number.isFinite(Number(edits[product.id]?.stock))
+             ? Number(edits[product.id].stock)
+             : getOriginalVal(product, 'stock'),
            qty: product.product_type === 'weight' ? 1000 : 1,
            product_type: product.product_type,
            isTemporary: false 
@@ -578,14 +583,20 @@ export default function BulkEditorView({
     setExportItems(prev => prev.map(item => item.id === id ? { ...item, qty } : item));
   };
 
-  const handleConfirmExport = () => {
-    if (onExportProducts) {
-      const cleanItems = exportItems.filter(item => item.title && item.title.trim() !== '');
-      onExportProducts(exportConfig, cleanItems);
+  const handleConfirmExport = async () => {
+    const cleanItems = exportItems.filter(item => item.title && item.title.trim() !== '');
+    if (cleanItems.length === 0 || !onExportProducts || isExportingPdf) return;
+
+    setIsExportingPdf(true);
+    try {
+      const wasExported = await onExportProducts(exportConfig, cleanItems);
+      if (!wasExported) return;
+      setExportItems([]);
+      setSelectedIds([]);
+      setIsExportModalOpen(false);
+    } finally {
+      setIsExportingPdf(false);
     }
-    setExportItems([]);
-    setSelectedIds([]);
-    setIsExportModalOpen(false);
   };
 
   const buildImageImportRows = () => {
@@ -4442,10 +4453,10 @@ export default function BulkEditorView({
                 </button>
                 <button 
                   onClick={handleConfirmExport}
-                  disabled={exportItems.length === 0}
+                  disabled={exportItems.length === 0 || isExportingPdf}
                   className="px-5 py-2 rounded-lg text-xs font-black bg-sky-600 text-white hover:bg-sky-500 disabled:opacity-50 transition-all flex items-center gap-1.5 transform hover:-translate-y-0.5"
                 >
-                  <FileText size={16} /> GUARDAR COMO PDF
+                  <FileText size={16} /> {isExportingPdf ? 'GENERANDO...' : 'GUARDAR COMO PDF'}
                 </button>
               </div>
             </div>

@@ -268,11 +268,111 @@ export const fetchAllCloudRowsWithSelectFallback = async (
   };
 };
 
-export const runSelectWithSchemaFallback = async (buildQuery, selectColumns) => {
+const compareCursorValuesDesc = (left, right) => {
+  const leftNumber = Number(left);
+  const rightNumber = Number(right);
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+    return rightNumber - leftNumber;
+  }
+
+  return String(right ?? '').localeCompare(String(left ?? ''), undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+};
+
+export const sortCloudRowsNewestFirst = (
+  rows = [],
+  { createdAtColumn = 'created_at', idColumn = 'id' } = {},
+) => [...(Array.isArray(rows) ? rows : [])].sort((left, right) => {
+  const leftCreatedAt = Date.parse(left?.[createdAtColumn]);
+  const rightCreatedAt = Date.parse(right?.[createdAtColumn]);
+  const safeLeftCreatedAt = Number.isFinite(leftCreatedAt) ? leftCreatedAt : 0;
+  const safeRightCreatedAt = Number.isFinite(rightCreatedAt) ? rightCreatedAt : 0;
+
+  if (safeLeftCreatedAt !== safeRightCreatedAt) {
+    return safeRightCreatedAt - safeLeftCreatedAt;
+  }
+
+  return compareCursorValuesDesc(left?.[idColumn], right?.[idColumn]);
+});
+
+export const fetchAllCloudRowsByIdCursorWithSelectFallback = async (
+  buildQuery,
+  selectColumns,
+  batchSize = 200,
+  { signal = null, idColumn = 'id' } = {},
+) => {
   let safeSelect = selectColumns;
 
   while (safeSelect) {
-    const { data, error } = await buildQuery(safeSelect);
+    const rows = [];
+    let cursor = null;
+    let shouldRetry = false;
+
+    while (true) {
+      let query = buildQuery(safeSelect)
+        .order(idColumn, { ascending: false })
+        .limit(batchSize);
+      if (cursor !== null) query = query.lt(idColumn, cursor);
+      if (signal && typeof query.abortSignal === 'function') {
+        query = query.abortSignal(signal);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        const missingColumn = extractSchemaMissingColumn(error);
+        const nextSelect = missingColumn ? removeColumnFromSelect(safeSelect, missingColumn) : '';
+
+        if (missingColumn && nextSelect && nextSelect !== safeSelect) {
+          safeSelect = nextSelect;
+          shouldRetry = true;
+          break;
+        }
+
+        return { data: null, error, selectColumns: safeSelect };
+      }
+
+      const page = Array.isArray(data) ? data : [];
+      rows.push(...page);
+      if (page.length === 0) {
+        return { data: rows, error: null, selectColumns: safeSelect };
+      }
+
+      const nextCursor = page[page.length - 1]?.[idColumn];
+      if (nextCursor === undefined || nextCursor === null || String(nextCursor) === String(cursor)) {
+        return {
+          data: null,
+          error: new Error(`La paginacion por cursor no pudo avanzar en la columna ${idColumn}.`),
+          selectColumns: safeSelect,
+        };
+      }
+      cursor = nextCursor;
+    }
+
+    if (!shouldRetry) break;
+  }
+
+  return {
+    data: null,
+    error: new Error('No quedaron columnas validas para consultar en Supabase.'),
+    selectColumns: '',
+  };
+};
+
+export const runSelectWithSchemaFallback = async (
+  buildQuery,
+  selectColumns,
+  { signal = null } = {},
+) => {
+  let safeSelect = selectColumns;
+
+  while (safeSelect) {
+    let query = buildQuery(safeSelect);
+    if (signal && typeof query?.abortSignal === 'function') {
+      query = query.abortSignal(signal);
+    }
+    const { data, error } = await query;
     if (!error) {
       return { data, error: null, selectColumns: safeSelect };
     }

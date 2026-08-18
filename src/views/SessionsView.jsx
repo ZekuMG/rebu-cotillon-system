@@ -155,6 +155,9 @@ export default function SessionsView({
     page,
     pageSize: SESSIONS_PAGE_SIZE,
     reloadKey,
+    // Session pairing needs sessionId/openedAt from details; these rows are
+    // already compact and are loaded in small pages.
+    includeDetails: true,
     filters: {
       actions: SESSION_LOG_ACTIONS,
       dateStart: dayFilter,
