@@ -72,10 +72,19 @@ import {
   WHATSAPP_TIME_ZONE,
   withDaySeparators,
 } from '../utils/whatsappMessageGroups';
+import {
+  describeInboxProgress,
+  mergeConversationBatches,
+  shouldPrefetchMore,
+  INBOX_BACKGROUND_PAGE_SIZE,
+} from '../utils/inboxLoadProgress';
 import WhatsAppBotSettingsPanel from '../components/WhatsAppBotSettingsPanel';
+import InboxLoadingBar from '../components/InboxLoadingBar';
 import { whatsappDeviceAccess } from '../utils/whatsappDeviceAccess';
 import { qrFreshness, shouldDropStaleQr } from '../utils/qrFreshness';
 import { describeAccountChange, readStoredAccount, writeStoredAccount } from '../utils/whatsappAccountChange';
+import { avisoDeBandeja, describeHistoryWindow } from '../utils/historyWindow';
+import { REINTENTO_INTERVALO_MS, debeReintentar } from '../utils/stickToLatest';
 import './WhatsAppInboxView.css';
 
 const MODES = [
@@ -614,28 +623,27 @@ function ArchiveConversationDialog({ customerName, busy, onConfirm, onClose }) {
 }
 
 function DeleteConversationDialog({ customerName, phone, busy, onConfirm, onClose }) {
-  const [confirmation, setConfirmation] = useState('');
-  const confirmed = confirmation.trim().toUpperCase() === 'ELIMINAR';
+  // Antes había que escribir "ELIMINAR" a mano. Se sacó por pedido de Mikkel:
+  // el diálogo ya dice con todas las letras qué se borra, y sumarle una
+  // transcripción sólo hacía lento algo que se usa seguido. La confirmación
+  // que espera el bot la manda la app.
   return (
     <MessageDialogShell title="Eliminar conversación definitivamente" icon={<Trash2 />} onClose={onClose} className="danger">
       <p>
-        Se eliminarán de Rebu la conversación de {customerName}, sus mensajes y sus archivos locales.
+        Se eliminarán de Rebu la conversación de <strong>{customerName}</strong> ({formatPhone(phone)}),
+        sus mensajes y sus archivos locales.
         El chat seguirá existiendo en el teléfono vinculado. Esta acción no se puede deshacer.
       </p>
-      <label className="wa-destructive-confirmation">
-        <span>Para confirmar, escribí <strong>ELIMINAR</strong></span>
-        <input
-          autoFocus
-          value={confirmation}
-          onChange={(event) => setConfirmation(event.target.value)}
-          placeholder="ELIMINAR"
-          aria-label={`Confirmar eliminación de ${customerName}, ${phone}`}
-        />
-      </label>
       <footer>
         <span>
           <button type="button" className="wa-secondary-action" onClick={onClose}>Cancelar</button>
-          <button type="button" className="wa-danger-action" disabled={busy || !confirmed} onClick={() => onConfirm('ELIMINAR')}>
+          <button
+            type="button"
+            className="wa-danger-action"
+            autoFocus
+            disabled={busy}
+            onClick={() => onConfirm('ELIMINAR')}
+          >
             {busy ? <Loader2 className="animate-spin" /> : <Trash2 />}Eliminar definitivamente
           </button>
         </span>
@@ -1597,12 +1605,22 @@ export default function WhatsAppInboxView({
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState('');
+  // Cuánto viene tardando la carga de la bandeja. Lo actualiza un intervalo
+  // mientras la barra está a la vista: sirve para avisar que está lenta.
+  const [inboxElapsedMs, setInboxElapsedMs] = useState(0);
+  // Si un lote de segundo plano falla se deja de insistir: lo que falte se trae
+  // con "Cargar más conversaciones".
+  const [prefetchStopped, setPrefetchStopped] = useState(false);
+  // Cuántos lotes se pidieron solos desde el último arranque. Es el freno duro
+  // para no encadenar pedidos al bot sin control.
+  const [prefetchBatches, setPrefetchBatches] = useState(0);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [contextMode, setContextMode] = useState('');
   const [businessSettings, setBusinessSettings] = useState(null);
   const [botSettings, setBotSettings] = useState(null);
   const [botSettingsOpen, setBotSettingsOpen] = useState(false);
+  const [botSettingsSection, setBotSettingsSection] = useState('');
   const [botSettingsLoading, setBotSettingsLoading] = useState(false);
   const [botSettingsLoadError, setBotSettingsLoadError] = useState(false);
   const [centralMachine, setCentralMachine] = useState(null);
@@ -1660,6 +1678,20 @@ export default function WhatsAppInboxView({
   const fileRef = useRef(null);
   const composerRef = useRef(null);
   const overviewRequestRef = useRef(0);
+  // Generación de la lista. Sube SÓLO cuando la bandeja se rehace de cero
+  // (cambió el filtro, la búsqueda, el número o se desmontó la vista), nunca en
+  // el refresco silencioso de cada 10 s.
+  //
+  // Por qué separada de `overviewRequestRef`: los lotes que se traen después
+  // del primero (el botón "Cargar más" y la carga en segundo plano) tardan unos
+  // cientos de ms. Si en el medio entraba el refresco automático, subía
+  // `overviewRequestRef` y el lote que ya había llegado se tiraba a la basura:
+  // el operador veía la lista clavada aunque el bot había respondido bien. El
+  // refresco silencioso conserva el cursor, así que pegar ese lote es correcto.
+  const overviewGenerationRef = useRef(0);
+  const inboxLoadStartRef = useRef(0);
+  const prefetchingRef = useRef(false);
+  const rowsRef = useRef(null);
   const profileRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const detailRevisionRef = useRef('');
@@ -1727,15 +1759,35 @@ export default function WhatsAppInboxView({
 
   const loadOverview = useCallback(async (quiet = false) => {
     const requestId = ++overviewRequestRef.current;
-    if (!quiet) setLoading(true);
+    if (!quiet) {
+      overviewGenerationRef.current += 1;
+      // Arranque limpio: se vuelve a contar el tiempo para que la barra diga la
+      // verdad y se habilita de nuevo la carga en segundo plano.
+      inboxLoadStartRef.current = Date.now();
+      setPrefetchStopped(false);
+      setPrefetchBatches(0);
+      setLoading(true);
+    }
     try {
       const data = await whatsappOperator.overview({
-        limit: 40,
         filter,
         search: deferredSearch,
       });
       if (requestId !== overviewRequestRef.current) return;
-      setOverview(data);
+      // El refresco silencioso trae sólo el primer lote: si ya había más
+      // conversaciones cargadas se actualizan las que cambiaron y se conserva
+      // el resto, en vez de tirar abajo todo lo que se venía trayendo.
+      setOverview((currentOverview) => {
+        const alreadyLoaded = currentOverview?.conversations || [];
+        if (!quiet || !alreadyLoaded.length) return data;
+        return {
+          ...currentOverview,
+          ...data,
+          conversations: mergeConversationBatches(alreadyLoaded, data.conversations),
+          // El cursor que vale es el del último lote traído, no el del primero.
+          nextCursor: currentOverview.nextCursor,
+        };
+      });
       setConnectionIssue(null);
       emitSummary(data);
       setError('');
@@ -1771,7 +1823,9 @@ export default function WhatsAppInboxView({
     const requestId = ++detailRequestRef.current;
     if (!quiet) setDetailLoading(true);
     try {
-      const data = await whatsappOperator.conversation(selectedPhone, { limit: 80 });
+      // Al abrir un chat se traen sólo los últimos mensajes; los anteriores
+      // llegan al scrollear con el cursor.
+      const data = await whatsappOperator.conversation(selectedPhone);
       if (requestId !== detailRequestRef.current || selectedPhone !== phone) return;
       detailRevisionRef.current = String(data.revision || '');
       setDetail((currentDetail) => {
@@ -1797,35 +1851,46 @@ export default function WhatsAppInboxView({
 
   const loadMoreConversations = async () => {
     if (!overview?.nextCursor || loadingMore) return;
-    const requestId = overviewRequestRef.current;
+    const generation = overviewGenerationRef.current;
     const requestedCursor = overview.nextCursor;
     setLoadingMore('conversations');
     try {
       const data = await whatsappOperator.overview({
-        limit: 40,
+        limit: INBOX_BACKGROUND_PAGE_SIZE,
         cursor: requestedCursor,
         filter,
         search: deferredSearch,
       });
-      if (requestId !== overviewRequestRef.current) return;
+      if (generation !== overviewGenerationRef.current) return;
       setOverview((currentOverview) => {
         if (currentOverview?.nextCursor !== requestedCursor) return currentOverview;
-        const byPhone = new Map(
-          [...(currentOverview?.conversations || []), ...(data.conversations || [])]
-            .map((row) => [row.phone, row]),
-        );
         return {
           ...currentOverview,
           ...data,
-          conversations: [...byPhone.values()],
+          conversations: mergeConversationBatches(
+            currentOverview?.conversations,
+            data.conversations,
+          ),
         };
       });
       emitSummary(data);
     } catch (requestError) {
-      if (requestId === overviewRequestRef.current) setError(errorCopy(requestError));
+      if (generation === overviewGenerationRef.current) setError(errorCopy(requestError));
     } finally {
       setLoadingMore('');
     }
+  };
+
+  // Pasado el tope de la carga automática, el resto llega al scrollear: al
+  // acercarse al final de la lista se pide el lote siguiente solo, sin que el
+  // operador tenga que buscar el botón. El botón sigue estando para el caso en
+  // que la lista entre sin scroll o la carga automática se haya cortado.
+  const handleRowsScroll = (event) => {
+    const node = event.currentTarget;
+    if (!node || !overview?.nextCursor || loadingMore || inboxPrefetching) return;
+    const restante = node.scrollHeight - node.scrollTop - node.clientHeight;
+    if (restante > 320) return;
+    void loadMoreConversations();
   };
 
   const loadOlderMessages = async () => {
@@ -1842,7 +1907,6 @@ export default function WhatsAppInboxView({
       : true;
     try {
       const data = await whatsappOperator.conversation(selectedPhone, {
-        limit: 80,
         cursor: requestedCursor,
       });
       if (
@@ -1905,8 +1969,101 @@ export default function WhatsAppInboxView({
       cancelled = true;
       if (timer) window.clearTimeout(timer);
       overviewRequestRef.current += 1;
+      overviewGenerationRef.current += 1;
     };
   }, [isActive, deviceAccessResolved, loadOverview]);
+
+  // -------------------------------------------------------------------------
+  // Carga progresiva de la bandeja.
+  //
+  // El primer lote se pinta apenas llega y el resto sigue viniendo solo, en
+  // segundo plano, hasta el tope de INBOX_BACKGROUND_MAX. Pasado ese tope se
+  // corta: lo que falte se trae con "Cargar más conversaciones" al scrollear.
+  // Así traer de a lotes chicos no se convierte en una catarata de pedidos al
+  // bot cuando nadie está mirando.
+  // -------------------------------------------------------------------------
+  const conversationsLoaded = overview?.conversations?.length || 0;
+  const inboxPrefetching = Boolean(
+    isActive
+    && deviceAccessResolved
+    && !loading
+    && !prefetchStopped
+    && shouldPrefetchMore({
+      loaded: conversationsLoaded,
+      cursor: overview?.nextCursor,
+      batches: prefetchBatches,
+    }),
+  );
+  const inboxLoadPhase = (loading && !overview)
+    ? 'connecting'
+    : (inboxPrefetching ? 'fetching' : 'ready');
+  const inboxProgress = useMemo(() => describeInboxProgress({
+    phase: inboxLoadPhase,
+    loaded: conversationsLoaded,
+    // El bot no devuelve cuántas conversaciones hay en total, así que no se
+    // inventa: sin total la barra avanza sin prometer un final que no conoce.
+    total: null,
+    elapsedMs: inboxElapsedMs,
+  }), [conversationsLoaded, inboxElapsedMs, inboxLoadPhase]);
+
+  useEffect(() => {
+    if (inboxLoadPhase === 'ready') {
+      setInboxElapsedMs(0);
+      return undefined;
+    }
+    const startedAt = inboxLoadStartRef.current || Date.now();
+    const tick = () => setInboxElapsedMs(Math.max(0, Date.now() - startedAt));
+    tick();
+    const timer = window.setInterval(tick, 500);
+    return () => window.clearInterval(timer);
+  }, [inboxLoadPhase]);
+
+  useEffect(() => {
+    // Un lote por vez. Cuando el lote entra, cambia el cursor y este efecto
+    // vuelve a correr con el siguiente; si no hay más o se llegó al tope,
+    // `inboxPrefetching` queda en false y la cadena se corta sola.
+    if (!inboxPrefetching || prefetchingRef.current || loadingMore) return;
+    const cursor = String(overview?.nextCursor || '');
+    const generation = overviewGenerationRef.current;
+    prefetchingRef.current = true;
+    setPrefetchBatches((current) => current + 1);
+    void (async () => {
+      try {
+        const data = await whatsappOperator.overview({
+          limit: INBOX_BACKGROUND_PAGE_SIZE,
+          cursor,
+          filter,
+          search: deferredSearch,
+        });
+        if (generation !== overviewGenerationRef.current) return;
+        setOverview((currentOverview) => {
+          if (currentOverview?.nextCursor !== cursor) return currentOverview;
+          return {
+            ...currentOverview,
+            ...data,
+            conversations: mergeConversationBatches(
+              currentOverview?.conversations,
+              data.conversations,
+            ),
+          };
+        });
+        emitSummary(data);
+      } catch {
+        // Traer en segundo plano no puede interrumpir a nadie: se corta la
+        // cadena y lo que falta queda a mano con "Cargar más conversaciones".
+        if (generation === overviewGenerationRef.current) setPrefetchStopped(true);
+      } finally {
+        prefetchingRef.current = false;
+      }
+    })();
+  }, [
+    deferredSearch,
+    emitSummary,
+    filter,
+    inboxPrefetching,
+    loadingMore,
+    overview?.nextCursor,
+  ]);
 
   useEffect(() => {
     if (!isActive || !profilePhonesKey) return undefined;
@@ -2123,6 +2280,39 @@ export default function WhatsAppInboxView({
         pinToLatest(true);
         secondFrame = window.requestAnimationFrame(() => pinToLatest(true));
       });
+
+      // Insistir hasta llegar de verdad al final. La altura del chat cambia
+      // varias veces al abrir (llegan mensajes, cargan imágenes y audios), y un
+      // solo intento puede ejecutarse cuando el contenido todavía medía poco:
+      // ahí queda arriba para siempre. Se corta apenas el usuario toca el
+      // scroll — nunca hay que pelearle el control.
+      let intentos = 0;
+      let usuarioTomoControl = false;
+      const soltarControl = () => { usuarioTomoControl = true; };
+      const streamActual = () => streamRef.current;
+      const reintentoTimer = window.setInterval(() => {
+        const stream = streamActual();
+        const seguir = debeReintentar({
+          metricas: stream
+            ? {
+              scrollHeight: stream.scrollHeight,
+              clientHeight: stream.clientHeight,
+              scrollTop: stream.scrollTop,
+            }
+            : {},
+          intentos,
+          usuarioTomoControl,
+          cancelado: cancelled || openingScrollPhoneRef.current !== openedPhone,
+        });
+        if (!seguir) {
+          window.clearInterval(reintentoTimer);
+          return;
+        }
+        intentos += 1;
+        pinToLatest(true);
+      }, REINTENTO_INTERVALO_MS);
+      stream?.addEventListener('wheel', soltarControl, { passive: true });
+      stream?.addEventListener('touchstart', soltarControl, { passive: true });
       stream?.addEventListener('load', pinAfterMediaReady, true);
       stream?.addEventListener('loadedmetadata', pinAfterMediaReady, true);
       const settleTimer = window.setTimeout(() => {
@@ -2133,8 +2323,11 @@ export default function WhatsAppInboxView({
         window.cancelAnimationFrame(firstFrame);
         window.cancelAnimationFrame(secondFrame);
         window.clearTimeout(settleTimer);
+        window.clearInterval(reintentoTimer);
         stream?.removeEventListener('load', pinAfterMediaReady, true);
         stream?.removeEventListener('loadedmetadata', pinAfterMediaReady, true);
+        stream?.removeEventListener('wheel', soltarControl);
+        stream?.removeEventListener('touchstart', soltarControl);
       };
     }
     if (String(latest.id) === previous.id) return;
@@ -2769,9 +2962,12 @@ export default function WhatsAppInboxView({
     });
   };
 
-  const openBotSettings = async () => {
+  // `seccion` permite abrir el panel directo donde hace falta (por ejemplo, el
+  // aviso de la bandeja manda a 'history' en vez de dejar a alguien buscándolo).
+  const openBotSettings = async (seccion = '') => {
     setMainMenuOpen(false);
     setContextMode('');
+    setBotSettingsSection(seccion);
     setBotSettingsOpen(true);
     setBotSettingsLoading(true);
     setBotSettingsLoadError(false);
@@ -3206,6 +3402,117 @@ export default function WhatsAppInboxView({
     writeStoredAccount(storage, linkedAccountId);
   }, [linkedAccountId]);
 
+  // Desde cuándo muestra la bandeja. Acá sólo se lee, para poder poner la línea
+  // de aviso; todo lo que se puede HACER vive en Configurar Blacky → Historial
+  // del número, y son las tres funciones de más abajo.
+  const [historyWindowState, setHistoryWindowState] = useState(null);
+
+  const [historyWindowLoading, setHistoryWindowLoading] = useState(false);
+
+  const refreshHistoryWindow = useCallback(async () => {
+    setHistoryWindowLoading(true);
+    try {
+      setHistoryWindowState(await whatsappOperator.historyWindow());
+    } catch {
+      // Si no se puede leer, no se muestra el aviso. Nunca bloquea la bandeja.
+      setHistoryWindowState(null);
+    } finally {
+      setHistoryWindowLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isActive || !deviceAccessResolved) return;
+    void refreshHistoryWindow();
+  }, [isActive, deviceAccessResolved, refreshHistoryWindow]);
+
+  const avisoHistorial = avisoDeBandeja(historyWindowState);
+  const [avisoHistorialDescartado, setAvisoHistorialDescartado] = useState(false);
+  const [historyWindowBusy, setHistoryWindowBusy] = useState('');
+  const [historyError, setHistoryError] = useState('');
+  const [historyResult, setHistoryResult] = useState(null);
+
+  // Si cambia desde cuándo se muestra, el aviso vuelve a aparecer: es
+  // información nueva, no la misma que ya se descartó.
+  useEffect(() => {
+    setAvisoHistorialDescartado(false);
+  }, [historyWindowState?.history_from]);
+
+  // Traer las conversaciones REALES del teléfono. Esto sí baja de WhatsApp.
+  const traerDelTelefono = useCallback(async (batchSize, messagesPerChat) => {
+    if (historyWindowBusy) return;
+    setHistoryWindowBusy('import');
+    setHistoryError('');
+    try {
+      const r = await whatsappOperator.importChats(batchSize, messagesPerChat);
+      const ventana = await whatsappOperator.historyWindow();
+      setHistoryWindowState(ventana);
+      // Lo que se trajo del teléfono puede ser más viejo que lo que la bandeja
+      // muestra, así que el resultado lleva cuántas quedaron tapadas para poder
+      // ofrecer la salida en el momento.
+      setHistoryResult({
+        importadas: r?.importadas || 0,
+        mensajes: r?.mensajes || 0,
+        ocultas: ventana?.ocultas || 0,
+      });
+      await loadOverview();
+    } catch {
+      setHistoryError('No pudimos traer las conversaciones del teléfono. Fijate que WhatsApp esté conectado e intentá de nuevo.');
+    } finally {
+      setHistoryWindowBusy('');
+    }
+  }, [historyWindowBusy, loadOverview]);
+
+  // Las respuestas de cambiar la ventana traen lo justo (`history_from`,
+  // `agotado`), no los conteos. Si se guardaran tal cual, la sección perdería
+  // los números y el botón dejaría de decir cuántas puede traer. Así que se
+  // vuelve a leer el estado completo y se le conserva el `agotado`, que sólo
+  // sabe la respuesta.
+  const aplicarVentana = useCallback(async (respuesta) => {
+    let completo = null;
+    try {
+      completo = await whatsappOperator.historyWindow();
+    } catch {
+      // Si la relectura falla, la respuesta de la acción alcanza para seguir.
+    }
+    setHistoryWindowState(completo ? { ...completo, agotado: respuesta?.agotado } : respuesta);
+  }, []);
+
+  // Mostrar lo que Rebu YA TIENE guardado. No baja nada del teléfono: mueve la
+  // fecha desde la cual la bandeja muestra.
+  const mostrarMasGuardadas = useCallback(async () => {
+    if (historyWindowBusy) return;
+    setHistoryWindowBusy('older');
+    setHistoryError('');
+    try {
+      const estado = describeHistoryWindow(historyWindowState);
+      await aplicarVentana(estado.puedeTraerMas
+        ? await whatsappOperator.historyWindowOlder()
+        : await whatsappOperator.setHistoryWindow('all'));
+      await loadOverview();
+    } catch {
+      setHistoryError('No pudimos mostrar las conversaciones anteriores. Intentá de nuevo.');
+    } finally {
+      setHistoryWindowBusy('');
+    }
+  }, [historyWindowBusy, historyWindowState, loadOverview, aplicarVentana]);
+
+  const cambiarQueSeVe = useCallback(async (mode) => {
+    if (historyWindowBusy) return;
+    setHistoryWindowBusy(mode === 'all' ? 'all' : 'clean');
+    setHistoryError('');
+    try {
+      await aplicarVentana(await whatsappOperator.setHistoryWindow(mode));
+      // Ya se resolvió lo que el aviso ofrecía: no tiene más sentido mostrarlo.
+      if (mode === 'all') setHistoryResult(null);
+      await loadOverview();
+    } catch {
+      setHistoryError('No pudimos cambiar qué conversaciones se ven. Intentá de nuevo.');
+    } finally {
+      setHistoryWindowBusy('');
+    }
+  }, [historyWindowBusy, loadOverview, aplicarVentana]);
+
   const qrCode = connectionInfo?.qr?.code || connectionInfo?.qr?.qrcode?.code || '';
   const qrGeneratedAt = connectionInfo?.qr?.generated_at || '';
   const [qrExtraSeconds, setQrExtraSeconds] = useState(0);
@@ -3389,6 +3696,28 @@ export default function WhatsAppInboxView({
       {error && !deviceAccessBlocked && (
         <div className="wa-error">
           <AlertCircle /><span>{error}</span><button type="button" onClick={() => setError('')}>Cerrar</button>
+        </div>
+      )}
+
+      {/* Sólo una línea, y sólo cuando la bandeja está recortada. Todo lo que
+          se puede hacer al respecto vive en Configurar Blacky → Historial del
+          número. No se elimina del todo a propósito: sin ninguna explicación a
+          la vista, una bandeja recortada se lee como mensajes perdidos. */}
+      {avisoHistorial && !avisoHistorialDescartado && (
+        <div className="wa-history-hint" role="status">
+          <Archive />
+          <span>{avisoHistorial.texto}</span>
+          {canSettings && (
+            <button type="button" onClick={() => void openBotSettings('history')}>
+              {avisoHistorial.accion}
+            </button>
+          )}
+          <button
+            type="button"
+            className="wa-history-hint-dismiss"
+            aria-label="Ocultar este aviso"
+            onClick={() => setAvisoHistorialDescartado(true)}
+          ><X /></button>
         </div>
       )}
 
@@ -3583,12 +3912,9 @@ export default function WhatsAppInboxView({
             </div>
             <p className="wa-filter-help"><Info />{activeFilter.description}</p>
           </div>
-          <div className="wa-rows">
+          <div className="wa-rows" ref={rowsRef} onScroll={handleRowsScroll}>
             {loading && !overview ? (
-              <LoadingState
-                title="Preparando la bandeja"
-                detail="Estamos recuperando las conversaciones más recientes."
-              />
+              <InboxLoadingBar progress={inboxProgress} />
             ) : conversations.length === 0 ? (
               <div className="wa-empty"><MessageCircle /><strong>Sin conversaciones en este filtro</strong><span>{activeFilter.empty}</span></div>
             ) : conversations.map((row) => {
@@ -3641,7 +3967,14 @@ export default function WhatsAppInboxView({
                 </button>
               );
             })}
-            {overview?.nextCursor && (
+            {inboxPrefetching && (
+              // Mientras siguen llegando lotes el operador ya puede trabajar:
+              // la barra fina al pie muestra que la lista todavía está creciendo.
+              // También se ve con la lista vacía (por ejemplo, recién cambiado
+              // el número): nunca queda una pantalla en blanco sin explicación.
+              <InboxLoadingBar progress={inboxProgress} compact />
+            )}
+            {overview?.nextCursor && !inboxPrefetching && (
               <button
                 type="button"
                 className="wa-load-more"
@@ -4300,6 +4633,17 @@ export default function WhatsAppInboxView({
           deviceAccessLoading={deviceAccessLoading}
           deviceAccessBusy={deviceAccessBusy}
           deviceAccessError={deviceAccessError}
+          initialSection={botSettingsSection}
+          canManageHistory={canConnection}
+          historyWindow={historyWindowState}
+          historyLoading={historyWindowLoading}
+          historyBusy={historyWindowBusy}
+          historyError={historyError}
+          historyResult={historyResult}
+          onRefreshHistory={() => void refreshHistoryWindow()}
+          onImportChats={(batchSize, messagesPerChat) => void traerDelTelefono(batchSize, messagesPerChat)}
+          onSetHistoryWindow={(mode) => void cambiarQueSeVe(mode)}
+          onLoadOlderConversations={() => void mostrarMasGuardadas()}
           modeBusy={String(busy || '').startsWith('mode-')}
           businessProfileReady={overview?.businessProfileReady !== false}
           testMode={overview?.testMode || { enabled: false, phone: '' }}

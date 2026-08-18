@@ -1,18 +1,32 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  Activity,
   AlertCircle,
+  Archive,
   Bot,
   Check,
   ChevronDown,
+  Download,
   FileText,
   FlaskConical,
   Loader2,
+  Laptop,
   RefreshCw,
+  Server,
   ShieldCheck,
+  Smartphone,
   Sparkles,
   X,
 } from 'lucide-react';
+import {
+  CLEAN_START_CONFIRM,
+  describeHistoryWindow,
+  describeImportResult,
+  explicacionDelTelefono,
+  importButtonLabel,
+  olderButtonLabel,
+} from '../utils/historyWindow';
 
 const DEFAULT_VALUE = {
   identity: { name: 'Blacky', role: 'asistente virtual de Rebu' },
@@ -99,6 +113,22 @@ const SECTIONS = [
   { id: 'capabilities', label: 'Permisos del bot', help: 'Qué puede consultar o preparar' },
   { id: 'limits', label: 'Contexto y límites', help: 'Reglas propias y derivaciones' },
 ];
+
+const CENTRAL_SECTION = {
+  id: 'central',
+  label: 'Máquina central',
+  help: 'Equipo que mantiene WhatsApp activo',
+};
+
+// Antes esto era un cartel en la bandeja cuyo botón decía que traía las
+// conversaciones del número y en realidad sólo movía una fecha sobre lo que ya
+// estaba guardado acá. Acá adentro se puede hacer las dos cosas, separadas y
+// con nombre propio.
+const HISTORY_SECTION = {
+  id: 'history',
+  label: 'Historial del número',
+  help: 'Qué conversaciones se ven',
+};
 
 const MODE_OPTIONS = [
   {
@@ -243,12 +273,38 @@ export default function WhatsAppBotSettingsPanel({
   selectedPhone = '',
   selectedContactName = '',
   testModeBusy = false,
+  canManageCentralMachine = false,
+  centralMachine = null,
+  centralCandidate = null,
+  centralMachineLoading = false,
+  centralMachineBusy = false,
+  centralMachineError = '',
+  canReviewDeviceAccess = false,
+  deviceAccessRequests = [],
+  deviceAccessLoading = false,
+  deviceAccessBusy = '',
+  deviceAccessError = '',
+  initialSection = '',
+  canManageHistory = false,
+  historyWindow = null,
+  historyLoading = false,
+  historyBusy = '',
+  historyError = '',
+  historyResult = null,
+  onRefreshHistory,
+  onImportChats,
+  onSetHistoryWindow,
+  onLoadOlderConversations,
   initialTestMessage = '',
   loading = false,
   loadError = false,
   busy = false,
   onModeChange,
   onTestModeChange,
+  onClaimCentralMachine,
+  onRefreshCentralMachine,
+  onRefreshDeviceAccess,
+  onReviewDeviceAccess,
   onPreview,
   onRetry,
   onSave,
@@ -256,7 +312,7 @@ export default function WhatsAppBotSettingsPanel({
 }) {
   const initialDraft = useMemo(() => formValue(value), [value]);
   const initialRuleDraft = useMemo(() => createRuleDraft(initialDraft), [initialDraft]);
-  const [section, setSection] = useState('mode');
+  const [section, setSection] = useState(initialSection || 'mode');
   const [draft, setDraft] = useState(initialDraft);
   const [ruleDraft, setRuleDraft] = useState(initialRuleDraft);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
@@ -265,8 +321,14 @@ export default function WhatsAppBotSettingsPanel({
   const [testSuggestionIndex, setTestSuggestionIndex] = useState(0);
   const [testLoading, setTestLoading] = useState(false);
   const [testError, setTestError] = useState('');
+  const [editingTestPhone, setEditingTestPhone] = useState(null);
+  const [confirmCentralTransfer, setConfirmCentralTransfer] = useState(false);
+  // Cuánto traer del teléfono por vez. El bot topea en 50 y 200 igual.
+  const [importSize, setImportSize] = useState(10);
+  const [messagesPerChat, setMessagesPerChat] = useState(50);
   const modalRef = useRef(null);
   const titleRef = useRef(null);
+  const centralConfirmRef = useRef(null);
   const requestCloseRef = useRef(null);
   const previousFocusRef = useRef(null);
 
@@ -277,6 +339,41 @@ export default function WhatsAppBotSettingsPanel({
     [initialDraft, initialRuleDraft],
   );
   const dirty = JSON.stringify(payload) !== JSON.stringify(originalPayload);
+  const visibleSections = useMemo(
+    () => [
+      ...SECTIONS,
+      ...(canManageHistory ? [HISTORY_SECTION] : []),
+      ...(canManageCentralMachine ? [CENTRAL_SECTION] : []),
+    ],
+    [canManageCentralMachine, canManageHistory],
+  );
+  const assignedCentralMachine = centralMachine?.machine || null;
+  const isThisCentralMachine = Boolean(
+    assignedCentralMachine?.device_id
+    && centralCandidate?.deviceId
+    && assignedCentralMachine.device_id === centralCandidate.deviceId,
+  );
+  const centralServiceRunning = centralCandidate?.localServiceRunning === true;
+  const centralServiceReady = centralCandidate?.localServiceReady === true;
+  const centralWhatsappConnected = centralCandidate?.whatsappConnected === true;
+  const centralSupported = centralCandidate?.supported !== false;
+  const centralStatusAvailable = centralMachine?.available !== false && !centralMachine?.error;
+  const centralLeaseActive = centralMachine?.lease_active === true;
+  const centralLeaseExpired = Boolean(assignedCentralMachine && !centralLeaseActive);
+  const remoteCentralActive = Boolean(
+    assignedCentralMachine
+    && !isThisCentralMachine
+    && centralLeaseActive,
+  );
+  const centralHeartbeatLabel = assignedCentralMachine?.heartbeat_at
+    ? new Date(assignedCentralMachine.heartbeat_at).toLocaleTimeString('es-AR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+    : '';
+  const effectiveBusy = busy || centralMachineBusy;
+  const pendingDeviceAccessCount = deviceAccessRequests.filter((request) => request.status === 'pending').length;
 
   const update = (group, patch) => setDraft((current) => ({
     ...current,
@@ -284,10 +381,10 @@ export default function WhatsAppBotSettingsPanel({
   }));
 
   const requestClose = useCallback(() => {
-    if (busy) return;
+    if (effectiveBusy) return;
     if (dirty) setConfirmDiscard(true);
     else onClose();
-  }, [busy, dirty, onClose]);
+  }, [dirty, effectiveBusy, onClose]);
 
   useEffect(() => {
     requestCloseRef.current = requestClose;
@@ -328,6 +425,47 @@ export default function WhatsAppBotSettingsPanel({
       previousFocusRef.current?.focus?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!canManageCentralMachine && section === 'central') setSection('mode');
+    if (!canManageHistory && section === 'history') setSection('mode');
+  }, [canManageCentralMachine, canManageHistory, section]);
+
+  // --- Historial del número ---------------------------------------------
+  const historyState = useMemo(() => {
+    const estado = describeHistoryWindow(historyWindow);
+    return { ...estado, decidedBy: historyWindow?.decided_by_name || '' };
+  }, [historyWindow]);
+
+  const importOutcome = useMemo(
+    () => (historyResult ? describeImportResult(historyResult) : null),
+    [historyResult],
+  );
+
+  const ocultasTexto = useMemo(() => {
+    const ocultas = Number(historyWindow?.ocultas);
+    // Sin el número no se inventa: "algunas" es honesto y no asusta.
+    if (!Number.isFinite(ocultas) || ocultas <= 0) return 'conversaciones';
+    return `${ocultas} ${ocultas === 1 ? 'conversación' : 'conversaciones'}`;
+  }, [historyWindow]);
+
+  // El estado del historial se pide al ENTRAR a la sección, no al abrir el
+  // panel: consultar a WhatsApp cuesta y la mayoría de las veces se viene acá
+  // por otra cosa.
+  //
+  // ⚠️ La función va por ref a propósito. El padre la pasa como arrow inline,
+  // así que cambia de identidad en cada render; ponerla en las dependencias
+  // hacía que el efecto se disparara solo, sin fin: consulta → setState en el
+  // padre → render → nueva identidad → consulta.
+  const refreshHistoryRef = useRef(onRefreshHistory);
+  refreshHistoryRef.current = onRefreshHistory;
+  useEffect(() => {
+    if (section === 'history' && canManageHistory) refreshHistoryRef.current?.();
+  }, [section, canManageHistory]);
+
+  useEffect(() => {
+    if (confirmCentralTransfer) centralConfirmRef.current?.focus();
+  }, [confirmCentralTransfer]);
 
   useEffect(() => {
     setTestSuggestions([]);
@@ -422,9 +560,9 @@ export default function WhatsAppBotSettingsPanel({
 
         {loading ? <LoadingState /> : loadError ? <ErrorState onRetry={onRetry} /> : (
           <>
-            <div className="wa-bot-modal-body">
-              <nav className="wa-bot-settings-nav" aria-label="Secciones de configuración">
-                {SECTIONS.map(({ id, label, help }, index) => (
+            <div className={`wa-bot-modal-body ${section === 'central' ? 'central-focus' : ''}`}>
+              <nav className={`wa-bot-settings-nav ${canManageCentralMachine ? 'with-central' : ''}`} aria-label="Secciones de configuración">
+                {visibleSections.map(({ id, label, help }, index) => (
                   <button
                     key={id}
                     type="button"
@@ -478,15 +616,37 @@ export default function WhatsAppBotSettingsPanel({
                         <div className="wa-bot-test-target">
                           <span>
                             <small>Número autorizado</small>
-                            <strong>{testModePhone}</strong>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '4px' }}>
+                              <input
+                                value={editingTestPhone !== null ? editingTestPhone : testModePhone}
+                                onChange={(e) => setEditingTestPhone(e.target.value.replace(/\D/g, ''))}
+                                disabled={!canManageMode || testModeBusy}
+                                placeholder="Ej: 5491122334455"
+                                style={{ background: 'var(--bg-light, #f8f9fa)', border: '1px solid var(--border, #e5e7eb)', borderRadius: '6px', padding: '6px 12px', color: 'inherit', fontSize: '0.875rem', width: '160px', outline: 'none' }}
+                              />
+                              {(editingTestPhone !== null && editingTestPhone !== testModePhone) ? (
+                                <button
+                                  type="button"
+                                  className="wa-primary-action"
+                                  style={{ padding: '6px 12px', fontSize: '0.875rem' }}
+                                  disabled={!canManageMode || testModeBusy || !editingTestPhone.trim() || editingTestPhone.trim().length < 8}
+                                  onClick={() => {
+                                    onTestModeChange?.({ enabled: true, phone: editingTestPhone.trim() });
+                                    setEditingTestPhone(null);
+                                  }}
+                                >Guardar</button>
+                              ) : !selectedPhoneAllowed && selectedTestPhone ? (
+                                <button
+                                  type="button"
+                                  disabled={!canManageMode || testModeBusy}
+                                  onClick={() => {
+                                    onTestModeChange?.({ enabled: true, phone: selectedTestPhone });
+                                    setEditingTestPhone(null);
+                                  }}
+                                >Usar {selectedContactName || 'este chat'}</button>
+                              ) : null}
+                            </div>
                           </span>
-                          {!selectedPhoneAllowed && selectedTestPhone && (
-                            <button
-                              type="button"
-                              disabled={!canManageMode || testModeBusy}
-                              onClick={() => onTestModeChange?.({ enabled: true, phone: selectedTestPhone })}
-                            >Usar {selectedContactName || 'este chat'}</button>
-                          )}
                         </div>
                       ) : (
                         <p>{selectedTestPhone
@@ -534,6 +694,354 @@ export default function WhatsAppBotSettingsPanel({
                       <ShieldCheck />
                       <span><strong>La atención humana siempre sigue disponible</strong><small>Si el cliente pide una persona o Blacky no puede confirmar algo, la conversación queda marcada para revisión.</small></span>
                     </div>
+                  </div>
+                )}
+
+                {canManageCentralMachine && section === 'central' && (
+                  <div className="wa-bot-settings-section wa-central-machine-section">
+                    <div className="wa-section-copy">
+                      <span>6</span>
+                      <div><strong>Máquina central de WhatsApp</strong><small>Esta PC mantendrá activo el servicio, la conexión y el envío de mensajes. Solo Sistema puede cambiarla.</small></div>
+                    </div>
+
+                    <section className={`wa-central-station ${centralLeaseExpired ? 'stale' : isThisCentralMachine ? 'current' : assignedCentralMachine ? 'remote' : 'empty'}`}>
+                      <header>
+                        <span><Server /></span>
+                        <div>
+                          <small>Central asignada</small>
+                          <strong>{assignedCentralMachine?.device_name || 'Todavía no hay una PC central'}</strong>
+                          <p>{assignedCentralMachine
+                            ? `${assignedCentralMachine.platform || 'Equipo de escritorio'}${assignedCentralMachine.ip_address ? ` · ${assignedCentralMachine.ip_address}` : ''}`
+                            : 'Comprobá esta PC y asignala para completar la configuración.'}</p>
+                        </div>
+                        <em>{centralLeaseExpired ? 'Pulso vencido' : isThisCentralMachine ? 'Esta PC · activa' : assignedCentralMachine ? 'Otra PC · activa' : 'Sin asignar'}</em>
+                      </header>
+
+                      <div className={`wa-central-pulse ${centralLeaseActive ? 'active' : centralLeaseExpired ? 'expired' : ''}`} role="status">
+                        <Activity />
+                        <span><strong>{centralLeaseActive ? 'Pulso central activo' : centralLeaseExpired ? 'La concesión central venció' : 'Esperando la primera asignación'}</strong><small>{centralLeaseActive
+                          ? `Última señal ${centralHeartbeatLabel || 'recién'} · se renueva automáticamente`
+                          : centralLeaseExpired
+                            ? `Última señal ${centralHeartbeatLabel || 'no disponible'} · esta PC ya no debe procesar mensajes`
+                            : 'Al establecer una PC, su bot renovará el control cada pocos segundos.'}</small></span>
+                      </div>
+
+                      <div className="wa-central-local-checks">
+                        <span className={centralCandidate ? 'ok' : ''}>
+                          <i />
+                          <span><strong>{centralCandidate?.deviceName || 'Comprobando equipo'}</strong><small>Identidad de esta PC</small></span>
+                        </span>
+                        <span className={centralServiceRunning ? 'ok' : 'error'}>
+                          <i />
+                          <span><strong>{centralServiceRunning ? 'Servicio iniciado' : 'No instalado en esta PC'}</strong><small>Servidor local (sólo necesario en la central)</small></span>
+                        </span>
+                        <span className={centralServiceReady ? 'ok' : 'warning'}>
+                          <i />
+                          <span><strong>{centralServiceReady ? 'Dependencias listas' : 'Revisión pendiente'}</strong><small>Supabase y Evolution</small></span>
+                        </span>
+                        <span className={centralWhatsappConnected ? 'ok' : 'warning'}>
+                          <i />
+                          <span><strong>{centralWhatsappConnected ? 'WhatsApp conectado' : 'WhatsApp desconectado'}</strong><small>Sesión de Evolution en esta PC</small></span>
+                        </span>
+                      </div>
+                    </section>
+
+                    {centralMachineError ? (
+                      <div className="wa-bot-mode-notice error" role="alert">
+                        <AlertCircle />
+                        <span><strong>No se completó la transferencia</strong><small>{centralMachineError}</small></span>
+                      </div>
+                    ) : centralMachineLoading && !centralCandidate ? (
+                      <div className="wa-bot-mode-notice" role="status">
+                        <Loader2 className="animate-spin" />
+                        <span><strong>Comprobando esta PC</strong><small>Rebu está revisando el servicio local y la central actualmente asignada.</small></span>
+                      </div>
+                    ) : !centralStatusAvailable ? (
+                      <div className="wa-bot-mode-notice warning" role="status">
+                        <AlertCircle />
+                        <span><strong>No pudimos consultar la central asignada</strong><small>Actualizá el estado antes de transferirla para evitar reemplazar una configuración más reciente.</small></span>
+                      </div>
+                    ) : !centralSupported ? (
+                      <div className="wa-bot-mode-notice warning" role="status">
+                        <AlertCircle />
+                        <span><strong>Esta opción necesita la app de escritorio</strong><small>Abrí Rebu desde Electron para identificar y comprobar esta PC.</small></span>
+                      </div>
+                    ) : remoteCentralActive ? (
+                      <div className="wa-bot-mode-notice" role="status">
+                        <ShieldCheck />
+                        <span><strong>Esta PC funciona como puesto remoto</strong><small>Accede a WhatsApp por Tailscale. No necesita Docker ni Evolution; esos servicios permanecen únicamente en {assignedCentralMachine?.device_name || 'la central'}.</small></span>
+                      </div>
+                    ) : !centralServiceRunning || !centralServiceReady ? (
+                      <div className="wa-bot-mode-notice warning" role="status">
+                        <AlertCircle />
+                        <span><strong>El servidor local todavía no está listo</strong><small>Esperá a que el proceso, Supabase y Evolution respondan correctamente antes de transferir la central.</small></span>
+                      </div>
+                    ) : !centralWhatsappConnected ? (
+                      <div className="wa-bot-mode-notice warning" role="status">
+                        <AlertCircle />
+                        <span><strong>WhatsApp todavía no está conectado</strong><small>Conectá la sesión de Evolution en esta PC antes de transferir o reactivar la central.</small></span>
+                      </div>
+                    ) : centralLeaseExpired ? (
+                      <div className="wa-bot-mode-notice warning" role="status">
+                        <AlertCircle />
+                        <span><strong>La central dejó de renovar su pulso</strong><small>{isThisCentralMachine ? 'Reactivá esta PC para que el bot vuelva a procesar mensajes.' : 'Podés transferir el control a esta PC de forma segura.'}</small></span>
+                      </div>
+                    ) : (
+                      <div className="wa-bot-mode-notice" role="status">
+                        <ShieldCheck />
+                        <span><strong>Cambio protegido</strong><small>La asignación es exclusiva. Si otra PC tomó el control mientras esta ventana estaba abierta, Rebu cancelará el cambio y pedirá actualizar.</small></span>
+                      </div>
+                    )}
+
+                    {confirmCentralTransfer ? (
+                      <div className="wa-central-transfer-confirm" role="alertdialog" aria-label="Confirmar transferencia de la máquina central">
+                        <span><AlertCircle /><span><strong>{isThisCentralMachine ? 'Reactivar esta PC como central' : 'Transferir la central a esta PC'}</strong><small>{isThisCentralMachine
+                          ? 'Esta PC volverá a renovar el pulso y podrá procesar mensajes.'
+                          : assignedCentralMachine
+                            ? `${assignedCentralMachine.device_name} dejará de figurar como central de WhatsApp.`
+                          : 'Esta PC quedará registrada como la central de WhatsApp.'}</small></span></span>
+                        <div>
+                          <button type="button" className="wa-secondary-action" disabled={centralMachineBusy} onClick={() => setConfirmCentralTransfer(false)}>Cancelar</button>
+                          <button
+                            ref={centralConfirmRef}
+                            type="button"
+                            className="wa-primary-action"
+                            disabled={centralMachineBusy}
+                            onClick={() => {
+                              setConfirmCentralTransfer(false);
+                              onClaimCentralMachine?.();
+                            }}
+                          >{centralMachineBusy ? <Loader2 className="animate-spin" /> : <Server />}{centralMachineBusy ? 'Estableciendo…' : 'Sí, establecer esta PC'}</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="wa-central-actions">
+                        <button type="button" className="wa-secondary-action" disabled={centralMachineLoading || centralMachineBusy} onClick={() => onRefreshCentralMachine?.()}>
+                          {centralMachineLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                          {centralMachineLoading ? 'Comprobando…' : 'Comprobar de nuevo'}
+                        </button>
+                        <button
+                          type="button"
+                          className="wa-primary-action"
+                          disabled={!centralStatusAvailable || !centralSupported || !centralServiceRunning || !centralServiceReady || !centralWhatsappConnected || (isThisCentralMachine && centralLeaseActive) || centralMachineBusy}
+                          onClick={() => setConfirmCentralTransfer(true)}
+                        >{centralMachineBusy ? <Loader2 className="animate-spin" /> : <Server />}{centralMachineBusy ? 'Estableciendo…' : isThisCentralMachine && centralLeaseActive ? 'Esta PC ya es la central' : isThisCentralMachine ? 'Reactivar esta PC' : 'Establecer esta PC como central'}</button>
+                      </div>
+                    )}
+
+                    {canReviewDeviceAccess && (
+                      <section className="wa-device-approval-queue" aria-label="Solicitudes de acceso a WhatsApp">
+                        <header>
+                          <span><Laptop /></span>
+                          <div>
+                            <strong>Dispositivos autorizados</strong>
+                            <small>La aprobación permite usar esta cuenta desde Rebu. Docker y Evolution siguen solamente en la central.</small>
+                          </div>
+                          <em>{pendingDeviceAccessCount ? `${pendingDeviceAccessCount} pendiente${pendingDeviceAccessCount === 1 ? '' : 's'}` : 'Sin pendientes'}</em>
+                        </header>
+
+                        {deviceAccessError && (
+                          <div className="wa-bot-mode-notice error" role="alert">
+                            <AlertCircle />
+                            <span><strong>No pudimos actualizar los accesos</strong><small>{deviceAccessError}</small></span>
+                          </div>
+                        )}
+
+                        <div className="wa-device-approval-list">
+                          {deviceAccessLoading && deviceAccessRequests.length === 0 ? (
+                            <div className="wa-device-approval-empty"><Loader2 className="animate-spin" />Comprobando dispositivos…</div>
+                          ) : deviceAccessRequests.length === 0 ? (
+                            <div className="wa-device-approval-empty"><ShieldCheck />Todavía no hay solicitudes de otros dispositivos.</div>
+                          ) : deviceAccessRequests.slice(0, 12).map((request) => {
+                            const requestBusy = String(deviceAccessBusy).endsWith(`:${request.id}`);
+                            const requestedAt = request.requested_at
+                              ? new Date(request.requested_at).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' })
+                              : '';
+                            return (
+                              <article key={request.id} className={`wa-device-approval-item ${request.status}`}>
+                                <span><Laptop /></span>
+                                <div>
+                                  <strong>{request.device_name || 'PC sin nombre'}</strong>
+                                  <small>{request.platform || 'Windows'}{request.requested_by_name ? ` · ${request.requested_by_name}` : ''}{requestedAt ? ` · ${requestedAt}` : ''}</small>
+                                </div>
+                                <em>{request.status === 'approved' ? 'Aprobada' : request.status === 'pending' ? 'Pendiente' : request.status === 'rejected' ? 'Rechazada' : 'Revocada'}</em>
+                                <nav aria-label={`Acciones para ${request.device_name || 'dispositivo'}`}>
+                                  {request.status === 'pending' && (
+                                    <>
+                                      <button type="button" className="wa-device-approve" disabled={requestBusy} onClick={() => onReviewDeviceAccess?.(request.id, 'approved')}>{requestBusy ? <Loader2 className="animate-spin" /> : <Check />}Aprobar</button>
+                                      <button type="button" className="wa-device-reject" disabled={requestBusy} onClick={() => onReviewDeviceAccess?.(request.id, 'rejected')}><X />Rechazar</button>
+                                    </>
+                                  )}
+                                  {request.status === 'approved' && (
+                                    <button type="button" className="wa-device-reject" disabled={requestBusy} onClick={() => onReviewDeviceAccess?.(request.id, 'revoked')}>{requestBusy ? <Loader2 className="animate-spin" /> : <X />}Revocar</button>
+                                  )}
+                                </nav>
+                              </article>
+                            );
+                          })}
+                        </div>
+
+                        <footer>
+                          <small>La PC central reconoce cada instalación por una clave local; cambiar de IP no elimina la autorización.</small>
+                          <button type="button" className="wa-secondary-action" disabled={deviceAccessLoading} onClick={() => onRefreshDeviceAccess?.()}>{deviceAccessLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}Actualizar</button>
+                        </footer>
+                      </section>
+                    )}
+                  </div>
+                )}
+
+                {canManageHistory && section === 'history' && (
+                  <div className="wa-bot-settings-section">
+                    <div className="wa-section-copy">
+                      <span><Archive /></span>
+                      <div>
+                        <strong>{historyState.title}</strong>
+                        <small>{historyState.detail}</small>
+                      </div>
+                    </div>
+
+                    {historyError && (
+                      <div className="wa-bot-inline-error" role="alert">
+                        <AlertCircle /><span>{historyError}</span>
+                      </div>
+                    )}
+
+                    {/* Lo que pasó después de traer. Es el aviso más importante
+                        de la sección: sin él, traer conversaciones más viejas
+                        que lo que se muestra parece no haber hecho nada. */}
+                    {importOutcome && (
+                      <div className="wa-history-result" role="status">
+                        <Check />
+                        <span>
+                          <strong>{importOutcome.titulo}</strong>
+                          <small>{importOutcome.detalle}</small>
+                        </span>
+                        {importOutcome.ofrecerMostrarTodo && (
+                          <button
+                            type="button"
+                            className="wa-primary-action"
+                            disabled={Boolean(historyBusy)}
+                            onClick={() => onSetHistoryWindow?.('all')}
+                          >Mostrar todas</button>
+                        )}
+                      </div>
+                    )}
+
+                    <section className="wa-history-block">
+                      <header>
+                        <span><Smartphone /></span>
+                        <div>
+                          <strong>Traer del teléfono</strong>
+                          <small>{explicacionDelTelefono(historyWindow)}</small>
+                        </div>
+                      </header>
+                      <div className="wa-history-actions">
+                        <button
+                          type="button"
+                          className="wa-primary-action"
+                          disabled={
+                            Boolean(historyBusy)
+                            || historyLoading
+                            || !historyState.puedeTraerDelTelefono
+                          }
+                          onClick={() => onImportChats?.(importSize, messagesPerChat)}
+                        >
+                          {historyBusy === 'import' ? <Loader2 className="animate-spin" /> : <Download />}
+                          {importButtonLabel(historyWindow)}
+                        </button>
+                      </div>
+                      <div className="wa-history-tuning">
+                        <label>
+                          Conversaciones por vez
+                          <select
+                            value={importSize}
+                            disabled={Boolean(historyBusy)}
+                            onChange={(event) => setImportSize(Number(event.target.value))}
+                          >
+                            {[5, 10, 25, 50].map((n) => <option key={n} value={n}>{n}</option>)}
+                          </select>
+                        </label>
+                        <label>
+                          Mensajes de cada una
+                          <select
+                            value={messagesPerChat}
+                            disabled={Boolean(historyBusy)}
+                            onChange={(event) => setMessagesPerChat(Number(event.target.value))}
+                          >
+                            {[20, 50, 100, 200].map((n) => <option key={n} value={n}>{n}</option>)}
+                          </select>
+                        </label>
+                        <small>Traer de a poco es más prolijo si el teléfono tiene mucha historia.</small>
+                      </div>
+                    </section>
+
+                    <section className="wa-history-block">
+                      <header>
+                        <span><Archive /></span>
+                        <div>
+                          <strong>Lo que ya está guardado</strong>
+                          <small>
+                            {historyState.recortado
+                              ? `Hay ${ocultasTexto} de antes del ${historyState.desde} que Rebu tiene guardadas y no se están mostrando.`
+                              : 'Ya se está mostrando todo lo guardado de este número.'}
+                          </small>
+                        </div>
+                      </header>
+                      {historyState.recortado && (
+                        <div className="wa-history-actions">
+                          <button
+                            type="button"
+                            className="wa-secondary-action"
+                            disabled={Boolean(historyBusy) || historyLoading}
+                            onClick={() => onLoadOlderConversations?.()}
+                          >
+                            {historyBusy === 'older' ? <Loader2 className="animate-spin" /> : <ChevronDown />}
+                            {olderButtonLabel(historyWindow)}
+                          </button>
+                          <button
+                            type="button"
+                            className="wa-secondary-action"
+                            disabled={Boolean(historyBusy) || historyLoading}
+                            onClick={() => onSetHistoryWindow?.('all')}
+                          >Mostrar todas</button>
+                        </div>
+                      )}
+                    </section>
+
+                    <section className="wa-history-block">
+                      <header>
+                        <span><RefreshCw /></span>
+                        <div>
+                          <strong>Empezar de cero</strong>
+                          <small>{CLEAN_START_CONFIRM.detail}</small>
+                        </div>
+                      </header>
+                      <div className="wa-history-actions">
+                        <button
+                          type="button"
+                          className="wa-secondary-action"
+                          disabled={Boolean(historyBusy) || historyLoading}
+                          onClick={() => onSetHistoryWindow?.('new_only')}
+                        >
+                          {historyBusy === 'clean' ? <Loader2 className="animate-spin" /> : null}
+                          Ver sólo lo que llegue de ahora en adelante
+                        </button>
+                      </div>
+                    </section>
+
+                    <footer className="wa-history-footer">
+                      <small>
+                        {historyState.decidedBy
+                          ? `Lo dejó así ${historyState.decidedBy}.`
+                          : 'Nada de esto borra conversaciones: sólo cambia lo que se muestra.'}
+                      </small>
+                      <button
+                        type="button"
+                        className="wa-secondary-action"
+                        disabled={historyLoading}
+                        onClick={() => onRefreshHistory?.()}
+                      >{historyLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}Actualizar</button>
+                    </footer>
                   </div>
                 )}
 
@@ -671,13 +1179,19 @@ export default function WhatsAppBotSettingsPanel({
 
             <footer className="wa-bot-modal-footer">
               <span className={dirty ? 'dirty' : ''}>
-                {dirty ? 'Tenés cambios sin guardar' : version ? `Configuración guardada · versión ${version}` : 'Configuración lista'}
+                {dirty
+                  ? 'Tenés cambios sin guardar'
+                  : section === 'central'
+                    ? 'La asignación de la máquina se aplica inmediatamente'
+                    : version ? `Configuración guardada · versión ${version}` : 'Configuración lista'}
               </span>
               <div>
-                <button type="button" className="wa-secondary-action" disabled={busy} onClick={requestClose}>Cerrar</button>
-                <button type="button" className="wa-primary-action" disabled={busy || !dirty} onClick={() => onSave(payload)}>
-                  {busy ? <Loader2 className="animate-spin" /> : <FileText />}{busy ? 'Guardando…' : 'Guardar cambios'}
-                </button>
+                <button type="button" className="wa-secondary-action" disabled={effectiveBusy} onClick={requestClose}>Cerrar</button>
+                {(section !== 'central' || dirty) && (
+                  <button type="button" className="wa-primary-action" disabled={effectiveBusy || !dirty} onClick={() => onSave(payload)}>
+                    {busy ? <Loader2 className="animate-spin" /> : <FileText />}{busy ? 'Guardando…' : 'Guardar cambios'}
+                  </button>
+                )}
               </div>
             </footer>
           </>

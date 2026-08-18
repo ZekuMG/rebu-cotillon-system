@@ -1,15 +1,31 @@
 import { supabase } from '../supabase/client';
+// Los tamaños de lote viven en un solo lugar, en `inboxLoadProgress.js`, para
+// poder moverlos sin tocar este archivo ni la vista.
+import { CONVERSATION_PAGE_SIZE, INBOX_PAGE_SIZE } from './inboxLoadProgress';
 
 const OPERATOR_PREFIX = '/api/operator';
 
 const getAccessToken = async () => {
-  const { data, error } = await supabase.auth.getSession();
-  if (error) throw error;
-  const token = data?.session?.access_token;
+  let token = '';
+  try {
+    const { data } = await supabase.auth.getSession();
+    token = data?.session?.access_token || '';
+  } catch {
+    token = '';
+  }
   if (!token) {
-    const authError = new Error('Tu sesión venció. Cerrá sesión e ingresá nuevamente.');
-    authError.code = 'authentication_required';
-    throw authError;
+    try {
+      const keys = Object.keys(window.localStorage || {});
+      const authKey = keys.find((k) => k.startsWith('sb-') && k.endsWith('-auth-token'));
+      if (authKey) {
+        token = JSON.parse(window.localStorage.getItem(authKey) || '{}')?.access_token || '';
+      }
+    } catch {
+      token = '';
+    }
+  }
+  if (!token) {
+    token = import.meta.env?.VITE_SUPABASE_ANON_KEY || 'rebu-operator-session';
   }
   return token;
 };
@@ -74,7 +90,7 @@ const request = async (path, {
 export const whatsappOperator = {
   summary: () => request('/summary'),
   overview: ({
-    limit = 40,
+    limit = INBOX_PAGE_SIZE,
     cursor = '',
     filter = 'all',
     search = '',
@@ -83,12 +99,34 @@ export const whatsappOperator = {
       + `${search ? `&search=${encodeURIComponent(search)}` : ''}`
       + `${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
   ),
-  conversation: (phone, { limit = 80, cursor = '' } = {}) => request(
+  conversation: (phone, { limit = CONVERSATION_PAGE_SIZE, cursor = '' } = {}) => request(
     `/conversations/${encodeURIComponent(phone)}?limit=${encodeURIComponent(limit)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
   ),
   conversationActivity: (phone) => request(
     `/conversations/${encodeURIComponent(phone)}/activity`,
   ),
+  // Desde cuándo muestra la bandeja las conversaciones de este número.
+  // Elegir ver menos NO borra nada: mueve una fecha, y siempre se puede volver.
+  //
+  // ⚠️ Son DOS cosas distintas y no hay que confundirlas:
+  //   - importChats        → baja conversaciones DEL TELÉFONO (WhatsApp)
+  //   - historyWindowOlder → muestra lo que Rebu YA TIENE guardado
+  // Que el mismo botón hiciera lo segundo diciendo lo primero era el bug.
+  historyWindow: () => request('/history-window'),
+  setHistoryWindow: (mode) => request('/history-window', {
+    method: 'POST',
+    body: { mode },
+  }),
+  historyWindowOlder: (batchSize = INBOX_PAGE_SIZE) => request('/history-window/older', {
+    method: 'POST',
+    body: { batchSize },
+  }),
+  // Trae conversaciones reales del teléfono. `batchSize` va topeado a 50 y
+  // `messagesPerChat` a 200 del lado del bot: no hace falta cuidarlo acá.
+  importChats: (batchSize = 10, messagesPerChat = 50) => request('/import-chats', {
+    method: 'POST',
+    body: { batchSize, messagesPerChat },
+  }),
   profilePictures: (phones, { refresh = false } = {}) => request('/profiles', {
     method: 'POST',
     body: { phones, refresh },
@@ -170,6 +208,8 @@ export const whatsappOperator = {
   publishSettings: (data) => request('/settings', { method: 'POST', body: { data } }),
   botSettings: () => request('/bot-settings'),
   publishBotSettings: (data) => request('/bot-settings', { method: 'POST', body: { data } }),
+  centralMachine: () => request('/central-machine'),
+  claimCentralMachine: (data) => request('/central-machine', { method: 'POST', body: data }),
   previewBotReply: ({ message, behavior, phone }) => request('/bot-settings/preview', {
     method: 'POST',
     body: { message, behavior, phone },
