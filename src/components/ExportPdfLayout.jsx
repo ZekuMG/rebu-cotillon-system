@@ -14,7 +14,9 @@ const formatCurrency = (amount) => {
 export const ExportPdfLayout = ({ data }) => {
   if (!data) return null;
 
-  const { config, items, date } = data;
+  const config = data.config && typeof data.config === 'object' ? data.config : {};
+  const items = Array.isArray(data.items) ? data.items.filter((item) => item && typeof item === 'object') : [];
+  const date = String(data.date || '');
   const isClient = config.isForClient;
   
   const time = data.time || new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -22,13 +24,15 @@ export const ExportPdfLayout = ({ data }) => {
   const clientCols = config.clientColumns || { showQty: true, showUnitPrice: true, showSubtotal: false, showTotal: true };
 
   const total = items.reduce((acc, item) => {
-    const q = Number(item.qty) || 1;
-    const p = Number(item.newPrice) || 0;
+    const parsedQty = Number(item.qty);
+    const parsedPrice = Number(item.newPrice);
+    const q = Number.isFinite(parsedQty) ? parsedQty : 0;
+    const p = Number.isFinite(parsedPrice) ? parsedPrice : 0;
     return acc + (item.product_type === 'weight' ? p * (q / 1000) : p * q);
   }, 0);
 
   const groupedItems = items.reduce((acc, item) => {
-    const cat = item.category || 'Otros';
+    const cat = String(item.category || 'Otros');
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(item);
     return acc;
@@ -154,15 +158,16 @@ export const ExportPdfLayout = ({ data }) => {
                     </tr>
                     {catItems.map((item, idx) => {
                       const isWeight = item.product_type === 'weight';
-                      const q = Number(item.qty) || 1;
-                      const p = Number(item.newPrice) || 0;
+                      const parsedQty = Number(item.qty);
+                      const parsedPrice = Number(item.newPrice);
+                      const q = Number.isFinite(parsedQty) ? parsedQty : 0;
+                      const p = Number.isFinite(parsedPrice) ? parsedPrice : 0;
                       const subtotal = isWeight ? p * (q / 1000) : p * q;
 
                       const rowColorClass = idx % 2 !== 0 ? 'bg-slate-50/80' : 'bg-transparent';
                       
-                      // ✨ LOGICA DE AGOTADO / SIN PRECIO:
-                      // Si el stock es <= 0 (y no es item extra) O si el precio es 0
-                      const isAgotado = (item.stock !== undefined && Number(item.stock) <= 0 && !item.isTemporary) || p === 0;
+                      // El presupuesto es un snapshot comercial y no consulta stock vivo.
+                      const isAgotado = p === 0;
 
                       return (
                         <tr 
@@ -178,7 +183,7 @@ export const ExportPdfLayout = ({ data }) => {
                                 <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
                                   {isAgotado && (
                                     <span className="bg-red-100 text-red-700 text-[8px] px-1.5 py-0.5 rounded font-black uppercase tracking-widest border border-red-300 whitespace-nowrap shrink-0">
-                                      Agotado - Preguntar Stock
+                                      Precio a confirmar
                                     </span>
                                   )}
 

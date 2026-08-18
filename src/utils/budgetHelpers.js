@@ -1,4 +1,13 @@
-import { formatDateAR, formatTimeAR, formatWeight } from './helpers';
+import { formatDateAR, formatTimeAR, formatWeight } from './helpers.js';
+
+const asArray = (value) => (Array.isArray(value) ? value : []);
+const asObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
+const toFiniteNumber = (value, fallback = 0) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+};
+const toText = (value, fallback = '') =>
+  value === undefined || value === null ? fallback : String(value);
 
 export const DEFAULT_BUDGET_CLIENT_COLUMNS = {
   showQty: true,
@@ -38,15 +47,16 @@ export const createEmptyBudgetItem = (overrides = {}) => {
 };
 
 export const calculateBudgetLineSubtotal = (item = {}) => {
-  const qty = Number(item.qty) || 0;
-  const price = Number(item.newPrice) || 0;
+  const qty = toFiniteNumber(item.qty ?? item.quantity, 0);
+  const price = toFiniteNumber(item.newPrice ?? item.unit_price ?? item.price, 0);
   return item.product_type === 'weight' ? price * (qty / 1000) : price * qty;
 };
 
 export const calculateBudgetTotal = (items = []) =>
-  items.reduce((acc, item) => acc + calculateBudgetLineSubtotal(item), 0);
+  asArray(items).reduce((acc, item) => acc + calculateBudgetLineSubtotal(asObject(item)), 0);
 
-const normalizeBudgetIncludedProduct = (product = {}) => {
+const normalizeBudgetIncludedProduct = (value = {}) => {
+  const product = asObject(value);
   const productType = product.product_type || 'quantity';
   const purchasePrice = Number(
     product.purchasePrice ??
@@ -72,37 +82,41 @@ const normalizeBudgetIncludedProduct = (product = {}) => {
   };
 };
 
-export const normalizeBudgetBuilderItem = (item = {}) => ({
-  id: item.id ?? `line-${Date.now()}`,
-  productId: item.productId ?? item.product_id ?? null,
-  title: item.title || '',
-  category: item.category || 'Otros',
-  qty: Number(item.qty ?? item.quantity ?? 1) || 1,
-  newPrice: Number(item.newPrice ?? item.unit_price ?? item.price ?? 0) || 0,
-  purchasePrice: Number(
-    item.purchasePrice ??
-      item.purchase_price ??
-      item.cost ??
-      item.unitCost ??
-      item.unit_cost ??
-      0
-  ) || 0,
-  product_type: item.product_type || 'quantity',
-  isTemporary: Boolean(item.isTemporary ?? item.is_custom ?? false),
-  stock:
-    item.stock === undefined || item.stock === null || item.stock === ''
-      ? undefined
-      : Number(item.stock) || 0,
-  isCombo: Boolean(item.isCombo ?? item.is_combo ?? false),
-  isDiscount: Boolean(item.isDiscount ?? item.is_discount ?? false),
-  originalOfferId: item.originalOfferId ?? item.original_offer_id ?? null,
-  productsIncluded: Array.isArray(item.productsIncluded || item.products_included)
-    ? (item.productsIncluded || item.products_included).map(normalizeBudgetIncludedProduct)
-    : [],
-});
+export const normalizeBudgetBuilderItem = (value = {}) => {
+  const item = asObject(value);
+  return {
+    id: item.id ?? `line-${Date.now()}`,
+    productId: item.productId ?? item.product_id ?? null,
+    title: toText(item.title),
+    category: toText(item.category, 'Otros') || 'Otros',
+    qty: toFiniteNumber(item.qty ?? item.quantity, 1),
+    newPrice: toFiniteNumber(item.newPrice ?? item.unit_price ?? item.price, 0),
+    purchasePrice: toFiniteNumber(
+      item.purchasePrice ??
+        item.purchase_price ??
+        item.cost ??
+        item.unitCost ??
+        item.unit_cost ??
+        0,
+      0,
+    ),
+    product_type: item.product_type || 'quantity',
+    isTemporary: Boolean(item.isTemporary ?? item.is_custom ?? false),
+    stock:
+      item.stock === undefined || item.stock === null || item.stock === ''
+        ? undefined
+        : toFiniteNumber(item.stock, 0),
+    isCombo: Boolean(item.isCombo ?? item.is_combo ?? false),
+    isDiscount: Boolean(item.isDiscount ?? item.is_discount ?? false),
+    originalOfferId: item.originalOfferId ?? item.original_offer_id ?? null,
+    productsIncluded: Array.isArray(item.productsIncluded || item.products_included)
+      ? (item.productsIncluded || item.products_included).map(normalizeBudgetIncludedProduct)
+      : [],
+  };
+};
 
 export const buildBudgetSnapshot = (items = []) =>
-  items
+  asArray(items)
     .map(normalizeBudgetBuilderItem)
     .filter((item) => item.title.trim() !== '')
     .map((item) => ({
@@ -110,11 +124,11 @@ export const buildBudgetSnapshot = (items = []) =>
       product_id: item.productId,
       title: item.title.trim(),
       category: item.category || 'Otros',
-      quantity: Number(item.qty) || 1,
-      unit_price: Number(item.newPrice) || 0,
-      purchase_price: Number(item.purchasePrice) || 0,
-      unit_cost: Number(item.purchasePrice) || 0,
-      cost: Number(item.purchasePrice) || 0,
+      quantity: toFiniteNumber(item.qty, 0),
+      unit_price: toFiniteNumber(item.newPrice, 0),
+      purchase_price: toFiniteNumber(item.purchasePrice, 0),
+      unit_cost: toFiniteNumber(item.purchasePrice, 0),
+      cost: toFiniteNumber(item.purchasePrice, 0),
       subtotal: calculateBudgetLineSubtotal(item),
       product_type: item.product_type || 'quantity',
       is_combo: Boolean(item.isCombo),
@@ -127,8 +141,9 @@ export const buildBudgetSnapshot = (items = []) =>
     }));
 
 export const hydrateBudgetSnapshot = (itemsSnapshot = []) =>
-  (itemsSnapshot || []).map((item) =>
-    normalizeBudgetBuilderItem({
+  asArray(itemsSnapshot).map((value) => {
+    const item = asObject(value);
+    return normalizeBudgetBuilderItem({
       id: item.id,
       product_id: item.product_id,
       title: item.title,
@@ -142,8 +157,8 @@ export const hydrateBudgetSnapshot = (itemsSnapshot = []) =>
       is_discount: item.is_discount,
       original_offer_id: item.original_offer_id,
       products_included: item.products_included,
-    })
-  );
+    });
+  });
 
 export const buildExportItemsFromSnapshot = (itemsSnapshot = []) =>
   hydrateBudgetSnapshot(itemsSnapshot).map((item) => ({
@@ -155,36 +170,74 @@ export const buildExportItemsFromSnapshot = (itemsSnapshot = []) =>
     purchasePrice: item.purchasePrice,
     product_type: item.product_type,
     isTemporary: item.isTemporary,
-    stock: item.stock,
+    // A client PDF is an immutable commercial snapshot. Live inventory is
+    // deliberately excluded so an exhausted/deleted product can never block it.
     isCombo: item.isCombo,
     isDiscount: item.isDiscount,
     originalOfferId: item.originalOfferId,
     productsIncluded: item.productsIncluded,
   }));
 
-export const buildBudgetExportConfig = (record) => ({
-  isForClient: true,
-  documentTitle: record.documentTitle || 'PRESUPUESTO',
-  clientName: record.customerName || '',
-  clientPhone: record.customerPhone || '',
-  clientEvent: record.eventLabel || '',
-  createdAtLabel: record.type === 'order' ? 'Pedido hecho el' : 'Presupuesto hecho el',
-  createdAtDisplay: record.createdAt ? `${formatDateAR(record.createdAt)} - ${formatTimeAR(record.createdAt)} hs` : '',
-  pickupDateLabel: 'Fecha de retiro',
-  pickupDate: record.pickupDate ? formatDateAR(`${record.pickupDate}T12:00:00`) : '',
-  financialSummary: {
-    totalAmount: Number(record.totalAmount || 0),
-    depositAmount: Number(record.depositAmount || 0),
-    paidTotal: Number(record.paidTotal || 0),
-    additionalPaid: Math.max(Number(record.paidTotal || 0) - Number(record.depositAmount || 0), 0),
-    remainingAmount:
-      record.remainingAmount !== undefined && record.remainingAmount !== null
-        ? Number(record.remainingAmount || 0)
-        : Math.max(Number(record.totalAmount || 0) - Number(record.paidTotal || 0), 0),
-  },
-  clientColumns: DEFAULT_BUDGET_CLIENT_COLUMNS,
-  columns: { cost: false, price: true, newPrice: false, stock: false },
+export const buildBudgetExportConfig = (record = {}) => {
+  const safeRecord = asObject(record);
+  const totalAmount = toFiniteNumber(safeRecord.totalAmount, 0);
+  const depositAmount = toFiniteNumber(safeRecord.depositAmount, 0);
+  const paidTotal = toFiniteNumber(safeRecord.paidTotal, 0);
+  const remainingAmount = safeRecord.remainingAmount !== undefined && safeRecord.remainingAmount !== null
+    ? toFiniteNumber(safeRecord.remainingAmount, 0)
+    : Math.max(totalAmount - paidTotal, 0);
+
+  return {
+    isForClient: true,
+    documentTitle: toText(safeRecord.documentTitle, 'PRESUPUESTO') || 'PRESUPUESTO',
+    clientName: toText(safeRecord.customerName),
+    clientPhone: toText(safeRecord.customerPhone),
+    clientEvent: toText(safeRecord.eventLabel),
+    createdAtLabel: safeRecord.type === 'order' ? 'Pedido hecho el' : 'Presupuesto hecho el',
+    createdAtDisplay: safeRecord.createdAt ? `${formatDateAR(safeRecord.createdAt)} - ${formatTimeAR(safeRecord.createdAt)} hs` : '',
+    pickupDateLabel: 'Fecha de retiro',
+    pickupDate: safeRecord.pickupDate ? formatDateAR(`${safeRecord.pickupDate}T12:00:00`) : '',
+    financialSummary: {
+      totalAmount,
+      depositAmount,
+      paidTotal,
+      additionalPaid: Math.max(paidTotal - depositAmount, 0),
+      remainingAmount,
+    },
+    clientColumns: DEFAULT_BUDGET_CLIENT_COLUMNS,
+    columns: { cost: false, price: true, newPrice: false, stock: false },
+  };
+};
+
+export const buildBudgetPdfPayload = (record = {}) => ({
+  config: buildBudgetExportConfig(record),
+  items: buildExportItemsFromSnapshot(asObject(record).itemsSnapshot),
 });
+
+export const getBudgetItemsValidationError = (items = []) => {
+  const cleanItems = asArray(items).filter((item) => toText(item?.title).trim() !== '');
+  if (cleanItems.length === 0) return 'Agregá al menos un artículo al presupuesto.';
+
+  const hasInvalidQuantity = cleanItems.some((item) => {
+    const quantity = Number(item?.qty ?? item?.quantity);
+    return !Number.isFinite(quantity) || quantity <= 0;
+  });
+  if (hasInvalidQuantity) return 'Revisá las cantidades: deben ser números mayores a cero.';
+
+  const hasInvalidPrice = cleanItems.some((item) => {
+    const price = Number(item?.newPrice ?? item?.unit_price ?? item?.price);
+    if (!Number.isFinite(price)) return true;
+    return price < 0 && !(item?.isDiscount ?? item?.is_discount);
+  });
+  if (hasInvalidPrice) return 'Revisá los precios: solo las líneas de descuento pueden ser negativas.';
+
+  const total = calculateBudgetTotal(cleanItems);
+  if (!Number.isFinite(total) || total < 0) {
+    return 'El total no puede ser negativo. Reducí o quitá alguno de los descuentos.';
+  }
+
+  return '';
+};
 
 export const deriveOrderStatus = ({ paidTotal = 0, totalAmount = 0, currentStatus = '' }) => {
   if (currentStatus === 'Retirado') return 'Retirado';
@@ -197,7 +250,7 @@ export const deriveOrderStatus = ({ paidTotal = 0, totalAmount = 0, currentStatu
 };
 
 export const formatBudgetItemQuantity = (item = {}) => {
-  const qty = Number(item.qty ?? item.quantity ?? 0) || 0;
+  const qty = toFiniteNumber(item.qty ?? item.quantity, 0);
   if (item.product_type === 'weight') {
     return formatWeight(qty);
   }

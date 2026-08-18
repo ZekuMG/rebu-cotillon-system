@@ -9,7 +9,7 @@ test('la reconciliacion puntual de ventas evita descargar logs cuando la fila ya
   const end = appSource.indexOf('const getTransactionCostSignal', start);
   const functionSource = appSource.slice(start, end);
 
-  assert.match(functionSource, /shouldFetchSaleLogsForMetrics\(salesData\)/);
+  assert.match(functionSource, /saleRowsRequireHistoryLogs\(salesData\)/);
   assert.doesNotMatch(functionSource, /Promise\.all/);
 });
 
@@ -19,4 +19,3 @@ test('Realtime actualiza colecciones chicas sin recargar todo el nucleo', () => 
   assert.match(appSource, /table: 'rewards' \}, handleRealtimeReward/);
   assert.match(appSource, /table: 'agenda_contacts' \}, handleRealtimeAgendaContact/);
 });
-

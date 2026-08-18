@@ -27,6 +27,7 @@ import {
   createEmptyBudgetItem,
   DEFAULT_BUDGET_CONFIG,
   formatBudgetItemQuantity,
+  getBudgetItemsValidationError,
   hydrateBudgetSnapshot,
   normalizeBudgetBuilderItem,
 } from '../utils/budgetHelpers';
@@ -103,9 +104,9 @@ const buildDraftFromRecord = (record, members) => {
 export default function BudgetBuilderModal({
   isOpen,
   onClose,
-  inventory,
-  categories,
-  members,
+  inventory = [],
+  categories = [],
+  members = [],
   offers = [],
   initialRecord = null,
   onSave,
@@ -683,18 +684,19 @@ export default function BudgetBuilderModal({
   };
 
   const handleSubmit = async () => {
-    const cleanItems = draftItems.filter((item) => item.title.trim() !== '');
+    const cleanItems = draftItems.filter((item) => String(item?.title || '').trim() !== '');
+    const itemsValidationError = getBudgetItemsValidationError(cleanItems);
 
     if (cleanItems.length === 0) {
       Swal.fire('Faltan artículos', 'Agregá al menos un artículo al presupuesto.', 'warning');
       return;
     }
 
-    if (cleanItems.some((item) => Number(item.qty) <= 0 || Number(item.newPrice) < 0)) {
+    if (itemsValidationError) {
       Swal.fire(
         'Detalle inválido',
-        'Revisá cantidades y precios. Ningún artículo puede quedar en cero o negativo.',
-        'warning'
+        itemsValidationError,
+        'warning',
       );
       return;
     }
@@ -706,9 +708,9 @@ export default function BudgetBuilderModal({
 
     if (draftConfig.customerMode === 'guest') {
       if (
-        !draftConfig.customerName.trim() ||
-        !draftConfig.customerPhone.trim() ||
-        !draftConfig.customerNote.trim()
+        !String(draftConfig.customerName || '').trim() ||
+        !String(draftConfig.customerPhone || '').trim() ||
+        !String(draftConfig.customerNote || '').trim()
       ) {
         Swal.fire(
           'Datos incompletos',
@@ -719,13 +721,13 @@ export default function BudgetBuilderModal({
       }
     }
 
-    await onSave({
+    const saveResult = await onSave({
       memberId: draftConfig.customerMode === 'member' ? draftConfig.memberId : null,
-      customerName: draftConfig.customerName.trim(),
-      customerPhone: draftConfig.customerPhone.trim(),
-      customerNote: draftConfig.customerNote.trim(),
-      documentTitle: (draftConfig.documentTitle || 'PRESUPUESTO').trim().toUpperCase(),
-      eventLabel: draftConfig.eventLabel.trim(),
+      customerName: String(draftConfig.customerName || '').trim(),
+      customerPhone: String(draftConfig.customerPhone || '').trim(),
+      customerNote: String(draftConfig.customerNote || '').trim(),
+      documentTitle: String(draftConfig.documentTitle || 'PRESUPUESTO').trim().toUpperCase(),
+      eventLabel: String(draftConfig.eventLabel || '').trim(),
       paymentMethod: budgetPaymentSummary,
       paymentBreakdown: normalizedBudgetPaymentLines.map((line) => ({
         id: line.id,
@@ -737,6 +739,8 @@ export default function BudgetBuilderModal({
       itemsSnapshot: buildBudgetSnapshot(cleanItems),
       totalAmount: calculateBudgetTotal(cleanItems),
     });
+
+    if (!saveResult) return;
 
     try {
       window.localStorage.removeItem(draftStorageKey);

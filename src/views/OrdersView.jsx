@@ -18,6 +18,7 @@ import {
   normalizeOrderPaymentHistory,
 } from '../utils/paymentBreakdown';
 import { hasPermission } from '../utils/userPermissions';
+import { isOrderStockPending } from '../utils/orderStockPolicy';
 import useIncrementalFeed from '../hooks/useIncrementalFeed';
 
 const RECORD_TYPE_LABELS = { budget: 'Presupuesto', order: 'Pedido' };
@@ -366,6 +367,7 @@ function FilterSelect({ label, value, options, onChange }) {
 
 function RecordCard({ record, isActive, onSelect }) {
   const statusLabel = record.type === 'budget' ? 'Creado' : record.status;
+  const hasPendingStock = record.type === 'order' && isOrderStockPending(record);
   const itemCount = record.items?.length || record.itemsSnapshot?.length || 0;
   const recordTitle = record.documentTitle || (record.type === 'order' ? 'PEDIDO' : 'PRESUPUESTO');
   return (
@@ -379,6 +381,7 @@ function RecordCard({ record, isActive, onSelect }) {
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] text-slate-600">{RECORD_TYPE_LABELS[record.type]}</span>
           <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] ${STATUS_STYLES[statusLabel] || STATUS_STYLES.Pendiente}`}>{statusLabel}</span>
+          {hasPendingStock && <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] text-amber-700">Stock pendiente</span>}
         </div>
         <div className="order-record-reference">
           <span>{formatDateAR(record.createdAt)}</span>
@@ -831,11 +834,14 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
   const handleSaveBudget = async (payload) => {
     setIsSavingBudget(true);
     try {
-      if (editingBudget?.type === 'order') await onUpdateOrder(editingBudget.id, payload);
-      else if (editingBudget) await onUpdateBudget(editingBudget.id, payload);
-      else await onCreateBudget(payload);
+      let savedRecord = null;
+      if (editingBudget?.type === 'order') savedRecord = await onUpdateOrder(editingBudget.id, payload);
+      else if (editingBudget) savedRecord = await onUpdateBudget(editingBudget.id, payload);
+      else savedRecord = await onCreateBudget(payload);
+      if (!savedRecord) return null;
       setIsBudgetModalOpen(false);
       setEditingBudget(null);
+      return savedRecord;
     } finally {
       setIsSavingBudget(false);
     }
@@ -1136,6 +1142,13 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
                       <strong><FancyPrice amount={selectedRecord.totalAmount || 0} /></strong>
                     </div>
                   </div>
+
+                  {selectedRecord.type === 'order' && isOrderStockPending(selectedRecord) && (
+                    <div className="mx-2 mt-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-800">
+                      <p className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.14em]"><Package size={12} />Stock pendiente</p>
+                      <p className="mt-1 text-[11px] font-semibold leading-relaxed">La seña está registrada. La mercadería se controlará antes de completar el pago o entregar el pedido.</p>
+                    </div>
+                  )}
 
                   <section className="order-summary-customer">
                     <p className="order-summary-label">Cliente</p>

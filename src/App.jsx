@@ -56,7 +56,9 @@ import {
 } from './utils/cloudSelects';
 import {
   doesCloudLoadCoverRequest,
+  fetchCloudPayloadWithMutationGuard,
   fetchCloudPayloadWithRetries,
+  recordCloudSourceMutations,
   resolveCoveredCloudLoadResult,
   summarizeCloudResults,
 } from './utils/cloudLoadControl';
@@ -69,6 +71,7 @@ import {
 } from './utils/realtimeSync';
 import {
   getTransactionSnapshotScope,
+  saleRowsRequireHistoryLogs,
   shouldUseIncrementalMetricsSync,
   shouldUseIncrementalTransactionSync,
   TRANSACTION_SNAPSHOT_SCOPE_FULL,
@@ -98,13 +101,15 @@ import {
 } from './utils/userAvatarStorage';
 import {
   extractSchemaMissingColumn,
+  fetchAllCloudRowsByIdCursorWithSelectFallback,
   fetchAllCloudRowsWithSelectFallback,
   getSchemaMissingColumnName,
   isOptionalSchemaColumn,
   removeColumnFromSelect,
   runSelectWithSchemaFallback,
+  sortCloudRowsNewestFirst,
 } from './utils/supabaseSchemaFallback';
-import { buildBudgetExportConfig, buildExportItemsFromSnapshot, deriveOrderStatus, hydrateBudgetSnapshot } from './utils/budgetHelpers';
+import { buildBudgetPdfPayload, deriveOrderStatus, hydrateBudgetSnapshot } from './utils/budgetHelpers';
 import {
   buildOrderOperationKey,
   getFinalizationPointsToCredit,
@@ -164,6 +169,11 @@ import {
   normalizeOrderPaymentHistory,
   replaceOrderDepositPaymentHistory,
 } from './utils/paymentBreakdown';
+import {
+  hasDeferredOrderStockPolicy,
+  isOrderStockReserved,
+  markOrderItemsForDeferredStock,
+} from './utils/orderStockPolicy';
 import {
   createPosBagSaleItem,
   isPosBagItem,
@@ -369,6 +379,7 @@ const APP_USERS_FRESHNESS_MS = 15 * 1000;
 const OFFLINE_BOOT_TIMEOUT_MS = 10000;
 const CLOUD_BOOT_RETRY_COUNT = 1;
 const CLOUD_BOOT_RETRY_DELAY_MS = 750;
+const MODULE_CLOUD_LOAD_TIMEOUT_MS = 30000;
 const APP_USERS_BOOT_TIMEOUT_MS = 20000;
 const OFFLINE_LOGIN_TIMEOUT_MS = 6500;
 const CLOUD_RECONNECT_TIMEOUT_MS = 15000;
@@ -795,12 +806,32 @@ const fetchAllCloudRows = async (
 const fetchRecentRowsWithSelectFallback = async (
   buildQuery,
   selectColumns,
-  limit = CLOUD_RECENT_SYNC_LIMIT
+  limit = CLOUD_RECENT_SYNC_LIMIT,
+  { signal = null } = {},
 ) =>
   runSelectWithSchemaFallback(
     (safeSelect) => buildQuery(safeSelect).limit(limit),
-    selectColumns
+    selectColumns,
+    { signal },
   );
+
+const fetchAllChronologicalRowsWithSelectFallback = async (
+  buildQuery,
+  selectColumns,
+  batchSize = CLOUD_FETCH_BATCH_SIZE,
+  options = {},
+) => {
+  const result = await fetchAllCloudRowsByIdCursorWithSelectFallback(
+    buildQuery,
+    selectColumns,
+    batchSize,
+    options,
+  );
+
+  return result.error || !Array.isArray(result.data)
+    ? result
+    : { ...result, data: sortCloudRowsNewestFirst(result.data) };
+};
 
 const fetchRecentRowsWithOptionalActiveFilter = async ({
   table,
@@ -809,6 +840,7 @@ const fetchRecentRowsWithOptionalActiveFilter = async ({
   orderDirection = 'desc',
   additionalOrders = [],
   limit = CLOUD_RECENT_SYNC_LIMIT,
+  signal = null,
 }) => {
   let useActiveFilter = true;
 
@@ -826,7 +858,8 @@ const fetchRecentRowsWithOptionalActiveFilter = async ({
         });
         return query.limit(limit);
       },
-      selectColumns
+      selectColumns,
+      { signal },
     );
 
     if (!result.error) return result;
@@ -878,11 +911,13 @@ const shouldAutoCloseRegister = ({ isRegisterClosed, closingTime, registerOpened
 const fetchRowsCreatedAfterWithSelectFallback = async (
   buildQuery,
   selectColumns,
-  createdAfter
+  createdAfter,
+  { signal = null } = {},
 ) =>
   runSelectWithSchemaFallback(
     (safeSelect) => buildQuery(safeSelect).gt('created_at', createdAfter),
-    selectColumns
+    selectColumns,
+    { signal },
   );
 
 const buildSaleHistoryLogsQuery = (selectColumns) =>
@@ -893,31 +928,42 @@ const buildSaleHistoryLogsQuery = (selectColumns) =>
     .order('created_at', { ascending: false })
     .order('id', { ascending: false });
 
-const fetchSaleHistoryLogsForTransactions = async ({ createdAfter = null, limit = null } = {}) => {
+const fetchSaleHistoryLogsForTransactions = async ({
+  createdAfter = null,
+  limit = null,
+  signal = null,
+} = {}) => {
   const logsResult = createdAfter
     ? await fetchRowsCreatedAfterWithSelectFallback(
         buildSaleHistoryLogsQuery,
         CLOUD_SELECTS.logs,
-        createdAfter
+        createdAfter,
+        { signal },
       )
     : limit
       ? await fetchRecentRowsWithSelectFallback(
           buildSaleHistoryLogsQuery,
           CLOUD_SELECTS.logs,
-          limit
+          limit,
+          { signal },
         )
-      : await fetchAllCloudRowsWithSelectFallback(
-          buildSaleHistoryLogsQuery,
+      : await fetchAllChronologicalRowsWithSelectFallback(
+          (selectColumns) =>
+            supabase
+              .from('logs')
+              .select(selectColumns)
+              .in('action', HISTORY_LOG_ACTIONS),
           CLOUD_SELECTS.logs,
-          CLOUD_FETCH_BATCH_SIZE
+          CLOUD_FETCH_BATCH_SIZE,
+          { signal },
         );
 
   if (logsResult.error) {
     console.warn('No se pudieron cargar logs para enriquecer ventas:', logsResult.error);
-    return [];
+    return { logs: [], error: logsResult.error };
   }
 
-  return mapLogRecords(logsResult.data || []);
+  return { logs: mapLogRecords(logsResult.data || []), error: null };
 };
 
 const fetchRowsCreatedAfterWithOptionalActiveFilter = async ({
@@ -927,6 +973,7 @@ const fetchRowsCreatedAfterWithOptionalActiveFilter = async ({
   orderBy = 'created_at',
   orderDirection = 'desc',
   additionalOrders = [],
+  signal = null,
 }) => {
   let useActiveFilter = true;
 
@@ -944,7 +991,8 @@ const fetchRowsCreatedAfterWithOptionalActiveFilter = async ({
         });
         return query;
       },
-      selectColumns
+      selectColumns,
+      { signal },
     );
 
     if (!result.error) return result;
@@ -1014,7 +1062,7 @@ const getSaleTransactionIdsFromLogs = (logs = []) => {
   return ids;
 };
 
-const fetchSaleRowsByIds = async (saleIds = []) => {
+const fetchSaleRowsByIds = async (saleIds = [], { signal = null } = {}) => {
   const ids = Array.from(new Set((saleIds || []).map((id) => String(id)).filter(Boolean)));
   if (ids.length === 0) return { data: [], error: null };
 
@@ -1026,12 +1074,25 @@ const fetchSaleRowsByIds = async (saleIds = []) => {
         .in('id', ids)
         .order('created_at', { ascending: false })
         .order('id', { ascending: false }),
-    CLOUD_SELECTS.sales
+    CLOUD_SELECTS.sales,
+    { signal },
   );
 };
 
-const fetchTransactionsCloudPayloadByIds = async (saleIds = []) => {
-  const salesResult = await fetchSaleRowsByIds(saleIds);
+const fetchModuleCloudPayloadWithRetries = ({ fetchPayload, label }) =>
+  fetchCloudPayloadWithRetries({
+    fetchPayload,
+    label,
+    timeoutMs: MODULE_CLOUD_LOAD_TIMEOUT_MS,
+    retryCount: CLOUD_BOOT_RETRY_COUNT,
+    retryDelayMs: CLOUD_BOOT_RETRY_DELAY_MS,
+    shouldRetryPayload: (payload) => payload?.shouldRetry === true,
+    isRecoverableError: isRecoverableCloudError,
+    isOffline: isBrowserOffline,
+  });
+
+const fetchTransactionsCloudPayloadByIds = async (saleIds = [], { signal = null } = {}) => {
+  const salesResult = await fetchSaleRowsByIds(saleIds, { signal });
 
   if (salesResult.error) {
     console.error('Error en tabla [ventas por Realtime]:', salesResult.error);
@@ -1039,13 +1100,23 @@ const fetchTransactionsCloudPayloadByIds = async (saleIds = []) => {
   }
 
   const salesData = salesResult.data || [];
-  const parsedLogs = shouldFetchSaleLogsForMetrics(salesData)
-    ? await fetchSaleHistoryLogsForTransactions({ limit: CLOUD_RECENT_SYNC_LIMIT })
-    : [];
+  const needsSaleLogs = saleRowsRequireHistoryLogs(salesData);
+  const logsResult = needsSaleLogs
+    ? await fetchSaleHistoryLogsForTransactions({ limit: CLOUD_RECENT_SYNC_LIMIT, signal })
+    : { logs: [], error: null };
+
+  if (logsResult.error) {
+    return {
+      hasCloudConnection: false,
+      transactions: null,
+      error: logsResult.error,
+      shouldRetry: isRecoverableCloudError(logsResult.error),
+    };
+  }
 
   return {
     hasCloudConnection: true,
-    transactions: mapSaleRecords(salesData, parsedLogs),
+    transactions: mapSaleRecords(salesData, logsResult.logs),
   };
 };
 
@@ -1394,23 +1465,29 @@ const fetchCoreCloudPayload = async ({ signal = null } = {}) => {
   };
 };
 
-const fetchTransactionsCloudPayload = async () => {
-  const [salesResult, parsedLogs] = await Promise.all([
-    fetchAllCloudRowsWithSelectFallback(
+const fetchTransactionsCloudPayload = async ({ signal = null } = {}) => {
+  const [salesResult, logsResult] = await Promise.all([
+    fetchAllChronologicalRowsWithSelectFallback(
       (selectColumns) =>
         supabase
           .from('sales')
-          .select(selectColumns)
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false }),
+          .select(selectColumns),
       CLOUD_SELECTS.sales,
-      CLOUD_FETCH_BATCH_SIZE
+      CLOUD_FETCH_BATCH_SIZE,
+      { signal },
     ),
-    fetchSaleHistoryLogsForTransactions(),
+    fetchSaleHistoryLogsForTransactions({ signal }),
   ]);
 
-  const hasCloudConnection = !salesResult.error;
   const salesData = salesResult.error ? null : salesResult.data || [];
+  const saleLogsAreRequired = Boolean(salesData && saleRowsRequireHistoryLogs(salesData));
+  const criticalLogsError = saleLogsAreRequired ? logsResult.error : null;
+  const failedSources = [
+    salesResult.error ? 'ventas' : null,
+    criticalLogsError ? 'logs de ventas' : null,
+  ].filter(Boolean);
+  const hasCloudConnection = failedSources.length === 0;
+  const retryableErrors = [salesResult.error, criticalLogsError].filter(Boolean);
 
   if (salesResult.error) {
     console.error('Error en tabla [ventas]:', salesResult.error);
@@ -1418,14 +1495,17 @@ const fetchTransactionsCloudPayload = async () => {
 
   return {
     hasCloudConnection,
-    failedSources: salesResult.error ? ['ventas'] : [],
+    failedSources,
     isComplete: hasCloudConnection,
-    transactions: salesData ? mapSaleRecords(salesData, parsedLogs) : null,
+    shouldRetry: retryableErrors.some(isRecoverableCloudError),
+    transactions: hasCloudConnection && salesData
+      ? mapSaleRecords(salesData, logsResult.logs)
+      : null,
   };
 };
 
-const fetchRecentTransactionsCloudPayload = async () => {
-  const [salesResult, parsedLogs] = await Promise.all([
+const fetchRecentTransactionsCloudPayload = async ({ signal = null } = {}) => {
+  const [salesResult, logsResult] = await Promise.all([
     fetchRecentRowsWithSelectFallback(
       (selectColumns) =>
         supabase
@@ -1434,13 +1514,21 @@ const fetchRecentTransactionsCloudPayload = async () => {
           .order('created_at', { ascending: false })
           .order('id', { ascending: false }),
       CLOUD_SELECTS.sales,
-      CLOUD_RECENT_SYNC_LIMIT
+      CLOUD_RECENT_SYNC_LIMIT,
+      { signal },
     ),
-    fetchSaleHistoryLogsForTransactions({ limit: CLOUD_RECENT_SYNC_LIMIT }),
+    fetchSaleHistoryLogsForTransactions({ limit: CLOUD_RECENT_SYNC_LIMIT, signal }),
   ]);
 
-  const hasCloudConnection = !salesResult.error;
   const salesData = salesResult.error ? null : salesResult.data || [];
+  const saleLogsAreRequired = Boolean(salesData && saleRowsRequireHistoryLogs(salesData));
+  const criticalLogsError = saleLogsAreRequired ? logsResult.error : null;
+  const failedSources = [
+    salesResult.error ? 'ventas recientes' : null,
+    criticalLogsError ? 'logs de ventas recientes' : null,
+  ].filter(Boolean);
+  const hasCloudConnection = failedSources.length === 0;
+  const retryableErrors = [salesResult.error, criticalLogsError].filter(Boolean);
 
   if (salesResult.error) {
     console.error('Error en tabla [ventas recientes]:', salesResult.error);
@@ -1448,14 +1536,17 @@ const fetchRecentTransactionsCloudPayload = async () => {
 
   return {
     hasCloudConnection,
-    failedSources: salesResult.error ? ['ventas'] : [],
+    failedSources,
     isComplete: hasCloudConnection,
-    transactions: salesData ? mapSaleRecords(salesData, parsedLogs) : null,
+    shouldRetry: retryableErrors.some(isRecoverableCloudError),
+    transactions: hasCloudConnection && salesData
+      ? mapSaleRecords(salesData, logsResult.logs)
+      : null,
   };
 };
 
-const fetchTransactionsCloudPayloadSince = async (createdAfter) => {
-  const [salesResult, recentSalesResult, parsedLogs] = await Promise.all([
+const fetchTransactionsCloudPayloadSince = async (createdAfter, { signal = null } = {}) => {
+  const [salesResult, recentSalesResult, logsResult] = await Promise.all([
     fetchRowsCreatedAfterWithSelectFallback(
       (selectColumns) =>
         supabase
@@ -1464,7 +1555,8 @@ const fetchTransactionsCloudPayloadSince = async (createdAfter) => {
           .order('created_at', { ascending: false })
           .order('id', { ascending: false }),
       CLOUD_SELECTS.sales,
-      createdAfter
+      createdAfter,
+      { signal },
     ),
     fetchRecentRowsWithSelectFallback(
       (selectColumns) =>
@@ -1474,11 +1566,13 @@ const fetchTransactionsCloudPayloadSince = async (createdAfter) => {
           .order('created_at', { ascending: false })
           .order('id', { ascending: false }),
       CLOUD_SELECTS.sales,
-      CLOUD_RECENT_TRANSACTION_OVERLAP_LIMIT
+      CLOUD_RECENT_TRANSACTION_OVERLAP_LIMIT,
+      { signal },
     ),
-    fetchSaleHistoryLogsForTransactions({ createdAfter }),
+    fetchSaleHistoryLogsForTransactions({ createdAfter, signal }),
   ]);
 
+  const parsedLogs = logsResult.logs;
   const changedSaleIds = getSaleTransactionIdsFromLogs(parsedLogs);
   const knownSaleIds = new Set(
     [...(salesResult.data || []), ...(recentSalesResult.data || [])]
@@ -1487,7 +1581,7 @@ const fetchTransactionsCloudPayloadSince = async (createdAfter) => {
   );
   const missingChangedSaleIds = Array.from(changedSaleIds).filter((id) => !knownSaleIds.has(String(id)));
   const changedSalesWasRequested = missingChangedSaleIds.length > 0;
-  const changedSalesResult = await fetchSaleRowsByIds(missingChangedSaleIds);
+  const changedSalesResult = await fetchSaleRowsByIds(missingChangedSaleIds, { signal });
 
   const usableSalesGroups = [
     salesResult.error ? [] : salesResult.data || [],
@@ -1498,9 +1592,16 @@ const fetchTransactionsCloudPayloadSince = async (createdAfter) => {
   const failedSources = [
     salesResult.error ? 'ventas nuevas' : null,
     recentSalesResult.error ? 'solape de ventas' : null,
+    logsResult.error ? 'logs incrementales de ventas' : null,
     changedSalesWasRequested && changedSalesResult.error ? 'ventas modificadas' : null,
   ].filter(Boolean);
   const hasCloudConnection = failedSources.length === 0;
+  const retryableErrors = [
+    salesResult.error,
+    recentSalesResult.error,
+    logsResult.error,
+    changedSalesWasRequested ? changedSalesResult.error : null,
+  ].filter(Boolean);
 
   if (salesResult.error) {
     console.error('Error en tabla [ventas incrementales]:', salesResult.error);
@@ -1516,11 +1617,16 @@ const fetchTransactionsCloudPayloadSince = async (createdAfter) => {
     hasCloudConnection,
     failedSources,
     isComplete: hasCloudConnection,
+    shouldRetry: retryableErrors.some(isRecoverableCloudError),
     transactions: hasCloudConnection ? mapSaleRecords(salesData, parsedLogs) : null,
   };
 };
 
-const fetchDashboardCloudPayload = async () => {
+const getSettledCloudError = (result) => (
+  result?.status === 'rejected' ? result.reason : result?.value?.error || null
+);
+
+const fetchDashboardCloudPayload = async ({ signal = null } = {}) => {
   const [logsResult, expResult, closuresResult] = await Promise.allSettled([
     runSelectWithSchemaFallback(
       (selectColumns) =>
@@ -1530,27 +1636,26 @@ const fetchDashboardCloudPayload = async () => {
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
           .limit(DASHBOARD_LOG_LIMIT),
-      CLOUD_SELECTS.logsSummary
+      CLOUD_SELECTS.logsSummary,
+      { signal },
     ),
-    fetchAllCloudRowsWithSelectFallback(
+    fetchAllChronologicalRowsWithSelectFallback(
       (selectColumns) =>
         supabase
           .from('expenses')
-          .select(selectColumns)
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false }),
+          .select(selectColumns),
       CLOUD_SELECTS.expenses,
-      CLOUD_FETCH_BATCH_SIZE
+      CLOUD_FETCH_BATCH_SIZE,
+      { signal },
     ),
-    fetchAllCloudRowsWithSelectFallback(
+    fetchAllChronologicalRowsWithSelectFallback(
       (selectColumns) =>
         supabase
           .from('cash_closures')
-          .select(selectColumns)
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false }),
+          .select(selectColumns),
       CLOUD_SELECTS.cashClosuresSummary,
-      CLOUD_FETCH_BATCH_SIZE
+      CLOUD_FETCH_BATCH_SIZE,
+      { signal },
     ),
   ]);
 
@@ -1567,18 +1672,23 @@ const fetchDashboardCloudPayload = async () => {
   const logsData = safeCloudData(logsResult, 'logs');
   const expData = safeCloudData(expResult, 'gastos');
   const closuresData = safeCloudData(closuresResult, 'cash_closures');
+  const shouldRetry = [logsResult, expResult, closuresResult]
+    .map(getSettledCloudError)
+    .filter(Boolean)
+    .some(isRecoverableCloudError);
 
   return {
     hasCloudConnection,
     failedSources,
     isComplete,
+    shouldRetry,
     dailyLogs: logsData ? mapLogRecords(logsData) : null,
     expenses: expData ? mapExpenseRecords(expData) : null,
     pastClosures: closuresData ? mapCashClosureRecords(closuresData) : null,
   };
 };
 
-const fetchRecentDashboardCloudPayload = async () => {
+const fetchRecentDashboardCloudPayload = async ({ signal = null } = {}) => {
   const [logsResult, expResult, closuresResult] = await Promise.allSettled([
     runSelectWithSchemaFallback(
       (selectColumns) =>
@@ -1588,7 +1698,8 @@ const fetchRecentDashboardCloudPayload = async () => {
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
           .limit(DASHBOARD_LOG_LIMIT),
-      CLOUD_SELECTS.logsSummary
+      CLOUD_SELECTS.logsSummary,
+      { signal },
     ),
     fetchRecentRowsWithSelectFallback(
       (selectColumns) =>
@@ -1598,7 +1709,8 @@ const fetchRecentDashboardCloudPayload = async () => {
           .order('created_at', { ascending: false })
           .order('id', { ascending: false }),
       CLOUD_SELECTS.expenses,
-      CLOUD_RECENT_SYNC_LIMIT
+      CLOUD_RECENT_SYNC_LIMIT,
+      { signal },
     ),
     fetchRecentRowsWithSelectFallback(
       (selectColumns) =>
@@ -1608,7 +1720,8 @@ const fetchRecentDashboardCloudPayload = async () => {
           .order('created_at', { ascending: false })
           .order('id', { ascending: false }),
       CLOUD_SELECTS.cashClosuresSummary,
-      CLOUD_RECENT_SYNC_LIMIT
+      CLOUD_RECENT_SYNC_LIMIT,
+      { signal },
     ),
   ]);
 
@@ -1624,18 +1737,28 @@ const fetchRecentDashboardCloudPayload = async () => {
   const logsData = safeCloudData(logsResult, 'logs recientes');
   const expData = safeCloudData(expResult, 'gastos recientes');
   const closuresData = safeCloudData(closuresResult, 'cash_closures recientes');
+  const shouldRetry = [logsResult, expResult, closuresResult]
+    .map(getSettledCloudError)
+    .filter(Boolean)
+    .some(isRecoverableCloudError);
 
   return {
     hasCloudConnection,
     failedSources,
     isComplete,
+    shouldRetry,
     dailyLogs: logsData ? mapLogRecords(logsData) : null,
     expenses: expData ? mapExpenseRecords(expData) : null,
     pastClosures: closuresData ? mapCashClosureRecords(closuresData) : null,
   };
 };
 
-const fetchDashboardCloudPayloadSince = async ({ logsAfter, expensesAfter, closuresAfter }) => {
+const fetchDashboardCloudPayloadSince = async ({
+  logsAfter,
+  expensesAfter,
+  closuresAfter,
+  signal = null,
+}) => {
   const [logsResult, expResult, closuresResult] = await Promise.allSettled([
     logsAfter
       ? fetchRowsCreatedAfterWithSelectFallback(
@@ -1646,7 +1769,8 @@ const fetchDashboardCloudPayloadSince = async ({ logsAfter, expensesAfter, closu
               .order('created_at', { ascending: false })
               .order('id', { ascending: false }),
           CLOUD_SELECTS.logsSummary,
-          logsAfter
+          logsAfter,
+          { signal },
         )
       : runSelectWithSchemaFallback(
           (selectColumns) =>
@@ -1656,7 +1780,8 @@ const fetchDashboardCloudPayloadSince = async ({ logsAfter, expensesAfter, closu
               .order('created_at', { ascending: false })
               .order('id', { ascending: false })
               .limit(DASHBOARD_LOG_LIMIT),
-          CLOUD_SELECTS.logsSummary
+          CLOUD_SELECTS.logsSummary,
+          { signal },
         ),
     expensesAfter
       ? fetchRowsCreatedAfterWithSelectFallback(
@@ -1667,7 +1792,8 @@ const fetchDashboardCloudPayloadSince = async ({ logsAfter, expensesAfter, closu
               .order('created_at', { ascending: false })
               .order('id', { ascending: false }),
           CLOUD_SELECTS.expenses,
-          expensesAfter
+          expensesAfter,
+          { signal },
         )
       : fetchRecentRowsWithSelectFallback(
           (selectColumns) =>
@@ -1677,7 +1803,8 @@ const fetchDashboardCloudPayloadSince = async ({ logsAfter, expensesAfter, closu
               .order('created_at', { ascending: false })
               .order('id', { ascending: false }),
           CLOUD_SELECTS.expenses,
-          CLOUD_RECENT_SYNC_LIMIT
+          CLOUD_RECENT_SYNC_LIMIT,
+          { signal },
         ),
     closuresAfter
       ? fetchRowsCreatedAfterWithSelectFallback(
@@ -1688,7 +1815,8 @@ const fetchDashboardCloudPayloadSince = async ({ logsAfter, expensesAfter, closu
               .order('created_at', { ascending: false })
               .order('id', { ascending: false }),
           CLOUD_SELECTS.cashClosuresSummary,
-          closuresAfter
+          closuresAfter,
+          { signal },
         )
       : fetchRecentRowsWithSelectFallback(
           (selectColumns) =>
@@ -1698,7 +1826,8 @@ const fetchDashboardCloudPayloadSince = async ({ logsAfter, expensesAfter, closu
               .order('created_at', { ascending: false })
               .order('id', { ascending: false }),
           CLOUD_SELECTS.cashClosuresSummary,
-          CLOUD_RECENT_SYNC_LIMIT
+          CLOUD_RECENT_SYNC_LIMIT,
+          { signal },
         ),
   ]);
 
@@ -1714,11 +1843,16 @@ const fetchDashboardCloudPayloadSince = async ({ logsAfter, expensesAfter, closu
   const logsData = safeCloudData(logsResult, 'logs incrementales');
   const expData = safeCloudData(expResult, 'gastos incrementales');
   const closuresData = safeCloudData(closuresResult, 'cash_closures incrementales');
+  const shouldRetry = [logsResult, expResult, closuresResult]
+    .map(getSettledCloudError)
+    .filter(Boolean)
+    .some(isRecoverableCloudError);
 
   return {
     hasCloudConnection,
     failedSources,
     isComplete,
+    shouldRetry,
     dailyLogs: logsData ? mapLogRecords(logsData) : null,
     expenses: expData ? mapExpenseRecords(expData) : null,
     pastClosures: closuresData ? mapCashClosureRecords(closuresData) : null,
@@ -1792,13 +1926,11 @@ const fetchHistoryCloudPayloadSince = async (createdAfter) => {
 };
 
 const fetchReportsCloudPayload = async () => {
-  const closuresResult = await fetchAllCloudRowsWithSelectFallback(
+  const closuresResult = await fetchAllChronologicalRowsWithSelectFallback(
     (selectColumns) =>
       supabase
         .from('cash_closures')
-        .select(selectColumns)
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false }),
+        .select(selectColumns),
     CLOUD_SELECTS.cashClosuresSummary,
     CLOUD_FETCH_BATCH_SIZE
   );
@@ -1854,65 +1986,36 @@ const fetchReportsCloudPayloadSince = async (createdAfter) => {
   };
 };
 
-const recordHasOwnColumn = (record, columnName) =>
-  Object.prototype.hasOwnProperty.call(record || {}, columnName);
-
-const shouldFetchSaleLogsForMetrics = (sales = []) =>
-  (Array.isArray(sales) ? sales : []).some((sale) => {
-    const requiredSaleColumns = [
-      'payment_breakdown',
-      'cash_received',
-      'cash_change',
-      'user_id',
-      'user_role',
-      'status',
-      'voided_at',
-    ];
-
-    if (requiredSaleColumns.some((columnName) => !recordHasOwnColumn(sale, columnName))) return true;
-
-    const items = Array.isArray(sale.sale_items) ? sale.sale_items : [];
-    if (Number(sale.total || 0) > 0 && items.length === 0) return true;
-
-    const requiredItemColumns = ['subtotal', 'cost', 'is_custom', 'is_discount', 'is_combo', 'product_type'];
-    return items.some((item) =>
-      requiredItemColumns.some((columnName) => !recordHasOwnColumn(item, columnName))
-    );
-  });
-
-const fetchMetricsCloudPayload = async ({ includeTransactions = true } = {}) => {
+const fetchMetricsCloudPayload = async ({ includeTransactions = true, signal = null } = {}) => {
   const [salesResult, expResult, closuresResult, budgetsResult, ordersResult] = await Promise.allSettled([
     includeTransactions
-      ? fetchAllCloudRowsWithSelectFallback(
+      ? fetchAllChronologicalRowsWithSelectFallback(
           (selectColumns) =>
             supabase
               .from('sales')
-              .select(selectColumns)
-              .order('created_at', { ascending: false })
-              .order('id', { ascending: false }),
+              .select(selectColumns),
           CLOUD_SELECTS.sales,
-          CLOUD_FETCH_BATCH_SIZE
+          CLOUD_FETCH_BATCH_SIZE,
+          { signal },
         )
       : Promise.resolve({ data: null, error: null, skipped: true }),
-    fetchAllCloudRowsWithSelectFallback(
+    fetchAllChronologicalRowsWithSelectFallback(
       (selectColumns) =>
         supabase
           .from('expenses')
-          .select(selectColumns)
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false }),
+          .select(selectColumns),
       CLOUD_SELECTS.expenses,
-      CLOUD_FETCH_BATCH_SIZE
+      CLOUD_FETCH_BATCH_SIZE,
+      { signal },
     ),
-    fetchAllCloudRowsWithSelectFallback(
+    fetchAllChronologicalRowsWithSelectFallback(
       (selectColumns) =>
         supabase
           .from('cash_closures')
-          .select(selectColumns)
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false }),
+          .select(selectColumns),
       CLOUD_SELECTS.cashClosuresSummary,
-      CLOUD_FETCH_BATCH_SIZE
+      CLOUD_FETCH_BATCH_SIZE,
+      { signal },
     ),
     fetchRowsWithOptionalActiveFilter({
       table: 'budgets',
@@ -1920,6 +2023,7 @@ const fetchMetricsCloudPayload = async ({ includeTransactions = true } = {}) => 
       orderBy: 'created_at',
       orderDirection: 'desc',
       additionalOrders: [{ column: 'id', ascending: false }],
+      signal,
     }),
     fetchRowsWithOptionalActiveFilter({
       table: 'orders',
@@ -1927,14 +2031,11 @@ const fetchMetricsCloudPayload = async ({ includeTransactions = true } = {}) => 
       orderBy: 'created_at',
       orderDirection: 'desc',
       additionalOrders: [{ column: 'id', ascending: false }],
+      signal,
     }),
   ]);
 
-  const {
-    failedSources,
-    hasCloudConnection,
-    isComplete,
-  } = summarizeCloudResults([
+  const summary = summarizeCloudResults([
     ...(includeTransactions ? [['ventas', salesResult]] : []),
     ['gastos', expResult],
     ['cierres', closuresResult],
@@ -1946,15 +2047,30 @@ const fetchMetricsCloudPayload = async ({ includeTransactions = true } = {}) => 
   const closuresData = safeCloudData(closuresResult, 'cierres para métricas');
   const budgetsData = safeCloudData(budgetsResult, 'presupuestos para métricas');
   const ordersData = safeCloudData(ordersResult, 'pedidos para métricas');
-  const parsedLogs = includeTransactions && salesData && shouldFetchSaleLogsForMetrics(salesData)
-    ? await fetchSaleHistoryLogsForTransactions()
-    : [];
+  const saleLogsAreRequired = Boolean(
+    includeTransactions && salesData && saleRowsRequireHistoryLogs(salesData),
+  );
+  const logsResult = saleLogsAreRequired
+    ? await fetchSaleHistoryLogsForTransactions({ signal })
+    : { logs: [], error: null };
+  const failedSources = [
+    ...summary.failedSources,
+    ...(logsResult.error ? ['logs de ventas'] : []),
+  ];
+  const hasCloudConnection = summary.hasCloudConnection && !logsResult.error;
+  const isComplete = summary.isComplete && !logsResult.error;
+  const shouldRetry = [salesResult, expResult, closuresResult, budgetsResult, ordersResult]
+    .map(getSettledCloudError)
+    .concat(logsResult.error)
+    .filter(Boolean)
+    .some(isRecoverableCloudError);
 
   return {
     hasCloudConnection,
     failedSources,
     isComplete,
-    transactions: salesData ? mapSaleRecords(salesData, parsedLogs) : null,
+    shouldRetry,
+    transactions: salesData && !logsResult.error ? mapSaleRecords(salesData, logsResult.logs) : null,
     dailyLogs: null,
     expenses: expData ? mapExpenseRecords(expData) : null,
     pastClosures: closuresData ? mapCashClosureRecords(closuresData) : null,
@@ -2926,8 +3042,11 @@ const updateWithSchemaFallback = async (table, id, payload, selectColumns = '*')
 };
 
 export default function PartySupplyApp() {
-  window.__REBU_APP_READY__ = true;
-
+  // OJO: el flag NO puede marcarse en el cuerpo del render. El cuerpo corre en el
+  // primer render, antes de que el árbol esté montado y pintado, así que avisaba
+  // "ya está lista" cuando todavía no había nada usable en pantalla y desactivaba
+  // el detector de pantalla blanca de DebugAppShell. Va solo en el useEffect, que
+  // recién corre después de que React montó y el navegador pudo pintar.
   useEffect(() => {
     window.__REBU_APP_READY__ = true;
 
@@ -3005,12 +3124,22 @@ export default function PartySupplyApp() {
     reports: 0,
     metrics: 0,
   });
+  const cloudSourceMutationVersionsRef = useRef({
+    sales: 0,
+    logs: 0,
+    expenses: 0,
+    closures: 0,
+  });
   const activeTabRef = useRef('pos');
   const dataStateRef = useRef({});
   const registerStateSnapshotRef = useRef(null);
   const transactionSnapshotScopeRef = useRef(TRANSACTION_SNAPSHOT_SCOPE_PARTIAL);
   const dashboardSnapshotScopeRef = useRef(DASHBOARD_SNAPSHOT_SCOPE_PARTIAL);
   const indexedTransactionHydrationPromiseRef = useRef(null);
+
+  const markCloudSourceMutation = (...sources) => {
+    recordCloudSourceMutations(cloudSourceMutationVersionsRef.current, sources);
+  };
 
   const [openingBalance, setOpeningBalance] = useState(0);
   const [isRegisterClosed, setIsRegisterClosed] = useState(true); 
@@ -3585,6 +3714,7 @@ export default function PartySupplyApp() {
   const upsertLocalTransaction = (transaction) => {
     if (!transaction?.id) return;
     localDataMutationRef.current.transactions = Date.now();
+    markCloudSourceMutation('sales');
     setModuleState('transactions', (prev) => ({ ...prev, dirty: true }));
     setTransactions((prev) => {
       const next = [transaction, ...(prev || []).filter((item) => String(item.id) !== String(transaction.id))];
@@ -3827,17 +3957,42 @@ export default function PartySupplyApp() {
         snapshotScope: transactionSnapshotScopeRef.current,
       });
       const useProgressiveBootstrap = progressive && !full && !useRecentSync;
+      const shouldMergeTransactions = useRecentSync || useProgressiveBootstrap;
 
       try {
-        const payload = useRecentSync
-          ? latestTransactionCreatedAt
-            ? await fetchTransactionsCloudPayloadSince(latestTransactionCreatedAt)
-            : await fetchRecentTransactionsCloudPayload()
-          : useProgressiveBootstrap
-            ? await fetchRecentTransactionsCloudPayload()
-            : await fetchTransactionsCloudPayload();
+        const fetchPayload = ({ signal }) => (
+          useRecentSync
+            ? latestTransactionCreatedAt
+              ? fetchTransactionsCloudPayloadSince(latestTransactionCreatedAt, { signal })
+              : fetchRecentTransactionsCloudPayload({ signal })
+            : useProgressiveBootstrap
+              ? fetchRecentTransactionsCloudPayload({ signal })
+              : fetchTransactionsCloudPayload({ signal })
+        );
+        const fetchReliablePayload = () => fetchModuleCloudPayloadWithRetries({
+          fetchPayload,
+          label: 'Carga de transacciones',
+        });
+        const payload = shouldMergeTransactions
+          ? await fetchReliablePayload()
+          : await fetchCloudPayloadWithMutationGuard({
+              fetchPayload: fetchReliablePayload,
+              getMutationVersions: () => cloudSourceMutationVersionsRef.current,
+              sources: ['sales', 'logs'],
+              retryCount: 1,
+            });
 
         if (!isCurrentModuleLoadRequest('transactions', requestId)) return true;
+
+        if (payload?.mutationConsistent === false) {
+          setModuleState('transactions', {
+            status: 'loaded',
+            dirty: true,
+            cloudRefreshFailed: payload?.hasCloudConnection === false,
+            lastLoadedAt: Date.now(),
+          });
+          return false;
+        }
 
         if (!payload?.hasCloudConnection) {
           if (Number(localDataMutationRef.current.transactions || 0) > requestStartedAt) {
@@ -3880,7 +4035,6 @@ export default function PartySupplyApp() {
           return true;
         }
 
-        const shouldMergeTransactions = useRecentSync || useProgressiveBootstrap;
         applyTransactionsPayload(payload, { merge: shouldMergeTransactions });
         if (!shouldMergeTransactions) {
           transactionSnapshotScopeRef.current = TRANSACTION_SNAPSHOT_SCOPE_FULL;
@@ -4016,6 +4170,7 @@ export default function PartySupplyApp() {
         snapshotScope: dashboardSnapshotScopeRef.current,
       });
       const useProgressiveBootstrap = !full && !useRecentSync;
+      const shouldMergeDashboard = useRecentSync || useProgressiveBootstrap;
 
       try {
         const transactionsPromise = includeTransactions
@@ -4026,17 +4181,32 @@ export default function PartySupplyApp() {
               progressive: !full,
             })
           : Promise.resolve(true);
-        const dashboardPayloadPromise = useRecentSync
-          ? latestDashboardLogCreatedAt || latestExpenseCreatedAt || latestClosureCreatedAt
-            ? fetchDashboardCloudPayloadSince({
-                logsAfter: latestDashboardLogCreatedAt,
-                expensesAfter: latestExpenseCreatedAt,
-                closuresAfter: latestClosureCreatedAt,
-              })
-            : fetchRecentDashboardCloudPayload()
-          : useProgressiveBootstrap
-            ? fetchRecentDashboardCloudPayload()
-            : fetchDashboardCloudPayload();
+        const fetchPayload = ({ signal }) => (
+          useRecentSync
+            ? latestDashboardLogCreatedAt || latestExpenseCreatedAt || latestClosureCreatedAt
+              ? fetchDashboardCloudPayloadSince({
+                  logsAfter: latestDashboardLogCreatedAt,
+                  expensesAfter: latestExpenseCreatedAt,
+                  closuresAfter: latestClosureCreatedAt,
+                  signal,
+                })
+              : fetchRecentDashboardCloudPayload({ signal })
+            : useProgressiveBootstrap
+              ? fetchRecentDashboardCloudPayload({ signal })
+              : fetchDashboardCloudPayload({ signal })
+        );
+        const fetchReliablePayload = () => fetchModuleCloudPayloadWithRetries({
+          fetchPayload,
+          label: 'Carga de Dashboard',
+        });
+        const dashboardPayloadPromise = shouldMergeDashboard
+          ? fetchReliablePayload()
+          : fetchCloudPayloadWithMutationGuard({
+              fetchPayload: fetchReliablePayload,
+              getMutationVersions: () => cloudSourceMutationVersionsRef.current,
+              sources: ['logs', 'expenses', 'closures'],
+              retryCount: 1,
+            });
         const [transactionsLoaded, payload] = await Promise.all([
           transactionsPromise,
           dashboardPayloadPromise,
@@ -4052,6 +4222,16 @@ export default function PartySupplyApp() {
         }
 
         if (!isCurrentModuleLoadRequest('dashboard', requestId)) return true;
+
+        if (payload?.mutationConsistent === false) {
+          setModuleState('dashboard', {
+            status: 'loaded',
+            dirty: true,
+            cloudRefreshFailed: payload?.hasCloudConnection === false,
+            lastLoadedAt: Date.now(),
+          });
+          return false;
+        }
 
         if (!payload?.hasCloudConnection) {
           const cachedSnapshot = loadOfflineDashboardSnapshot() || loadOfflineSnapshot();
@@ -4073,7 +4253,6 @@ export default function PartySupplyApp() {
           return false;
         }
 
-        const shouldMergeDashboard = useRecentSync || useProgressiveBootstrap;
         applyDashboardPayload(payload, { merge: shouldMergeDashboard });
         if (!shouldMergeDashboard) {
           dashboardSnapshotScopeRef.current = DASHBOARD_SNAPSHOT_SCOPE_FULL;
@@ -5019,6 +5198,7 @@ export default function PartySupplyApp() {
 
     const handleRealtimeSale = (payload) => {
       noteRealtimeEvent();
+      markCloudSourceMutation('sales');
       const saleId = getRealtimeRecordId(payload);
       if (!saleId) {
         scheduleAffectedModuleSync(['transactions', 'dashboard', 'history', 'metrics']);
@@ -5043,6 +5223,7 @@ export default function PartySupplyApp() {
 
     const handleRealtimeExpense = (payload) => {
       noteRealtimeEvent();
+      markCloudSourceMutation('expenses');
       if (!getRealtimeRecordId(payload)) {
         scheduleAffectedModuleSync(['dashboard', 'metrics']);
         return;
@@ -5062,6 +5243,7 @@ export default function PartySupplyApp() {
 
     const handleRealtimeClosure = (payload) => {
       noteRealtimeEvent();
+      markCloudSourceMutation('closures');
       if (!getRealtimeRecordId(payload)) {
         scheduleAffectedModuleSync(['dashboard', 'reports', 'metrics']);
         return;
@@ -5157,6 +5339,7 @@ export default function PartySupplyApp() {
 
     const handleRealtimeLog = (payload) => {
       noteRealtimeEvent();
+      markCloudSourceMutation('logs');
       const mappedLog = mapLogRecords([payload.new])[0] || null;
       if (!mappedLog?.id) {
         scheduleAffectedModuleSync(['transactions', 'dashboard', 'history', 'metrics']);
@@ -6248,6 +6431,10 @@ export default function PartySupplyApp() {
     newLog.isTest = shouldIgnoreNestedTestDetectionForLog(action)
       ? Boolean(compactedDetails?.isTest || compactedDetails?.testMarker === 'test')
       : isTestRecord({ action, details: compactedDetails, reason });
+    markCloudSourceMutation(
+      'logs',
+      ...(isHistoryLogAction(action) ? ['sales'] : []),
+    );
     setDailyLogs((prev) => [newLog, ...prev].slice(0, DASHBOARD_LOG_LIMIT));
     if (isHistoryLogAction(action)) {
       upsertLocalHistoryLog(newLog);
@@ -6434,10 +6621,13 @@ export default function PartySupplyApp() {
     const images = Array.from(exportRoot.querySelectorAll('img'));
     await Promise.all(images.map(async (image) => {
       if (!image.complete) {
-        await new Promise((resolve) => {
-          image.addEventListener('load', resolve, { once: true });
-          image.addEventListener('error', resolve, { once: true });
-        });
+        await Promise.race([
+          new Promise((resolve) => {
+            image.addEventListener('load', resolve, { once: true });
+            image.addEventListener('error', resolve, { once: true });
+          }),
+          new Promise((resolve) => window.setTimeout(resolve, 2000)),
+        ]);
       }
       if (typeof image.decode === 'function') {
         await image.decode().catch(() => {});
@@ -6458,12 +6648,15 @@ export default function PartySupplyApp() {
 
         if (result.success) {
           showNotification('success', 'PDF Guardado', `Guardado en: ${result.filePath}`);
+          return true;
         } else if (!result.canceled) {
           Swal.fire('Error', 'No se pudo guardar el PDF: ' + result.error, 'error');
         }
+        return false;
       } else {
         window.print();
         showNotification('info', 'Vista de impresi\u00f3n abierta', 'No se detect\u00f3 Electron; us\u00e1 "Guardar como PDF" desde el di\u00e1logo del navegador');
+        return true;
       }
     } catch (error) {
       console.error('Error preparando el PDF:', error);
@@ -6472,6 +6665,7 @@ export default function PartySupplyApp() {
         error?.message || 'El documento no termin\u00f3 de renderizarse. Volv\u00e9 a intentarlo.',
         'error',
       );
+      return false;
     } finally {
       setExportPdfData(null);
       restorePdfTheme();
@@ -6499,17 +6693,21 @@ export default function PartySupplyApp() {
       note: 'Snapshot completo omitido para reducir uso de base de datos.',
     };
 
-    addLog('Exportación PDF', logDetails, 'Exportación de catálogo');
-
     const defaultTitle = config.documentTitle 
       ? `${config.documentTitle} - ${config.clientName || 'Cliente'}` 
       : 'Reporte Interno';
 
     const safeName = defaultTitle.replace(/[^a-zA-Z0-9 _-]/g, '');
 
-    window.setTimeout(() => {
-      void savePreparedPdf(safeName, restorePdfTheme);
-    }, 0);
+    return new Promise((resolve) => {
+      window.setTimeout(async () => {
+        const wasExported = await savePreparedPdf(safeName, restorePdfTheme);
+        if (wasExported) {
+          addLog('Exportación PDF', logDetails, 'Exportación de catálogo');
+        }
+        resolve(wasExported);
+      }, 0);
+    });
   };
   
   const handleReprintPdf = (logDetails) => {
@@ -6693,6 +6891,7 @@ export default function PartySupplyApp() {
         budgetData.eventLabel || 'Gestion de pedidos'
       );
       showNotification('success', 'Presupuesto Actualizado', 'Los cambios se guardaron.');
+      return updatedBudget;
     } catch (error) {
       console.error('Error actualizando presupuesto:', error);
       showNotification('error', 'Error', `No se pudo actualizar el presupuesto. ${getCloudErrorMessage(error)}`);
@@ -6731,6 +6930,7 @@ export default function PartySupplyApp() {
         currentStatus: previousOrder.status,
       });
 
+      const wasStockReserved = isOrderStockReserved(previousOrder);
       const orderPreview = {
         ...previousOrder,
         memberId: orderData.memberId || null,
@@ -6739,7 +6939,9 @@ export default function PartySupplyApp() {
         customerNote: orderData.customerNote || '',
         documentTitle: orderData.documentTitle || 'PEDIDO',
         eventLabel: orderData.eventLabel || '',
-        itemsSnapshot: orderData.itemsSnapshot || [],
+        itemsSnapshot: wasStockReserved
+          ? (orderData.itemsSnapshot || [])
+          : markOrderItemsForDeferredStock(orderData.itemsSnapshot || []),
         totalAmount: nextTotalAmount,
         depositAmount: nextDepositAmount,
         paidTotal: nextPaidTotal,
@@ -6751,12 +6953,10 @@ export default function PartySupplyApp() {
         Number(previousOrder.paidTotal || 0) < Number(previousOrder.totalAmount || 0) &&
         nextPaidTotal >= nextTotalAmount &&
         nextTotalAmount > 0;
-      const wasStockReserved = isOrderStockReserved(previousOrder);
-
       if (isCrossingToFullyPaid && !wasStockReserved) {
         const { stockIssues } = getOrderStockIssues(orderPreview);
         if (stockIssues.length > 0) {
-          showNotification('error', 'Stock Insuficiente', `No se puede guardar el pedido: ${stockIssues.join(', ')}`);
+          showNotification('error', 'Stock Insuficiente', `No se puede completar el pedido: ${stockIssues.join(', ')}`);
           return;
         }
       }
@@ -6858,9 +7058,11 @@ export default function PartySupplyApp() {
         return next;
       });
       localDataMutationRef.current.transactions = Date.now();
+      markCloudSourceMutation('sales');
       setModuleState('transactions', (prev) => ({ ...prev, dirty: true }));
       if (orderLog) upsertLocalHistoryLog(orderLog);
       showNotification('success', 'Pedido Actualizado', 'Los cambios del pedido se guardaron.');
+      return updatedOrder;
     } catch (error) {
       console.error('Error actualizando pedido:', error);
       showNotification('error', 'Error', `No se pudo actualizar el pedido. ${getCloudErrorMessage(error)}`);
@@ -6978,12 +7180,6 @@ export default function PartySupplyApp() {
       stockIssues,
     };
   };
-
-  const isOrderStockReserved = (orderRecord) =>
-    Boolean(orderRecord) &&
-    Number(orderRecord.paidTotal || 0) > 0 &&
-    Number(orderRecord.remainingAmount || 0) > 0 &&
-    !['Retirado', 'Cancelado'].includes(String(orderRecord.status || ''));
 
   const buildStockLifecyclePayload = (product, delta, { trackDepletion = false, now = new Date().toISOString() } = {}) => {
     const numericDelta = Number(delta || 0);
@@ -8180,12 +8376,11 @@ export default function PartySupplyApp() {
         normalizedDepositPayment.cashChange || 0,
       );
 
-      if (initialPayment > 0) {
-        const { stockIssues } = getOrderStockIssues(budgetRecord);
-        if (stockIssues.length > 0) {
-          showNotification('error', 'Stock Insuficiente', `No se puede señar el pedido: ${stockIssues.join(', ')}`);
-          return null;
-        }
+      const { stockIssues: initialStockIssues } = getOrderStockIssues(budgetRecord);
+      const isInitiallyFullyPaid = initialPayment >= totalAmount && totalAmount > 0;
+      if (isInitiallyFullyPaid && initialStockIssues.length > 0) {
+        showNotification('error', 'Stock Insuficiente', `No se puede completar el pedido: ${initialStockIssues.join(', ')}`);
+        return null;
       }
 
       const payload = {
@@ -8199,7 +8394,7 @@ export default function PartySupplyApp() {
         payment_method: paymentHistoryState.paymentMethod || null,
         payment_breakdown: paymentHistory,
         installments: paymentHistoryState.installments || 0,
-        items_snapshot: budgetRecord.itemsSnapshot || [],
+        items_snapshot: markOrderItemsForDeferredStock(budgetRecord.itemsSnapshot || []),
         total_amount: totalAmount,
         deposit_amount: initialPayment,
         paid_total: initialPayment,
@@ -8222,20 +8417,9 @@ export default function PartySupplyApp() {
       if (rpcOrder) await syncMemberPointBalancesCloud(newOrder.memberId);
       setOrders((prev) => [newOrder, ...prev]);
       let finalizedSale = null;
-      let reservationChanges = [];
-
-      if (initialPayment > 0) {
-        const { stockIssues, stockChanges } = await reserveOrderStock(newOrder);
-        if (stockIssues.length > 0) {
-          showNotification('error', 'Stock Insuficiente', `No se pudo reservar stock para el pedido: ${stockIssues.join(', ')}`);
-          return null;
-        }
-        reservationChanges = stockChanges;
-      }
-
       if (initialPayment >= totalAmount && totalAmount > 0) {
         finalizedSale = await handleFinalizePaidOrder(newOrder, {
-          skipStockDeduction: initialPayment > 0,
+          skipStockDeduction: false,
         });
       }
 
@@ -8264,11 +8448,18 @@ export default function PartySupplyApp() {
           paymentHistory: newOrder.paymentHistory || [],
           pointsCredited: Number(newOrder.pointsCredited || 0),
           pickupDate: newOrder.pickupDate,
-          stockChanges: finalizedSale?.stockChanges || reservationChanges,
+          stockChanges: finalizedSale?.stockChanges || [],
+          stockPending: initialPayment > 0 && !isInitiallyFullyPaid,
         },
         budgetRecord.eventLabel || 'Conversión desde presupuesto'
       );
-      showNotification('success', 'Pedido Creado', 'El presupuesto se convirtió en pedido.');
+      showNotification(
+        initialPayment > 0 && !isInitiallyFullyPaid ? 'warning' : 'success',
+        initialPayment > 0 && !isInitiallyFullyPaid ? 'Pedido Señado' : 'Pedido Creado',
+        initialPayment > 0 && !isInitiallyFullyPaid
+          ? 'La seña se registró. El stock se controlará al completar o entregar el pedido.'
+          : 'El presupuesto se convirtió en pedido.',
+      );
       return newOrder;
     } catch (error) {
       console.error('Error convirtiendo presupuesto:', error);
@@ -8351,23 +8542,22 @@ export default function PartySupplyApp() {
       );
       const wasStockReserved = isOrderStockReserved(orderRecord);
       const shouldCommitStock = nextPaidTotal > 0;
+      const isCrossingToFullyPaid =
+        Number(orderRecord.paidTotal || 0) < totalAmount &&
+        nextPaidTotal >= totalAmount &&
+        totalAmount > 0;
       let stockTransition = null;
       let stockChanges = [];
 
-      if (!wasStockReserved && shouldCommitStock) {
+      if (isCrossingToFullyPaid && !wasStockReserved) {
         const { stockIssues } = getOrderStockIssues(orderRecord);
         if (stockIssues.length > 0) {
-          showNotification('error', 'Stock Insuficiente', `No se puede corregir la se\u00f1a: ${stockIssues.join(', ')}`);
+          showNotification('error', 'Stock Insuficiente', `No se puede completar el pedido: ${stockIssues.join(', ')}`);
           return null;
         }
-        const reservationResult = await reserveOrderStock(orderRecord);
-        if (reservationResult.stockIssues.length > 0) {
-          showNotification('error', 'Stock Insuficiente', `No se pudo reservar stock: ${reservationResult.stockIssues.join(', ')}`);
-          return null;
-        }
-        stockTransition = 'reserved';
-        stockChanges = reservationResult.stockChanges;
-      } else if (wasStockReserved && !shouldCommitStock) {
+      }
+
+      if (wasStockReserved && !shouldCommitStock) {
         const restorationResult = await restoreOrderStock(orderRecord);
         if (restorationResult.stockIssues.length > 0) {
           showNotification('error', 'Stock', `No se pudo liberar el stock: ${restorationResult.stockIssues.join(', ')}`);
@@ -8388,6 +8578,10 @@ export default function PartySupplyApp() {
           paid_total: nextPaidTotal,
           remaining_amount: nextRemaining,
           status: nextStatus,
+          items_snapshot:
+            wasStockReserved && stockTransition !== 'restored'
+              ? (orderRecord.itemsSnapshot || [])
+              : markOrderItemsForDeferredStock(orderRecord.itemsSnapshot || []),
         };
         rpcOrder = await saveOrderWithPointsCloud({
           operationKey: buildOrderOperationKey(
@@ -8406,7 +8600,6 @@ export default function PartySupplyApp() {
         ).data;
       } catch (updateError) {
         try {
-          if (stockTransition === 'reserved') await restoreOrderStock(orderRecord);
           if (stockTransition === 'restored') await reserveOrderStock(orderRecord);
         } catch (rollbackError) {
           console.error('No se pudo revertir el stock tras fallar la correcci\u00f3n de se\u00f1a:', rollbackError);
@@ -8420,13 +8613,9 @@ export default function PartySupplyApp() {
         prev.map((order) => (String(order.id) === String(orderRecord.id) ? updatedOrder : order))
       );
 
-      const isCrossingToFullyPaid =
-        Number(orderRecord.paidTotal || 0) < totalAmount &&
-        nextPaidTotal >= totalAmount &&
-        totalAmount > 0;
       const finalizedSale = isCrossingToFullyPaid
         ? await handleFinalizePaidOrder(updatedOrder, {
-            skipStockDeduction: wasStockReserved || stockTransition === 'reserved',
+            skipStockDeduction: wasStockReserved,
           })
         : null;
 
@@ -8478,15 +8667,12 @@ export default function PartySupplyApp() {
     try {
       const normalizedPayment = buildOrderPaymentRecord(paymentPayload, paymentPayload?.amount || 0);
       const paymentAmount = Number(normalizedPayment.amount || 0);
-      const isFirstPayment =
-        Number(orderRecord.paidTotal || 0) <= 0 &&
-        paymentAmount > 0;
       const wasStockReserved = isOrderStockReserved(orderRecord);
       const isCrossingToFullyPaid =
         Number(orderRecord.paidTotal || 0) < Number(orderRecord.totalAmount || 0) &&
         Number(orderRecord.paidTotal || 0) + paymentAmount >= Number(orderRecord.totalAmount || 0);
 
-      if (isFirstPayment || (isCrossingToFullyPaid && !wasStockReserved)) {
+      if (isCrossingToFullyPaid && !wasStockReserved) {
         const { stockIssues } = getOrderStockIssues(orderRecord);
         if (stockIssues.length > 0) {
           showNotification('error', 'Stock Insuficiente', `No se puede registrar el pago del pedido: ${stockIssues.join(', ')}`);
@@ -8532,6 +8718,9 @@ export default function PartySupplyApp() {
         paid_total: nextPaidTotal,
         remaining_amount: nextRemaining,
         status,
+        items_snapshot: wasStockReserved
+          ? (orderRecord.itemsSnapshot || [])
+          : markOrderItemsForDeferredStock(orderRecord.itemsSnapshot || []),
       };
 
       const rpcOrder = await saveOrderWithPointsCloud({
@@ -8557,20 +8746,10 @@ export default function PartySupplyApp() {
       );
 
       let finalizedSale = null;
-      let reservationChanges = [];
-
-      if (isFirstPayment) {
-        const { stockIssues, stockChanges } = await reserveOrderStock(updatedOrder);
-        if (stockIssues.length > 0) {
-          showNotification('error', 'Stock Insuficiente', `No se pudo reservar stock para el pedido: ${stockIssues.join(', ')}`);
-          return;
-        }
-        reservationChanges = stockChanges;
-      }
 
       if (isCrossingToFullyPaid && Number(updatedOrder.totalAmount || 0) > 0) {
         finalizedSale = await handleFinalizePaidOrder(updatedOrder, {
-          skipStockDeduction: wasStockReserved || isFirstPayment,
+          skipStockDeduction: wasStockReserved,
         });
       }
 
@@ -8600,7 +8779,7 @@ export default function PartySupplyApp() {
             Number(updatedOrder.pointsCredited || 0) - Number(orderRecord.pointsCredited || 0),
           pickupDate: updatedOrder.pickupDate || null,
           itemsSnapshot: buildOrderLogItems(updatedOrder.itemsSnapshot || []),
-          stockChanges: finalizedSale?.stockChanges || reservationChanges,
+          stockChanges: finalizedSale?.stockChanges || [],
         },
         'Cobro manual en Pedidos'
       );
@@ -8615,6 +8794,35 @@ export default function PartySupplyApp() {
   const handleMarkOrderRetired = async (orderRecord) => {
     if (blockIfOfflineReadonly('marcar pedidos como retirados')) return;
     try {
+      const totalAmount = Number(orderRecord.totalAmount || 0);
+      const paidTotal = Number(orderRecord.paidTotal || 0);
+      if (totalAmount <= 0 || paidTotal < totalAmount) {
+        showNotification('warning', 'Pago Pendiente', 'Completá el pago antes de entregar el pedido.');
+        return null;
+      }
+
+      const hasLinkedSale = transactions.some(
+        (tx) => String(tx.orderId || '') === String(orderRecord.id) && tx.status === 'completed',
+      );
+      if (!hasLinkedSale) {
+        if (!hasDeferredOrderStockPolicy(orderRecord)) {
+          showNotification(
+            'warning',
+            'Pedido Anterior',
+            'Este pedido no permite confirmar automáticamente si el stock ya fue descontado. Revisalo antes de entregarlo.',
+          );
+          return null;
+        }
+
+        const { stockIssues } = getOrderStockIssues(orderRecord);
+        if (stockIssues.length > 0) {
+          showNotification('error', 'Stock Insuficiente', `No se puede entregar el pedido: ${stockIssues.join(', ')}`);
+          return null;
+        }
+
+        await handleFinalizePaidOrder(orderRecord, { skipStockDeduction: false });
+      }
+
       const retirePatch = { status: 'Retirado' };
       const rpcOrder = await saveOrderWithPointsCloud({
         operationKey: buildOrderOperationKey('retire', orderRecord.id, orderRecord.version || 1),
@@ -8927,10 +9135,8 @@ export default function PartySupplyApp() {
   };
 
   const handlePrintOrderRecord = (record) => {
-    handleExportProducts(
-      buildBudgetExportConfig(record),
-      buildExportItemsFromSnapshot(record.itemsSnapshot || [])
-    );
+    const { config, items } = buildBudgetPdfPayload(record);
+    handleExportProducts(config, items);
   };
 
   // ==========================================
@@ -9209,6 +9415,7 @@ export default function PartySupplyApp() {
       };
 
       newExpense.isTest = isTestRecord(newExpense);
+      markCloudSourceMutation('expenses');
       setExpenses((prev) => {
         const next = [newExpense, ...(prev || [])];
         dataStateRef.current = { ...dataStateRef.current, expenses: next };
@@ -9268,6 +9475,7 @@ export default function PartySupplyApp() {
         user_role: data.user_role || currentExpense.userRole || null,
       }]);
 
+      markCloudSourceMutation('expenses');
       setExpenses((prev) => {
         const next = (prev || []).map((expense) => (
           String(expense.id) === String(expenseId)
@@ -11818,6 +12026,7 @@ export default function PartySupplyApp() {
             if (error) throw error;
 
             const adaptedReport = mapCashClosureRecord(savedReport);
+            markCloudSourceMutation('closures');
             setPastClosures((prev) => [adaptedReport, ...prev]);
             closureLogDetails.id = savedReport.id;
           }
@@ -15028,6 +15237,7 @@ export default function PartySupplyApp() {
 
       rememberLocalTransactionOverride(finalTx);
       localDataMutationRef.current.transactions = Date.now();
+      markCloudSourceMutation('sales');
       dataStateRef.current = {
         ...dataStateRef.current,
         transactions: nextTransactionsSnapshot,
@@ -15970,6 +16180,7 @@ export default function PartySupplyApp() {
               <PersistentTabPanel tab="whatsapp" activeTab={activeTab} className="h-full min-h-0">
                 <WhatsAppInboxView
                   isActive={activeTab === 'whatsapp'}
+                  currentUser={currentUser}
                   inventory={inventory}
                   members={members}
                   onCreateBudget={handleCreateBudget}
