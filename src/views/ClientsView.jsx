@@ -190,6 +190,9 @@ export default function ClientsView({
   const [isDrawerEditMode, setIsDrawerEditMode] = useState(false);
   const [drawerFormData, setDrawerFormData] = useState({});
   const [showExpirationDetails, setShowExpirationDetails] = useState(false);
+  const [selectedExpirationGroup, setSelectedExpirationGroup] = useState(null);
+  const [expirationGroupSortBy, setExpirationGroupSortBy] = useState('expiring_desc');
+  const [expirationGroupSearch, setExpirationGroupSearch] = useState('');
   const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
   const [auditReport, setAuditReport] = useState(null);
   const [auditRangeDays, setAuditRangeDays] = useState(90);
@@ -524,6 +527,47 @@ export default function ClientsView({
       };
     });
   }, [auditReport, auditPreviewReport]);
+
+  const filteredExpirationGroupMembers = useMemo(() => {
+    if (!selectedExpirationGroup?.members) return [];
+    let list = [...selectedExpirationGroup.members];
+
+    if (expirationGroupSearch.trim()) {
+      const q = normalizeClientSearchValue(expirationGroupSearch);
+      list = list.filter((item) => {
+        const nameMatch = normalizeClientSearchValue(item.name || '').includes(q);
+        const numberMatch = String(item.memberNumber || '').includes(q);
+        const phoneMatch = String(item.member?.phone || item.phone || '').includes(q);
+        const dniMatch = String(item.member?.dni || item.dni || '').includes(q);
+        return nameMatch || numberMatch || phoneMatch || dniMatch;
+      });
+    }
+
+    list.sort((a, b) => {
+      switch (expirationGroupSortBy) {
+        case 'expiring_desc':
+          return (Number(b.expiringPoints || 0) - Number(a.expiringPoints || 0)) || (a.name || '').localeCompare(b.name || '');
+        case 'expiring_asc':
+          return (Number(a.expiringPoints || 0) - Number(b.expiringPoints || 0)) || (a.name || '').localeCompare(b.name || '');
+        case 'points_desc':
+          return (Number(b.currentPoints || 0) - Number(a.currentPoints || 0));
+        case 'points_asc':
+          return (Number(a.currentPoints || 0) - Number(b.currentPoints || 0));
+        case 'name_asc':
+          return (a.name || '').localeCompare(b.name || '');
+        case 'name_desc':
+          return (b.name || '').localeCompare(a.name || '');
+        case 'id_asc':
+          return Number(a.memberNumber || 0) - Number(b.memberNumber || 0);
+        case 'id_desc':
+          return Number(b.memberNumber || 0) - Number(a.memberNumber || 0);
+        default:
+          return (Number(b.expiringPoints || 0) - Number(a.expiringPoints || 0));
+      }
+    });
+
+    return list;
+  }, [expirationGroupSearch, expirationGroupSortBy, selectedExpirationGroup]);
   const duplicateFormMember = useMemo(() => {
     const cleanName = normalizeMemberName(formData.name);
     const cleanDni = sanitizeOptionalMemberField(formData.dni);
@@ -752,13 +796,15 @@ export default function ClientsView({
             </AsyncActionButton>
           )}
 
-          {canCreateClients && <button
-            onClick={openCreateModal}
-            className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shadow-md transition-all active:scale-95 text-xs uppercase tracking-wide"
-          >
-            <Plus size={14} />
-            <span className="hidden sm:inline">Nuevo Socio</span>
-          </button>}
+          {canCreateClients && (
+            <button
+              onClick={openCreateModal}
+              className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shadow-md transition-all active:scale-95 text-xs uppercase tracking-wide"
+            >
+              <Plus size={14} />
+              <span className="hidden sm:inline">Nuevo Socio</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -774,9 +820,28 @@ export default function ClientsView({
                     ? `${pointsExpirationReport.totals.upcomingMembers} socios tienen ${formatNumber(pointsExpirationReport.totals.upcomingPoints)} pts a vencer en ${pointsExpirationReport.upcomingDays} dias.`
                     : 'No hay puntos a vencer en los proximos dias.'}
                   {pointsExpirationReport.totals.expiredMembers > 0 && (
-                    <span className="ml-1 font-black text-red-700">
-                      {pointsExpirationReport.totals.expiredMembers} socios ya tienen puntos vencidos.
-                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedExpirationGroup({
+                          title: 'Socios con puntos vencidos',
+                          isExpired: true,
+                          displayDate: 'Puntos ya vencidos',
+                          points: pointsExpirationReport.totals.expiredPoints,
+                          memberCount: pointsExpirationReport.totals.expiredMembers,
+                          members: pointsExpirationReport.expiredMembers.map((m) => ({
+                            ...m,
+                            expiringPoints: m.expiredPoints,
+                          })),
+                        });
+                        setExpirationGroupSearch('');
+                        setExpirationGroupSortBy('expiring_desc');
+                      }}
+                      className="ml-1 font-black text-red-700 underline hover:text-red-800 cursor-pointer transition-colors"
+                      title="Ver lista de socios con puntos vencidos"
+                    >
+                      {pointsExpirationReport.totals.expiredMembers} socios ya tienen puntos vencidos. (Ver socios)
+                    </button>
                   )}
                 </p>
               </div>
@@ -785,22 +850,43 @@ export default function ClientsView({
               <button
                 type="button"
                 onClick={() => setShowExpirationDetails((prev) => !prev)}
-                className="inline-flex h-8 items-center gap-1 rounded-lg border border-amber-200 bg-white px-3 text-xs font-black text-amber-800 transition hover:bg-amber-100"
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-amber-200 bg-white px-3 text-xs font-black text-amber-800 transition hover:bg-amber-100 cursor-pointer shadow-xs"
               >
-                Ver fechas
+                Ver fechas ({pointsExpirationReport.upcomingGroups.length})
                 <ChevronDown size={14} className={`transition-transform ${showExpirationDetails ? 'rotate-180' : ''}`} />
               </button>
             )}
           </div>
           {showExpirationDetails && pointsExpirationReport.upcomingGroups.length > 0 && (
-            <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="mt-2.5 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {pointsExpirationReport.upcomingGroups.map((group) => (
-                <div key={group.dateKey} className="rounded-lg border border-amber-200 bg-white px-3 py-2">
-                  <p className="text-[10px] font-black uppercase tracking-[0.08em] text-amber-600">{group.displayDate}</p>
-                  <p className="mt-0.5 text-xs font-bold text-slate-700">
-                    {formatNumber(group.points)} pts · {group.memberCount} socios
+                <button
+                  key={group.dateKey}
+                  type="button"
+                  onClick={() => {
+                    setSelectedExpirationGroup(group);
+                    setExpirationGroupSearch('');
+                    setExpirationGroupSortBy('expiring_desc');
+                  }}
+                  className="group/card text-left cursor-pointer rounded-xl border border-amber-200 bg-white p-3 shadow-xs hover:border-amber-400 hover:shadow-md hover:bg-amber-50/50 transition-all active:scale-[0.98] flex flex-col justify-between"
+                  title="Clic para ver los socios que perderán puntos en esta fecha"
+                >
+                  <div className="flex items-center justify-between gap-1 w-full">
+                    <p className="text-[11px] font-black uppercase tracking-[0.08em] text-amber-700 flex items-center gap-1">
+                      <CalendarDays size={13} className="text-amber-500 shrink-0" />
+                      {group.displayDate}
+                    </p>
+                    <span className="text-[10px] font-bold text-amber-600 opacity-0 group-hover/card:opacity-100 transition-opacity">
+                      Ver socios →
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-sm font-black text-slate-800">
+                    {formatNumber(group.points)} pts
                   </p>
-                </div>
+                  <p className="text-xs font-semibold text-slate-500">
+                    {group.memberCount} {group.memberCount === 1 ? 'socio afectado' : 'socios afectados'}
+                  </p>
+                </button>
               ))}
             </div>
           )}
@@ -1555,13 +1641,26 @@ export default function ClientsView({
                       <div className="mt-3">
                         <p className="mb-2 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Por fecha</p>
                         <div className="grid gap-2 sm:grid-cols-2">
-                          {auditFutureReport.upcomingGroups.slice(0, 6).map((group) => (
-                            <div key={group.dateKey} className="rounded-lg border border-blue-100 bg-white px-3 py-2">
-                              <p className="text-[10px] font-black uppercase text-blue-500">{group.displayDate}</p>
+                          {auditFutureReport.upcomingGroups.slice(0, 12).map((group) => (
+                            <button
+                              key={group.dateKey}
+                              type="button"
+                              onClick={() => {
+                                setSelectedExpirationGroup(group);
+                                setExpirationGroupSearch('');
+                                setExpirationGroupSortBy('expiring_desc');
+                              }}
+                              className="text-left cursor-pointer rounded-lg border border-blue-100 bg-white px-3 py-2 hover:border-blue-300 hover:bg-blue-50/60 transition-all shadow-xs"
+                              title="Clic para ver los socios que perderán puntos en esta fecha"
+                            >
+                              <div className="flex items-center justify-between">
+                                <p className="text-[10px] font-black uppercase text-blue-500">{group.displayDate}</p>
+                                <span className="text-[10px] font-bold text-blue-500">Ver socios →</span>
+                              </div>
                               <p className="mt-0.5 text-xs font-bold text-slate-700">
                                 {formatNumber(group.points)} pts - {group.memberCount} socios
                               </p>
-                            </div>
+                            </button>
                           ))}
                         </div>
                       </div>
@@ -1589,6 +1688,198 @@ export default function ClientsView({
                   Aplicar auditoria
                 </AsyncActionButton>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedExpirationGroup && (
+        <div
+          className="fixed inset-0 z-[75] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Socios con puntos a vencer el ${selectedExpirationGroup.displayDate}`}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setSelectedExpirationGroup(null);
+          }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-amber-50/70">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shadow-xs shrink-0">
+                  <CalendarDays size={22} />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">
+                    {selectedExpirationGroup.title || `Vencimiento de puntos · ${selectedExpirationGroup.displayDate}`}
+                  </h3>
+                  <p className="text-xs font-semibold text-slate-500">
+                    Socios que perderán puntos en esta fecha ({selectedExpirationGroup.memberCount} socios en total)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedExpirationGroup(null)}
+                className="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer"
+                aria-label="Cerrar modal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* KPIs & Filtros */}
+            <div className="p-4 bg-slate-50/70 border-b border-slate-100 space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                <div className="bg-white rounded-xl p-3 border border-slate-200 shadow-xs">
+                  <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Total a perder</p>
+                  <p className="text-lg font-black text-amber-700">{formatNumber(selectedExpirationGroup.points)} pts</p>
+                </div>
+                <div className="bg-white rounded-xl p-3 border border-slate-200 shadow-xs">
+                  <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Socios afectados</p>
+                  <p className="text-lg font-black text-slate-800">{selectedExpirationGroup.memberCount} socios</p>
+                </div>
+                <div className="bg-white rounded-xl p-3 border border-slate-200 shadow-xs col-span-2 sm:col-span-1">
+                  <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Fecha límite</p>
+                  <p className="text-lg font-black text-slate-800">{selectedExpirationGroup.displayDate}</p>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-1">
+                {/* Search */}
+                <div className="relative flex-1">
+                  <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={expirationGroupSearch}
+                    onChange={(e) => setExpirationGroupSearch(e.target.value)}
+                    placeholder="Buscar socio por nombre, teléfono o N° socio..."
+                    className="w-full pl-9 pr-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  />
+                  {expirationGroupSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setExpirationGroupSearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Sort dropdown */}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-xs font-bold text-slate-500">Ordenar por:</span>
+                  <select
+                    value={expirationGroupSortBy}
+                    onChange={(e) => setExpirationGroupSortBy(e.target.value)}
+                    className="text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-amber-500 shadow-xs cursor-pointer"
+                  >
+                    <option value="expiring_desc">Puntos a perder (Mayor a menor)</option>
+                    <option value="expiring_asc">Puntos a perder (Menor a mayor)</option>
+                    <option value="points_desc">Saldo actual (Mayor a menor)</option>
+                    <option value="points_asc">Saldo actual (Menor a mayor)</option>
+                    <option value="name_asc">Nombre (A - Z)</option>
+                    <option value="name_desc">Nombre (Z - A)</option>
+                    <option value="id_asc">N° Socio (Ascendente)</option>
+                    <option value="id_desc">N° Socio (Descendente)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* List / Table */}
+            <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-100">
+              {filteredExpirationGroupMembers.length > 0 ? (
+                <table className="w-full text-left border-collapse">
+                  <thead className="bg-slate-50/80 sticky top-0 z-10 text-[10px] font-black uppercase tracking-wider text-slate-400 border-b border-slate-100 backdrop-blur-xs">
+                    <tr>
+                      <th className="px-4 py-2.5 text-center">N° Socio</th>
+                      <th className="px-4 py-2.5">Socio</th>
+                      <th className="px-4 py-2.5">Contacto</th>
+                      <th className="px-4 py-2.5 text-center">Saldo Actual</th>
+                      <th className="px-4 py-2.5 text-center">Puntos a Perder</th>
+                      <th className="px-4 py-2.5 text-right">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs font-semibold text-slate-700">
+                    {filteredExpirationGroupMembers.map((item) => {
+                      const fullMember = item.member || (Array.isArray(members) ? members : []).find((m) => String(m.id) === String(item.memberId));
+                      const phoneStr = fullMember?.phone || item.phone;
+                      return (
+                        <tr key={item.memberId || item.memberNumber || item.name} className="hover:bg-amber-50/30 transition-colors">
+                          <td className="px-4 py-3 text-center">
+                            <span className="font-mono font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 text-[11px]">
+                              #{String(item.memberNumber || '0').padStart(4, '0')}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-black text-xs shrink-0">
+                                {(item.name || '?').charAt(0).toUpperCase()}
+                              </div>
+                              <span className="font-bold text-slate-900 truncate max-w-[180px]">{item.name}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            {phoneStr ? (
+                              <span className="text-slate-600 font-mono text-[11px] flex items-center gap-1">
+                                <Phone size={11} className="text-slate-400" />
+                                {phoneStr}
+                              </span>
+                            ) : (
+                              <span className="text-slate-300 italic text-[11px]">Sin teléfono</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-center font-bold text-slate-600">
+                            {formatNumber(item.currentPoints)} pts
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-100 text-red-700 font-black text-xs border border-red-200">
+                              Pierde {formatNumber(item.expiringPoints)} pts
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (fullMember) {
+                                  setSelectedExpirationGroup(null);
+                                  setIsAuditModalOpen(false);
+                                  openDrawerDetails(fullMember);
+                                }
+                              }}
+                              className="px-2.5 py-1 text-xs font-bold text-blue-700 hover:bg-blue-50 rounded-lg border border-blue-200 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                              title="Ver ficha del socio"
+                            >
+                              Ver ficha
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="p-8 text-center text-slate-400">
+                  <User size={32} className="mx-auto text-slate-300 mb-2" />
+                  <p className="font-bold text-sm text-slate-600">No se encontraron socios</p>
+                  <p className="text-xs">Probá con otro término de búsqueda.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-3 border-t border-slate-100 bg-slate-50 flex items-center justify-between text-xs font-semibold text-slate-500">
+              <span>Mostrando {filteredExpirationGroupMembers.length} de {selectedExpirationGroup.memberCount} socios</span>
+              <button
+                type="button"
+                onClick={() => setSelectedExpirationGroup(null)}
+                className="px-4 py-1.5 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer shadow-xs"
+              >
+                Cerrar
+              </button>
             </div>
           </div>
         </div>

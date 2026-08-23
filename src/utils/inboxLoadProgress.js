@@ -116,7 +116,20 @@ export const mergeConversationBatches = (current, incoming) => {
     rows.forEach((row) => {
       const phone = String(row?.phone || '').trim();
       if (!phone) return;
-      merged.set(phone, row);
+      const existing = merged.get(phone);
+      if (existing) {
+        merged.set(phone, {
+          ...existing,
+          ...row,
+          customer_name: row?.customer_name?.trim() || existing?.customer_name || null,
+          saved_name: row?.saved_name?.trim() || existing?.saved_name || null,
+          contact_name: row?.contact_name?.trim() || existing?.contact_name || null,
+          push_name: row?.push_name?.trim() || existing?.push_name || null,
+          name: row?.name?.trim() || existing?.name || null,
+        });
+      } else {
+        merged.set(phone, row);
+      }
     });
   };
   push(current);

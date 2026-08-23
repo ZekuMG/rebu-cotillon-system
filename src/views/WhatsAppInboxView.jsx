@@ -10,16 +10,24 @@ import Swal from 'sweetalert2';
 import {
   AlertCircle,
   Archive,
+  Bell,
+  BellOff,
   Bot,
+  Calendar,
   Check,
   CheckCheck,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   CircleDollarSign,
   Clock3,
   CreditCard,
+  DollarSign,
   Download,
+  ExternalLink,
+  Eye,
+  EyeOff,
   File,
   FileAudio,
   FileText,
@@ -33,6 +41,7 @@ import {
   Loader2,
   LockKeyhole,
   Mail,
+  Maximize2,
   MessageCircle,
   Mic2,
   MoreVertical,
@@ -42,13 +51,18 @@ import {
   Phone,
   Play,
   Power,
+  Receipt,
   RefreshCw,
+  Reply,
+  RotateCcw,
   Search,
   Send,
   Settings2,
   ShieldAlert,
   SlidersHorizontal,
+  ShoppingCart,
   Sparkles,
+  Tag,
   Trash2,
   UserRound,
   Volume2,
@@ -56,6 +70,8 @@ import {
   Wifi,
   WifiOff,
   X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { whatsappOperator } from '../utils/whatsappOperator';
 import {
@@ -85,7 +101,30 @@ import { qrFreshness, shouldDropStaleQr } from '../utils/qrFreshness';
 import { describeAccountChange, readStoredAccount, writeStoredAccount } from '../utils/whatsappAccountChange';
 import { avisoDeBandeja, describeHistoryWindow } from '../utils/historyWindow';
 import { REINTENTO_INTERVALO_MS, debeReintentar } from '../utils/stickToLatest';
+import {
+  normalizeSearchText,
+  unansweredPriority,
+  isTestConversation,
+} from '../utils/whatsappInboxHelpers';
+import {
+  SYSTEM_TAGS,
+  getTagById,
+  loadChatTags,
+  saveChatTags,
+  getTagsForPhone,
+  toggleTagForPhone,
+  loadMarkedUnreadPhones,
+  saveMarkedUnreadPhones,
+  loadMutedPhones,
+  saveMutedPhones,
+  loadContactAliases,
+  saveContactAliases,
+  setContactAlias,
+  resolveContactName,
+  calculateMemberSalesStats,
+} from '../utils/whatsappTags';
 import './WhatsAppInboxView.css';
+import { formatRecordCode } from '../utils/recordCode';
 
 const MODES = [
   ['shadow', 'Solo observar', 'Analiza los mensajes y muestra sugerencias, pero no envía respuestas por su cuenta.'],
@@ -129,7 +168,6 @@ const FILTERS = [
 const SOUND_MUTED_KEY = 'rebu_whatsapp_sound_muted_v1';
 const APPEARANCE_KEY = 'rebu_whatsapp_appearance_v1';
 const DEFAULT_APPEARANCE = {
-  density: 'compact',
   messageSize: 14,
 };
 const MESSAGE_SIZES = [12, 14, 16];
@@ -267,9 +305,7 @@ const handoffCopy = (value) => {
   return summary;
 };
 
-const contactName = (row) => (
-  row?.customer_name?.trim() || `Contacto ${String(row?.phone || '').slice(-4)}`
-);
+const contactName = (row, options = {}) => resolveContactName(row, options);
 
 const normalizePhone = (value) => String(value || '').replace(/\D/g, '');
 
@@ -304,7 +340,16 @@ const linkedMembersForPhone = (members, phone) => {
   return scored.filter(({ score }) => score === bestScore).map(({ member }) => member);
 };
 
-const isTestConversation = (row) => row?.latest_message?.metadata?.test_fixture === true;
+const rowIndicatorClass = (row) => {
+  if (row?.failed_message) return 'failed';
+  if (row?.handoff) return 'handoff';
+  if (row?.opted_out || row?.status === 'paused') return 'paused';
+  const priority = unansweredPriority(row);
+  if (priority?.tone && priority.tone !== 'unanswered') {
+    return priority.tone;
+  }
+  return statusFor(row).tone;
+};
 
 const responderFor = (row) => {
   const message = row?.latest_message;
@@ -312,7 +357,9 @@ const responderFor = (row) => {
     return { label: 'Prueba', tone: 'test', Icon: Info };
   }
   if (!message || message.direction !== 'outbound') {
-    return { label: 'Sin responder', tone: 'unanswered', Icon: Clock3 };
+    const priority = unansweredPriority(row);
+    const tone = priority?.tone || 'unanswered';
+    return { label: 'Sin responder', tone, Icon: Clock3 };
   }
   // El mensaje de ausencia de WhatsApp Business sale solo, 3 segundos despues
   // del primer mensaje del cliente. Mostrarlo como respuesta de una persona
@@ -759,6 +806,30 @@ function ImageGallery({
 }) {
   const closeButtonRef = useRef(null);
   const requestRef = useRef(0);
+  const stageRef = useRef(null);
+
+  const galleryItems = useMemo(() => {
+    const list = Array.isArray(items) ? [...items] : [];
+    if (initialId && !list.some((item) => String(item.id) === String(initialId))) {
+      return [
+        {
+          id: initialId,
+          file_name: initialData?.file_name || 'Foto de perfil',
+          caption: initialData?.file_name || '',
+          dataUrl: initialData?.dataUrl,
+          url: initialData?.url || initialData?.dataUrl,
+        },
+        ...list,
+      ];
+    }
+    return list.length > 0 ? list : (initialData || initialId ? [{
+      id: initialId,
+      file_name: initialData?.file_name || 'Foto',
+      dataUrl: initialData?.dataUrl,
+      url: initialData?.url || initialData?.dataUrl,
+    }] : []);
+  }, [items, initialId, initialData]);
+
   const cacheRef = useRef(new Map(
     initialData ? [[String(initialId), initialData]] : [],
   ));
@@ -766,17 +837,50 @@ function ImageGallery({
   const [currentData, setCurrentData] = useState(initialData || null);
   const [loading, setLoading] = useState(!initialData);
   const [error, setError] = useState('');
+  const [zoom, setZoom] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const currentIndex = Math.max(
     0,
-    items.findIndex((item) => String(item.id) === currentId),
+    galleryItems.findIndex((item) => String(item.id) === currentId),
   );
-  const current = items[currentIndex];
+  const current = galleryItems[currentIndex];
 
   const move = useCallback((offset) => {
     const nextIndex = currentIndex + offset;
-    if (nextIndex < 0 || nextIndex >= items.length) return;
-    setCurrentId(String(items[nextIndex].id));
-  }, [currentIndex, items]);
+    if (nextIndex < 0 || nextIndex >= galleryItems.length) return;
+    setZoom(1);
+    setCurrentId(String(galleryItems[nextIndex].id));
+  }, [currentIndex, galleryItems]);
+
+  const toggleZoom = useCallback(() => {
+    setZoom((currentZoom) => (currentZoom > 1 ? 1 : 2));
+  }, []);
+
+  const downloadImage = useCallback(() => {
+    if (!currentData?.dataUrl) return;
+    const link = document.createElement('a');
+    link.href = currentData.dataUrl;
+    link.download = current?.file_name || `whatsapp-imagen-${currentId}.jpg`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [current?.file_name, currentData?.dataUrl, currentId]);
+
+  const toggleFullscreenMode = useCallback(() => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -800,11 +904,23 @@ function ImageGallery({
       } else if (event.key === 'ArrowRight') {
         event.preventDefault();
         move(1);
+      } else if (event.key === '+' || event.key === '=') {
+        event.preventDefault();
+        setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)));
+      } else if (event.key === '-' || event.key === '_') {
+        event.preventDefault();
+        setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)));
+      } else if (event.key === '0') {
+        event.preventDefault();
+        setZoom(1);
+      } else if (event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        toggleFullscreenMode();
       }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [move, onClose]);
+  }, [move, onClose, toggleFullscreenMode]);
 
   const loadCurrent = useCallback(async () => {
     if (!current) return;
@@ -813,6 +929,14 @@ function ImageGallery({
     const cached = cacheRef.current.get(key) || cachedAttachment(current.id);
     if (cached) {
       setCurrentData(cached);
+      setLoading(false);
+      setError('');
+      return;
+    }
+    if (current.dataUrl || current.url) {
+      const dataObj = { dataUrl: current.dataUrl || current.url, fileName: current.file_name };
+      cacheRef.current.set(key, dataObj);
+      setCurrentData(dataObj);
       setLoading(false);
       setError('');
       return;
@@ -840,10 +964,10 @@ function ImageGallery({
 
   return (
     <div
-      className="wa-image-gallery"
+      className={`wa-image-gallery ${isFullscreen ? 'is-fullscreen' : ''}`}
       role="dialog"
       aria-modal="true"
-      aria-label="Visor de imágenes de la conversación"
+      aria-label="Visor de imágenes en pantalla grande"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -851,17 +975,70 @@ function ImageGallery({
       <header className="wa-image-gallery-toolbar">
         <span>
           <strong>{current.caption || current.file_name || 'Imagen de la conversación'}</strong>
-          <small>{currentIndex + 1} de {items.length}</small>
+          <small>{currentIndex + 1} de {galleryItems.length}</small>
         </span>
-        <button
-          ref={closeButtonRef}
-          type="button"
-          onClick={onClose}
-          aria-label="Cerrar visor de imágenes"
-          title="Cerrar (Esc)"
-        >
-          <X />
-        </button>
+        <div className="wa-image-gallery-actions">
+          <button
+            type="button"
+            className="wa-image-gallery-tool"
+            onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)))}
+            disabled={zoom <= 0.5 || !currentData}
+            aria-label="Alejar imagen (-)"
+            title="Alejar (-)"
+          >
+            <ZoomOut />
+          </button>
+          <button
+            type="button"
+            className="wa-image-gallery-tool wa-image-gallery-zoom-label"
+            onClick={() => setZoom(1)}
+            disabled={zoom === 1 || !currentData}
+            aria-label="Restablecer tamaño (0)"
+            title="Tamaño original (0)"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            type="button"
+            className="wa-image-gallery-tool"
+            onClick={() => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)))}
+            disabled={zoom >= 3 || !currentData}
+            aria-label="Acercar imagen (+)"
+            title="Acercar (+)"
+          >
+            <ZoomIn />
+          </button>
+          {currentData?.dataUrl && (
+            <button
+              type="button"
+              className="wa-image-gallery-tool"
+              onClick={downloadImage}
+              aria-label="Descargar imagen"
+              title="Descargar imagen"
+            >
+              <Download />
+            </button>
+          )}
+          <button
+            type="button"
+            className="wa-image-gallery-tool"
+            onClick={toggleFullscreenMode}
+            aria-label={isFullscreen ? 'Salir de pantalla completa (F)' : 'Pantalla completa (F)'}
+            title={isFullscreen ? 'Salir de pantalla completa (F)' : 'Pantalla completa (F)'}
+          >
+            <Maximize2 />
+          </button>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            className="wa-image-gallery-close"
+            onClick={onClose}
+            aria-label="Cerrar visor de imágenes"
+            title="Cerrar (Esc)"
+          >
+            <X />
+          </button>
+        </div>
       </header>
 
       <button
@@ -876,6 +1053,7 @@ function ImageGallery({
       </button>
 
       <div
+        ref={stageRef}
         className="wa-image-gallery-stage"
         onMouseDown={(event) => {
           if (event.target === event.currentTarget) onClose();
@@ -884,7 +1062,7 @@ function ImageGallery({
         {loading ? (
           <div className="wa-image-gallery-state">
             <Loader2 className="animate-spin" />
-            <span>Preparando vista previa…</span>
+            <span>Preparando vista previa en alta resolución…</span>
           </div>
         ) : error ? (
           <div className="wa-image-gallery-state error">
@@ -896,6 +1074,12 @@ function ImageGallery({
           <img
             src={currentData?.dataUrl}
             alt={current.file_name || 'Imagen de la conversación'}
+            style={{
+              transform: `scale(${zoom})`,
+              cursor: zoom > 1 ? 'grab' : 'zoom-in',
+            }}
+            onClick={toggleZoom}
+            title={zoom > 1 ? 'Clic para tamaño normal' : 'Clic para agrandar 2x'}
           />
         )}
       </div>
@@ -904,13 +1088,54 @@ function ImageGallery({
         type="button"
         className="wa-image-gallery-nav next"
         onClick={() => move(1)}
-        disabled={currentIndex === items.length - 1}
+        disabled={currentIndex === galleryItems.length - 1}
         aria-label="Ver imagen siguiente"
         title="Imagen siguiente"
       >
         <ChevronRight />
       </button>
     </div>
+  );
+}
+
+function WhatsAppContactImageThumb({ attachment, onOpen }) {
+  const [data, setData] = useState(() => cachedAttachment(attachment.id));
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (data || !attachment?.id) return;
+    let cancelled = false;
+    setLoading(true);
+    fetchAttachmentOnce(attachment.id)
+      .then((res) => {
+        if (!cancelled && res) setData(res);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [attachment.id, data]);
+
+  const src = data?.dataUrl || attachment.dataUrl || attachment.url;
+
+  return (
+    <button
+      type="button"
+      className="wa-contact-media-thumb"
+      onClick={() => onOpen(attachment, data)}
+      title={attachment.caption || attachment.file_name || 'Ver foto en grande'}
+    >
+      {src ? (
+        <img src={src} alt={attachment.caption || attachment.file_name || 'Foto del chat'} />
+      ) : loading ? (
+        <div className="wa-contact-media-state"><Loader2 className="animate-spin" size={16} /></div>
+      ) : (
+        <div className="wa-contact-media-state"><ImageIcon size={18} /></div>
+      )}
+    </button>
   );
 }
 
@@ -1195,14 +1420,144 @@ function Attachment({
   );
 }
 
+const extractQuotedMessage = (row, allMessages = []) => {
+  const metadata = row?.metadata || {};
+  const rawQuoted = metadata.quoted_message
+    || metadata.quotedMessage
+    || metadata.context_info?.quoted_message
+    || metadata.contextInfo?.quotedMessage
+    || metadata.quoted;
+
+  let sourceId = row?.source_message_id
+    || metadata.source_message_id
+    || metadata.reply_to_message_id
+    || metadata.context_info?.stanza_id
+    || metadata.contextInfo?.stanzaId;
+
+  let content = '';
+  let sender = '';
+  let isImage = false;
+
+  if (rawQuoted) {
+    if (typeof rawQuoted === 'string') {
+      content = rawQuoted;
+    } else {
+      content = rawQuoted.content
+        || rawQuoted.conversation
+        || rawQuoted.text
+        || rawQuoted.extendedTextMessage?.text
+        || rawQuoted.caption
+        || '';
+      if (!content && (rawQuoted.imageMessage || rawQuoted.image)) {
+        content = rawQuoted.imageMessage?.caption || '[Imagen]';
+        isImage = true;
+      }
+      sender = rawQuoted.sender || rawQuoted.participant || rawQuoted.actor_name || '';
+    }
+  }
+
+  if (sourceId && allMessages.length > 0) {
+    const referenced = allMessages.find(
+      (m) => String(m.id) === String(sourceId)
+        || (m.provider_message_id && String(m.provider_message_id) === String(sourceId)),
+    );
+    if (referenced) {
+      if (!content) {
+        content = referenced.content || (referenced.attachments?.length ? '[Archivo adjunto]' : '');
+      }
+      if (!sender) {
+        sender = referenced.direction === 'outbound' ? 'Tú' : 'Cliente';
+      }
+      if (!isImage && referenced.attachments?.some((a) => attachmentKindForView(a) === 'image')) {
+        isImage = true;
+      }
+    }
+  }
+
+  if (!content && !sender && !sourceId) return null;
+
+  return {
+    id: sourceId || null,
+    sender: sender || (row.direction === 'outbound' ? 'Cliente' : 'Tú'),
+    content: content || '[Mensaje]',
+    isImage,
+  };
+};
+
+const normalizeForHighlight = (value = '') => (
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+);
+
+const highlightMatches = (text, query) => {
+  if (!text) return text;
+  const str = String(text);
+  const trimmedQuery = String(query || '').trim();
+  if (!trimmedQuery) return str;
+  const normalizedQuery = normalizeSearchText(trimmedQuery);
+  if (!normalizedQuery) return str;
+  const normalizedText = normalizeForHighlight(str);
+  if (!normalizedText.includes(normalizedQuery)) return str;
+
+  const parts = [];
+  let lastIndex = 0;
+  let matchIndex = normalizedText.indexOf(normalizedQuery, lastIndex);
+
+  while (matchIndex !== -1) {
+    if (matchIndex > lastIndex) {
+      parts.push(str.slice(lastIndex, matchIndex));
+    }
+    parts.push(
+      <mark key={`mark-${matchIndex}`} className="wa-search-match">
+        {str.slice(matchIndex, matchIndex + normalizedQuery.length)}
+      </mark>,
+    );
+    lastIndex = matchIndex + normalizedQuery.length;
+    matchIndex = normalizedText.indexOf(normalizedQuery, lastIndex);
+  }
+
+  if (lastIndex < str.length) {
+    parts.push(str.slice(lastIndex));
+  }
+  return parts;
+};
+
+function QuotedMessage({ quoted, onClick }) {
+  if (!quoted) return null;
+  return (
+    <div
+      className="wa-quoted-bubble"
+      onClick={quoted.id && onClick ? () => onClick(quoted.id) : undefined}
+      title={quoted.id ? 'Ir al mensaje citado' : undefined}
+      role={quoted.id ? 'button' : undefined}
+      tabIndex={quoted.id ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (quoted.id && onClick && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          onClick(quoted.id);
+        }
+      }}
+    >
+      <div className="wa-quoted-sender">{quoted.sender}</div>
+      <div className="wa-quoted-text">{quoted.content}</div>
+    </div>
+  );
+}
+
 function Message({
   row,
   groupRows = [],
+  allMessages = [],
+  canReply,
   canRetry,
   canMutate,
   canGenerate,
+  searchQuery = '',
   menuOpen,
   onToggleMenu,
+  onReply,
   onRetry,
   onEdit,
   onDelete,
@@ -1210,6 +1565,8 @@ function Message({
   onGenerateReply,
   onOpenImage,
   onOpenDocument,
+  onAddOrderToBudget,
+  onScrollToMessage,
 }) {
   const rows = groupRows.length > 0 ? groupRows : [row];
   const displayRow = rows[0];
@@ -1252,12 +1609,14 @@ function Message({
     && rows.length === 1
     && inbound
     && Boolean(String(displayRow.content || '').trim());
+  const quoted = extractQuotedMessage(displayRow, allMessages);
   const handleMenuSelection = (event) => {
     const target = event.target instanceof Element ? event.target : event.target?.parentElement;
     const action = target?.closest?.('[data-message-action]')?.dataset?.messageAction;
     if (!action) return;
     event.preventDefault();
     event.stopPropagation();
+    if (action === 'reply') onReply?.(displayRow);
     if (action === 'generate') onGenerateReply(displayRow);
     if (action === 'edit') onEdit(displayRow);
     if (action === 'retry') onRetry(statusRow);
@@ -1278,12 +1637,23 @@ function Message({
         onOpenDocument={onOpenDocument}
       />
       {remainingImages > 0 && index === visibleAttachments.length - 1 && (
-        <span className="wa-image-album-more">+{remainingImages}</span>
+        <span
+          className="wa-image-album-more"
+          onClick={() => onOpenImage?.(attachment)}
+          role="button"
+          tabIndex={0}
+        >
+          +{remainingImages}
+        </span>
       )}
     </div>
   ));
   return (
-    <div className={`wa-message ${inbound ? 'inbound' : 'outbound'} ${menuOpen ? 'menu-open' : ''}`}>
+    <div
+      id={`wa-msg-${displayRow.id}`}
+      data-msg-ids={rows.map((r) => String(r.id)).join(' ')}
+      className={`wa-message ${inbound ? 'inbound' : 'outbound'} ${menuOpen ? 'menu-open' : ''}`}
+    >
       <article
         className={[
           suggested ? 'suggested' : '',
@@ -1295,11 +1665,6 @@ function Message({
           hasDocument ? 'has-document' : '',
           deleted ? 'deleted' : '',
         ].filter(Boolean).join(' ')}
-        onClick={(event) => {
-          const target = event.target instanceof Element ? event.target : event.target?.parentElement;
-          if (target?.closest?.('button, a, audio, video, input, textarea, [role="menu"]')) return;
-          onToggleMenu(String(displayRow.id));
-        }}
       >
         <div className="wa-message-menu">
           <button
@@ -1316,6 +1681,11 @@ function Message({
           </button>
           {menuOpen && (
             <div className="wa-message-menu-popover" role="menu" onClickCapture={handleMenuSelection}>
+              {canReply && !deleted && (
+                <button type="button" role="menuitem" data-message-action="reply">
+                  <Reply />Responder
+                </button>
+              )}
               {replyable && (
                 <button type="button" role="menuitem" data-message-action="generate">
                   <Sparkles />Generar respuesta
@@ -1344,18 +1714,488 @@ function Message({
         </div>
         {suggested && <small className="wa-message-kind"><Sparkles />Sugerencia</small>}
         {deleted && <p className="wa-deleted-message"><Trash2 />Este mensaje fue eliminado</p>}
+        {quoted && <QuotedMessage quoted={quoted} onClick={onScrollToMessage} />}
         {imageAlbum ? (
           <div className={`wa-image-album-grid count-${Math.min(4, visibleAttachments.length)}`}>
             {renderedAttachments}
           </div>
         ) : renderedAttachments}
-        {captions.map((caption) => <p key={caption}>{caption}</p>)}
+        {displayRow.message_kind === 'order' && displayRow.metadata?.order ? (
+          <OrderCard
+            order={displayRow.metadata.order}
+            nota={String(displayRow.content || '').split('Nota del cliente: ')[1] || ''}
+            onAddToBudget={onAddOrderToBudget}
+          />
+        ) : (
+          captions.map((caption) => <p key={caption}>{highlightMatches(caption, searchQuery)}</p>)
+        )}
         {!displayRow.content && attachments.length === 0 && <p>[{displayRow.message_kind || 'mensaje'}]</p>}
         <footer className={statusRow.status === 'failed' ? 'failed' : ''}>
           <time>{formatAt(statusRow.created_at, true)}</time>
           <span><DeliveryState row={statusRow} /></span>
         </footer>
       </article>
+    </div>
+  );
+}
+
+function OrderCard({ order, nota, onAddToBudget }) {
+  const items = String(order?.title || '')
+    .split(',')
+    .map((entrada) => entrada.trim())
+    .filter(Boolean);
+  const cantidad = Number(order?.item_count || 0) || items.length;
+  return (
+    <div className="wa-order-card">
+      <header>
+        <ShoppingCart />
+        <span>
+          <strong>Pedido del catálogo</strong>
+          <small>{cantidad} {cantidad === 1 ? 'artículo' : 'artículos'}</small>
+        </span>
+      </header>
+      {items.length > 0 && (
+        <ul>
+          {items.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
+        </ul>
+      )}
+      {nota && <p className="wa-order-note">{nota}</p>}
+      {typeof onAddToBudget === 'function' && items.length > 0 && (
+        <button type="button" className="wa-order-action" onClick={() => onAddToBudget(items)}>
+          <CircleDollarSign />Agregar a un presupuesto
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ChatSearchBar({
+  query,
+  onChange,
+  onClose,
+  matchCount,
+  currentMatchIndex,
+  onNextMatch,
+  onPrevMatch,
+}) {
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  return (
+    <div className="wa-chat-search-bar" role="search" aria-label="Buscar en esta conversación">
+      <Search className="wa-chat-search-icon" />
+      <input
+        ref={inputRef}
+        value={query}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            if (e.shiftKey) onPrevMatch?.();
+            else onNextMatch?.();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            onClose();
+          }
+        }}
+        placeholder="Buscar mensajes en este chat…"
+      />
+      {query && (
+        <span className="wa-chat-search-counter">
+          {matchCount > 0
+            ? `${currentMatchIndex + 1} de ${matchCount}`
+            : 'Sin resultados'}
+        </span>
+      )}
+      <div className="wa-chat-search-nav">
+        <button
+          type="button"
+          onClick={onPrevMatch}
+          disabled={matchCount <= 1}
+          aria-label="Coincidencia anterior"
+          title="Anterior (Shift + Enter)"
+        >
+          <ChevronUp />
+        </button>
+        <button
+          type="button"
+          onClick={onNextMatch}
+          disabled={matchCount <= 1}
+          aria-label="Coincidencia siguiente"
+          title="Siguiente (Enter)"
+        >
+          <ChevronDown />
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Cerrar búsqueda en el chat"
+          title="Cerrar búsqueda (Esc)"
+        >
+          <X />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function WhatsAppContextMenu({
+  x,
+  y,
+  row,
+  name = '',
+  isMuted,
+  isMarkedUnread,
+  tags = [],
+  onClose,
+  onViewContact,
+  onEditAlias,
+  onToggleUnread,
+  onToggleMute,
+  onEditTags,
+  onToggleBot,
+  onCopyPhone,
+  onArchive,
+  onDelete,
+}) {
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    const handleOutside = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        onClose();
+      }
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose]);
+
+  const menuWidth = 220;
+  const menuHeight = 350;
+  const posX = Math.min(x, (typeof window !== 'undefined' ? window.innerWidth : 1000) - menuWidth - 10);
+  const posY = Math.min(y, (typeof window !== 'undefined' ? window.innerHeight : 800) - menuHeight - 10);
+  const displayName = name || contactName(row);
+
+  return (
+    <div
+      ref={menuRef}
+      className="wa-context-menu"
+      style={{ left: `${Math.max(10, posX)}px`, top: `${Math.max(10, posY)}px` }}
+      role="menu"
+      aria-label={`Acciones para ${displayName}`}
+    >
+      <header className="wa-context-menu-head">
+        <strong>{displayName}</strong>
+        <small>{formatPhone(row.phone)}</small>
+      </header>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onViewContact();
+          onClose();
+        }}
+      >
+        <UserRound />Ver contacto
+      </button>
+      {onEditAlias && (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onEditAlias();
+            onClose();
+          }}
+        >
+          <Pencil />Cambiar nombre / apodo
+        </button>
+      )}
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onToggleUnread();
+          onClose();
+        }}
+      >
+        {isMarkedUnread || Number(row.unread_count || 0) > 0 ? (
+          <><Eye />Marcar como leído</>
+        ) : (
+          <><EyeOff />Marcar como no leído</>
+        )}
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onEditTags();
+          onClose();
+        }}
+      >
+        <Tag />Gestionar etiquetas ({tags.length})
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onToggleMute();
+          onClose();
+        }}
+      >
+        {isMuted ? (
+          <><Bell />Reactivar notificaciones</>
+        ) : (
+          <><BellOff />Silenciar notificaciones</>
+        )}
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onToggleBot();
+          onClose();
+        }}
+      >
+        {row.status === 'human' ? (
+          <><Bot />Permitir que responda el bot</>
+        ) : (
+          <><Hand />Atender conversación</>
+        )}
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onCopyPhone();
+          onClose();
+        }}
+      >
+        <Phone />Copiar teléfono
+      </button>
+      {onArchive && (
+        <button
+          type="button"
+          role="menuitem"
+          className="wa-context-menu-separator"
+          onClick={() => {
+            onArchive();
+            onClose();
+          }}
+        >
+          <Archive />Archivar chat
+        </button>
+      )}
+      {onDelete && (
+        <button
+          type="button"
+          role="menuitem"
+          className="danger"
+          onClick={() => {
+            onDelete();
+            onClose();
+          }}
+        >
+          <Trash2 />Eliminar chat
+        </button>
+      )}
+    </div>
+  );
+}
+
+function WhatsAppRenameContactModal({
+  phone,
+  initialValue = '',
+  originalName = '',
+  onSave,
+  onClose,
+}) {
+  const [value, setValue] = useState(initialValue);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      onClose();
+    }
+  };
+
+  return (
+    <div
+      className="wa-tag-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Cambiar nombre o apodo del contacto"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      onKeyDown={handleKeyDown}
+    >
+      <div className="wa-tag-modal wa-rename-modal">
+        <header>
+          <div>
+            <Pencil size={18} />
+            <strong>Editar nombre o apodo</strong>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Cerrar"><X /></button>
+        </header>
+
+        <p className="wa-tag-modal-sub">
+          Asigná un apodo personalizado a <strong>{formatPhone(phone)}</strong> para identificarlo fácilmente en Rebu.
+        </p>
+
+        {originalName && (
+          <small className="wa-rename-original-note">
+            Nombre original en WhatsApp: <strong>{originalName}</strong>
+          </small>
+        )}
+
+        <form
+          className="wa-rename-modal-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onSave(value);
+            onClose();
+          }}
+        >
+          <input
+            ref={inputRef}
+            type="text"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="Ej: Juan Pérez / Proveedor Globos"
+            maxLength={60}
+          />
+          <div className="wa-rename-modal-actions">
+            {initialValue ? (
+              <button
+                type="button"
+                className="wa-rename-reset-btn"
+                onClick={() => {
+                  onSave('');
+                  onClose();
+                }}
+              >
+                Restablecer original
+              </button>
+            ) : <span />}
+            <div className="wa-rename-modal-right-btns">
+              <button type="button" className="wa-rename-cancel-btn" onClick={onClose}>
+                Cancelar
+              </button>
+              <button type="submit" className="wa-rename-save-btn">
+                Guardar
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function WhatsAppTagSelectorModal({
+  phone,
+  contactName,
+  activeTagIds = [],
+  onToggleTag,
+  onClose,
+}) {
+  const [customTagLabel, setCustomTagLabel] = useState('');
+
+  return (
+    <div
+      className="wa-tag-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Gestionar etiquetas del chat"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="wa-tag-modal">
+        <header>
+          <div>
+            <Tag />
+            <strong>Etiquetas del chat</strong>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Cerrar"><X /></button>
+        </header>
+        <p className="wa-tag-modal-sub">
+          Asigná etiquetas a <strong>{contactName}</strong> ({formatPhone(phone)}) para identificar y filtrar la conversación.
+        </p>
+        <div className="wa-tag-modal-list">
+          {SYSTEM_TAGS.map((tag) => {
+            const isChecked = activeTagIds.includes(tag.id);
+            return (
+              <label
+                key={tag.id}
+                className={`wa-tag-modal-item ${isChecked ? 'active' : ''}`}
+                style={{
+                  '--tag-color': tag.color,
+                  '--tag-bg': tag.bg,
+                  '--tag-border': tag.border,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={() => onToggleTag(tag.id)}
+                />
+                <span className="wa-tag-modal-chip" style={{ color: tag.color, backgroundColor: tag.bg, borderColor: tag.border }}>
+                  {tag.label}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+        <div className="wa-tag-modal-custom">
+          <input
+            value={customTagLabel}
+            onChange={(e) => setCustomTagLabel(e.target.value)}
+            placeholder="Crear etiqueta personalizada..."
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && customTagLabel.trim()) {
+                e.preventDefault();
+                onToggleTag(customTagLabel.trim().toLowerCase());
+                setCustomTagLabel('');
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="wa-secondary-action"
+            disabled={!customTagLabel.trim()}
+            onClick={() => {
+              if (customTagLabel.trim()) {
+                onToggleTag(customTagLabel.trim().toLowerCase());
+                setCustomTagLabel('');
+              }
+            }}
+          >
+            Agregar
+          </button>
+        </div>
+        <footer>
+          <button type="button" className="wa-primary-action" onClick={onClose}>
+            Listo
+          </button>
+        </footer>
+      </div>
     </div>
   );
 }
@@ -1430,11 +2270,31 @@ function BudgetPanel({
       : Number(item.unit_price || 0) * Number(item.quantity || 0)
   ), 0);
   const candidates = useMemo(() => {
-    const query = productQuery.trim().toLowerCase();
-    if (query.length < 2) return [];
-    return (inventory || []).filter((product) => (
-      `${product.title || ''} ${product.barcode || ''}`.toLowerCase().includes(query)
-    )).slice(0, 6);
+    const normalizar = (valor) => String(valor || '')
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .trim();
+    const consulta = normalizar(productQuery);
+    if (consulta.length < 2) return [];
+    const palabras = consulta.split(/\s+/).filter(Boolean);
+    return (inventory || [])
+      .map((product) => {
+        const titulo = normalizar(product.title);
+        const buscable = `${titulo} ${normalizar(product.barcode)} ${normalizar(product.category)}`;
+        if (!palabras.every((palabra) => buscable.includes(palabra))) return null;
+        // Cuanto más al principio del nombre aparece lo escrito, más arriba va.
+        const posicion = titulo.indexOf(consulta);
+        const puntaje = titulo === consulta ? 0
+          : titulo.startsWith(consulta) ? 1
+            : posicion >= 0 ? 2 + Math.min(posicion, 40) / 100
+              : 3;
+        return { product, puntaje, largo: titulo.length };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.puntaje - b.puntaje || a.largo - b.largo)
+      .slice(0, 8)
+      .map((entrada) => entrada.product);
   }, [inventory, productQuery]);
   const linkedMemberMatches = linkedMembersForPhone(members, value.customer_phone);
   const linkedMember = linkedMemberMatches.length === 1 ? linkedMemberMatches[0] : null;
@@ -1460,17 +2320,38 @@ function BudgetPanel({
         <small>{linkedMember ? `Vinculado con ${linkedMember.name || linkedMember.displayName || 'socio de Rebu'}` : 'Se guardará como cliente invitado.'}</small>
       </div>
       <div className="wa-budget-items">
-        {value.items.map((item, index) => (
-          <div className="wa-budget-line" key={`${item.product_id || 'custom'}-${index}`}>
-            <input className="title" value={item.title || ''} onChange={(event) => updateItem(index, { title: event.target.value })} aria-label="Producto" />
-            <input type="number" min="0.001" step="0.001" value={item.quantity} onChange={(event) => updateItem(index, { quantity: Number(event.target.value) })} aria-label="Cantidad" />
-            <input type="number" min="0" step="0.01" value={item.unit_price} onChange={(event) => updateItem(index, { unit_price: Number(event.target.value) })} aria-label="Precio" />
-            <button type="button" onClick={() => setValue((current) => ({ ...current, items: current.items.filter((_, itemIndex) => itemIndex !== index) }))} aria-label="Quitar producto"><Trash2 /></button>
+        {value.items.length > 0 && (
+          <div className="wa-budget-head" aria-hidden="true">
+            <span>Producto</span><span>Cant.</span><span>Precio</span><span />
           </div>
-        ))}
+        )}
+        {value.items.map((item, index) => {
+          const subtotal = item.product_type === 'weight'
+            ? Number(item.unit_price || 0) * Number(item.quantity || 0) / 1000
+            : Number(item.unit_price || 0) * Number(item.quantity || 0);
+          return (
+            <div className="wa-budget-line" key={`${item.product_id || 'custom'}-${index}`}>
+              <input className="title" value={item.title || ''} onChange={(event) => updateItem(index, { title: event.target.value })} aria-label="Producto" placeholder="Nombre del producto" />
+              <input type="number" min="0.001" step="0.001" value={item.quantity} onChange={(event) => updateItem(index, { quantity: Number(event.target.value) })} aria-label="Cantidad" />
+              <input type="number" min="0" step="0.01" value={item.unit_price} onChange={(event) => updateItem(index, { unit_price: Number(event.target.value) })} aria-label="Precio unitario" />
+              <button type="button" onClick={() => setValue((current) => ({ ...current, items: current.items.filter((_, itemIndex) => itemIndex !== index) }))} aria-label={`Quitar ${item.title || 'producto'}`} title="Quitar"><Trash2 /></button>
+              <small className="wa-budget-subtotal">
+                {item.product_type === 'weight' ? `${item.quantity} g · ` : `${item.quantity} × `}
+                {formatMoney(item.unit_price)}
+                <strong>{formatMoney(subtotal)}</strong>
+              </small>
+            </div>
+          );
+        })}
+        {value.items.length === 0 && (
+          <p className="wa-budget-sin-items">Todavía no hay productos. Buscalos abajo y agregalos.</p>
+        )}
       </div>
       <div className="wa-budget-add">
         <input value={productQuery} onChange={(event) => setProductQuery(event.target.value)} placeholder="Agregar producto del catálogo" />
+        {productQuery.trim().length >= 2 && candidates.length === 0 && (
+          <div className="wa-budget-empty"><small>Ningún producto coincide con “{productQuery.trim()}”.</small></div>
+        )}
         {candidates.length > 0 && (
           <div>
             {candidates.map((product) => (
@@ -1491,7 +2372,14 @@ function BudgetPanel({
                   setProductQuery('');
                 }}
               >
-                <span>{product.title}</span><strong>{formatMoney(product.product_type === 'weight' ? product.price * 1000 : product.price)}</strong>
+                <span>
+                  {product.title}
+                  <small>
+                    {Number.isFinite(Number(product.stock)) ? `Stock ${Number(product.stock)}` : 'Sin stock cargado'}
+                    {product.barcode ? ` · ${product.barcode}` : ''}
+                  </small>
+                </span>
+                <strong>{formatMoney(product.product_type === 'weight' ? product.price * 1000 : product.price)}</strong>
               </button>
             ))}
           </div>
@@ -1585,7 +2473,10 @@ export default function WhatsAppInboxView({
   currentUser = null,
   inventory = [],
   members = [],
+  agendaContacts = [],
+  transactions = [],
   onCreateBudget,
+  onBudgetPdf,
 }) {
   const [overview, setOverview] = useState(null);
   const [phone, setPhone] = useState('');
@@ -1593,6 +2484,19 @@ export default function WhatsAppInboxView({
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const [tagFilter, setTagFilter] = useState('all');
+  const [chatTags, setChatTags] = useState(() => loadChatTags());
+  const [markedUnreadPhones, setMarkedUnreadPhones] = useState(() => loadMarkedUnreadPhones());
+  const [mutedPhones, setMutedPhones] = useState(() => loadMutedPhones());
+  const [contactAliases, setContactAliases] = useState(() => loadContactAliases());
+  const [aliasModalTarget, setAliasModalTarget] = useState(null);
+  const [inlineEditingAlias, setInlineEditingAlias] = useState(false);
+  const [inlineAliasValue, setInlineAliasValue] = useState('');
+  const [tagModalPhone, setTagModalPhone] = useState(null);
+  const [contextMenu, setContextMenu] = useState(null);
+  const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [chatSearch, setChatSearch] = useState('');
+  const [chatSearchMatchIndex, setChatSearchMatchIndex] = useState(0);
   const [draft, setDraft] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedCatalogMedia, setSelectedCatalogMedia] = useState([]);
@@ -1602,6 +2506,7 @@ export default function WhatsAppInboxView({
   const [quickRepliesLoading, setQuickRepliesLoading] = useState(false);
   const [quickRepliesError, setQuickRepliesError] = useState('');
   const [quickReplySourceId, setQuickReplySourceId] = useState(null);
+  const [replyingMessage, setReplyingMessage] = useState(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState('');
@@ -1703,7 +2608,6 @@ export default function WhatsAppInboxView({
   const openingScrollPhoneRef = useRef('');
   const nearBottomRef = useRef(true);
   const latestVisibleMessageRef = useRef({ phone: '', id: '' });
-  const manualListRef = useRef(false);
   const lockTokenRef = useRef(globalThis.crypto?.randomUUID?.() || `lock-${Date.now()}-${Math.random()}`);
   const manualSendOperationRef = useRef(null);
   const [newMessageCount, setNewMessageCount] = useState(0);
@@ -1791,15 +2695,12 @@ export default function WhatsAppInboxView({
       setConnectionIssue(null);
       emitSummary(data);
       setError('');
-      setPhone((current) => {
-        // Actualizar, filtrar o marcar como leído nunca debe mover al operador
-        // de la conversación en la que está trabajando.
-        if (current) return current;
-        if (!current && manualListRef.current) return '';
-        return data.conversations?.find((row) => (
-          Number(row.unread_count || 0) > 0 || row.handoff || row.failed_message || row.budget_draft
-        ))?.phone || data.conversations?.[0]?.phone || '';
-      });
+      // La bandeja nunca elige una conversación por su cuenta: abre en la lista
+      // y entra sólo cuando la persona toca una fila. Antes autoseleccionaba la
+      // primera con pendientes, así que al abrir Rebu ya estabas dentro de un
+      // chat que nadie pidió abrir — y el efecto de "marcar leído" le borraba
+      // los no leídos sin que nadie lo hubiera leído.
+      // Actualizar, filtrar o marcar como leído tampoco mueven la selección.
     } catch (requestError) {
       if (requestId === overviewRequestRef.current) {
         setError(errorCopy(requestError));
@@ -2174,6 +3075,127 @@ export default function WhatsAppInboxView({
   const openDocumentViewer = useCallback((attachment, data) => {
     setDocumentViewer({ attachment, data });
   }, []);
+  const scrollToMessageId = useCallback((messageId) => {
+    if (!messageId) return;
+    const strId = String(messageId);
+    let el = document.getElementById(`wa-msg-${strId}`);
+    if (!el) {
+      el = document.querySelector(`[data-msg-ids~="${strId}"]`)
+        || document.querySelector(`[data-msg-id="${strId}"]`);
+    }
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.remove('wa-msg-highlight');
+      // Forzar reflow para reiniciar la animación
+      void el.offsetWidth;
+      el.classList.add('wa-msg-highlight');
+      window.setTimeout(() => el.classList.remove('wa-msg-highlight'), 2200);
+    }
+  }, []);
+
+  const getContactName = useCallback(
+    (row) => resolveContactName(row, { aliases: contactAliases, agendaContacts, members }),
+    [contactAliases, agendaContacts, members],
+  );
+
+  const handleSaveAlias = useCallback((targetPhone, alias) => {
+    if (!targetPhone) return;
+    setContactAliases((prev) => setContactAlias(prev, targetPhone, alias));
+  }, []);
+
+  const handleReplyToMessage = useCallback((row) => {
+    if (!row) return;
+    const sender = row.direction === 'outbound' ? 'Tú' : (current ? getContactName(current) : 'Cliente');
+    const snippet = String(row.content || (row.attachments?.length ? '[Archivo]' : 'Mensaje')).slice(0, 100);
+    setReplyingMessage({
+      id: row.id,
+      sender,
+      snippet,
+      content: row.content,
+      direction: row.direction,
+    });
+    setManualQuickReplyTarget(null);
+    composerRef.current?.focus();
+  }, [current, getContactName]);
+
+  const handleToggleTag = useCallback((tagId, targetPhone = tagModalPhone || phone) => {
+    if (!targetPhone || !tagId) return;
+    setChatTags((prev) => toggleTagForPhone(prev, targetPhone, tagId));
+  }, [tagModalPhone, phone]);
+
+  const handleToggleMarkedUnread = useCallback((targetPhone = phone) => {
+    if (!targetPhone) return;
+    const key = String(targetPhone);
+    setMarkedUnreadPhones((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+        void whatsappOperator.markRead(key).catch(() => {});
+      } else {
+        next.add(key);
+      }
+      saveMarkedUnreadPhones(next);
+      return next;
+    });
+  }, [phone]);
+
+  const handleToggleMute = useCallback((targetPhone = phone) => {
+    if (!targetPhone) return;
+    const key = String(targetPhone);
+    setMutedPhones((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      saveMutedPhones(next);
+      return next;
+    });
+  }, [phone]);
+
+  const matchingMessageIds = useMemo(() => {
+    const trimmed = String(chatSearch || '').trim();
+    if (!trimmed || !displayedMessages.length) return [];
+    const query = normalizeSearchText(trimmed);
+    if (!query) return [];
+    return displayedMessages
+      .filter((msg) => {
+        const content = normalizeSearchText(msg.content || '');
+        const caption = normalizeSearchText(
+          (msg.attachments || [])
+            .map((a) => a.caption || a.description || a.file_name || '')
+            .join(' '),
+        );
+        return content.includes(query) || caption.includes(query);
+      })
+      .map((msg) => String(msg.id));
+  }, [chatSearch, displayedMessages]);
+
+  const handleNextChatMatch = useCallback(() => {
+    if (matchingMessageIds.length <= 1) return;
+    const nextIdx = (chatSearchMatchIndex + 1) % matchingMessageIds.length;
+    setChatSearchMatchIndex(nextIdx);
+    scrollToMessageId(matchingMessageIds[nextIdx]);
+  }, [chatSearchMatchIndex, matchingMessageIds, scrollToMessageId]);
+
+  const handlePrevChatMatch = useCallback(() => {
+    if (matchingMessageIds.length <= 1) return;
+    const prevIdx = (chatSearchMatchIndex - 1 + matchingMessageIds.length) % matchingMessageIds.length;
+    setChatSearchMatchIndex(prevIdx);
+    scrollToMessageId(matchingMessageIds[prevIdx]);
+  }, [chatSearchMatchIndex, matchingMessageIds, scrollToMessageId]);
+
+  useEffect(() => {
+    if (matchingMessageIds.length > 0) {
+      // Iniciar en la última coincidencia (la más reciente)
+      const targetIdx = matchingMessageIds.length - 1;
+      setChatSearchMatchIndex(targetIdx);
+      scrollToMessageId(matchingMessageIds[targetIdx]);
+    } else {
+      setChatSearchMatchIndex(0);
+    }
+  }, [chatSearch, matchingMessageIds, scrollToMessageId]);
   const proposed = useMemo(
     () => [...messages].reverse().find((row) => (
       row.direction === 'outbound' && row.status === 'suggested'
@@ -2225,6 +3247,7 @@ export default function WhatsAppInboxView({
     setMessageEdit(null);
     setMessageDelete(null);
     setManualQuickReplyTarget(null);
+    setReplyingMessage(null);
   }, [phone]);
 
   useEffect(() => {
@@ -2234,6 +3257,7 @@ export default function WhatsAppInboxView({
     setSelectedFile(null);
     setSelectedCatalogMedia([]);
     setQuickReplySourceId(null);
+    setReplyingMessage(null);
     setNewMessageCount(0);
     nearBottomRef.current = true;
     latestVisibleMessageRef.current = { phone, id: '' };
@@ -2367,6 +3391,7 @@ export default function WhatsAppInboxView({
         || !phone
         || !latestInboundMessageId
         || unread <= 0
+        || markedUnreadPhones.has(String(phone))
         || readKeyRef.current === readKey
       ) return;
       readKeyRef.current = readKey;
@@ -2385,6 +3410,7 @@ export default function WhatsAppInboxView({
     detail?.conversation?.unread_count,
     latestInboundMessageId,
     loadOverview,
+    markedUnreadPhones,
     phone,
   ]);
 
@@ -2418,7 +3444,7 @@ export default function WhatsAppInboxView({
   const testModeTarget = (overview?.conversations || []).find((row) => (
     String(row.phone || '') === testModePhone
   ));
-  const testModeTargetName = testModeTarget ? contactName(testModeTarget) : formatPhone(testModePhone);
+  const testModeTargetName = testModeTarget ? getContactName(testModeTarget) : formatPhone(testModePhone);
   const testModeAllowsCurrent = !testModeEnabled || (
     Boolean(phone) && Boolean(testModePhone) && phone === testModePhone
   );
@@ -2624,29 +3650,64 @@ export default function WhatsAppInboxView({
   }, [businessSettings, canApproveBudget, isActive]);
 
   const conversations = useMemo(() => {
-    const query = search.trim().toLowerCase();
+    const query = normalizeSearchText(search);
     const attention = (row) => (
       Number(row.unread_count || 0) > 0
+      || markedUnreadPhones.has(String(row.phone))
       || row.handoff
       || row.failed_message
       || row.budget_draft
     );
     const filtered = (overview?.conversations || []).filter((row) => {
+      const isUnread = Number(row.unread_count || 0) > 0 || markedUnreadPhones.has(String(row.phone));
       if (filter === 'attention' && !attention(row)) return false;
-      if (filter === 'unread' && Number(row.unread_count || 0) <= 0) return false;
+      if (filter === 'unread' && !isUnread) return false;
       if (filter === 'budgets' && !row.budget_draft) return false;
       if (filter === 'failed' && !row.failed_message) return false;
-      return !query
-        || contactName(row).toLowerCase().includes(query)
-        || String(row.phone).includes(query)
-        || String(row.latest_message?.content || '').toLowerCase().includes(query);
+
+      // Filtro de etiquetas
+      if (tagFilter !== 'all') {
+        const rowTagIds = chatTags[String(row.phone)] || [];
+        if (!rowTagIds.includes(tagFilter)) return false;
+      }
+
+      if (!query) return true;
+
+      // Coincidencia con etiquetas
+      const rowTags = getTagsForPhone(chatTags, row.phone);
+      if (rowTags.some((t) => normalizeSearchText(t.label).includes(query))) return true;
+
+      // Contact name match (incluye apodos, agendados y socios)
+      if (normalizeSearchText(getContactName(row)).includes(query)) return true;
+      // Phone match (digits, normalized or raw)
+      const phoneStr = String(row.phone || '');
+      if (phoneStr.includes(query) || normalizePhone(phoneStr).includes(query)) return true;
+      // Latest message content match
+      if (normalizeSearchText(row.latest_message?.content || '').includes(query)) return true;
+      // Matched message or snippet from server if present
+      if (
+        (row.matched_message && normalizeSearchText(row.matched_message.content || '').includes(query))
+        || (row.matching_message && normalizeSearchText(row.matching_message.content || '').includes(query))
+        || (row.snippet && normalizeSearchText(row.snippet).includes(query))
+        || (row.match && normalizeSearchText(row.match.content || '').includes(query))
+      ) return true;
+      // Check active chat detail messages if this row is selected
+      if (row.phone === phone && detail?.messages?.some((m) => normalizeSearchText(m.content || '').includes(query))) {
+        return true;
+      }
+      // If deferredSearch is active, any conversation row returned by the server
+      // search query matched a message in the database and must be preserved!
+      if (deferredSearch && deferredSearch.trim()) {
+        return true;
+      }
+      return false;
     });
     return filtered.sort(
       filter === 'all' || filter === 'unread'
         ? compareConversationActivity
         : compareConversationAttention,
     );
-  }, [filter, overview?.conversations, search]);
+  }, [chatTags, deferredSearch, detail?.messages, filter, getContactName, markedUnreadPhones, overview?.conversations, phone, search, tagFilter]);
   const memberMatchCountsByPhone = useMemo(() => new Map(
     conversations.map((row) => [
       String(row.phone || ''),
@@ -2720,13 +3781,14 @@ export default function WhatsAppInboxView({
   }, [releaseTyping]);
 
   const send = async (content, sourceMessageId = null) => {
+    const effectiveSourceId = sourceMessageId || replyingMessage?.id || null;
     const clean = content.trim();
     if ((!clean && !selectedFile && selectedCatalogMedia.length === 0) || !phone || lockedByOther) return;
     const catalogMedia = selectedCatalogMedia.map((entry) => ({ ...entry }));
     const sendSignature = JSON.stringify({
       phone,
       content: clean,
-      sourceMessageId,
+      sourceMessageId: effectiveSourceId,
       file: selectedFile ? {
         name: selectedFile.name,
         size: selectedFile.size,
@@ -2772,7 +3834,7 @@ export default function WhatsAppInboxView({
           phone,
           content: clean,
           productIds: catalogMedia.map((entry) => entry.productId),
-          sourceMessageId,
+          sourceMessageId: effectiveSourceId,
           idempotencyKey: operationKey,
         });
       } else {
@@ -2780,7 +3842,7 @@ export default function WhatsAppInboxView({
           phone,
           content: clean,
           attachment,
-          sourceMessageId,
+          sourceMessageId: effectiveSourceId,
           idempotencyKey: operationKey,
         });
       }
@@ -2789,6 +3851,7 @@ export default function WhatsAppInboxView({
       setSelectedFile(null);
       setSelectedCatalogMedia([]);
       setQuickReplySourceId(null);
+      setReplyingMessage(null);
       manualSendOperationRef.current = null;
       await releaseTyping();
       window.requestAnimationFrame(() => scrollToLatest('smooth'));
@@ -3082,6 +4145,78 @@ export default function WhatsAppInboxView({
   };
 
 
+  // El presupuesto sólo se podía revisar si el bot había detectado la intención.
+  // Si el cliente lo pide por audio, por teléfono o mandando un carrito del
+  // catálogo, la pantalla existía pero no había por dónde entrar.
+  const startBudget = async () => {
+    setChatMenuOpen(false);
+    if (budgetDraft) {
+      setContextMode('budget');
+      return;
+    }
+    await action('start-budget', async () => {
+      await whatsappOperator.createBudgetDraft(phone);
+      await loadDetail(phone, true);
+      setContextMode('budget');
+    });
+  };
+
+  // Pasar el carrito del catálogo a un presupuesto. WhatsApp sólo manda los
+  // NOMBRES, así que cada uno se busca en el catálogo para traer precio y
+  // producto real; el que no aparece entra igual, con precio en cero, para que
+  // quede a la vista y se complete a mano en vez de perderse.
+  const addOrderToBudget = async (items) => {
+    const normalizar = (valor) => String(valor || '')
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .trim();
+    const buscarEnCatalogo = (nombre) => {
+      const palabras = normalizar(nombre).split(/\s+/).filter(Boolean);
+      if (!palabras.length) return null;
+      const encontrados = (inventory || [])
+        .map((product) => {
+          const titulo = normalizar(product.title);
+          if (!palabras.every((palabra) => titulo.includes(palabra))) return null;
+          return { product, largo: titulo.length };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.largo - b.largo);
+      return encontrados[0]?.product || null;
+    };
+    const nuevos = items.map((nombre) => {
+      const product = buscarEnCatalogo(nombre);
+      if (!product) {
+        return { product_id: null, title: nombre, quantity: 1, unit_price: 0, product_type: 'quantity' };
+      }
+      const porPeso = product.product_type === 'weight';
+      return {
+        product_id: product.id,
+        title: product.title,
+        quantity: porPeso ? 1000 : 1,
+        unit_price: Number(porPeso ? product.price * 1000 : product.price) || 0,
+        product_type: product.product_type || 'quantity',
+      };
+    });
+
+    await action('start-budget', async () => {
+      let entry = budgetDraft;
+      if (!entry) {
+        entry = await whatsappOperator.createBudgetDraft(phone);
+      }
+      const previos = Array.isArray(entry?.items) ? entry.items : [];
+      await whatsappOperator.updateBudgetDraft(entry.id, {
+        customer_name: entry.customer_name || current?.customer_name || '',
+        customer_phone: entry.customer_phone || phone,
+        notes: entry.notes || '',
+        items: [...previos, ...nuevos],
+        status: 'pending_review',
+      });
+      await loadDetail(phone, true);
+      setContextMode('budget');
+    });
+  };
+
   const rejectBudget = (entry) => {
     void action('reject-budget', () => whatsappOperator.updateBudgetDraft(entry.id, {
       ...entry,
@@ -3140,52 +4275,32 @@ export default function WhatsAppInboxView({
         pdfDeliveryStatus: entry.pdf_delivery_status || 'pending',
       });
 
-      let textStatus = entry.text_delivery_status || 'pending';
+      const codigo = formatRecordCode(created.id || entry.id);
+      const textStatus = 'skipped';
       let pdfStatus = entry.pdf_delivery_status || 'pending';
-      if (textStatus !== 'sent') {
-        try {
-          await whatsappOperator.sendMessage({
-            phone: entry.phone,
-            content: `Te envío el presupuesto ${created.id ? `N.º ${created.id}` : ''} por ${formatMoney(value.total)}. El detalle completo está en el PDF adjunto.`,
-            idempotencyKey: `budget-text:${entry.id}`,
-          });
-          textStatus = 'sent';
-        } catch (textError) {
-          textStatus = 'failed';
-          setError(errorCopy(textError));
-        }
-        await whatsappOperator.recordBudgetResult(entry.id, {
-          status: 'sending',
-          operationKey,
-          rebuBudgetId: created.id,
-          textDeliveryStatus: textStatus,
-          pdfDeliveryStatus: pdfStatus,
-        });
-      }
       if (pdfStatus !== 'sent') {
         try {
-          if (!window.electronAPI?.generateWhatsAppBudgetPdf) {
+          if (typeof onBudgetPdf !== 'function') {
             throw new Error('Abrí Rebu como aplicación de escritorio para generar el PDF.');
           }
-          const pdf = await window.electronAPI.generateWhatsAppBudgetPdf({
+          const pdf = await onBudgetPdf({
             budget: {
               id: created.id,
               customerName: value.customer_name,
               customerPhone: value.customer_phone,
               notes: value.notes,
-              items: value.items,
               totalAmount: value.total,
             },
-            settings: businessSettings?.data || {},
+            items: value.items,
           });
           if (!pdf?.success || !pdf.base64) throw new Error(pdf?.error || 'No se pudo generar el PDF.');
           await whatsappOperator.sendMessage({
             phone: entry.phone,
-            content: `Presupuesto Rebu N.º ${created.id || ''}`.trim(),
+            content: `Presupuesto ${codigo} por ${formatMoney(value.total)}`,
             attachment: {
               base64: pdf.base64,
               mimeType: 'application/pdf',
-              fileName: `presupuesto-rebu-${created.id || entry.id}.pdf`,
+              fileName: `presupuesto-${codigo}.pdf`,
             },
             idempotencyKey: `budget-pdf:${entry.id}`,
           });
@@ -3203,15 +4318,15 @@ export default function WhatsAppInboxView({
         });
       }
       await whatsappOperator.recordBudgetResult(entry.id, {
-        status: textStatus === 'sent' && pdfStatus === 'sent' ? 'sent' : 'failed',
+        status: pdfStatus === 'sent' ? 'sent' : 'failed',
         operationKey,
         rebuBudgetId: created.id,
         textDeliveryStatus: textStatus,
         pdfDeliveryStatus: pdfStatus,
       });
-      if (textStatus !== 'sent' || pdfStatus !== 'sent') {
+      if (pdfStatus !== 'sent') {
         const deliveryError = new Error(
-          'El presupuesto quedó creado, pero una parte del envío necesita reintento.',
+          'El presupuesto quedó creado, pero el envío del PDF necesita reintento.',
         );
         deliveryError.code = 'budget_delivery_incomplete';
         throw deliveryError;
@@ -3571,7 +4686,7 @@ export default function WhatsAppInboxView({
 
   return (
     <section
-      className={`wa-inbox ${contextOpen ? 'context-open' : ''} ${phone ? 'has-selection' : ''} density-${appearance.density}`}
+      className={`wa-inbox ${contextOpen ? 'context-open' : ''} ${phone ? 'has-selection' : ''}`}
       style={{ '--wa-message-font-size': `${appearance.messageSize}px` }}
       onClick={(event) => {
         const target = event.target instanceof Element ? event.target : event.target?.parentElement;
@@ -3652,7 +4767,7 @@ export default function WhatsAppInboxView({
             <div className="wa-control-menu">
               <section>
                 <header><SlidersHorizontal /><span><strong>Apariencia</strong><small>Se guarda en este equipo</small></span></header>
-                <label>Mensajes</label>
+                <label>Tamaño de texto en mensajes</label>
                 <div className="wa-choice-row">
                   {[[12, 'Pequeños'], [14, 'Normales'], [16, 'Grandes']].map(([size, label]) => (
                     <button
@@ -3660,20 +4775,6 @@ export default function WhatsAppInboxView({
                       type="button"
                       className={appearance.messageSize === size ? 'active' : ''}
                       onClick={() => saveAppearance({ messageSize: size })}
-                    >{label}</button>
-                  ))}
-                </div>
-                <label>Densidad de la lista</label>
-                <div className="wa-choice-row">
-                  {[
-                    ['compact', 'Compacta'],
-                    ['comfortable', 'Cómoda'],
-                  ].map(([density, label]) => (
-                    <button
-                      key={density}
-                      type="button"
-                      className={appearance.density === density ? 'active' : ''}
-                      onClick={() => saveAppearance({ density })}
                     >{label}</button>
                   ))}
                 </div>
@@ -3870,7 +4971,25 @@ export default function WhatsAppInboxView({
           <>
             <aside className="wa-list">
           <div className="wa-list-tools">
-            <label><Search /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar contacto o mensaje" /></label>
+            <label className="wa-search-label">
+              <Search />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Buscar contacto o mensaje"
+              />
+              {search && (
+                <button
+                  type="button"
+                  className="wa-search-clear"
+                  onClick={() => setSearch('')}
+                  aria-label="Limpiar búsqueda"
+                  title="Limpiar búsqueda"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </label>
             <div className="wa-filter-control">
               <SlidersHorizontal />
               <span>Vista</span>
@@ -3911,6 +5030,33 @@ export default function WhatsAppInboxView({
               </div>
             </div>
             <p className="wa-filter-help"><Info />{activeFilter.description}</p>
+            <div className="wa-tag-filter-bar">
+              <div className="wa-tag-filter-chips">
+                <button
+                  type="button"
+                  className={`wa-tag-pill ${tagFilter === 'all' ? 'active' : ''}`}
+                  onClick={() => setTagFilter('all')}
+                >
+                  Todas
+                </button>
+                {SYSTEM_TAGS.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className={`wa-tag-pill ${tagFilter === t.id ? 'active' : ''}`}
+                    style={{
+                      '--tag-color': t.color,
+                      '--tag-bg': t.bg,
+                      '--tag-border': t.border,
+                    }}
+                    onClick={() => setTagFilter((prev) => prev === t.id ? 'all' : t.id)}
+                  >
+                    <span className="wa-tag-pill-dot" style={{ backgroundColor: t.color }} />
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
           <div className="wa-rows" ref={rowsRef} onScroll={handleRowsScroll}>
             {loading && !overview ? (
@@ -3920,7 +5066,11 @@ export default function WhatsAppInboxView({
             ) : conversations.map((row) => {
               const status = statusFor(row);
               const responder = responderFor(row);
+              const isMarkedUnread = markedUnreadPhones.has(String(row.phone));
+              const isMuted = mutedPhones.has(String(row.phone));
               const unread = Number(row.unread_count || 0);
+              const showUnread = unread > 0 || isMarkedUnread;
+              const rowTags = getTagsForPhone(chatTags, row.phone);
               return (
                 <button
                   key={row.phone}
@@ -3929,7 +5079,6 @@ export default function WhatsAppInboxView({
                     const alreadySelected = phone === row.phone;
                     void releaseTyping();
                     if (phone) draftsByPhoneRef.current.set(phone, draft);
-                    manualListRef.current = false;
                     setFilterMenuOpen(false);
                     setPhone(row.phone);
                     setContextMode('');
@@ -3937,8 +5086,21 @@ export default function WhatsAppInboxView({
                       window.requestAnimationFrame(() => scrollToLatest('auto'));
                     }
                   }}
+                  onDoubleClick={() => {
+                    setPhone(row.phone);
+                    setContextMode('contact');
+                  }}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setContextMenu({
+                      x: event.clientX,
+                      y: event.clientY,
+                      row,
+                    });
+                  }}
                 >
-                  <i className={row.failed_message ? 'failed' : row.handoff ? 'handoff' : status.tone} />
+                  <i className={rowIndicatorClass(row)} />
                   <Avatar
                     row={row}
                     url={profiles[row.phone]}
@@ -3946,21 +5108,62 @@ export default function WhatsAppInboxView({
                   />
                   <span className="wa-row-content">
                     <header>
-                      <strong>{contactName(row)}</strong>
+                      <div className="wa-row-header-name">
+                        <strong>
+                          {search.trim() ? highlightMatches(getContactName(row), search) : getContactName(row)}
+                        </strong>
+                        {isMuted && <BellOff className="wa-row-muted-icon" size={12} title="Silenciado" />}
+                      </div>
                       <em className={`wa-responder ${responder.tone}`} title={`Última respuesta: ${responder.label}`}>
                         <responder.Icon />{responder.label}
                       </em>
                       <time>{waiting(row.latest_message?.created_at || row.updated_at)}</time>
                     </header>
-                    <p>{row.latest_message?.content || 'Archivo o mensaje sin texto'}</p>
-                    <footer>
-                      {row.budget_draft && <em className="budget">Presupuesto</em>}
-                      {row.failed_message && <em className="failed">No se envió</em>}
-                      {row.handoff && <em className="pending">Necesita respuesta</em>}
+                    <div className="wa-row-middle">
+                      <p>
+                        {search.trim() ? (
+                          highlightMatches(
+                            row.matched_message?.content
+                              || row.matching_message?.content
+                              || row.snippet
+                              || (row.phone === phone && detail?.messages?.find((m) => normalizeSearchText(m.content || '').includes(normalizeSearchText(search)))?.content)
+                              || row.latest_message?.content
+                              || 'Archivo o mensaje sin texto',
+                            search,
+                          )
+                        ) : (
+                          row.latest_message?.content || 'Archivo o mensaje sin texto'
+                        )}
+                      </p>
                       {unread > 0 && (
                         <strong className="unread is-visible">
                           {unread > 99 ? '99+' : unread}
                         </strong>
+                      )}
+                      {isMarkedUnread && unread === 0 && (
+                        <strong className="unread is-visible">
+                          •
+                        </strong>
+                      )}
+                    </div>
+                    <footer>
+                      <div className="wa-row-badges">
+                        {row.budget_draft && <em className="budget">Presupuesto</em>}
+                        {row.failed_message && <em className="failed">No se envió</em>}
+                        {row.handoff && <em className="pending">Necesita respuesta</em>}
+                      </div>
+                      {rowTags.length > 0 && (
+                        <div className="wa-row-tags">
+                          {rowTags.map((tag) => (
+                            <span
+                              key={tag.id}
+                              className="wa-tag-chip"
+                              style={{ color: tag.color, backgroundColor: tag.bg, borderColor: tag.border }}
+                            >
+                              {tag.label}
+                            </span>
+                          ))}
+                        </div>
                       )}
                     </footer>
                   </span>
@@ -3992,7 +5195,7 @@ export default function WhatsAppInboxView({
 
         <main className="wa-chat">
           {!current ? (
-            <div className="wa-empty"><MessageCircle /><strong>Seleccioná una conversación</strong><span>La bandeja compartida reúne mensajes, presupuestos y casos pendientes.</span></div>
+            <div className="wa-empty wa-empty-welcome"><MessageCircle /><strong>Seleccioná una conversación</strong><span>Todo está en orden. Elegí un chat de la lista de la izquierda para ver sus mensajes, presupuestos y casos pendientes.</span></div>
           ) : (
             <>
               <header className="wa-chat-head">
@@ -4001,15 +5204,15 @@ export default function WhatsAppInboxView({
                   className="wa-back"
                   onClick={() => {
                     if (phone) draftsByPhoneRef.current.set(phone, draft);
-                    manualListRef.current = true;
                     setPhone('');
                   }}
                   aria-label="Volver a la lista"
+                  title="Volver a la lista"
                 ><ChevronLeft /></button>
                 <button
                   type="button"
                   className="wa-chat-contact-trigger"
-                  aria-label={`Ver contacto de ${contactName(current)}, ${formatPhone(current.phone)}`}
+                  aria-label={`Ver contacto de ${getContactName(current)}, ${formatPhone(current.phone)}`}
                   aria-controls="wa-contact-panel"
                   aria-expanded={activeContext === 'contact'}
                   title="Ver datos del contacto"
@@ -4020,10 +5223,11 @@ export default function WhatsAppInboxView({
                 >
                   <Avatar
                     row={current}
+                    name={getContactName(current)}
                     url={profiles[current.phone]}
                     memberMatchCount={linkedMemberMatches.length}
                   />
-                  <span><strong>{contactName(current)}</strong><small>{formatPhone(current.phone)}</small></span>
+                  <span><strong>{getContactName(current)}</strong><small>{formatPhone(current.phone)}</small></span>
                 </button>
                 <nav>
                   {testModeEnabled && !testModeAllowsCurrent && <em className="test-locked"><FlaskConical />Fuera de la prueba</em>}
@@ -4043,6 +5247,27 @@ export default function WhatsAppInboxView({
                           : <><Sparkles />Revisar</>}
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className={`wa-chat-head-icon-btn ${chatSearchOpen ? 'active' : ''}`}
+                    title="Buscar en este chat"
+                    aria-label="Buscar en este chat"
+                    onClick={() => {
+                      setChatSearchOpen((prev) => !prev);
+                      if (chatSearchOpen) setChatSearch('');
+                    }}
+                  >
+                    <Search />
+                  </button>
+                  <button
+                    type="button"
+                    className="wa-chat-head-icon-btn"
+                    title="Gestionar etiquetas"
+                    aria-label="Gestionar etiquetas"
+                    onClick={() => setTagModalPhone(current.phone)}
+                  >
+                    <Tag />
+                  </button>
                   <em className={currentResponder.tone} title={`Última respuesta: ${currentResponder.label}`}>
                     <currentResponder.Icon />{currentResponder.label}
                   </em>
@@ -4060,11 +5285,34 @@ export default function WhatsAppInboxView({
                           setContextMode('contact');
                           setChatMenuOpen(false);
                         }}><UserRound />Ver contacto</button>
-                        {Number(current.unread_count || 0) > 0 && (
-                          <button type="button" onClick={() => {
-                            setChatMenuOpen(false);
-                            void action('read', () => whatsappOperator.markRead(phone));
-                          }}><CheckCheck />Marcar como leído</button>
+                        <button type="button" onClick={() => {
+                          setTagModalPhone(current.phone);
+                          setChatMenuOpen(false);
+                        }}><Tag />Gestionar etiquetas</button>
+                        <button type="button" onClick={() => {
+                          handleToggleMarkedUnread(current.phone);
+                          setChatMenuOpen(false);
+                        }}>
+                          {markedUnreadPhones.has(current.phone) || Number(current.unread_count || 0) > 0 ? (
+                            <><Eye />Marcar como leído</>
+                          ) : (
+                            <><EyeOff />Marcar como no leído</>
+                          )}
+                        </button>
+                        <button type="button" onClick={() => {
+                          handleToggleMute(current.phone);
+                          setChatMenuOpen(false);
+                        }}>
+                          {mutedPhones.has(current.phone) ? (
+                            <><Bell />Reactivar notificaciones</>
+                          ) : (
+                            <><BellOff />Silenciar notificaciones</>
+                          )}
+                        </button>
+                        {canApproveBudget && (
+                          <button type="button" disabled={busy === 'start-budget'} onClick={() => void startBudget()}>
+                            <CircleDollarSign />{budgetDraft ? 'Ver presupuesto' : 'Armar presupuesto'}
+                          </button>
                         )}
                         {canReply && !current.opted_out && !testChat && (
                           current.status === 'human'
@@ -4104,6 +5352,20 @@ export default function WhatsAppInboxView({
                   </div>
                 </nav>
               </header>
+              {chatSearchOpen && (
+                <ChatSearchBar
+                  query={chatSearch}
+                  onChange={setChatSearch}
+                  onClose={() => {
+                    setChatSearchOpen(false);
+                    setChatSearch('');
+                  }}
+                  matchCount={matchingMessageIds.length}
+                  currentMatchIndex={chatSearchMatchIndex}
+                  onNextMatch={handleNextChatMatch}
+                  onPrevMatch={handlePrevChatMatch}
+                />
+              )}
               <div className="wa-stream-shell">
                 <div ref={streamRef} className="wa-stream" onScroll={handleStreamScroll}>
                   {detail?.nextCursor && (
@@ -4141,13 +5403,17 @@ export default function WhatsAppInboxView({
                         key={block.key}
                         row={block.rows[0]}
                         groupRows={block.rows}
+                        allMessages={messages}
+                        canReply={canReply && !testChat && testModeAllowsCurrent}
                         canRetry={canReply && testModeAllowsCurrent}
                         canMutate={canReply && !testChat}
                         canGenerate={canReply && !testChat && testModeAllowsCurrent}
+                        searchQuery={chatSearch || search}
                         menuOpen={messageMenuId === String(block.rows[0].id)}
                         onToggleMenu={(id) => setMessageMenuId((currentId) => (
                           currentId === id ? '' : id
                         ))}
+                        onReply={handleReplyToMessage}
                         onRetry={retryMessage}
                         onEdit={openMessageEdit}
                         onDelete={openMessageDelete}
@@ -4155,6 +5421,8 @@ export default function WhatsAppInboxView({
                         onGenerateReply={(row) => void generateRepliesForMessage(row)}
                         onOpenImage={openImageGallery}
                         onOpenDocument={openDocumentViewer}
+                        onAddOrderToBudget={canApproveBudget ? addOrderToBudget : null}
+                        onScrollToMessage={scrollToMessageId}
                       />
                     )
                   ))}
@@ -4301,6 +5569,26 @@ export default function WhatsAppInboxView({
                     </div>
                   </div>
                 )}
+                {replyingMessage && (
+                  <div className="wa-replying-bar" aria-live="polite">
+                    <div className="wa-replying-icon">
+                      <Reply />
+                    </div>
+                    <div className="wa-replying-content">
+                      <strong>Respondiendo a {replyingMessage.sender}</strong>
+                      <span>{replyingMessage.snippet}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="wa-replying-cancel"
+                      onClick={() => setReplyingMessage(null)}
+                      aria-label="Cancelar respuesta"
+                      title="Cancelar respuesta"
+                    >
+                      <X />
+                    </button>
+                  </div>
+                )}
                 <div className="wa-compose-row">
                   <input
                     ref={fileRef}
@@ -4378,22 +5666,160 @@ export default function WhatsAppInboxView({
                   <button type="button" onClick={closeContext} aria-label="Cerrar contacto"><X /></button>
                 </header>
                 <div className="wa-contact-identity">
-                  <Avatar
-                    row={current}
-                    url={profiles[current.phone]}
-                    className="large"
-                    memberMatchCount={linkedMemberMatches.length}
-                  />
-                  <span>
-                    <strong>{contactName(current)}</strong>
-                    <small>{formatPhone(current.phone)}</small>
-                  </span>
+                  <div
+                    className="wa-contact-avatar-wrap"
+                    onClick={() => {
+                      if (profiles[current.phone]) {
+                        openImageGallery(
+                          {
+                            id: 'avatar',
+                            file_name: `Foto de perfil - ${getContactName(current)}`,
+                            dataUrl: profiles[current.phone],
+                            url: profiles[current.phone],
+                          },
+                          {
+                            dataUrl: profiles[current.phone],
+                            url: profiles[current.phone],
+                            file_name: `Foto de perfil - ${getContactName(current)}`,
+                          },
+                        );
+                      }
+                    }}
+                    role={profiles[current.phone] ? 'button' : undefined}
+                    tabIndex={profiles[current.phone] ? 0 : undefined}
+                    title={profiles[current.phone] ? 'Tocar para ver foto de perfil en grande' : undefined}
+                  >
+                    <Avatar
+                      row={current}
+                      name={getContactName(current)}
+                      url={profiles[current.phone]}
+                      className="large wa-contact-avatar-hero"
+                      memberMatchCount={linkedMemberMatches.length}
+                    />
+                  </div>
+                  <div className="wa-contact-name-row">
+                    {inlineEditingAlias ? (
+                      <form
+                        className="wa-contact-name-edit-form"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleSaveAlias(current.phone, inlineAliasValue);
+                          setInlineEditingAlias(false);
+                        }}
+                      >
+                        <input
+                          type="text"
+                          value={inlineAliasValue}
+                          onChange={(e) => setInlineAliasValue(e.target.value)}
+                          placeholder="Ej: Juan Pérez / Proveedor"
+                          autoFocus
+                          maxLength={60}
+                        />
+                        <button type="submit" className="wa-alias-btn-save" title="Guardar"><Check size={14} /></button>
+                        <button type="button" className="wa-alias-btn-cancel" onClick={() => setInlineEditingAlias(false)} title="Cancelar"><X size={14} /></button>
+                      </form>
+                    ) : (
+                      <>
+                        <strong className="wa-contact-name-lg">{getContactName(current)}</strong>
+                        <button
+                          type="button"
+                          className="wa-contact-edit-name-btn"
+                          onClick={() => {
+                            setInlineEditingAlias(true);
+                            setInlineAliasValue(contactAliases[String(current.phone)] || getContactName(current) || '');
+                          }}
+                          title="Cambiar nombre o apodo"
+                          aria-label="Editar nombre del contacto"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {contactAliases[String(current.phone)] && !inlineEditingAlias && (
+                    <div className="wa-contact-alias-badge-wrap">
+                      <small className="wa-contact-alias-badge">
+                        Apodo guardado · <button type="button" onClick={() => handleSaveAlias(current.phone, '')}>Restablecer</button>
+                      </small>
+                    </div>
+                  )}
+                  <small className="wa-contact-phone-lg">{formatPhone(current.phone)}</small>
+                  <div className="wa-contact-quick-actions">
+                    <button
+                      type="button"
+                      className="wa-contact-quick-btn"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(formatPhone(current.phone));
+                      }}
+                      title="Copiar número de teléfono"
+                    >
+                      <Phone size={13} /> Copiar
+                    </button>
+                    <button
+                      type="button"
+                      className="wa-contact-quick-btn"
+                      onClick={() => setTagModalPhone(current.phone)}
+                      title="Gestionar etiquetas del contacto"
+                    >
+                      <Tag size={13} /> Etiquetas
+                    </button>
+                    <button
+                      type="button"
+                      className="wa-contact-quick-btn"
+                      onClick={() => handleToggleMarkedUnread(current.phone)}
+                      title="Marcar leído / no leído"
+                    >
+                      {markedUnreadPhones.has(current.phone) || Number(current.unread_count || 0) > 0 ? (
+                        <><Eye size={13} /> Leído</>
+                      ) : (
+                        <><EyeOff size={13} /> No leído</>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="wa-contact-quick-btn"
+                      onClick={() => handleToggleMute(current.phone)}
+                      title="Silenciar o reactivar notificaciones"
+                    >
+                      {mutedPhones.has(current.phone) ? (
+                        <><Bell size={13} /> Activar</>
+                      ) : (
+                        <><BellOff size={13} /> Silenciar</>
+                      )}
+                    </button>
+                  </div>
                 </div>
+
                 <div className="wa-context-stats">
                   <div><MessageCircle /><span>Sin leer</span><strong>{Number(current.unread_count || 0)}</strong></div>
                   <div><currentStatus.Icon /><span>Estado</span><strong>{currentStatus.label}</strong></div>
                   <div><Clock3 /><span>Último mensaje recibido</span><strong>{formatAt(current.last_inbound_at)}</strong></div>
                 </div>
+
+                <section className="wa-contact-tags-section">
+                  <header>
+                    <span><Tag size={13} /><strong>Etiquetas del chat</strong></span>
+                    <button type="button" onClick={() => setTagModalPhone(current.phone)}>
+                      + Gestionar
+                    </button>
+                  </header>
+                  {getTagsForPhone(chatTags, current.phone).length > 0 ? (
+                    <div className="wa-contact-tags-list">
+                      {getTagsForPhone(chatTags, current.phone).map((t) => (
+                        <span
+                          key={t.id}
+                          className="wa-tag-chip"
+                          style={{ color: t.color, backgroundColor: t.bg, borderColor: t.border }}
+                        >
+                          {t.label}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="wa-contact-empty-note">Sin etiquetas asignadas</p>
+                  )}
+                </section>
+
                 {linkedMember ? (
                   <section className="wa-linked-member">
                     <header>
@@ -4416,6 +5842,49 @@ export default function WhatsAppInboxView({
                       <div><dt><Sparkles />Puntos</dt><dd>{Number(linkedMember.points || 0).toLocaleString('es-AR')}</dd></div>
                     </dl>
                     {linkedMember.extraInfo && <p>{linkedMember.extraInfo}</p>}
+
+                    <div className="wa-contact-sales-box">
+                      <div className="wa-contact-sales-header">
+                        <Receipt size={14} />
+                        <strong>Historial comercial del cliente</strong>
+                      </div>
+                      <div className="wa-contact-sales-kpis">
+                        <div className="wa-sales-kpi">
+                          <span>Compras totales</span>
+                          <strong>{memberSalesStats.ticketCount}</strong>
+                        </div>
+                        <div className="wa-sales-kpi">
+                          <span>Total acumulado</span>
+                          <strong>{formatMoney(memberSalesStats.totalSpent)}</strong>
+                        </div>
+                      </div>
+                      {memberSalesStats.lastPurchaseDate && (
+                        <small className="wa-contact-last-sale">
+                          Última compra: {formatAt(memberSalesStats.lastPurchaseDate)}
+                        </small>
+                      )}
+                      {memberSalesStats.recentTransactions.length > 0 && (
+                        <div className="wa-contact-recent-sales">
+                          <small>Últimos tickets:</small>
+                          <ul>
+                            {memberSalesStats.recentTransactions.map((tx, idx) => {
+                              const itemsSummary = Array.isArray(tx.items)
+                                ? tx.items.map((it) => `${it.quantity || 1}x ${it.name || it.title || it.description || 'Art.'}`).slice(0, 2).join(', ')
+                                : '';
+                              return (
+                                <li key={tx.id || idx}>
+                                  <div className="wa-sale-row-top">
+                                    <span className="wa-sale-amount">{formatMoney(tx.total)}</span>
+                                    <span className="wa-sale-date">{formatAt(tx.date || tx.created_at)}</span>
+                                  </div>
+                                  {itemsSummary && <span className="wa-sale-items">{itemsSummary}</span>}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
                   </section>
                 ) : linkedMemberMatches.length > 1 ? (
                   <div className="wa-member-match ambiguous">
@@ -4428,8 +5897,26 @@ export default function WhatsAppInboxView({
                     <span><strong>Sin socio vinculado</strong><small>No encontramos este teléfono en Socios.</small></span>
                   </div>
                 )}
+
+                {conversationImages.length > 0 && (
+                  <section className="wa-contact-media-section">
+                    <header>
+                      <span><ImageIcon size={14} /><strong>Fotos en este chat ({conversationImages.length})</strong></span>
+                    </header>
+                    <div className="wa-contact-media-grid">
+                      {conversationImages.slice(0, 9).map((img, idx) => (
+                        <WhatsAppContactImageThumb
+                          key={img.id || img.message_id || idx}
+                          attachment={img}
+                          onOpen={(att, data) => openImageGallery(att, data)}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                )}
+
                 <p className="wa-context-note">
-                  Las acciones de este chat están en el menú de tres puntos del encabezado.
+                  Podés hacer clic derecho en cualquier chat de la lista para ver opciones rápidas.
                 </p>
               </section>
             )}
@@ -4648,7 +6135,7 @@ export default function WhatsAppInboxView({
           businessProfileReady={overview?.businessProfileReady !== false}
           testMode={overview?.testMode || { enabled: false, phone: '' }}
           selectedPhone={phone}
-          selectedContactName={current ? contactName(current) : ''}
+          selectedContactName={current ? getContactName(current) : ''}
           testModeBusy={busy === 'test-mode'}
           initialTestMessage={String(latestInboundMessage?.content || '')}
           loading={botSettingsLoading}
@@ -4664,6 +6151,71 @@ export default function WhatsAppInboxView({
           onRetry={() => void openBotSettings()}
           onSave={saveBotSettings}
           onClose={() => setBotSettingsOpen(false)}
+        />
+      )}
+      {contextMenu && (
+        <WhatsAppContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          row={contextMenu.row}
+          name={getContactName(contextMenu.row)}
+          isMuted={mutedPhones.has(String(contextMenu.row.phone))}
+          isMarkedUnread={markedUnreadPhones.has(String(contextMenu.row.phone))}
+          tags={getTagsForPhone(chatTags, contextMenu.row.phone)}
+          onClose={() => setContextMenu(null)}
+          onViewContact={() => {
+            setPhone(contextMenu.row.phone);
+            setContextMode('contact');
+          }}
+          onEditAlias={() => setAliasModalTarget({
+            phone: contextMenu.row.phone,
+            currentName: getContactName(contextMenu.row),
+            originalName: contextMenu.row.customer_name || contextMenu.row.push_name || '',
+            initialAlias: contactAliases[String(contextMenu.row.phone)] || '',
+          })}
+          onToggleUnread={() => handleToggleMarkedUnread(contextMenu.row.phone)}
+          onToggleMute={() => handleToggleMute(contextMenu.row.phone)}
+          onEditTags={() => setTagModalPhone(contextMenu.row.phone)}
+          onToggleBot={() => {
+            if (contextMenu.row.status === 'human') {
+              void action('release', () => whatsappOperator.releaseConversation(contextMenu.row.phone));
+            } else {
+              void action('take', () => whatsappOperator.takeConversation(contextMenu.row.phone));
+            }
+          }}
+          onCopyPhone={() => void navigator.clipboard?.writeText(formatPhone(contextMenu.row.phone))}
+          onArchive={canArchiveConversation ? () => setConversationArchive({
+            phone: contextMenu.row.phone,
+            customerName: getContactName(contextMenu.row),
+          }) : null}
+          onDelete={canDeleteConversation ? () => setConversationDelete({
+            phone: contextMenu.row.phone,
+            customerName: getContactName(contextMenu.row),
+          }) : null}
+        />
+      )}
+      {aliasModalTarget && (
+        <WhatsAppRenameContactModal
+          phone={aliasModalTarget.phone}
+          initialValue={aliasModalTarget.initialAlias || contactAliases[String(aliasModalTarget.phone)] || ''}
+          originalName={aliasModalTarget.originalName}
+          onSave={(newAlias) => handleSaveAlias(aliasModalTarget.phone, newAlias)}
+          onClose={() => setAliasModalTarget(null)}
+        />
+      )}
+      {tagModalPhone && (
+        <WhatsAppTagSelectorModal
+          phone={tagModalPhone}
+          contactName={
+            getContactName(
+              overview?.conversations?.find((c) => c.phone === tagModalPhone)
+              || (phone === tagModalPhone ? current : null)
+              || { phone: tagModalPhone }
+            )
+          }
+          activeTagIds={chatTags[String(tagModalPhone)] || []}
+          onToggleTag={(tagId) => handleToggleTag(tagId, tagModalPhone)}
+          onClose={() => setTagModalPhone(null)}
         />
       )}
     </section>

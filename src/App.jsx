@@ -11,6 +11,7 @@ import {
   Moon,
   Sun,
   Camera,
+  Bell,
   Loader2,
   CheckCircle2,
   X
@@ -111,6 +112,12 @@ import {
 } from './utils/supabaseSchemaFallback';
 import { buildBudgetPdfPayload, deriveOrderStatus, hydrateBudgetSnapshot } from './utils/budgetHelpers';
 import {
+  buildSupplierPriceChangeReport,
+  getSupplierPriceReportCutoff,
+  getSupplierPriceReportPeriod,
+  SUPPLIER_PRICE_REPORT_ACTIONS,
+} from './utils/supplierPriceReport';
+import {
   buildOrderOperationKey,
   getFinalizationPointsToCredit,
   isIncrementalOrderPoints,
@@ -150,6 +157,10 @@ import {
   shouldLoadPrivateAppUserDirectory,
 } from './utils/appUserLoadControl';
 import {
+  assessSecureSession,
+  getExpectedAuthUserId,
+} from './utils/secureSession';
+import {
   canAccessTab,
   canEditUserProfile,
   canManageUserPermissions,
@@ -158,6 +169,7 @@ import {
   getEffectivePermissions,
   hasPermission,
 } from './utils/userPermissions';
+import { isSafeExcelImportNumber } from './utils/excelImportNumbers';
 import {
   createOrderPaymentEntry,
   createOrderPaymentLine,
@@ -195,6 +207,7 @@ import {
   getProductActiveState,
   getProductSupplierLinks,
   hasHydratedSupplierLinks,
+  recordExcelImportApplication,
   removeCasaAlbertoLink,
   shouldAutoDisableOutOfStockProduct,
   updateStockLifecycleLinks,
@@ -254,6 +267,7 @@ const ImageModal = lazyNamedComponent(() => import('./components/modals/SaleModa
 const SaleSuccessModal = lazyNamedComponent(() => import('./components/modals/SaleModals'), 'SaleSuccessModal');
 const TicketModal = lazyNamedComponent(() => import('./components/modals/SaleModals'), 'TicketModal');
 const NotificationModal = lazyNamedComponent(() => import('./components/modals/NotificationModal'), 'NotificationModal');
+const SecureSessionReauthPanel = lazy(() => import('./components/SecureSessionReauthPanel'));
 const BarcodeNotFoundModal = lazyNamedComponent(() => import('./components/modals/BarcodeModals'), 'BarcodeNotFoundModal');
 const BarcodeDuplicateModal = lazyNamedComponent(() => import('./components/modals/BarcodeModals'), 'BarcodeDuplicateModal');
 const ExpenseModal = lazyNamedComponent(() => import('./components/modals/ExpenseModal'), 'ExpenseModal');
@@ -2832,7 +2846,11 @@ const getCloudErrorMessage = (error, fallback = 'Error de sincronizacion con la 
 
 const getCheckoutErrorMessage = (error) => {
   const message = getCloudErrorMessage(error, 'Fallo al guardar la venta.');
-  const errorText = [message, error?.details, error?.hint, error?.code].filter(Boolean).join(' ');
+  const errorText = [message, error?.details, error?.hint, error?.code, error?.status].filter(Boolean).join(' ');
+
+  if (/web service down|web server is down|521|503|502|504|gateway timeout|bad gateway|service unavailable|failed to fetch|networkerror/i.test(errorText)) {
+    return 'El servidor en la nube no responde temporalmente (corte de conexión o mantenimiento de Supabase). Verifica tu conexión a internet o reintenta en unos segundos.';
+  }
 
   if (/Operacion bloqueada: registrar ventas requiere RPC transaccional|sesion de Supabase Auth/i.test(errorText)) {
     return 'La sesion segura de Supabase no esta activa. Cierra sesion e ingresa nuevamente con la clave del usuario antes de cobrar. Si vuelve a pasar, vincula ese usuario a Supabase Auth.';
@@ -5544,9 +5562,15 @@ export default function PartySupplyApp() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [currentUser, setCurrentUser] = useState(null);
   const [currentSessionMeta, setCurrentSessionMeta] = useState(null);
+  const [secureSessionPrompt, setSecureSessionPrompt] = useState({
+    isOpen: false,
+    isSubmitting: false,
+    error: '',
+  });
   const [activeTab, setActiveTab] = useState('pos');
   const [imageImportTask, setImageImportTask] = useState(null);
   const [isImageImportTaskOpen, setIsImageImportTaskOpen] = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [imageImportOpenRequest, setImageImportOpenRequest] = useState(0);
   const [supplierOpenRequest, setSupplierOpenRequest] = useState(0);
 
@@ -5588,6 +5612,11 @@ export default function PartySupplyApp() {
   const productDetailRequestsRef = useRef(new Map());
   const memberCreationRequestsRef = useRef(new Set());
   const lastCloudFallbackNoticeRef = useRef(0);
+  const isCheckoutInProgressRef = useRef(false);
+  const secureSessionHealthRef = useRef(assessSecureSession());
+  const secureSessionCheckPromiseRef = useRef(null);
+  const pendingSecureCheckoutRef = useRef(null);
+  const notificationsPanelRef = useRef(null);
   activeTabRef.current = activeTab;
   dataStateRef.current = {
     inventory,
@@ -5804,6 +5833,7 @@ export default function PartySupplyApp() {
   const canViewBulkEditor = canAccessTab(currentUser, 'bulk-editor');
   const canViewAgenda = canAccessTab(currentUser, 'agenda');
   const canCreateInventory = hasPermission(currentUser, 'inventory.create');
+  const canEditInventory = hasPermission(currentUser, 'inventory.edit');
 
   useEffect(() => {
     if (!currentUser) return;
@@ -6214,6 +6244,100 @@ export default function PartySupplyApp() {
   currentSessionMetaRef.current = currentSessionMeta;
   showNotificationRef.current = showNotification;
 
+  const checkSecureSession = useCallback(async ({ source = 'manual' } = {}) => {
+    if (!ENABLE_AUTHENTICATED_TRANSACTION_RPCS || isLocalDemoMode()) {
+      return { status: 'disabled', isUsable: true, source };
+    }
+
+    if (secureSessionCheckPromiseRef.current) {
+      return secureSessionCheckPromiseRef.current;
+    }
+
+    const checkPromise = (async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        const assessment = assessSecureSession({
+          session: data?.session || null,
+          expectedAuthUserId: getExpectedAuthUserId(
+            currentUserRef.current,
+            currentSessionMetaRef.current,
+          ),
+          error,
+        });
+        secureSessionHealthRef.current = { ...assessment, source, checkedAt: Date.now() };
+        return secureSessionHealthRef.current;
+      } catch (error) {
+        const assessment = assessSecureSession({ error });
+        secureSessionHealthRef.current = { ...assessment, source, checkedAt: Date.now() };
+        return secureSessionHealthRef.current;
+      }
+    })();
+
+    secureSessionCheckPromiseRef.current = checkPromise;
+    try {
+      return await checkPromise;
+    } finally {
+      if (secureSessionCheckPromiseRef.current === checkPromise) {
+        secureSessionCheckPromiseRef.current = null;
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!ENABLE_AUTHENTICATED_TRANSACTION_RPCS || isLocalDemoMode()) return undefined;
+
+    const updateFromAuthEvent = (event, session) => {
+      const assessment = assessSecureSession({
+        session,
+        expectedAuthUserId: getExpectedAuthUserId(
+          currentUserRef.current,
+          currentSessionMetaRef.current,
+        ),
+      });
+      secureSessionHealthRef.current = {
+        ...assessment,
+        source: `auth:${String(event || 'unknown').toLowerCase()}`,
+        checkedAt: Date.now(),
+      };
+    };
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(updateFromAuthEvent);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && currentUserRef.current) {
+        void checkSecureSession({ source: 'visibility' });
+      }
+    };
+    const handleOnline = () => {
+      if (currentUserRef.current) {
+        void checkSecureSession({ source: 'online' });
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('online', handleOnline);
+    if (currentUserRef.current) void checkSecureSession({ source: 'mount' });
+
+    return () => {
+      authListener?.subscription?.unsubscribe?.();
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [checkSecureSession]);
+
+  useEffect(() => {
+    if (!currentUser || isAuthBootLoading) return;
+    void checkSecureSession({ source: 'rebu-user' });
+  }, [checkSecureSession, currentUser, isAuthBootLoading]);
+
+  const closeSecureSessionPrompt = useCallback(() => {
+    pendingSecureCheckoutRef.current = null;
+    setSecureSessionPrompt((current) => (
+      current.isSubmitting
+        ? current
+        : { isOpen: false, isSubmitting: false, error: '' }
+    ));
+  }, []);
+
   const getActorContext = (preferredName = null) => {
     const activeUser = currentUserRef.current;
     if (activeUser) {
@@ -6514,10 +6638,13 @@ export default function PartySupplyApp() {
   const clearAuthenticatedState = () => {
     const signOutPromise = supabase.auth.signOut().catch(() => {});
     clearRememberedSession();
+    pendingSecureCheckoutRef.current = null;
+    secureSessionHealthRef.current = assessSecureSession();
     currentSessionMetaRef.current = null;
     currentUserRef.current = null;
     setCurrentSessionMeta(null);
     setCurrentUser(null);
+    setSecureSessionPrompt({ isOpen: false, isSubmitting: false, error: '' });
     resetPosCartWorkspace();
     setLoginStep('select');
     setSelectedUserIdForLogin(null);
@@ -6666,6 +6793,42 @@ export default function PartySupplyApp() {
         'error',
       );
       return false;
+    } finally {
+      setExportPdfData(null);
+      restorePdfTheme();
+    }
+  };
+
+  const handleWhatsAppBudgetPdf = async ({ budget, items }) => {
+    if (!window.electronAPI?.captureExportPdf) {
+      throw new Error('Abrí Rebu como aplicación de escritorio para generar el PDF.');
+    }
+    const restorePdfTheme = forceLightThemeForPdfExport();
+    try {
+      setExportPdfData({
+        config: {
+          isForClient: true,
+          documentTitle: 'PRESUPUESTO',
+          clientName: budget?.customerName || 'Cliente',
+          clientPhone: budget?.customerPhone || '',
+          clientColumns: { showQty: true, showUnitPrice: true, showSubtotal: false, showTotal: true },
+        },
+        items: (items || []).map((item) => ({
+          id: item.product_id || item.title,
+          title: item.title,
+          category: item.category || 'WhatsApp',
+          qty: Number(item.quantity) || 0,
+          newPrice: Number(item.unit_price) || 0,
+          product_type: item.product_type || 'quantity',
+        })),
+        date: formatDateAR(new Date()),
+      });
+      await waitForPdfExportReady();
+      const result = await window.electronAPI.captureExportPdf();
+      if (!result?.success || !result.base64) {
+        throw new Error(result?.error || 'No se pudo generar el PDF.');
+      }
+      return result;
     } finally {
       setExportPdfData(null);
       restorePdfTheme();
@@ -7468,7 +7631,8 @@ export default function PartySupplyApp() {
     if (isLocalDemoMode()) return null;
     if (!ENABLE_AUTHENTICATED_TRANSACTION_RPCS) return null;
     if (!(await canUseAuthenticatedTransactionRpcs())) {
-      throw createTransactionRpcRequiredError('registrar ventas');
+      console.warn('Venta sin RPC autenticada: se usara el guardado compatible para no bloquear la caja.');
+      return null;
     }
 
     const { data, error } = await supabase.rpc('register_sale_transaction', {
@@ -7675,25 +7839,29 @@ export default function PartySupplyApp() {
 
     if (candidateIds.length === 0) return safeItems;
 
-    let validIds;
-    if (isLocalDemoMode()) {
-      validIds = new Set(
-        inventory
-          .map((product) => product?.id)
-          .filter((id) => id !== null && id !== undefined)
-          .map(String)
-      );
-    } else {
-      const { data, error } = await supabase
-        .from('products')
-        .select('id')
-        .in('id', candidateIds);
+    const localProductIds = new Set(
+      (Array.isArray(inventory) ? inventory : [])
+        .map((product) => product?.id)
+        .filter((id) => id !== null && id !== undefined)
+        .map(String)
+    );
 
-      if (error) {
-        throw new Error(`No se pudieron validar los productos de la venta: ${error.message}`);
+    const missingIds = candidateIds.filter((id) => !localProductIds.has(id));
+    let validIds = new Set(localProductIds);
+
+    if (missingIds.length > 0 && !isLocalDemoMode() && !isBrowserOffline()) {
+      try {
+        const { data, error } = await supabase
+          .from('products')
+          .select('id')
+          .in('id', missingIds);
+
+        if (!error && Array.isArray(data)) {
+          data.forEach((product) => validIds.add(String(product.id)));
+        }
+      } catch (validationErr) {
+        console.warn('No se pudo verificar productos faltantes en la nube:', validationErr);
       }
-
-      validIds = new Set((data || []).map((product) => String(product.id)));
     }
 
     return safeItems.map((item) => {
@@ -10944,7 +11112,7 @@ export default function PartySupplyApp() {
       }
     }
 
-    if (!offline && ENABLE_AUTHENTICATED_TRANSACTION_RPCS && !supabaseAuthMeta.signedIn) {
+    if (!offline && !isLocalDemoMode() && ENABLE_AUTHENTICATED_TRANSACTION_RPCS && !supabaseAuthMeta.signedIn) {
       throw new Error(getSupabaseAuthLoginRequiredMessage(supabaseAuthMeta));
     }
 
@@ -10955,6 +11123,7 @@ export default function PartySupplyApp() {
         signedIn: Boolean(supabaseAuthMeta.signedIn),
         reason: supabaseAuthMeta.reason || null,
         authUserId: supabaseAuthMeta.authUser?.id || null,
+        authEmail: verifiedUser.authEmail || verifiedUser.auth_email || null,
       },
     };
     setAppUsers((prev) =>
@@ -12590,6 +12759,10 @@ export default function PartySupplyApp() {
   };
 
   const handleCreateExcelProducts = async (draftsToCreate = []) => {
+    if (!hasPermission(currentUserRef.current, 'inventory.create')) {
+      showNotification('error', 'Permiso requerido', 'Necesitas permiso para crear productos desde Excel.');
+      return { created: [], failed: [] };
+    }
     if (blockIfOfflineReadonly('crear productos desde Excel')) {
       return { created: [], failed: [] };
     }
@@ -12616,9 +12789,9 @@ export default function PartySupplyApp() {
 
         if (!title) throw new Error('Falta el nombre del producto.');
         if (!category) throw new Error('Falta seleccionar una categoria.');
-        if (!Number.isFinite(stockDelta) || stockDelta < 0) throw new Error('La cantidad asignada no es valida.');
-        if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) throw new Error('El costo debe ser mayor a cero.');
-        if (!Number.isFinite(price) || price <= 0) throw new Error('El precio debe ser mayor a cero.');
+        if (!isSafeExcelImportNumber(stockDelta, { min: 0 })) throw new Error('La cantidad asignada no es valida.');
+        if (!isSafeExcelImportNumber(purchasePrice, { min: Number.MIN_VALUE }) || purchasePrice <= 0) throw new Error('El costo debe ser mayor a cero.');
+        if (!isSafeExcelImportNumber(price, { min: Number.MIN_VALUE }) || price <= 0) throw new Error('El precio debe ser mayor a cero.');
         if (price < purchasePrice) throw new Error('El precio no puede ser menor al costo.');
         if (barcode && reservedBarcodes.has(barcode)) {
           throw new Error(`El codigo ${barcode} ya pertenece a otro producto.`);
@@ -12689,6 +12862,10 @@ export default function PartySupplyApp() {
   };
 
   const handleExcelProductImport = async (rowsToApply = []) => {
+    if (!hasPermission(currentUserRef.current, 'inventory.edit')) {
+      showNotification('error', 'Permiso requerido', 'Necesitas permiso para modificar inventario desde Excel.');
+      return { appliedRowIds: [] };
+    }
     if (blockIfOfflineReadonly('importar productos desde Excel')) return { appliedRowIds: [] };
     const safeRows = Array.isArray(rowsToApply) ? rowsToApply : [];
     if (safeRows.length === 0) return { appliedRowIds: [] };
@@ -12711,9 +12888,40 @@ export default function PartySupplyApp() {
         const currentStock = Number(product.stock || 0);
         const currentCost = Number(product.purchasePrice || 0);
         const currentPrice = Number(product.price || 0);
-        const stockDelta = row.approvals?.stock ? Number(row.quantity || 0) : 0;
+        const stockDelta = row.approvals?.stock ? Number(row.quantity ?? 0) : 0;
         const currentSupplierLinks = getProductSupplierLinks(product);
         let nextSupplierLinks = currentSupplierLinks;
+
+        if (!isSafeExcelImportNumber(currentStock)) throw new Error('El stock actual del producto no es valido.');
+        if (!isSafeExcelImportNumber(currentCost, { min: 0 })) throw new Error('El costo actual del producto no es valido.');
+        if (!isSafeExcelImportNumber(currentPrice, { min: 0 })) throw new Error('El precio actual del producto no es valido.');
+        if (row.approvals?.stock && (!isSafeExcelImportNumber(stockDelta, { min: Number.MIN_VALUE }) || stockDelta <= 0)) {
+          throw new Error('La variacion de stock no es valida.');
+        }
+        if (row.approvals?.stock && !isSafeExcelImportNumber(currentStock + stockDelta, { min: 0 })) {
+          throw new Error('El stock resultante queda fuera de rango.');
+        }
+        if (row.approvals?.cost && !isSafeExcelImportNumber(row.after?.cost, { min: Number.MIN_VALUE })) {
+          throw new Error('El costo importado no es valido.');
+        }
+        if (row.approvals?.price && !isSafeExcelImportNumber(row.after?.price, { min: Number.MIN_VALUE })) {
+          throw new Error('El precio importado no es valido.');
+        }
+        if (row.approvals?.stock && currentStock !== Number(row.before?.stock)) {
+          throw new Error('El stock cambio despues de revisar el Excel. Volve a confirmar la fila.');
+        }
+        if (row.approvals?.cost && currentCost !== Number(row.before?.cost ?? row.before?.purchasePrice)) {
+          throw new Error('El costo cambio despues de revisar el Excel. Volve a confirmar la fila.');
+        }
+        if (row.approvals?.price && currentPrice !== Number(row.before?.price)) {
+          throw new Error('El precio cambio despues de revisar el Excel. Volve a confirmar la fila.');
+        }
+        if (
+          row.shouldAssignBarcode
+          && String(product.barcode || '').trim() !== String(row.before?.barcode || '').trim()
+        ) {
+          throw new Error('El codigo de barras cambio despues de revisar el Excel. Volve a confirmar la fila.');
+        }
 
         if (row.approvals?.cost) payload.purchasePrice = Number(row.after?.cost || currentCost);
         if (row.approvals?.price) payload.price = Number(row.after?.price || currentPrice);
@@ -12721,6 +12929,14 @@ export default function PartySupplyApp() {
 
         if (row.shouldSaveExcelLink && row.excelLink) {
           nextSupplierLinks = upsertExcelImportAlias(nextSupplierLinks, row.excelLink);
+          payload.supplier_links = nextSupplierLinks;
+        }
+
+        if (row.importApplication?.signature) {
+          nextSupplierLinks = recordExcelImportApplication(
+            nextSupplierLinks,
+            row.importApplication,
+          );
           payload.supplier_links = nextSupplierLinks;
         }
 
@@ -12975,6 +13191,10 @@ export default function PartySupplyApp() {
   };
 
   const handleUndoExcelProductImport = async (itemsToUndo = []) => {
+    if (!hasPermission(currentUserRef.current, 'inventory.edit')) {
+      showNotification('error', 'Permiso requerido', 'Necesitas permiso para deshacer cambios de inventario.');
+      return { undoneRowIds: [] };
+    }
     if (blockIfOfflineReadonly('deshacer importacion desde Excel')) return { undoneRowIds: [] };
     const safeItems = Array.isArray(itemsToUndo) ? itemsToUndo : [];
     if (safeItems.length === 0) return { undoneRowIds: [] };
@@ -13538,6 +13758,83 @@ export default function PartySupplyApp() {
     return { products: updatedProducts.filter(Boolean) };
   };
 
+  const handleExportSupplierPriceReport = async (days = 1) => {
+    if (blockIfOfflineReadonly('exportar el historial de precios de Casa Alberto')) {
+      return { success: false, offline: true };
+    }
+    if (!window.electronAPI?.saveSupplierPriceReportPdf) {
+      await Swal.fire({
+        icon: 'info',
+        title: 'Electron requerido',
+        text: 'El historial PDF se guarda desde la aplicación de escritorio.',
+        confirmButtonText: 'Entendido',
+      });
+      return { success: false, unsupported: true };
+    }
+
+    const period = getSupplierPriceReportPeriod(days);
+    const now = new Date();
+    const cutoff = getSupplierPriceReportCutoff(period.days, now);
+
+    try {
+      const logsResult = await fetchAllCloudRowsWithSelectFallback(
+        (selectColumns) => supabase
+          .from('logs')
+          .select(selectColumns)
+          .in('action', SUPPLIER_PRICE_REPORT_ACTIONS)
+          .gte('created_at', cutoff.toISOString())
+          .lte('created_at', now.toISOString())
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false }),
+        CLOUD_SELECTS.logs,
+        CLOUD_FETCH_BATCH_SIZE,
+      );
+      if (logsResult.error) throw logsResult.error;
+
+      const report = buildSupplierPriceChangeReport(mapLogRecords(logsResult.data || []), {
+        days: period.days,
+        now,
+      });
+      if (report.changes.length === 0) {
+        await Swal.fire({
+          icon: 'info',
+          title: 'Sin cambios en el período',
+          text: `No hay aprobaciones ni reversiones de Casa Alberto en ${period.label.toLowerCase()}.`,
+          confirmButtonText: 'Cerrar',
+        });
+        return { success: false, empty: true };
+      }
+
+      const result = await window.electronAPI.saveSupplierPriceReportPdf({
+        report,
+        defaultName: `Cambios Casa Alberto - ${period.fileLabel}.pdf`,
+      });
+      if (result?.canceled) return result;
+      if (!result?.success) throw new Error(result?.error || 'No se pudo guardar el PDF.');
+
+      void addLog('Exportacion PDF Casa Alberto', {
+        source: 'Productos Avanzado / Casa Alberto',
+        periodDays: period.days,
+        periodLabel: period.label,
+        changeCount: report.summary.changeCount,
+        uniqueProducts: report.summary.uniqueProducts,
+        fileName: String(result.filePath || '').split(/[\\/]/).pop() || '',
+      }, 'Casa Alberto').catch((logError) => {
+        console.warn('No se pudo registrar la exportacion PDF de Casa Alberto:', logError);
+      });
+      showNotification(
+        'success',
+        'Historial PDF guardado',
+        `${report.summary.changeCount} cambio(s) de ${report.summary.uniqueProducts} producto(s).`,
+      );
+      return result;
+    } catch (error) {
+      console.error('Error exportando historial de precios de Casa Alberto:', error);
+      showNotification('error', 'No se pudo crear el PDF', error?.message || 'Reintentá en unos segundos.');
+      return { success: false, error: error?.message || 'No se pudo crear el PDF.' };
+    }
+  };
+
   const handleApplySupplierPriceUpdates = async (updatesToApply = []) => {
     if (blockIfOfflineReadonly('aprobar costos de Casa Alberto')) return { products: [] };
     const safeUpdates = Array.isArray(updatesToApply) ? updatesToApply : [];
@@ -13630,6 +13927,7 @@ export default function PartySupplyApp() {
         logItems.push({
           id: product.id,
           title: product.title,
+          barcode: product.barcode || '',
           provider: 'Cotillon Casa Alberto',
           supplierCode: update.supplierCode || '',
           casaAlbertoId: update.casaAlbertoId || '',
@@ -13752,6 +14050,7 @@ export default function PartySupplyApp() {
         logItems.push({
           id: product.id,
           title: product.title,
+          barcode: product.barcode || '',
           provider: 'Cotillon Casa Alberto',
           supplierCode: update.supplierCode || '',
           casaAlbertoId: update.casaAlbertoId || '',
@@ -14147,15 +14446,25 @@ export default function PartySupplyApp() {
   };
 
   const handleCheckout = async (checkoutOptions = {}) => {
+    if (isCheckoutInProgressRef.current) return;
+    isCheckoutInProgressRef.current = true;
     const checkoutPosCartId = activePosCartId;
-    if (blockIfOfflineReadonly('registrar ventas')) return;
-    if (ENABLE_AUTHENTICATED_TRANSACTION_RPCS && !(await canUseAuthenticatedTransactionRpcs())) {
-      Swal.fire(
-        'Sesion segura requerida',
-        'Cierra sesion e ingresa nuevamente con la clave del usuario antes de cobrar. Supabase necesita esa sesion para guardar la venta completa.',
-        'warning',
-      );
+    if (blockIfOfflineReadonly('registrar ventas')) {
+      isCheckoutInProgressRef.current = false;
       return;
+    }
+    if (ENABLE_AUTHENTICATED_TRANSACTION_RPCS) {
+      const secureSession = await checkSecureSession({ source: 'checkout' });
+      if (!secureSession.isUsable) {
+        pendingSecureCheckoutRef.current = { checkoutOptions };
+        isCheckoutInProgressRef.current = false;
+        setSecureSessionPrompt({
+          isOpen: true,
+          isSubmitting: false,
+          error: '',
+        });
+        return;
+      }
     }
 
     const merchandiseSubtotal = cart.reduce(
@@ -14208,6 +14517,7 @@ export default function PartySupplyApp() {
     const { stockIssues } = getSaleStockDeltaPreview(checkoutStockDelta);
 
     if (stockIssues.length > 0) { 
+      isCheckoutInProgressRef.current = false;
       showNotification('error', 'Falta Stock', `Revisar: ${stockIssues.join(', ')}`); 
       return; 
     }
@@ -14231,7 +14541,7 @@ export default function PartySupplyApp() {
         installments: primaryInstallments,
         client_id: clientId,
         points_earned: clientId ? pointsEarned : 0,
-        points_spent: pointsSpent,
+        pointsSpent: pointsSpent,
         user_id: toOptionalDbId(actor.userId),
         user_role: actor.userRole,
         user_name: actor.userName,
@@ -14429,7 +14739,7 @@ export default function PartySupplyApp() {
 
       const isGuest = !posSelectedClient || posSelectedClient.id === 'guest';
       
-      await addLog('Venta Realizada', {
+      void addLog('Venta Realizada', {
         transactionId: tx.id, total: total, items: logItems,
         subtotal,
         merchandiseSubtotal,
@@ -14446,7 +14756,9 @@ export default function PartySupplyApp() {
         pointsSpent: pointsSpent,
         pointsChange: pointsChange,
         stockChanges,
-      }, 'Venta regular');
+      }, 'Venta regular').catch((logErr) => {
+        console.warn('Error no bloqueante guardando log de venta en nube:', logErr);
+      });
       
       setSaleSuccessModal(tx);
       closePosCartAfterCheckout(checkoutPosCartId);
@@ -14456,6 +14768,99 @@ export default function PartySupplyApp() {
     } catch (e) {
       console.error(e);
       Swal.fire('Error', getCheckoutErrorMessage(e), 'error');
+    } finally {
+      isCheckoutInProgressRef.current = false;
+    }
+  };
+
+  const handleSecureSessionReauthentication = async (password) => {
+    const activeUser = currentUserRef.current;
+    if (!activeUser?.id) {
+      setSecureSessionPrompt((current) => ({
+        ...current,
+        error: 'No encontramos el usuario activo de Rebu. Vuelve a iniciar sesion.',
+      }));
+      return;
+    }
+    if (isBrowserOffline()) {
+      setSecureSessionPrompt((current) => ({
+        ...current,
+        error: 'Sin internet no podemos recuperar la sesion segura. El carrito sigue guardado.',
+      }));
+      return;
+    }
+
+    setSecureSessionPrompt((current) => ({
+      ...current,
+      isSubmitting: true,
+      error: '',
+    }));
+
+    try {
+      const verifiedUser = await verifyAppUserLogin({
+        userId: activeUser.id,
+        password,
+      });
+      if (!verifiedUser) {
+        throw new Error('La clave no es correcta. Intenta nuevamente.');
+      }
+
+      const supabaseAuthMeta = await signInSupabaseAuthForAppUser({
+        user: verifiedUser,
+        password,
+      });
+      if (!supabaseAuthMeta.signedIn) {
+        throw new Error(getSupabaseAuthLoginRequiredMessage(supabaseAuthMeta));
+      }
+
+      const secureSession = assessSecureSession({
+        session: supabaseAuthMeta.session,
+        expectedAuthUserId: verifiedUser.authUserId || verifiedUser.auth_user_id,
+      });
+      if (!secureSession.isUsable) {
+        throw new Error(secureSession.reason || 'No se pudo recuperar la sesion segura.');
+      }
+
+      const refreshedUser = { ...activeUser, ...verifiedUser };
+      const refreshedSessionMeta = {
+        ...(currentSessionMetaRef.current || {}),
+        lastActivityAt: new Date().toISOString(),
+        supabaseAuth: {
+          signedIn: true,
+          reason: null,
+          authUserId: supabaseAuthMeta.authUser?.id || verifiedUser.authUserId || null,
+          authEmail: verifiedUser.authEmail || verifiedUser.auth_email || null,
+        },
+      };
+
+      currentUserRef.current = refreshedUser;
+      currentSessionMetaRef.current = refreshedSessionMeta;
+      secureSessionHealthRef.current = {
+        ...secureSession,
+        source: 'reauthentication',
+        checkedAt: Date.now(),
+      };
+      setCurrentUser(refreshedUser);
+      setCurrentSessionMeta(refreshedSessionMeta);
+      setAppUsers((currentUsers) => currentUsers.map((user) => (
+        String(user.id) === String(refreshedUser.id)
+          ? { ...user, ...refreshedUser }
+          : user
+      )));
+
+      const pendingCheckout = pendingSecureCheckoutRef.current;
+      pendingSecureCheckoutRef.current = null;
+      setSecureSessionPrompt({ isOpen: false, isSubmitting: false, error: '' });
+
+      if (pendingCheckout) {
+        Promise.resolve().then(() => handleCheckout(pendingCheckout.checkoutOptions));
+      }
+    } catch (error) {
+      setSecureSessionPrompt({
+        isOpen: true,
+        isSubmitting: false,
+        error: error?.message || 'No se pudo recuperar la sesion segura.',
+      });
     }
   };
 
@@ -15400,11 +15805,27 @@ export default function PartySupplyApp() {
     const key = `${summary.changes}-${summary.errors}-${summary.linked}`;
     return { ...summary, key };
   }, [inventory]);
-  const shouldShowSupplierGlobalNotice =
+  const hasSupplierGlobalNotice =
     currentUser &&
-    activeTab !== 'bulk-editor' &&
     (supplierGlobalNotice.changes > 0 || supplierGlobalNotice.errors > 0) &&
     dismissedSupplierNoticeKey !== supplierGlobalNotice.key;
+  const operationalNotificationCount = hasSupplierGlobalNotice ? 1 : 0;
+
+  useEffect(() => {
+    if (!isNotificationsOpen) return undefined;
+    const handlePointerDown = (event) => {
+      if (!notificationsPanelRef.current?.contains(event.target)) setIsNotificationsOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setIsNotificationsOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isNotificationsOpen]);
   const fallbackLoginUsers = useMemo(
     () => buildLegacyUsers(USERS, userSettings),
     [userSettings],
@@ -15962,6 +16383,112 @@ export default function PartySupplyApp() {
                     </span>
                   )}
                 </button>
+                <div ref={notificationsPanelRef} className="app-notifications relative">
+                  <button
+                    type="button"
+                    onClick={() => setIsNotificationsOpen((open) => !open)}
+                    className={`app-topbar-notification ${operationalNotificationCount > 0 ? 'has-pending' : ''}`}
+                    aria-label={`Notificaciones, ${operationalNotificationCount} pendiente${operationalNotificationCount === 1 ? '' : 's'}`}
+                    aria-expanded={isNotificationsOpen}
+                    aria-haspopup="true"
+                    title="Notificaciones"
+                  >
+                    <Bell size={14} />
+                    {operationalNotificationCount > 0 && (
+                      <span aria-hidden="true" className="app-notification-badge">
+                        {operationalNotificationCount}
+                      </span>
+                    )}
+                  </button>
+
+                  {isNotificationsOpen && (
+                    <div
+                      role="region"
+                      aria-label="Bandeja de notificaciones"
+                      className="app-notifications-panel absolute right-0 top-full mt-2 w-[372px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-slate-700/80 bg-[#0f1e33] text-slate-100 shadow-xl shadow-slate-950/30"
+                    >
+                      <div className="flex h-11 items-center justify-between border-b border-slate-700/70 bg-[#102139] px-3.5">
+                        <div className="flex items-center gap-2">
+                          <Bell size={13} className="text-slate-400" />
+                          <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-200">Notificaciones</p>
+                        </div>
+                        <span className="rounded border border-slate-700 bg-slate-950/20 px-1.5 py-1 text-[9px] font-black tabular-nums text-slate-400">
+                          {operationalNotificationCount} pendiente{operationalNotificationCount === 1 ? '' : 's'}
+                        </span>
+                      </div>
+
+                      {hasSupplierGlobalNotice ? (
+                        <article className="relative">
+                          <span aria-hidden="true" className="absolute inset-y-0 left-0 w-0.5 bg-amber-300" />
+                          <div className="px-4 pb-3 pt-3.5">
+                            <div className="flex items-start gap-3">
+                              <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-amber-300/25 bg-amber-300/10 text-amber-200">
+                                <AlertTriangle size={14} />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[9px] font-black uppercase tracking-[0.14em] text-amber-200">Casa Alberto</p>
+                                <p className="mt-0.5 text-[12px] font-black text-white">Revisión de costos pendiente</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setDismissedSupplierNoticeKey(supplierGlobalNotice.key)}
+                                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-700 bg-slate-950/30 text-slate-400 transition hover:border-red-400/40 hover:bg-red-400/10 hover:text-red-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+                                title="Descartar notificación"
+                                aria-label="Descartar notificación de Casa Alberto"
+                              >
+                                <X size={13} />
+                              </button>
+                            </div>
+
+                            <div className="ml-10 mt-3 flex items-center rounded-md border border-slate-700/70 bg-slate-950/25 py-2">
+                              <div className="flex flex-1 items-baseline justify-center gap-1.5 px-2">
+                                <strong className="text-base font-black tabular-nums text-amber-200">{supplierGlobalNotice.changes}</strong>
+                                <span className="text-[9px] font-black uppercase tracking-[0.08em] text-slate-400">cambios</span>
+                              </div>
+                              <span aria-hidden="true" className="h-6 w-px bg-slate-700" />
+                              <div className="flex flex-1 items-baseline justify-center gap-1.5 px-2">
+                                <strong className={`text-base font-black tabular-nums ${supplierGlobalNotice.errors > 0 ? 'text-red-300' : 'text-emerald-300'}`}>
+                                  {supplierGlobalNotice.errors}
+                                </strong>
+                                <span className="text-[9px] font-black uppercase tracking-[0.08em] text-slate-400">errores</span>
+                              </div>
+                            </div>
+
+                            <p className="ml-10 mt-2.5 text-[10px] font-bold leading-relaxed text-slate-400">
+                              Hay costos del proveedor que necesitan una revisión manual antes de aplicarse.
+                            </p>
+                          </div>
+                          <div className="flex items-center justify-end gap-2 border-t border-slate-700/70 bg-slate-950/15 px-4 py-2.5">
+                            <button
+                              type="button"
+                              onClick={() => setDismissedSupplierNoticeKey(supplierGlobalNotice.key)}
+                              className="inline-flex h-8 items-center justify-center rounded-md px-3 text-[9px] font-black uppercase tracking-[0.06em] text-slate-400 transition hover:bg-slate-700/40 hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
+                            >
+                              Descartar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveTab('bulk-editor');
+                                setSupplierOpenRequest((current) => current + 1);
+                                setIsNotificationsOpen(false);
+                              }}
+                              className="inline-flex h-8 items-center justify-center rounded-md border border-emerald-400/35 bg-emerald-400/10 px-3.5 text-[9px] font-black uppercase tracking-[0.06em] text-emerald-100 transition hover:bg-emerald-400/18 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+                            >
+                              Revisar costos
+                            </button>
+                          </div>
+                        </article>
+                      ) : (
+                        <div className="px-4 py-6 text-center">
+                          <CheckCircle2 size={19} className="mx-auto text-emerald-300" />
+                          <p className="mt-2 text-[11px] font-black text-slate-200">No hay pendientes</p>
+                          <p className="mt-1 text-[10px] font-bold text-slate-500">Los avisos operativos van a aparecer aca.</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
                 <button
                   type="button"
                   onClick={handleSoftReload}
@@ -16069,54 +16596,6 @@ export default function PartySupplyApp() {
               </div>
             </div>
           )}
-          {shouldShowSupplierGlobalNotice && (
-            <div className="pointer-events-none fixed right-4 top-20 z-[70] w-[320px] max-w-[calc(100vw-2rem)]">
-              <div className="pointer-events-auto overflow-hidden rounded-xl border border-amber-300/35 bg-[#0f1e33] text-slate-100 shadow-2xl">
-                <div className="h-1 bg-amber-300" />
-                <div className="p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-200">Casa Alberto</p>
-                      <p className="mt-1 text-sm font-black text-white">
-                        {supplierGlobalNotice.changes} cambios - {supplierGlobalNotice.errors} errores
-                      </p>
-                      <p className="mt-1 text-[11px] font-bold text-slate-400">
-                        Hay costos del proveedor para revisar manualmente.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setDismissedSupplierNoticeKey(supplierGlobalNotice.key)}
-                      className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 bg-slate-950/30 text-slate-400 hover:text-white"
-                      title="Descartar"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                  <div className="mt-3 flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveTab('bulk-editor');
-                        setSupplierOpenRequest((current) => current + 1);
-                      }}
-                      className="h-8 flex-1 rounded-md border border-emerald-400/35 bg-emerald-400/14 text-[11px] font-black text-emerald-100 hover:bg-emerald-400/20"
-                    >
-                      Ver revision
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setDismissedSupplierNoticeKey(supplierGlobalNotice.key)}
-                      className="h-8 rounded-md border border-slate-700 bg-slate-950/30 px-3 text-[11px] font-black text-slate-300 hover:bg-slate-800"
-                    >
-                      Descartar
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-          
           <main className={mainContentClass}>
             {isCoreHydratingForSession ? (
               <div className="flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white shadow-sm">
@@ -16183,7 +16662,10 @@ export default function PartySupplyApp() {
                   currentUser={currentUser}
                   inventory={inventory}
                   members={members}
+                  agendaContacts={agendaContacts}
+                  transactions={transactions}
                   onCreateBudget={handleCreateBudget}
+                  onBudgetPdf={handleWhatsAppBudgetPdf}
                 />
               </PersistentTabPanel>
             )}
@@ -16201,7 +16683,38 @@ export default function PartySupplyApp() {
               </PersistentTabPanel>
             )}
             <PersistentTabPanel tab="orders" activeTab={activeTab} className="h-full min-h-0"><OrdersView budgets={budgets} orders={orders} members={members} inventory={inventory} categories={categories} offers={offers} currentUser={currentUser} userCatalog={userCatalog} isLoading={isOrdersModuleLoading && budgets.length === 0 && orders.length === 0} emptyStateMessage={ordersOfflineEmptyMessage} onCreateBudget={handleCreateBudget} onUpdateBudget={handleUpdateBudget} onUpdateOrder={handleUpdateOrder} onUpdateOrderDeposit={handleUpdateOrderDeposit} onDeleteBudget={handleDeleteBudget} onDeleteOrder={handleDeleteOrder} onConvertBudgetToOrder={handleConvertBudgetToOrder} onRegisterOrderPayment={handleRegisterOrderPayment} onCancelOrder={handleCancelOrder} onMarkOrderRetired={handleMarkOrderRetired} onPrintRecord={handlePrintOrderRecord} /></PersistentTabPanel>
-            <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0"><HistoryView transactions={transactions} dailyLogs={historyLogs} inventory={inventory} currentUser={currentUser} userCatalog={userCatalog} members={members} isLoading={isHistoryModuleLoading && transactions.length === 0 && historyLogs.length === 0} emptyStateMessage={historyOfflineEmptyMessage} showNotification={showNotification} onViewTicket={handleViewTicket} onDeleteTransaction={handleDeleteTransaction} onEditTransaction={handleEditTransactionRequest} onRestoreTransaction={handleRestoreTransaction} setTransactions={setTransactions} setDailyLogs={setHistoryLogs} navigationRequest={historyNavigationRequest} onSoftReload={() => Promise.all([loadHistoryCloudData({ force: true }), loadTransactionsCloudData({ force: true, full: false })])} isActive={activeTab === 'history'} enableCloudFeed={!isLocalDemoMode() && !isOfflineReadOnly} /></PersistentTabPanel>
+            <PersistentTabPanel tab="history" activeTab={activeTab} className="h-full min-h-0">
+              <HistoryView
+                transactions={transactions}
+                expenses={expenses}
+                dailyLogs={historyLogs}
+                inventory={inventory}
+                currentUser={currentUser}
+                userCatalog={userCatalog}
+                members={members}
+                isLoading={isHistoryModuleLoading && transactions.length === 0 && historyLogs.length === 0}
+                emptyStateMessage={historyOfflineEmptyMessage}
+                showNotification={showNotification}
+                onViewTicket={handleViewTicket}
+                onDeleteTransaction={handleDeleteTransaction}
+                onEditTransaction={handleEditTransactionRequest}
+                onRestoreTransaction={handleRestoreTransaction}
+                onOpenExpenseModal={() => {
+                  setExpenseToEdit(null);
+                  setIsExpenseModalOpen(true);
+                }}
+                onViewExpense={(expense) => {
+                  setExpenseToEdit(expense);
+                  setIsExpenseModalOpen(true);
+                }}
+                setTransactions={setTransactions}
+                setDailyLogs={setHistoryLogs}
+                navigationRequest={historyNavigationRequest}
+                onSoftReload={() => Promise.all([loadHistoryCloudData({ force: true }), loadTransactionsCloudData({ force: true, full: false })])}
+                isActive={activeTab === 'history'}
+                enableCloudFeed={!isLocalDemoMode() && !isOfflineReadOnly}
+              />
+            </PersistentTabPanel>
             {canViewReports && (<PersistentTabPanel tab="reports" activeTab={activeTab} className="h-full min-h-0"><ReportsHistoryView pastClosures={pastClosures} members={members} isLoading={isReportsModuleLoading && pastClosures.length === 0} emptyStateMessage={reportsOfflineEmptyMessage} onLoadReportDetail={fetchCashClosureDetailById} /></PersistentTabPanel>)}
             {canViewMetrics && (<PersistentTabPanel tab="metrics" activeTab={activeTab} className="h-full min-h-0"><MetricsView transactions={transactions} expenses={expenses} pastClosures={pastClosures} inventory={inventory} members={members} budgets={budgets} orders={orders} dailyLogs={dailyLogs} currentUser={currentUser} userCatalog={userCatalog} isLoading={isMetricsModuleLoading && transactions.length === 0 && expenses.length === 0 && pastClosures.length === 0} isProfitSyncing={isMetricsProfitSyncing} emptyStateMessage={metricsOfflineEmptyMessage} onRefresh={async () => { await loadCoreCloudData({ force: false }); return loadMetricsCloudData({ force: true, includeTransactions: true, full: true }); }} isActive={activeTab === 'metrics'} /></PersistentTabPanel>)}
             {canViewLogs && (<PersistentTabPanel tab="logs" activeTab={activeTab} className="h-full min-h-0"><LogsView initialLogs={dailyLogs} onUpdateLogNote={handleUpdateLogNote} onReprintPdf={handleReprintPdf} userCatalog={userCatalog} inventory={inventory} isActive={activeTab === 'logs'} /></PersistentTabPanel>)}
@@ -16257,6 +16770,7 @@ export default function PartySupplyApp() {
             {canViewBulkEditor && (
               <PersistentTabPanel tab="bulk-editor" activeTab={activeTab} className="h-full min-h-0">
                 <BulkEditorView 
+                currentUser={currentUser}
                 inventory={inventory} 
                 categories={categories} 
                 onSaveSingle={handleBulkSaveSingle} 
@@ -16276,10 +16790,13 @@ export default function PartySupplyApp() {
                 onImageImportTaskChange={setImageImportTask}
                 imageImportOpenRequest={imageImportOpenRequest}
                 onSaveSupplierPriceChecks={handleSaveSupplierPriceChecks}
+                onExportSupplierPriceReport={handleExportSupplierPriceReport}
                 onApplySupplierPriceUpdates={handleApplySupplierPriceUpdates}
                 onUndoSupplierPriceUpdates={handleUndoSupplierPriceUpdates}
                 onUpdateCasaAlbertoLinks={handleUpdateCasaAlbertoLinks}
                 isOfflineReadOnly={isOfflineReadOnly}
+                canCreateInventory={canCreateInventory}
+                canEditInventory={canEditInventory}
                 supplierOpenRequest={supplierOpenRequest}
                 />
               </PersistentTabPanel>
@@ -16310,6 +16827,16 @@ export default function PartySupplyApp() {
       <div className="print:hidden">
         <Suspense fallback={null}>
           {notification.isOpen && <NotificationModal isOpen onClose={closeNotification} type={notification.type} title={notification.title} message={notification.message} />}
+          {secureSessionPrompt.isOpen && (
+            <SecureSessionReauthPanel
+              isOpen
+              userName={currentUser?.displayName || currentUser?.name || 'usuario'}
+              error={secureSessionPrompt.error}
+              isSubmitting={secureSessionPrompt.isSubmitting}
+              onSubmit={handleSecureSessionReauthentication}
+              onClose={closeSecureSessionPrompt}
+            />
+          )}
           {isOpeningBalanceModalOpen && <OpeningBalanceModal isOpen onClose={() => setIsOpeningBalanceModalOpen(false)} tempOpeningBalance={tempOpeningBalance} setTempOpeningBalance={setTempOpeningBalance} tempClosingTime={tempClosingTime} setTempClosingTime={setTempClosingTime} onSave={handleSaveOpeningBalance} />}
           {isClosingTimeModalOpen && <ClosingTimeModal isOpen onClose={() => setIsClosingTimeModalOpen(false)} closingTime={closingTime} setClosingTime={setClosingTime} onSave={handleSaveClosingTime} />}
           {isModalOpen && <AddProductModal isOpen onClose={() => { setIsModalOpen(false); }} newItem={newItem} setNewItem={setNewItem} categories={categories} onImageUpload={handleImageUpload} onAdd={handleAddItem} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} />}
@@ -16390,16 +16917,3 @@ export default function PartySupplyApp() {
     </>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-

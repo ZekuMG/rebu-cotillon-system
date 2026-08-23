@@ -141,26 +141,16 @@ const DEFAULT_FILTERS = {
   includeTest: false,
 };
 
-const METRICS_VIEW_MODE_STORAGE_KEY = 'rebu_metrics_view_mode_v1';
-const DEFAULT_METRICS_VIEW_MODE = 'modern';
-const PROFIT_CONTROL_VIEW_MODE = 'profit-control';
-
-const METRICS_VIEW_MODE_OPTIONS = [
-  { id: 'modern', label: 'Panel', helper: 'Operativo' },
-  { id: PROFIT_CONTROL_VIEW_MODE, label: 'Lectura', helper: 'Simple' },
-  { id: 'legacy', label: 'Clasica', helper: 'Detalle' },
-];
-
 const RANGE_FILTER_OPTIONS = [
   { value: 'today', label: 'Hoy', helper: 'Caja actual' },
-  { value: 'yesterday', label: 'Ayer', helper: 'Dia anterior' },
-  { value: '3d', label: '3 dias', helper: 'Corto' },
-  { value: '7d', label: '7 dias', helper: 'Semana' },
+  { value: 'yesterday', label: 'Ayer', helper: 'Día anterior' },
+  { value: '3d', label: '3 días', helper: 'Corto' },
+  { value: '7d', label: '7 días', helper: 'Semana' },
   { value: '14d', label: '2 semanas', helper: 'Quincena' },
-  { value: '30d', label: '30 dias', helper: 'Mes' },
-  { value: '90d', label: '90 dias', helper: 'Trimestre' },
-  { value: 'year', label: 'Anio', helper: 'Actual' },
-  { value: 'all', label: 'Todo', helper: 'Historico' },
+  { value: '30d', label: '30 días', helper: 'Mes' },
+  { value: '90d', label: '90 días', helper: 'Trimestre' },
+  { value: 'year', label: 'Año', helper: 'Actual' },
+  { value: 'all', label: 'Todo', helper: 'Histórico' },
   { value: 'custom', label: 'Manual', helper: 'Fechas' },
 ];
 
@@ -171,20 +161,6 @@ const STATUS_FILTER_OPTIONS = [
   { value: 'deleted', label: 'Eliminadas' },
   { value: 'restored', label: 'Restauradas' },
 ];
-
-const normalizeMetricsViewMode = (value) => (
-  value === 'legacy' || value === PROFIT_CONTROL_VIEW_MODE ? value : DEFAULT_METRICS_VIEW_MODE
-);
-
-const getStoredMetricsViewMode = () => {
-  if (typeof window === 'undefined') return null;
-  try {
-    const storedMode = window.localStorage.getItem(METRICS_VIEW_MODE_STORAGE_KEY);
-    return storedMode ? normalizeMetricsViewMode(storedMode) : null;
-  } catch {
-    return null;
-  }
-};
 
 const calculatePercentageChange = (current, previous) => {
   const currentValue = Number(current || 0);
@@ -208,14 +184,7 @@ const formatComparisonRange = (range) => {
 const getComparisonLabel = (metrics) =>
   metrics?.canComparePreviousRange
     ? `${formatComparisonRange(metrics.range)} vs ${formatComparisonRange(metrics.previousRange)}`
-    : 'Sin comparacion anterior';
-
-const getPreferredMetricsViewMode = (user) => {
-  const storedMode = getStoredMetricsViewMode();
-  if (storedMode) return storedMode;
-  if (user?.metricsViewMode) return normalizeMetricsViewMode(user.metricsViewMode);
-  return DEFAULT_METRICS_VIEW_MODE;
-};
+    : 'Sin comparación anterior';
 
 const BASE_SECTIONS = [
   { id: 'summary', label: 'Resumen', icon: BarChart3 },
@@ -230,8 +199,6 @@ const BASE_SECTIONS = [
   { id: 'users', label: 'Usuarios', icon: ShieldCheck, permission: 'metrics.viewUsers' },
   { id: 'cash', label: 'Caja', icon: CalendarDays },
 ];
-
-const MODERN_SECTION_IDS = new Set(['summary', 'sales', 'products', 'payments', 'clients', 'stock', 'users', 'cash']);
 
 const SelectField = ({ label, value, onChange, children, className = '' }) => (
   <label className={`flex min-w-0 flex-col gap-0.5 ${className}`}>
@@ -460,34 +427,6 @@ const ModernHealthCard = ({ label, value, detail, change, tone = 'slate', hidden
     </div>
     <p className="metrics-modern-kpi-detail">{hidden ? 'Permiso requerido' : detail}</p>
   </article>
-);
-
-const MetricsModeSwitch = ({ value, onChange, className = '' }) => (
-  <div
-    className={`metrics-view-mode-toggle inline-flex h-8 shrink-0 items-center rounded-md border border-slate-200 bg-slate-100 p-0.5 ${className}`}
-    role="group"
-    aria-label="Modo de metricas"
-  >
-    {METRICS_VIEW_MODE_OPTIONS.map((option) => {
-      const isActiveOption = value === option.id;
-      return (
-        <button
-          key={option.id}
-          type="button"
-          onClick={() => onChange(option.id)}
-          className={`inline-flex h-7 min-w-[78px] items-center justify-center rounded-[5px] px-2 text-[10px] font-black uppercase leading-none transition ${
-            isActiveOption
-              ? 'is-active bg-white text-slate-900 shadow-sm'
-              : 'text-slate-500 hover:bg-white/70 hover:text-slate-700'
-          }`}
-          title={option.helper}
-          aria-pressed={isActiveOption}
-        >
-          {option.label}
-        </button>
-      );
-    })}
-  </div>
 );
 
 const MetricLensSelect = ({ label, value, onChange, children, className = '' }) => (
@@ -1043,6 +982,8 @@ const buildCsvRows = ({ metrics, canViewProfit, canViewUsers, canViewClients }) 
   metrics.current.productStats.forEach((item) => rows.push(['Productos', item.name, item.qty, item.revenue, canViewProfit ? item.cost : '', canViewProfit ? (COST_BASIS_META[item.costStatus]?.label || 'Sin costo') : '']));
 
   rows.push([]);
+
+  rows.push([]);
   rows.push(['Categorías', 'Nombre', 'Cantidad', 'Ingreso', canViewProfit ? 'Costo vendido' : '', canViewProfit ? 'Base' : '']);
   metrics.current.categoryStats.forEach((item) => rows.push(['Categorías', item.name, item.qty, item.revenue, canViewProfit ? item.cost : '', canViewProfit ? (COST_BASIS_META[item.costStatus]?.label || 'Sin costo') : '']));
 
@@ -1075,17 +1016,15 @@ export default function MetricsView({
   orders = [],
   dailyLogs = [],
   currentUser,
-  isLoading = false,
+  isLoading: _isLoading = false,
   isProfitSyncing: _isProfitSyncing = false,
-  emptyStateMessage = '',
+  emptyStateMessage: _emptyStateMessage = '',
   onRefresh,
-  isActive = true,
+  isActive: _isActive = true,
 }) {
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [activeSection, setActiveSection] = useState('summary');
-  const [viewMode, setViewMode] = useState(() => getPreferredMetricsViewMode(currentUser));
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isModernControlOpen, setIsModernControlOpen] = useState(false);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [summaryEvolutionMetrics, setSummaryEvolutionMetrics] = useState(['revenue']);
   const [pieSelections, setPieSelections] = useState({});
@@ -1096,8 +1035,6 @@ export default function MetricsView({
   const canViewClients = hasPermission(currentUser, 'metrics.viewClients');
   const canExport = hasPermission(currentUser, 'metrics.export');
   const canConfigureAlerts = hasPermission(currentUser, 'metrics.configureAlerts');
-  const isModernMode = viewMode === 'modern';
-  const isProfitControlMode = viewMode === PROFIT_CONTROL_VIEW_MODE;
 
   useEffect(() => {
     setSummaryEvolutionMetrics((current) => {
@@ -1105,10 +1042,6 @@ export default function MetricsView({
       return next.length ? next : ['revenue'];
     });
   }, [canViewProfit]);
-
-  useEffect(() => {
-    setViewMode(getPreferredMetricsViewMode(currentUser));
-  }, [currentUser]);
 
   const metrics = useMetricsData({
     transactions,
@@ -1208,9 +1141,8 @@ export default function MetricsView({
       : 'rose';
 
   const sections = useMemo(() => {
-    const allowedSections = BASE_SECTIONS.filter((section) => !section.permission || hasPermission(currentUser, section.permission));
-    return isModernMode ? allowedSections.filter((section) => MODERN_SECTION_IDS.has(section.id)) : allowedSections;
-  }, [currentUser, isModernMode]);
+    return BASE_SECTIONS.filter((section) => !section.permission || hasPermission(currentUser, section.permission));
+  }, [currentUser]);
 
   useEffect(() => {
     if (sections.some((section) => section.id === activeSection)) return;
@@ -1235,17 +1167,6 @@ export default function MetricsView({
     }
   };
 
-  const handleMetricsViewModeChange = (mode) => {
-    const nextMode = normalizeMetricsViewMode(mode);
-    setViewMode(nextMode);
-    setIsModernControlOpen(false);
-    try {
-      window.localStorage.setItem(METRICS_VIEW_MODE_STORAGE_KEY, nextMode);
-    } catch (error) {
-      console.error('No se pudo guardar la preferencia de metricas:', error);
-    }
-  };
-
   const handleCsvExport = () => {
     exportCsv('metricas-rebu.csv', buildCsvRows({ metrics, canViewProfit, canViewUsers, canViewClients }));
   };
@@ -1253,133 +1174,6 @@ export default function MetricsView({
   const handlePdfExport = () => {
     window.print();
   };
-
-  const handleModernSectionSelect = (sectionId) => {
-    setActiveSection(sectionId);
-    setIsModernControlOpen(false);
-  };
-
-  const renderModeSwitch = (className = '') => (
-    <MetricsModeSwitch value={viewMode} onChange={handleMetricsViewModeChange} className={className} />
-  );
-
-  const renderModernFiltersPanel = () => (
-    <div className="metrics-modern-filters">
-      <div className="metrics-modern-filter-layout">
-        <ModernFilterGroup
-          step="1"
-          title="Periodo"
-          helper="Rango activo"
-          className="metrics-modern-filter-period"
-        >
-          <div className="metrics-modern-range-grid">
-            {RANGE_FILTER_OPTIONS.map((option) => {
-              const isActiveRange = filters.preset === option.value;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => updateFilter('preset', option.value)}
-                  className={`metrics-modern-range-chip ${isActiveRange ? 'is-active' : ''}`}
-                  aria-pressed={isActiveRange}
-                >
-                  <strong>{option.label}</strong>
-                  <span>{option.helper}</span>
-                </button>
-              );
-            })}
-          </div>
-          {filters.preset === 'custom' && (
-            <div className="metrics-modern-date-row">
-              <InputField label="Desde" type="date" value={filters.startDate} onChange={(value) => updateFilter('startDate', value)} />
-              <InputField label="Hasta" type="date" value={filters.endDate} onChange={(value) => updateFilter('endDate', value)} />
-            </div>
-          )}
-        </ModernFilterGroup>
-
-        <ModernFilterGroup
-          step="2"
-          title="Ventas"
-          helper="Estado y pago"
-          className="metrics-modern-filter-sales"
-        >
-          <div className="metrics-modern-status-row">
-            {STATUS_FILTER_OPTIONS.map((option) => {
-              const isActiveStatus = filters.status === option.value;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => updateFilter('status', option.value)}
-                  className={`metrics-modern-status-chip ${isActiveStatus ? 'is-active' : ''}`}
-                  aria-pressed={isActiveStatus}
-                >
-                  {option.label}
-                </button>
-              );
-            })}
-          </div>
-          <ModernSelectControl label="Pago" value={filters.payment} onChange={(value) => updateFilter('payment', value)} icon={CreditCard}>
-            <option value="">Todos los pagos</option>
-            {metrics.filterOptions.payments.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </ModernSelectControl>
-        </ModernFilterGroup>
-
-        <ModernFilterGroup
-          step="3"
-          title="Detalle"
-          helper="Rubro, producto o socio"
-          className="metrics-modern-filter-refine"
-        >
-          <div className="metrics-modern-refine-grid">
-            <ModernSelectControl label="Categoria" value={filters.category} onChange={(value) => updateFilter('category', value)} icon={Boxes}>
-              <option value="">Todas las categorias</option>
-              {metrics.filterOptions.categories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </ModernSelectControl>
-            <ModernSelectControl label="Producto" value={filters.product} onChange={(value) => updateFilter('product', value)} icon={ShoppingBag} className="metrics-modern-product-select">
-              <option value="">Todos los productos</option>
-              {visibleProductOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </ModernSelectControl>
-            <button
-              type="button"
-              onClick={() => setShowAdvancedFilters((prev) => !prev)}
-              className={`metrics-modern-advanced-button ${showAdvancedFilters || hasAdvancedFilters ? 'is-active' : ''}`}
-            >
-              <SlidersHorizontal size={14} />
-              Mas{hasAdvancedFilters ? ' *' : ''}
-            </button>
-            <button type="button" onClick={resetFilters} className="metrics-modern-clear-button">
-              Limpiar
-            </button>
-          </div>
-
-          {showAdvancedFilters && (
-            <div className="metrics-modern-advanced-grid">
-              <ModernSelectControl label="Tipo de producto" value={filters.productType} onChange={(value) => updateFilter('productType', value)} icon={PackageSearch}>
-                <option value="all">Todos los tipos</option>
-                <option value="quantity">Unidad</option>
-                <option value="weight">Peso</option>
-              </ModernSelectControl>
-              {canViewUsers && (
-                <ModernSelectControl label="Usuario" value={filters.user} onChange={(value) => updateFilter('user', value)} icon={ShieldCheck}>
-                  <option value="">Todos los usuarios</option>
-                  {metrics.filterOptions.users.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </ModernSelectControl>
-              )}
-              {canViewClients && (
-                <ModernSelectControl label="Socio" value={filters.client} onChange={(value) => updateFilter('client', value)} icon={Users}>
-                  <option value="">Todos los socios</option>
-                  {metrics.filterOptions.clients.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </ModernSelectControl>
-              )}
-              <ModernToggleChip checked={filters.includeVoided} onChange={(value) => updateFilter('includeVoided', value)} label="Incluir anuladas" />
-              <ModernToggleChip checked={filters.includeTest} onChange={(value) => updateFilter('includeTest', value)} label="Incluir test" />
-            </div>
-          )}
-        </ModernFilterGroup>
-      </div>
-    </div>
-  );
 
   const isHourlyMode = metrics.current.periodMode === 'hour';
   const summaryEvolutionOptions = [
@@ -1414,277 +1208,7 @@ export default function MetricsView({
   const showHourlyPulse =
     hourlyPulseSeries.some((row) => Number(row.salesCount || 0) > 0);
 
-  const hasSourceData =
-    transactions.length > 0 ||
-    dailyLogs.length > 0 ||
-    expenses.length > 0 ||
-    pastClosures.length > 0 ||
-    inventory.length > 0 ||
-    budgets.length > 0 ||
-    orders.length > 0;
-
-  const renderHeaderActions = (modern = false) => (
-    <div className={`flex flex-wrap items-center gap-2 ${modern ? 'metrics-modern-actions' : ''}`}>
-      <button
-        type="button"
-        onClick={handleRefresh}
-        disabled={!onRefresh || isRefreshing}
-        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-black text-slate-600 transition hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60"
-      >
-        <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
-        Actualizar
-      </button>
-      {canExport && (
-        <>
-          <button type="button" onClick={handleCsvExport} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2.5 text-[11px] font-black text-sky-700 transition hover:bg-sky-100">
-            <Download size={14} /> CSV
-          </button>
-          <button type="button" onClick={handlePdfExport} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-fuchsia-200 bg-fuchsia-50 px-2.5 text-[11px] font-black text-fuchsia-700 transition hover:bg-fuchsia-100">
-            <Printer size={14} /> PDF
-          </button>
-        </>
-      )}
-    </div>
-  );
-
-  const _renderFiltersPanel = (modern = false) => (
-    modern ? renderModernFiltersPanel() :
-    <div className={modern ? 'metrics-modern-filters rounded-lg border border-slate-200 bg-white p-2' : 'rounded-lg border border-slate-200 bg-slate-50 p-2'}>
-      <div className={modern ? 'grid grid-cols-2 items-end gap-2 md:grid-cols-4 xl:grid-cols-[0.8fr_0.85fr_0.85fr_0.95fr_1.35fr_auto_auto]' : 'grid grid-cols-2 items-end gap-2 md:grid-cols-4 xl:grid-cols-[0.9fr_0.85fr_0.9fr_1fr_1.7fr_auto_auto]'}>
-        <SelectField label="Rango" value={filters.preset} onChange={(value) => updateFilter('preset', value)}>
-          <option value="today">Hoy</option>
-          <option value="yesterday">Ayer</option>
-          <option value="3d">Ultimos 3 dias</option>
-          <option value="7d">Ultimos 7 dias</option>
-          <option value="14d">Ultimas 2 semanas</option>
-          <option value="30d">Ultimos 30 dias</option>
-          <option value="90d">Ultimos 90 dias</option>
-          <option value="year">Anio actual</option>
-          <option value="all">Todo</option>
-          <option value="custom">Personalizado</option>
-        </SelectField>
-        {filters.preset === 'custom' && (
-          <>
-            <InputField label="Desde" type="date" value={filters.startDate} onChange={(value) => updateFilter('startDate', value)} />
-            <InputField label="Hasta" type="date" value={filters.endDate} onChange={(value) => updateFilter('endDate', value)} />
-          </>
-        )}
-        <SelectField label="Estado" value={filters.status} onChange={(value) => updateFilter('status', value)}>
-          <option value="all">Todos</option>
-          <option value="completed">Completadas</option>
-          <option value="voided">Anuladas</option>
-          <option value="deleted">Eliminadas</option>
-          <option value="restored">Restauradas</option>
-        </SelectField>
-        <SelectField label="Pago" value={filters.payment} onChange={(value) => updateFilter('payment', value)}>
-          <option value="">Todos</option>
-          {metrics.filterOptions.payments.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </SelectField>
-        <SelectField label="Categoria" value={filters.category} onChange={(value) => updateFilter('category', value)}>
-          <option value="">Todas</option>
-          {metrics.filterOptions.categories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </SelectField>
-        <SelectField label="Producto" value={filters.product} onChange={(value) => updateFilter('product', value)} className="min-w-[220px]">
-          <option value="">Todos</option>
-          {visibleProductOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </SelectField>
-        <button
-          type="button"
-          onClick={() => setShowAdvancedFilters((prev) => !prev)}
-          className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-[11px] font-black transition ${
-            showAdvancedFilters || hasAdvancedFilters
-              ? 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700'
-              : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
-          }`}
-        >
-          <SlidersHorizontal size={14} />
-          Avanzados{hasAdvancedFilters ? ' *' : ''}
-        </button>
-        <button type="button" onClick={resetFilters} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-black text-slate-600 transition hover:bg-slate-100">
-          Limpiar
-        </button>
-      </div>
-
-      {showAdvancedFilters && (
-        <div className="mt-2 grid grid-cols-2 items-end gap-2 border-t border-slate-200 pt-2 md:grid-cols-4 xl:grid-cols-[0.8fr_1fr_1.4fr_auto_auto]">
-          <SelectField label="Tipo" value={filters.productType} onChange={(value) => updateFilter('productType', value)}>
-            <option value="all">Todos</option>
-            <option value="quantity">Unidad</option>
-            <option value="weight">Peso</option>
-          </SelectField>
-          {canViewUsers && (
-            <SelectField label="Usuario" value={filters.user} onChange={(value) => updateFilter('user', value)}>
-              <option value="">Todos</option>
-              {metrics.filterOptions.users.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </SelectField>
-          )}
-          {canViewClients && (
-            <SelectField label="Socio" value={filters.client} onChange={(value) => updateFilter('client', value)}>
-              <option value="">Todos</option>
-              {metrics.filterOptions.clients.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </SelectField>
-          )}
-          <ToggleField checked={filters.includeVoided} onChange={(value) => updateFilter('includeVoided', value)} label="Anuladas" />
-          <ToggleField checked={filters.includeTest} onChange={(value) => updateFilter('includeTest', value)} label="Test" />
-        </div>
-      )}
-    </div>
-  );
-
-  const renderSectionTabs = (modern = false) => (
-    <div className={`custom-scrollbar flex gap-1.5 overflow-x-auto pb-1 ${modern ? 'metrics-modern-tabs' : ''}`}>
-      {sections.map((section) => {
-        const Icon = section.icon;
-        const isActiveSection = activeSection === section.id;
-        return (
-          <button
-            key={section.id}
-            type="button"
-            onClick={() => (modern ? handleModernSectionSelect(section.id) : setActiveSection(section.id))}
-            className={modern
-              ? `metrics-modern-tab ${isActiveSection ? 'is-active' : ''}`
-              : `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-black transition ${
-                  isActiveSection
-                    ? 'border-fuchsia-200 bg-fuchsia-600 text-white shadow-sm'
-                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                }`}
-          >
-            <Icon size={14} />
-            {section.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-
-  const renderModernSidebar = () => (
-    <aside className={`metrics-modern-sidebar ${isModernControlOpen ? 'is-open' : ''}`}>
-      <div className="metrics-modern-sidebar-inner custom-scrollbar">
-        <div className="metrics-modern-sidebar-head">
-          <div>
-            <p>Lectura</p>
-            <span>Periodo, seccion y detalle.</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setIsModernControlOpen(false)}
-            className="metrics-modern-sidebar-close"
-          >
-            Cerrar
-          </button>
-        </div>
-
-        <div className="metrics-modern-sidebar-block">
-          <div className="metrics-modern-sidebar-label">Secciones</div>
-          {renderSectionTabs(true)}
-        </div>
-
-        <div className="metrics-modern-sidebar-block">
-          <div className="metrics-modern-sidebar-label">Filtros</div>
-          {renderModernFiltersPanel()}
-        </div>
-      </div>
-    </aside>
-  );
-
-  const renderProfitControlFilters = () => (
-    <section className="metrics-profit-filterbar rounded-lg border border-slate-200 bg-white/95 px-2.5 py-2 shadow-sm">
-      <div className="flex flex-col gap-2 2xl:flex-row 2xl:items-center">
-        <div className="flex min-w-[176px] items-center gap-2">
-          <span className="metrics-filter-mark inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700">
-            <Search size={15} />
-          </span>
-          <div className="min-w-0">
-            <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Consulta</p>
-            <p className="truncate text-[12px] font-black text-slate-900">{metrics.range.label}</p>
-          </div>
-        </div>
-
-        <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-[0.68fr_0.78fr_0.9fr_0.95fr_minmax(190px,1.2fr)]">
-          <MetricLensSelect label="Rango" value={filters.preset} onChange={(value) => updateFilter('preset', value)}>
-            {RANGE_FILTER_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </MetricLensSelect>
-          <MetricLensSelect label="Estado" value={filters.status} onChange={(value) => updateFilter('status', value)}>
-            {STATUS_FILTER_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </MetricLensSelect>
-          <MetricLensSelect label="Pago" value={filters.payment} onChange={(value) => updateFilter('payment', value)}>
-            <option value="">Todos</option>
-            {metrics.filterOptions.payments.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </MetricLensSelect>
-          <MetricLensSelect label="Rubro" value={filters.category} onChange={(value) => updateFilter('category', value)}>
-            <option value="">Todos</option>
-            {metrics.filterOptions.categories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </MetricLensSelect>
-          <MetricLensSelect label="Producto" value={filters.product} onChange={(value) => updateFilter('product', value)}>
-            <option value="">Todos</option>
-            {visibleProductOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </MetricLensSelect>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setShowAdvancedFilters((prev) => !prev)}
-            aria-expanded={showAdvancedFilters}
-            className={`metrics-filter-action inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-[11px] font-black transition ${
-              showAdvancedFilters || hasAdvancedFilters
-                ? 'is-active border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700'
-                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            <SlidersHorizontal size={14} />
-            Ajustes
-          </button>
-          <button type="button" onClick={resetFilters} className="metrics-filter-action inline-flex h-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-black text-slate-600 transition hover:bg-slate-100">
-            Limpiar
-          </button>
-        </div>
-      </div>
-
-      {filters.preset === 'custom' && (
-        <div className="mt-2 grid grid-cols-1 gap-2 border-t border-slate-100 pt-2 sm:grid-cols-2">
-          <InputField label="Desde" type="date" value={filters.startDate} onChange={(value) => updateFilter('startDate', value)} />
-          <InputField label="Hasta" type="date" value={filters.endDate} onChange={(value) => updateFilter('endDate', value)} />
-        </div>
-      )}
-
-      {showAdvancedFilters && (
-        <div className="mt-2 grid grid-cols-1 items-center gap-2 border-t border-slate-100 pt-2 sm:grid-cols-2 lg:grid-cols-[0.8fr_1fr_1fr_auto_auto]">
-          <MetricLensSelect label="Tipo" value={filters.productType} onChange={(value) => updateFilter('productType', value)}>
-            <option value="all">Todos</option>
-            <option value="quantity">Unidad</option>
-            <option value="weight">Peso</option>
-          </MetricLensSelect>
-          {canViewUsers && (
-            <MetricLensSelect label="Usuario" value={filters.user} onChange={(value) => updateFilter('user', value)}>
-              <option value="">Todos</option>
-              {metrics.filterOptions.users.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </MetricLensSelect>
-          )}
-          {canViewClients && (
-            <MetricLensSelect label="Socio" value={filters.client} onChange={(value) => updateFilter('client', value)}>
-              <option value="">Todos</option>
-              {metrics.filterOptions.clients.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </MetricLensSelect>
-          )}
-          <label className="inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-black text-slate-600">
-            <input type="checkbox" checked={filters.includeVoided} onChange={(event) => updateFilter('includeVoided', event.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500" />
-            Anuladas
-          </label>
-          <label className="inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-black text-slate-600">
-            <input type="checkbox" checked={filters.includeTest} onChange={(event) => updateFilter('includeTest', event.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500" />
-            Test
-          </label>
-        </div>
-      )}
-    </section>
-  );
-
-  const renderProfitControlMode = () => {
+  const renderSummary = () => {
     const stats = metrics.current.stats;
     const revenue = Number(stats.revenue || 0);
     const cost = Number(stats.cost || 0);
@@ -1695,509 +1219,211 @@ export default function MetricsView({
     const netMarginRate = revenue ? (netProfit / revenue) * 100 : 0;
     const costRate = revenue ? (cost / revenue) * 100 : 0;
     const expenseRate = revenue ? (expensesTotal / revenue) * 100 : 0;
-    const productRows = [...metrics.current.productStats]
-      .sort((a, b) => Number(b.revenue || 0) - Number(a.revenue || 0))
-      .slice(0, 14);
-    const leadingProduct = productRows[0] || metrics.current.productStats[0];
-    const profitControlSeries = metrics.current.dailySeries.map((row) => ({
-      ...row,
-      grossProfit: Number(row.profit || 0) + Number(row.expenses || 0),
-      netProfit: Number(row.profit || 0),
-    }));
-    const hasEvolutionData = profitControlSeries.some((row) => (
-      Number(row.revenue || 0) !== 0 ||
-      Number(row.grossProfit || 0) !== 0 ||
-      Number(row.netProfit || 0) !== 0
-    ));
-    const summaryCards = [
-      {
-        label: 'Ventas totales',
-        value: <FancyPrice amount={revenue} />,
-        helper: `${formatNumber(stats.salesCount)} ventas`,
-        icon: ShoppingBag,
-        tone: 'from-violet-500 to-fuchsia-500',
-      },
-      {
-        label: 'Costo vendido',
-        value: <FancyPrice amount={cost} />,
-        helper: `${formatNumber(costRate, 1)}% de ventas`,
-        icon: PackageSearch,
-        tone: 'from-teal-500 to-emerald-500',
-        restricted: !canViewProfit,
-      },
-      {
-        label: 'Margen vendido',
-        value: <FancyPrice amount={grossProfit} />,
-        helper: `${formatNumber(grossMarginRate, 1)}%`,
-        icon: BarChart3,
-        tone: 'from-blue-500 to-sky-500',
-        restricted: !canViewProfit,
-      },
-      {
-        label: 'Gastos y comisiones',
-        value: <FancyPrice amount={expensesTotal} />,
-        helper: `${formatNumber(expenseRate, 1)}%`,
-        icon: FileText,
-        tone: 'from-amber-500 to-orange-500',
-      },
-      {
-        label: 'Resultado caja',
-        value: profitStatusLabel || <FancyPrice amount={netProfit} />,
-        helper: `${formatNumber(netMarginRate, 1)}%`,
-        icon: WalletCards,
-        tone: 'from-emerald-600 to-green-500',
-        restricted: !canViewProfit,
-      },
-    ];
-    const detailRows = [
-      { label: 'Ventas cobradas', value: <FancyPrice amount={revenue} /> },
-      { label: '(-) Gastos registrados', value: <FancyPrice amount={expensesTotal} /> },
-      { label: '= Resultado caja', value: profitStatusLabel || <FancyPrice amount={netProfit} />, strong: true, tone: isProfitUnverified ? 'text-amber-700' : netProfit >= 0 ? 'text-emerald-700' : 'text-rose-700', restricted: !canViewProfit },
-      { label: 'Costo vendido', value: <FancyPrice amount={cost} />, restricted: !canViewProfit },
-      { label: 'Margen vendido', value: <FancyPrice amount={grossProfit} />, strong: true, tone: grossProfit >= 0 ? 'text-emerald-700' : 'text-rose-700', restricted: !canViewProfit },
-    ];
+
     const profitControlInsight = !canViewProfit
       ? null
       : isProfitUnverified
         ? {
             tone: 'warning',
-            title: 'Costos pendientes',
-            text: 'Revisar productos antes de tomar decisiones finas.',
+            title: 'Costos de inventario pendientes de verificación',
+            text: 'Hay productos vendidos sin costo cargado en el inventario. El margen y rentabilidad son estimados.',
           }
         : netProfit < 0 && expensesTotal > revenue
           ? {
               tone: 'danger',
-              title: 'Gastos por encima de cobros',
-              text: 'Los gastos registrados superan lo cobrado en el rango.',
+              title: 'Gastos por encima de los ingresos',
+              text: `Los egresos registrados (${formatCurrency(expensesTotal)}) superan las ventas cobradas (${formatCurrency(revenue)}) en este período.`,
             }
           : netProfit < 0
             ? {
                 tone: 'danger',
-                title: 'Caja negativa',
-                text: 'El resultado de caja queda debajo de cero. Revisar gastos y cobros.',
+                title: 'Resultado de caja negativo',
+                text: `El resultado operativo arroja una pérdida neta de ${formatCurrency(Math.abs(netProfit))}. Se sugiere auditar costos de reposición y egresos.`,
               }
             : netMarginRate < 8
               ? {
                   tone: 'warning',
-                  title: 'Resultado ajustado',
-                  text: `Queda ${formatNumber(netMarginRate, 1)}% sobre lo cobrado. Hay poco aire operativo.`,
+                  title: 'Margen operativo ajustado',
+                  text: `Queda un ${formatNumber(netMarginRate, 1)}% (${formatCurrency(netProfit)}) sobre lo cobrado. Margen estrecho frente a imprevistos.`,
                 }
               : {
                   tone: 'success',
-                  title: 'Caja positiva',
-                  text: `Queda ${formatNumber(netMarginRate, 1)}% sobre lo cobrado despues de gastos.`,
+                  title: 'Salud de caja sólida & rentabilidad positiva',
+                  text: `Margen neto saludable del ${formatNumber(netMarginRate, 1)}% (${formatCurrency(netProfit)}) tras cubrir todos los costos y gastos del rango.`,
                 };
-    return (
-      <div className="metrics-view flex h-full min-h-0 flex-col bg-slate-100">
-        <div className="relative z-20 shrink-0 border-b border-slate-200 bg-white px-3 py-2 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2.5">
-              <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700">
-                <WalletCards size={18} />
-              </span>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-lg font-black text-slate-950">Lectura simple de metricas</h2>
-                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] text-slate-500">
-                    {metrics.range.label}
-                  </span>
-                </div>
-                <p className="mt-0.5 text-[11px] font-semibold text-slate-500">Lo importante del rango, explicado como caja: entro, salio y quedo.</p>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {renderModeSwitch()}
-              {renderHeaderActions(true)}
-            </div>
-          </div>
-        </div>
 
-        <main className="custom-scrollbar min-h-0 flex-1 overflow-auto bg-[linear-gradient(135deg,#f8fbff_0%,#eef5fb_52%,#f7fbff_100%)] p-2.5">
-          <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-2.5">
-            {renderProfitControlFilters()}
-
-            {metrics.current.filteredTransactions.length === 0 && metrics.current.filteredExpenses.length === 0 ? (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
-                <div className="flex items-center gap-2">
-                  <Search size={16} />
-                  No hay ventas ni gastos para los filtros activos.
-                </div>
-              </div>
-            ) : null}
-
-            <section className="metrics-profit-control-card space-y-2.5">
-              <div className="metrics-profit-summary-row grid grid-cols-1 items-start gap-2.5 xl:grid-cols-[260px_minmax(0,1fr)] 2xl:grid-cols-[280px_minmax(0,1fr)]">
-                <aside className="metrics-profit-explainer order-2 self-start rounded-lg border border-slate-200 bg-white/80 p-3 xl:order-1">
-                  <p className="text-sm font-black leading-5 text-slate-950">Lectura rapida</p>
-                  <div className="mt-2.5 space-y-2 text-[12px] font-semibold leading-5 text-slate-700">
-                    {profitControlInsight ? (
-                      <div className={`metrics-profit-insight metrics-profit-insight-${profitControlInsight.tone}`}>
-                        <strong>{profitControlInsight.title}</strong>
-                        <span>{profitControlInsight.text}</span>
-                      </div>
-                    ) : null}
-                    <div className="space-y-1.5 border-t border-slate-200 pt-2.5 text-[11px] leading-4">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-slate-500">Resultado / ventas</span>
-                        <strong className={netMarginRate >= 0 ? 'text-emerald-600' : 'text-rose-500'}>{formatNumber(netMarginRate, 1)}%</strong>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-slate-500">Gastos / ventas</span>
-                        <strong className="text-amber-500">{formatNumber(expenseRate, 1)}%</strong>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-slate-500">Resultado</span>
-                        <strong className={netProfit >= 0 ? 'text-emerald-600' : 'text-rose-500'}>{formatCurrency(netProfit)}</strong>
-                      </div>
-                    </div>
-                    {isProfitUnverified ? (
-                      <div className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-amber-800">
-                        Hay costos sin verificar. Revisalos antes de tomar decisiones finas.
-                      </div>
-                    ) : null}
-                  </div>
-                </aside>
-
-                <div className="order-1 min-w-0 rounded-lg border border-slate-200 bg-white p-2.5 xl:order-2">
-                  <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-[172px_minmax(0,1fr)] 2xl:grid-cols-[190px_minmax(0,1fr)]">
-                    <div className="metrics-summary-context rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2.5">
-                      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Resumen del rango</p>
-                      <h3 className="mt-1 text-base font-black leading-tight text-slate-950">Control de caja</h3>
-                      <p className="mt-2 text-[11px] font-semibold leading-4 text-slate-500">{getComparisonLabel(metrics)}</p>
-                    </div>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-5">
-                      {summaryCards.map((card) => {
-                        const Icon = card.icon;
-                        return (
-                          <article key={card.label} className="min-h-[94px] rounded-lg border border-slate-200 bg-white px-3 py-2.5">
-                            <div className="flex items-start gap-2.5">
-                              <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-gradient-to-br ${card.tone} text-white shadow-sm`}>
-                                <Icon size={17} />
-                              </span>
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-[11px] font-black text-slate-700">{card.label}</p>
-                                <div className="mt-1 truncate text-[20px] font-black leading-none text-slate-950">
-                                  {card.restricted ? <span className="text-base text-slate-400">Restringido</span> : card.value}
-                                </div>
-                                <p className="mt-1.5 truncate text-[11px] font-semibold text-slate-500">{card.restricted ? 'Permiso requerido' : card.helper}</p>
-                              </div>
-                            </div>
-                          </article>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-[minmax(360px,0.66fr)_minmax(0,1.34fr)]">
-                <section className="rounded-lg border border-slate-200 bg-white p-3">
-                    <div className="mb-2 flex items-center gap-2">
-                      <FileText size={17} className="text-fuchsia-600" />
-                      <h3 className="text-sm font-black text-slate-900">Detalle del rango</h3>
-                    </div>
-                    <div className="overflow-hidden rounded-lg border border-slate-200">
-                      <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-400">
-                          <tr>
-                            <th className="px-3 py-2 font-black">Concepto</th>
-                            <th className="px-3 py-2 text-right font-black">Importe</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 bg-white">
-                          {detailRows.map((row) => (
-                            <tr key={row.label} className={row.strong ? 'bg-slate-50/80' : ''}>
-                              <td className={`px-3 py-2 ${row.strong ? 'font-black text-slate-900' : 'font-semibold text-slate-700'}`}>{row.label}</td>
-                              <td className={`px-3 py-2 text-right text-sm font-black ${row.tone || 'text-slate-800'}`}>
-                                {row.restricted ? <span className="text-xs text-slate-400">Restringido</span> : row.value}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </section>
-
-                  <section className="rounded-lg border border-slate-200 bg-white p-3">
-                    <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <TrendingUp size={17} className="text-sky-600" />
-                        <div>
-                          <h3 className="text-sm font-black text-slate-900">Evolucion de caja</h3>
-                          <p className="text-[10px] font-semibold text-slate-500">Azul: cobrado. Verde: resultado.</p>
-                        </div>
-                      </div>
-                    </div>
-                    {canViewProfit && hasEvolutionData ? (
-                      <ChartFrame height={248}>
-                        <ResponsiveContainer width="100%" height="100%">
-                          <LineChart data={profitControlSeries} margin={{ top: 8, right: 12, left: -4, bottom: 0 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#dbe5ef" />
-                            <XAxis dataKey="label" tick={{ fontSize: 10 }} stroke="#7c8da3" interval="preserveStartEnd" minTickGap={18} />
-                            <YAxis width={64} tick={{ fontSize: 10 }} stroke="#7c8da3" tickFormatter={(value) => `$${formatNumber(value)}`} />
-                            <Tooltip content={<EvolutionChartTooltip />} />
-                            <Legend verticalAlign="top" height={24} />
-                            <Line type="monotone" dataKey="grossProfit" name="Ingreso cobrado" stroke="#2563eb" strokeWidth={2.2} dot={false} activeDot={{ r: 4 }} />
-                            <Line type="monotone" dataKey="netProfit" name="Resultado caja" stroke="#16a34a" strokeWidth={2.2} dot={false} activeDot={{ r: 4 }} />
-                          </LineChart>
-                        </ResponsiveContainer>
-                      </ChartFrame>
-                    ) : (
-                      <EmptyState text={canViewProfit ? 'Sin evolucion para estos filtros.' : 'Permiso requerido para ver ganancias.'} />
-                    )}
-                  </section>
-              </div>
-            </section>
-
-            <section className="metrics-profit-products-card grid grid-cols-1 items-start gap-2.5 xl:grid-cols-[minmax(0,1fr)_236px] 2xl:grid-cols-[minmax(0,1fr)_252px]">
-              <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-2.5">
-                <div className="mb-2.5 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-                  <div>
-                    <h3 className="text-lg font-black text-slate-950">Productos</h3>
-                    <p className="text-[11px] font-semibold text-slate-500">Ranking por ingreso vendido.</p>
-                  </div>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:w-[min(620px,55vw)]">
-                    <MetricLensSelect label="Producto" value={filters.product} onChange={(value) => updateFilter('product', value)}>
-                      <option value="">Todos</option>
-                      {visibleProductOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </MetricLensSelect>
-                    <MetricLensSelect label="Categoria" value={filters.category} onChange={(value) => updateFilter('category', value)}>
-                      <option value="">Todas</option>
-                      {metrics.filterOptions.categories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </MetricLensSelect>
-                  </div>
-                </div>
-                <div className="custom-scrollbar overflow-auto rounded-lg border border-slate-200">
-                  <table className="w-full min-w-[760px] text-left text-xs">
-                    <thead className="sticky top-0 z-10 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-400">
-                      <tr>
-                        <th className="px-3 py-2 font-black">Producto</th>
-                        <th className="px-3 py-2 font-black">Tipo</th>
-                        <th className="px-3 py-2 text-right font-black">Cantidad</th>
-                        <th className="px-3 py-2 text-right font-black">Ventas</th>
-                        {canViewProfit && <th className="px-3 py-2 text-right font-black">Costo vendido</th>}
-                        {canViewProfit && <th className="px-3 py-2 text-right font-black">Base</th>}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
-                      {(canViewProfit ? productRows : metrics.current.productStats).length ? (
-                        (canViewProfit ? productRows : metrics.current.productStats).map((row, index) => (
-                          <tr key={row.key || `${row.name}-${index}`} className="hover:bg-slate-50">
-                            <td className="px-3 py-2 font-black text-slate-800">
-                              <span className="block max-w-[360px] truncate 2xl:max-w-[520px]" title={row.name}>{row.name}</span>
-                            </td>
-                            <td className="px-3 py-2 font-semibold text-slate-500">{row.type === 'weight' ? 'Peso' : 'Unidad'}</td>
-                            <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatNumber(row.qty)}</td>
-                            <td className="px-3 py-2 text-right font-semibold text-slate-700"><FancyPrice amount={row.revenue} /></td>
-                            {canViewProfit && <td className="px-3 py-2 text-right font-semibold text-slate-700"><FancyPrice amount={row.cost} /></td>}
-                            {canViewProfit && <td className="px-3 py-2 text-right"><CostBasisBadge status={row.costStatus} /></td>}
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={canViewProfit ? 6 : 4} className="px-3 py-8 text-center font-bold text-slate-400">Sin productos vendidos.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <aside className="metrics-products-explainer self-start rounded-lg border border-emerald-200 bg-emerald-50/80 p-3">
-                <p className="text-sm font-black leading-5 text-slate-950">Lectura por producto</p>
-                    <p className="mt-2 text-[12px] font-semibold leading-5 text-slate-700">Compara ventas, cantidad y costo vendido para revisar precios y reposicion.</p>
-                {leadingProduct ? (
-                  <div className="mt-3 rounded-md border border-emerald-200 bg-white/70 px-2.5 py-2">
-                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">Producto lider</p>
-                    <p className="mt-1 truncate text-sm font-black text-slate-900" title={leadingProduct.name}>{leadingProduct.name}</p>
-                    {canViewProfit && (
-                      <div className="mt-2 grid grid-cols-2 gap-1.5 border-t border-emerald-100 pt-2 text-[10px] font-semibold text-slate-500">
-                        <span>Ventas</span>
-                        <strong className="text-right text-slate-800">{formatCurrency(leadingProduct.revenue || 0)}</strong>
-                        <span>Costo</span>
-                        <strong className="text-right text-slate-800">{formatCurrency(leadingProduct.cost || 0)}</strong>
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </aside>
-            </section>
-          </div>
-        </main>
-      </div>
-    );
-  };
-
-  const renderModernHeader = () => (
-    <div className="metrics-modern-header relative z-20 shrink-0 border-b border-slate-200 px-3 py-2 shadow-sm">
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <span className="metrics-modern-mark">
-              <BarChart3 size={17} />
-            </span>
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-lg font-black text-slate-900">Metricas</h2>
-                <span className="metrics-modern-range-pill">{metrics.range.label}</span>
-                <span className="metrics-modern-test-pill">Vista nueva</span>
-                <span className="metrics-modern-comparison-pill">{getComparisonLabel(metrics)}</span>
-              </div>
-              <p className="mt-0.5 text-[11px] font-semibold text-slate-500">Resumen operativo del rango activo.</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {renderModeSwitch()}
-            <button
-              type="button"
-              onClick={() => setIsModernControlOpen(true)}
-              className="metrics-modern-control-button"
-            >
-              <SlidersHorizontal size={14} />
-              Filtros
-            </button>
-            {renderHeaderActions(true)}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  if (!isActive) {
-    return <div className="h-full min-h-0 bg-slate-100" />;
-  }
-
-  if (isLoading && !hasSourceData) {
-    return (
-      <div className="flex h-full items-center justify-center rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="text-center">
-          <RefreshCw className="mx-auto mb-3 animate-spin text-fuchsia-600" size={34} />
-          <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Cargando métricas</p>
-          <p className="mt-2 text-sm font-medium text-slate-500">Estamos trayendo histórico completo para analizar el negocio.</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (emptyStateMessage && !hasSourceData) {
-    return (
-      <div className="flex h-full items-center justify-center rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="max-w-md text-center">
-          <AlertTriangle className="mx-auto mb-3 text-amber-500" size={34} />
-          <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">Métricas no disponibles</p>
-          <p className="mt-2 text-sm font-medium text-slate-500">{emptyStateMessage}</p>
-        </div>
-      </div>
-    );
-  }
-
-  const renderModernSummary = () => {
-    const stats = metrics.current.stats;
-    const marginRate = stats.revenue ? (stats.profit / stats.revenue) * 100 : 0;
-    const stockValue = canViewProfit ? metrics.stockStats.totalCost : metrics.stockStats.totalRetail;
-    const strongestPeriod = metrics.current.dailySeries.reduce((best, row) => (
-      Number(row.revenue || 0) > Number(best?.revenue || 0) ? row : best
-    ), null);
     const topProduct = metrics.current.productStats[0] || null;
-    const topPayment = metrics.current.paymentStats[0] || null;
-    const paymentTotal = metrics.current.paymentStats.reduce((sum, item) => sum + Number(item.value || 0), 0);
-    const visiblePayments = metrics.current.paymentStats.slice(0, 4);
-    const topRecommendation = metrics.recommendations[0] || null;
 
     return (
-      <div className="metrics-modern-summary space-y-3">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
-          <ModernHealthCard
+      <div className="space-y-4">
+        {/* DIAGNÓSTICO INTELIGENTE DE SALUD FINANCIERA */}
+        {profitControlInsight && (
+          <div className={`rounded-xl border p-3.5 flex items-start gap-3 shadow-xs transition-all ${
+            profitControlInsight.tone === 'danger'
+              ? 'border-rose-200 bg-rose-50/90 text-rose-900'
+              : profitControlInsight.tone === 'warning'
+                ? 'border-amber-200 bg-amber-50/90 text-amber-900'
+                : 'border-emerald-200 bg-emerald-50/90 text-emerald-950'
+          }`}>
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-xs ${
+              profitControlInsight.tone === 'danger'
+                ? 'bg-rose-500 text-white'
+                : profitControlInsight.tone === 'warning'
+                  ? 'bg-amber-500 text-white'
+                  : 'bg-emerald-600 text-white'
+            }`}>
+              {profitControlInsight.tone === 'danger' ? <AlertTriangle size={16} /> : profitControlInsight.tone === 'warning' ? <AlertTriangle size={16} /> : <Sparkles size={16} />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[10px] font-black uppercase tracking-[0.14em] opacity-75">Diagnóstico Rebu</span>
+                <span className="text-[10px] font-bold opacity-60">•</span>
+                <span className="text-xs font-black">{profitControlInsight.title}</span>
+              </div>
+              <p className="text-[12px] font-semibold mt-0.5 opacity-90 leading-snug">{profitControlInsight.text}</p>
+            </div>
+          </div>
+        )}
+
+        {/* TARJETAS PRINCIPALES KPI */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <MetricCard
             label="Ingreso bruto"
-            value={<FancyPrice amount={stats.revenue} />}
-            detail="Bruto"
+            value={<FancyPrice amount={revenue} />}
+            sublabel={metrics.range.label}
             change={metrics.changes.revenue}
             tone="sky"
+            hint="Total vendido en el rango filtrado antes de restar costos o gastos."
           />
-          <ModernHealthCard
-            label="Resultado caja"
-            value={profitStatusLabel || <FancyPrice amount={stats.profit} />}
-            detail={profitStatusLabel ? profitStatusDetail : `Margen ${formatNumber(marginRate, 1)}%`}
-            change={metrics.changes.profit}
-            tone={profitStatusTone}
+          <MetricCard
+            label="Costo vendido"
+            value={<FancyPrice amount={cost} />}
+            sublabel={`${formatNumber(costRate, 1)}% de ventas`}
+            tone="slate"
             hidden={!canViewProfit}
+            hint="Costo de la mercadería vendida según inventario o foto guardada."
           />
-          <ModernHealthCard
-            label="Ventas"
-            value={formatNumber(stats.salesCount)}
-            detail="Tickets"
-            change={metrics.changes.salesCount}
-            tone="violet"
+          <MetricCard
+            label="Margen bruto"
+            value={<FancyPrice amount={grossProfit} />}
+            sublabel={`${formatNumber(grossMarginRate, 1)}% margen`}
+            tone="emerald"
+            hidden={!canViewProfit}
+            hint="Ingreso bruto menos costo vendido."
           />
-          <ModernHealthCard
-            label="Ticket prom."
-            value={<FancyPrice amount={stats.averageTicket} />}
-            detail="Por venta"
-            change={metrics.changes.averageTicket}
-            tone="amber"
-          />
-          <ModernHealthCard
+          <MetricCard
             label="Gastos"
-            value={<FancyPrice amount={stats.expenses} />}
-            detail={`${metrics.current.filteredExpenses.length} mov.`}
+            value={<FancyPrice amount={expensesTotal} />}
+            sublabel={`${metrics.current.filteredExpenses.length} mov. (${formatNumber(expenseRate, 1)}%)`}
             change={metrics.changes.expenses}
             invertChange
             tone="rose"
+            hint="Suma total de gastos y egresos registrados en el rango."
           />
-          <ModernHealthCard
-            label="Stock actual"
-            value={<FancyPrice amount={stockValue} />}
-            detail={canViewProfit ? 'Costo actual' : 'Venta actual'}
-            tone="slate"
+          <MetricCard
+            label="Resultado caja"
+            value={profitStatusLabel || <FancyPrice amount={netProfit} />}
+            sublabel={profitStatusLabel ? profitStatusDetail : `Margen neto ${formatNumber(netMarginRate, 1)}%`}
+            change={metrics.changes.profit}
+            tone={profitStatusTone}
+            hidden={!canViewProfit}
+            hint="Ingreso cobrado menos gastos registrados (flujo de caja libre)."
+          />
+          <MetricCard
+            label="Ventas & Ticket"
+            value={<FancyPrice amount={stats.averageTicket} />}
+            sublabel={`${formatNumber(stats.salesCount)} tickets emitidos`}
+            change={metrics.changes.averageTicket}
+            tone="violet"
+            hint="Ticket promedio por cada venta realizada."
           />
         </div>
 
-        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.65fr_0.85fr]">
-          <section className="metrics-modern-panel metrics-modern-evolution">
-            <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <div className="flex items-center gap-2">
-                  <TrendingUp size={17} className="text-sky-600" />
-                  <h3 className="text-sm font-black text-slate-900">
-                    {isHourlyMode ? 'Evolucion por horario' : 'Evolucion de salud'}
-                  </h3>
-                </div>
-                <p className="mt-0.5 text-[10px] font-semibold text-slate-500">Ritmo de ingresos, ganancia y gastos.</p>
+        {/* ECUACIÓN DE CAJA FINANCIERA (Cobrado - Costo - Gastos = Resultado) */}
+        {canViewProfit && (
+          <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-xs">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
+              <div className="flex items-center gap-2">
+                <WalletCards size={16} className="text-fuchsia-600" />
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-800">Ecuación de Caja del Período</h3>
               </div>
-              <div className="metrics-modern-chart-toggles">
-                {summaryEvolutionOptions.map((option) => {
-                  const isActiveOption = summaryEvolutionMetrics.includes(option.id);
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => toggleSummaryEvolutionMetric(option.id)}
-                      className={isActiveOption ? 'is-active' : ''}
-                      aria-pressed={isActiveOption}
-                    >
-                      <span style={{ backgroundColor: option.color }} />
-                      {option.label}
-                    </button>
-                  );
-                })}
+              <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-black ${
+                netMarginRate >= 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
+              }`}>
+                Margen Neto: {formatNumber(netMarginRate, 1)}%
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+              <div className="rounded-lg border border-sky-100 bg-sky-50/60 p-2.5">
+                <span className="text-[9px] font-black uppercase tracking-wider text-sky-600 block">1. Cobrado</span>
+                <span className="text-sm font-black text-sky-900 block mt-0.5"><FancyPrice amount={revenue} /></span>
+                <span className="text-[10px] font-medium text-slate-500 block mt-0.5">Ventas totales</span>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                <span className="text-[9px] font-black uppercase tracking-wider text-slate-500 block">2. Costo Mercadería</span>
+                <span className="text-sm font-black text-slate-800 block mt-0.5"><FancyPrice amount={cost} /></span>
+                <span className="text-[10px] font-medium text-slate-500 block mt-0.5">{formatNumber(costRate, 1)}% sobre cobros</span>
+              </div>
+              <div className="rounded-lg border border-rose-100 bg-rose-50/60 p-2.5">
+                <span className="text-[9px] font-black uppercase tracking-wider text-rose-600 block">3. Gastos Operativos</span>
+                <span className="text-sm font-black text-rose-800 block mt-0.5"><FancyPrice amount={expensesTotal} /></span>
+                <span className="text-[10px] font-medium text-slate-500 block mt-0.5">{metrics.current.filteredExpenses.length} movimientos</span>
+              </div>
+              <div className={`rounded-lg border p-2.5 ${
+                netProfit >= 0 ? 'border-emerald-200 bg-emerald-50/80 text-emerald-900' : 'border-rose-200 bg-rose-50/80 text-rose-900'
+              }`}>
+                <span className="text-[9px] font-black uppercase tracking-wider opacity-75 block">4. Resultado Neto</span>
+                <span className="text-sm font-black block mt-0.5"><FancyPrice amount={netProfit} /></span>
+                <span className="text-[10px] font-medium opacity-80 block mt-0.5">{netMarginRate >= 0 ? 'Superávit en caja' : 'Déficit operativo'}</span>
               </div>
             </div>
+          </div>
+        )}
 
+        {/* EVOLUCIÓN TEMPORAL DE CAJA & VENTAS */}
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.45fr_0.9fr]">
+          <Panel
+            title={isHourlyMode ? 'Evolución por horario' : 'Evolución del período'}
+            icon={TrendingUp}
+            action={(
+              <div className="inline-flex flex-wrap gap-1 rounded-md border border-slate-200 bg-slate-50 p-0.5">
+                {summaryEvolutionOptions.map((option) => (
+                  <label
+                    key={option.id}
+                    className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded border px-2 text-[10px] font-black transition ${
+                      summaryEvolutionMetrics.includes(option.id)
+                        ? option.tone
+                        : 'border-transparent text-slate-500 hover:bg-white'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={summaryEvolutionMetrics.includes(option.id)}
+                      onChange={() => toggleSummaryEvolutionMetric(option.id)}
+                      className="h-3 w-3 rounded border-slate-300"
+                    />
+                    {option.label}
+                  </label>
+                ))}
+              </div>
+            )}
+            hint={`Compara ingreso bruto, cantidad de ventas y, si tenés permiso, resultado de caja por ${periodUnit}.`}
+          >
             {metrics.current.dailySeries.length ? (
               <ChartFrame height={260}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={metrics.current.dailySeries} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                  <AreaChart data={metrics.current.dailySeries}>
                     <defs>
                       {summaryEvolutionOptions.map((option) => (
-                        <linearGradient key={option.id} id={`metrics-modern-${option.id}`} x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={option.color} stopOpacity={0.24} />
+                        <linearGradient key={option.id} id={`metrics-${option.id}`} x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor={option.color} stopOpacity={0.22} />
                           <stop offset="95%" stopColor={option.color} stopOpacity={0} />
                         </linearGradient>
                       ))}
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#d8e2ee" />
-                    <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#7c8da3" />
-                    <YAxis tick={{ fontSize: 11 }} stroke="#7c8da3" tickFormatter={(value) => `$${formatNumber(value)}`} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#94a3b8" />
+                    <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={(value) => `$${formatNumber(value)}`} />
                     <Tooltip content={<EvolutionChartTooltip />} />
                     <Legend verticalAlign="top" height={24} />
                     {activeEvolutionOptions.map((option) => (
@@ -2207,8 +1433,8 @@ export default function MetricsView({
                         dataKey={option.id}
                         name={option.label}
                         stroke={option.color}
-                        fill={`url(#metrics-modern-${option.id})`}
-                        strokeWidth={2.5}
+                        fill={`url(#metrics-${option.id})`}
+                        strokeWidth={2}
                       />
                     ))}
                   </AreaChart>
@@ -2217,12 +1443,12 @@ export default function MetricsView({
             ) : <EmptyState />}
 
             {showHourlyPulse && (
-              <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50/80 p-2">
+              <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
                 <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
                   <p className="min-w-0 truncate text-[11px] font-semibold text-slate-500">
                     <span className="font-black uppercase tracking-[0.12em] text-slate-600">Pulso horario</span>
                     <span className="mx-1 text-slate-400">·</span>
-                    Movimientos por hora
+                    Movimientos acumulados por hora
                   </p>
                   <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-black text-violet-700">
                     08:00 a 21:00
@@ -2230,249 +1456,70 @@ export default function MetricsView({
                 </div>
                 <AreaMetricPanel
                   data={hourlyPulseSeries}
-                  areas={[{ key: 'salesCount', label: 'Movimientos', color: '#8b5cf6' }]}
+              areas={[{ key: 'salesCount', label: 'Movimientos', color: '#8b5cf6' }]}
                   yFormatter={(value) => formatNumber(value)}
                   height={110}
                   showLegend={false}
                 />
               </div>
             )}
+          </Panel>
 
-            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
-              <div className="metrics-modern-insight">
-                <span>Mejor tramo</span>
-                <strong>{strongestPeriod?.label || '-'}</strong>
-                <small>{strongestPeriod ? <FancyPrice amount={strongestPeriod.revenue} /> : 'Sin ventas'}</small>
-              </div>
-              <div className="metrics-modern-insight">
-                <span>Top producto</span>
-                <strong title={topProduct?.name || undefined}>{topProduct?.name || '-'}</strong>
-                <small>{topProduct ? <FancyPrice amount={topProduct.revenue} /> : 'Sin ventas'}</small>
-              </div>
-              <div className="metrics-modern-insight">
-                <span>Medio lider</span>
-                <strong title={topPayment?.name || undefined}>{topPayment?.name || '-'}</strong>
-                <small>{topPayment ? <FancyPrice amount={topPayment.value} /> : 'Sin pagos'}</small>
-              </div>
-            </div>
-          </section>
-
-          <div className="space-y-3">
-            <section className="metrics-modern-panel">
-              <div className="mb-2 flex items-center gap-2">
-                <WalletCards size={16} className="text-emerald-600" />
-                <h3 className="text-sm font-black text-slate-900">Tira de caja</h3>
-              </div>
-              <div className="metrics-modern-ledger">
-                <ModernLedgerRow label="Ingreso bruto" value={<FancyPrice amount={stats.revenue} />} tone="sky" />
-                {canViewProfit && <ModernLedgerRow label="Costo vendido" value={<FancyPrice amount={stats.cost} />} />}
-                <ModernLedgerRow label="Gastos" value={<FancyPrice amount={stats.expenses} />} tone="rose" />
-                {canViewProfit ? (
-                  <>
-                    <ModernLedgerRow label="Resultado" value={profitStatusLabel || <FancyPrice amount={stats.profit} />} tone={profitStatusTone} strong />
-                    <ModernLedgerRow label="Resultado / ingreso" value={`${formatNumber(marginRate, 1)}%`} tone="emerald" />
-                  </>
-                ) : (
-                  <ModernLedgerRow label="Ticket promedio" value={<FancyPrice amount={stats.averageTicket} />} tone="amber" strong />
-                )}
-              </div>
-            </section>
-
-            <section className="metrics-modern-panel">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <CreditCard size={16} className="shrink-0 text-sky-600" />
-                  <h3 className="truncate text-sm font-black text-slate-900">Metodos de pago</h3>
+          <div className="space-y-4">
+            {/* PRODUCTO LÍDER */}
+            {topProduct && (
+              <Panel title="Producto Líder" icon={ShoppingBag}>
+                <div className="flex items-center justify-between gap-2 p-1">
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm font-black text-slate-900 block truncate" title={topProduct.name}>
+                      {topProduct.name}
+                    </span>
+                    <span className="text-[11px] text-slate-500 font-semibold block mt-0.5">
+                      {formatNumber(topProduct.qty)} {topProduct.type === 'weight' ? 'g vendidos' : 'unidades vendidas'}
+                    </span>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className="text-sm font-black text-emerald-700 block">
+                      <FancyPrice amount={topProduct.revenue} />
+                    </span>
+                    {canViewProfit && Number(topProduct.cost) > 0 && (
+                      <span className="text-[10px] text-slate-400 font-medium block">
+                        Costo: <FancyPrice amount={topProduct.cost} />
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveSection('payments')}
-                  className="metrics-modern-payment-detail"
-                >
-                  Ver detalle
-                </button>
-              </div>
-              {visiblePayments.length ? (
-                <div className="metrics-modern-payment-list">
-                  {visiblePayments.map((item, index) => {
-                    const share = paymentTotal > 0 ? (Number(item.value || 0) / paymentTotal) * 100 : 0;
-                    return (
-                      <div key={item.name} className="metrics-modern-payment-row">
-                        <div className="metrics-modern-payment-main">
-                          <span
-                            className="metrics-modern-payment-dot"
-                            style={{ backgroundColor: COLORS[index % COLORS.length] }}
-                          />
-                          <span className="metrics-modern-payment-name" title={item.name}>{item.name}</span>
-                          <span className="metrics-modern-payment-uses">{formatNumber(item.salesCount)} usos</span>
-                          <strong><FancyPrice amount={item.value} /></strong>
-                        </div>
-                        <div className="metrics-modern-payment-track">
-                          <span
-                            style={{
-                              width: `${Math.max(2, Math.min(100, share))}%`,
-                              backgroundColor: COLORS[index % COLORS.length],
-                            }}
-                          />
-                        </div>
-                        <span className="metrics-modern-payment-share">{formatNumber(share, 1)}%</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="metrics-modern-payment-empty">Sin pagos para estos filtros.</div>
-              )}
-            </section>
+              </Panel>
+            )}
 
-            <section className="metrics-modern-panel">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Sparkles size={16} className="text-fuchsia-600" />
-                  <h3 className="text-sm font-black text-slate-900">Pulso</h3>
-                </div>
-                {topRecommendation && <span className="metrics-modern-range-pill">Top</span>}
-              </div>
+            {/* ALERTAS Y RECOMENDACIONES */}
+            <Panel title="Alertas y Recomendaciones" icon={Sparkles} action={canConfigureAlerts ? <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-black text-slate-500">Calculadas</span> : null}>
               <div className="space-y-2">
-                {metrics.recommendations.length ? metrics.recommendations.slice(0, 3).map((item, index) => (
-                  <div key={`${item.title}-${index}`} className={`metrics-modern-alert metrics-modern-alert-${item.tone || 'info'}`}>
-                    <p>{item.title}</p>
-                    <span>{item.detail}</span>
-                  </div>
-                )) : (
-                  <div className="metrics-modern-alert metrics-modern-alert-success">
-                    <p>Sin alertas importantes</p>
-                    <span>Los filtros actuales no muestran seniales criticas.</span>
+                {metrics.recommendations.length ? metrics.recommendations.slice(0, 3).map((item, index) => {
+                  const toneClass = {
+                    danger: 'border-rose-200 bg-rose-50 text-rose-700',
+                    warning: 'border-amber-200 bg-amber-50 text-amber-700',
+                    success: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+                    info: 'border-sky-200 bg-sky-50 text-sky-700',
+                  }[item.tone] || 'border-slate-200 bg-slate-50 text-slate-700';
+                  return (
+                    <div key={`${item.title}-${index}`} className={`rounded-lg border px-3 py-2 ${toneClass}`}>
+                      <p className="text-xs font-black">{item.title}</p>
+                      <p className="mt-0.5 text-[11px] font-semibold opacity-80">{item.detail}</p>
+                    </div>
+                  );
+                }) : (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm font-bold text-emerald-700">
+                    No hay alertas críticas en los filtros actuales.
                   </div>
                 )}
               </div>
-            </section>
+            </Panel>
           </div>
         </div>
       </div>
     );
   };
-
-  const renderSummary = () => (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
-        <MetricCard label="Ingreso bruto" value={<FancyPrice amount={metrics.current.stats.revenue} />} sublabel={metrics.range.label} change={metrics.changes.revenue} tone="sky" hint="Total vendido en el rango filtrado, antes de restar costos o gastos." />
-        <MetricCard label="Resultado caja" value={profitStatusLabel || <FancyPrice amount={metrics.current.stats.profit} />} sublabel={profitStatusLabel ? profitStatusDetail : 'Ingreso cobrado - gastos'} change={metrics.changes.profit} tone={profitStatusTone} hidden={!canViewProfit} hint="Resultado del periodo: ingreso cobrado menos gastos registrados. El costo vendido se usa para margen de productos." />
-        <MetricCard label="Ventas" value={formatNumber(metrics.current.stats.salesCount)} sublabel="Tickets emitidos" change={metrics.changes.salesCount} tone="violet" />
-        <MetricCard label="Ticket promedio" value={<FancyPrice amount={metrics.current.stats.averageTicket} />} sublabel="Promedio por venta" change={metrics.changes.averageTicket} tone="amber" hint="Ingreso bruto dividido por cantidad de ventas." />
-        <MetricCard label="Gastos" value={<FancyPrice amount={metrics.current.stats.expenses} />} sublabel={`${metrics.current.filteredExpenses.length} movimientos`} change={metrics.changes.expenses} invertChange tone="rose" hint="Suma de gastos registrados en el rango filtrado." />
-        <MetricCard label="Stock actual" value={<FancyPrice amount={canViewProfit ? metrics.stockStats.totalCost : metrics.stockStats.totalRetail} />} sublabel={canViewProfit ? 'Snapshot a costo' : 'Snapshot a venta'} tone="slate" hint={canViewProfit ? 'Valor estimado del stock actual a precio de compra; no depende del rango filtrado.' : 'Valor estimado del stock actual a precio de venta; no depende del rango filtrado.'} />
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.45fr_0.9fr]">
-        <Panel
-          title={isHourlyMode ? 'Evolución por horario' : 'Evolución del período'}
-          icon={TrendingUp}
-          action={(
-            <div className="inline-flex flex-wrap gap-1 rounded-md border border-slate-200 bg-slate-50 p-0.5">
-              {summaryEvolutionOptions.map((option) => (
-                <label
-                  key={option.id}
-                  className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded border px-2 text-[10px] font-black transition ${
-                    summaryEvolutionMetrics.includes(option.id)
-                      ? option.tone
-                      : 'border-transparent text-slate-500 hover:bg-white'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={summaryEvolutionMetrics.includes(option.id)}
-                    onChange={() => toggleSummaryEvolutionMetric(option.id)}
-                    className="h-3 w-3 rounded border-slate-300"
-                  />
-                  {option.label}
-                </label>
-              ))}
-            </div>
-          )}
-          hint={`Compara ingreso bruto, cantidad de ventas y, si tenés permiso, resultado de caja por ${periodUnit}.`}
-        >
-          {metrics.current.dailySeries.length ? (
-            <ChartFrame height={260}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={metrics.current.dailySeries}>
-                  <defs>
-                    {summaryEvolutionOptions.map((option) => (
-                      <linearGradient key={option.id} id={`metrics-${option.id}`} x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={option.color} stopOpacity={0.22} />
-                        <stop offset="95%" stopColor={option.color} stopOpacity={0} />
-                      </linearGradient>
-                    ))}
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                  <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={(value) => `$${formatNumber(value)}`} />
-                  <Tooltip content={<EvolutionChartTooltip />} />
-                  <Legend verticalAlign="top" height={24} />
-                  {activeEvolutionOptions.map((option) => (
-                    <Area
-                      key={option.id}
-                      type="monotone"
-                      dataKey={option.id}
-                      name={option.label}
-                      stroke={option.color}
-                      fill={`url(#metrics-${option.id})`}
-                      strokeWidth={2}
-                    />
-                  ))}
-                </AreaChart>
-              </ResponsiveContainer>
-            </ChartFrame>
-          ) : <EmptyState />}
-
-          {showHourlyPulse && (
-            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
-              <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
-                <p className="min-w-0 truncate text-[11px] font-semibold text-slate-500">
-                  <span className="font-black uppercase tracking-[0.12em] text-slate-600">Pulso horario</span>
-                  <span className="mx-1 text-slate-400">·</span>
-                  Movimientos acumulados por hora
-                </p>
-                <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-black text-violet-700">
-                  08:00 a 21:00
-                </span>
-              </div>
-              <AreaMetricPanel
-                data={hourlyPulseSeries}
-                areas={[{ key: 'salesCount', label: 'Movimientos', color: '#8b5cf6' }]}
-                yFormatter={(value) => formatNumber(value)}
-                height={110}
-                showLegend={false}
-              />
-            </div>
-          )}
-        </Panel>
-
-        <Panel title="Alertas y recomendaciones" icon={Sparkles} action={canConfigureAlerts ? <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-black text-slate-500">Calculadas</span> : null}>
-          <div className="space-y-2">
-            {metrics.recommendations.length ? metrics.recommendations.map((item, index) => {
-              const toneClass = {
-                danger: 'border-rose-200 bg-rose-50 text-rose-700',
-                warning: 'border-amber-200 bg-amber-50 text-amber-700',
-                success: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-                info: 'border-sky-200 bg-sky-50 text-sky-700',
-              }[item.tone] || 'border-slate-200 bg-slate-50 text-slate-700';
-              return (
-                <div key={`${item.title}-${index}`} className={`rounded-lg border px-3 py-2 ${toneClass}`}>
-                  <p className="text-xs font-black">{item.title}</p>
-                  <p className="mt-0.5 text-[11px] font-semibold opacity-80">{item.detail}</p>
-                </div>
-              );
-            }) : (
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm font-bold text-emerald-700">
-                No hay alertas importantes para estos filtros.
-              </div>
-            )}
-          </div>
-        </Panel>
-      </div>
-    </div>
-  );
 
   const renderSales = () => (
     <div className="space-y-4">
@@ -2620,11 +1667,6 @@ export default function MetricsView({
   };
 
   const renderProducts = () => {
-    const categoryPieData = metrics.current.categoryStats.slice(0, 10);
-    const selectedCategoryName = pieSelections.productCategories || null;
-    const selectedCategory = selectedCategoryName
-      ? metrics.current.categoryStats.find((category) => category.name === selectedCategoryName)
-      : null;
     const hasProductLookup = productLookupTerms.length > 0;
     const productLookupResultLabel = productLookupRows.length === 1
       ? '1 resultado'
@@ -2755,18 +1797,8 @@ export default function MetricsView({
               rows={productLookupRows}
             />
           </Panel>
-          <Panel title={isModernMode ? 'Categorias por ingreso' : 'Tipo de producto'} icon={isModernMode ? Boxes : PackageSearch}>
-            {isModernMode ? (
-              <PieMetricPanel
-                data={categoryPieData}
-                dataKey="revenue"
-                height={300}
-                valueType="currency"
-                selectedName={selectedCategory?.name}
-                onSelectionChange={(name) => updatePieSelection('productCategories', name)}
-                getSecondaryText={(entry) => `${formatNumber(entry.qty)} unidades/items`}
-              />
-            ) : metrics.current.typeStats.length ? (
+          <Panel title="Tipo de producto" icon={PackageSearch}>
+            {metrics.current.typeStats.length ? (
               <PieMetricPanel
                 data={metrics.current.typeStats}
                 dataKey="revenue"
@@ -2779,50 +1811,6 @@ export default function MetricsView({
             ) : <EmptyState />}
           </Panel>
         </div>
-
-        {isModernMode && (
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <Panel title="Detalle de categorias" icon={Boxes}>
-              <Table
-                emptyText="Sin categorias vendidas."
-                columns={[
-                  { key: 'name', label: 'Categoria' },
-                  { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
-                  { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-                  ...(canViewProfit ? SOLD_COST_COLUMNS : []),
-                ]}
-                rows={metrics.current.categoryStats}
-                onRowClick={(row) => updatePieSelection('productCategories', row.name)}
-                isRowSelected={(row) => row.name === selectedCategoryName}
-              />
-            </Panel>
-
-            <Panel
-              title={selectedCategory ? `Articulos de ${selectedCategory.name}` : 'Articulos de categoria'}
-              icon={ShoppingBag}
-              action={selectedCategory ? (
-                <button
-                  type="button"
-                  onClick={() => updatePieSelection('productCategories', null)}
-                  className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-500 hover:bg-slate-50"
-                >
-                  Limpiar
-                </button>
-              ) : null}
-            >
-              <Table
-                emptyText="Selecciona una categoria del grafico."
-                columns={[
-                  { key: 'name', label: 'Articulo' },
-                  { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
-                  { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-                  ...(canViewProfit ? SOLD_COST_COLUMNS : []),
-                ]}
-                rows={selectedCategory?.productBreakdown || []}
-              />
-            </Panel>
-          </div>
-        )}
       </div>
     );
   };
@@ -3329,52 +2317,21 @@ export default function MetricsView({
   };
 
   const renderActiveSection = () => {
-    if (isModernMode && !MODERN_SECTION_IDS.has(activeSection)) return renderModernSummary();
-
     switch (activeSection) {
-      case 'summary': return isModernMode ? renderModernSummary() : renderSummary();
+      case 'summary': return renderSummary();
       case 'sales': return renderSales();
-      case 'profit': return canViewProfit ? renderProfit() : (isModernMode ? renderModernSummary() : renderSummary());
+      case 'profit': return canViewProfit ? renderProfit() : renderSummary();
       case 'products': return renderProducts();
       case 'categories': return renderCategories();
       case 'payments': return renderPayments();
-      case 'clients': return canViewClients ? renderClients() : (isModernMode ? renderModernSummary() : renderSummary());
+      case 'clients': return canViewClients ? renderClients() : renderSummary();
       case 'stock': return renderStock();
       case 'orders': return renderOrders();
-      case 'users': return canViewUsers ? renderUsers() : (isModernMode ? renderModernSummary() : renderSummary());
+      case 'users': return canViewUsers ? renderUsers() : renderSummary();
       case 'cash': return renderCash();
-      default: return isModernMode ? renderModernSummary() : renderSummary();
+      default: return renderSummary();
     }
   };
-
-  if (isProfitControlMode) {
-    return renderProfitControlMode();
-  }
-
-  if (isModernMode) {
-    return (
-      <div className="metrics-view metrics-view-modern flex h-full min-h-0 flex-col bg-slate-100">
-        {renderModernHeader()}
-        <div className={`metrics-modern-backdrop ${isModernControlOpen ? 'is-open' : ''}`} onClick={() => setIsModernControlOpen(false)} />
-        <div className="metrics-modern-shell">
-          {renderModernSidebar()}
-          <main className="metrics-modern-content custom-scrollbar">
-            <div className="rebu-content-frame pb-8">
-              {metrics.current.filteredTransactions.length === 0 && metrics.current.filteredExpenses.length === 0 && activeSection !== 'stock' ? (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
-                  <div className="flex items-center gap-2">
-                    <Search size={16} />
-                    No hay ventas ni gastos para los filtros activos. Algunas secciones pueden mostrar inventario, pedidos o caja igualmente.
-                  </div>
-                </div>
-              ) : null}
-              {renderActiveSection()}
-            </div>
-          </main>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="metrics-view flex h-full min-h-0 flex-col bg-slate-100">
@@ -3388,11 +2345,13 @@ export default function MetricsView({
                 <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] text-slate-500">
                   {metrics.range.label}
                 </span>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-semibold text-slate-500">
+                  {getComparisonLabel(metrics)}
+                </span>
               </div>
-              <p className="mt-0.5 text-[11px] font-semibold text-slate-400">Ventas, productos, stock, caja y operación.</p>
+              <p className="mt-0.5 text-[11px] font-semibold text-slate-400">Ventas, costos, caja, stock y diagnóstico operativo.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {renderModeSwitch()}
               <button
                 type="button"
                 onClick={handleRefresh}

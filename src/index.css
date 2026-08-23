@@ -513,6 +513,9 @@ button.app-update-status:hover {
 }
 
 .app-topbar {
+  position: relative;
+  z-index: 80 !important;
+  overflow: visible;
   height: var(--app-topbar-height) !important;
   min-height: var(--app-topbar-height);
   padding-right: var(--app-topbar-padding-x) !important;
@@ -651,6 +654,80 @@ button.app-update-status:hover {
   color: var(--rebu-danger);
 }
 
+.app-topbar-notification {
+  position: relative;
+  display: inline-flex;
+  width: var(--app-control-height);
+  height: var(--app-control-height);
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--rebu-border);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--rebu-control) 82%, transparent);
+  color: var(--rebu-text-secondary);
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.app-topbar-notification:hover,
+.app-topbar-notification[aria-expanded='true'] {
+  border-color: var(--rebu-info-border);
+  background: var(--rebu-info-bg);
+  color: var(--rebu-info);
+}
+
+.app-topbar-notification.has-pending {
+  border-color: var(--rebu-warning-border);
+  color: var(--rebu-warning);
+}
+
+.app-topbar-notification:focus-visible {
+  outline: 2px solid var(--rebu-info);
+  outline-offset: 2px;
+}
+
+.app-notification-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: inline-flex;
+  min-width: 17px;
+  height: 17px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--rebu-surface-2);
+  border-radius: 999px;
+  background: var(--rebu-warning);
+  padding: 0 3px;
+  color: #07111f;
+  font-size: 9px;
+  font-weight: 950;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.app-notifications-panel {
+  z-index: 90;
+  transform-origin: top right;
+  animation: app-notifications-enter 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes app-notifications-enter {
+  from {
+    transform: translateY(-4px) scale(0.985);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-notifications-panel {
+    animation: none;
+  }
+}
+
 @media (max-width: 1280px) {
   .app-topbar-action {
     width: 34px;
@@ -689,6 +766,28 @@ button.app-update-status:hover {
   border-color: var(--rebu-border);
   background: color-mix(in srgb, var(--rebu-surface-3) 90%, transparent);
   color: var(--rebu-text-secondary);
+}
+
+:root[data-theme='dark'] .app-topbar-notification,
+.app-shell[data-theme='dark'] .app-topbar-notification {
+  border-color: var(--rebu-border);
+  background: color-mix(in srgb, var(--rebu-surface-3) 90%, transparent);
+  color: var(--rebu-text-secondary);
+}
+
+:root[data-theme='dark'] .app-topbar-notification.has-pending,
+.app-shell[data-theme='dark'] .app-topbar-notification.has-pending {
+  border-color: var(--rebu-warning-border);
+  color: var(--rebu-warning);
+}
+
+:root[data-theme='dark'] .app-topbar-notification:hover,
+:root[data-theme='dark'] .app-topbar-notification[aria-expanded='true'],
+.app-shell[data-theme='dark'] .app-topbar-notification:hover,
+.app-shell[data-theme='dark'] .app-topbar-notification[aria-expanded='true'] {
+  border-color: var(--rebu-info-border);
+  background: var(--rebu-info-bg);
+  color: var(--rebu-info);
 }
 
 :root[data-theme='dark'] .app-topbar-action:hover,
@@ -918,6 +1017,8 @@ body::-webkit-scrollbar,
 }
 
 .app-main-content {
+  position: relative;
+  z-index: 0;
   padding: var(--app-main-padding);
 }
 
@@ -7959,6 +8060,46 @@ code {
 
 :root[data-theme='dark'] .bulk-excel-import .excel-review-row-collapsed .excel-target-list {
   background: rgba(10, 25, 44, 0.36) !important;
+}
+
+/* Excel review selection: one unmistakable active work block. */
+.bulk-excel-import .excel-review-row-collapsed.excel-review-row-active {
+  position: relative;
+  z-index: 1;
+  border-left-color: #0284c7 !important;
+  background: linear-gradient(90deg, rgba(224, 242, 254, 0.96) 0%, rgba(248, 251, 255, 0.98) 38%, #ffffff 100%) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(14, 116, 144, 0.42),
+    inset 5px 0 0 #0284c7 !important;
+}
+
+.bulk-excel-import .excel-review-row-collapsed.excel-review-row-active::before {
+  bottom: 0;
+  top: 0;
+  width: 5px;
+  border-radius: 0;
+  background: #0284c7;
+  opacity: 1;
+}
+
+.bulk-excel-import .excel-review-row-active .excel-row-heading {
+  border-bottom-color: rgba(14, 116, 144, 0.24);
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-collapsed.excel-review-row-active {
+  border-left-color: #38bdf8 !important;
+  background: linear-gradient(90deg, rgba(8, 92, 126, 0.44) 0%, #183554 38%, #142c49 100%) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(56, 189, 248, 0.48),
+    inset 5px 0 0 #38bdf8 !important;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-collapsed.excel-review-row-active::before {
+  background: #38bdf8;
+}
+
+:root[data-theme='dark'] .bulk-excel-import .excel-review-row-active .excel-row-heading {
+  border-bottom-color: rgba(125, 211, 252, 0.26);
 }
 
 :root[data-theme='dark'] .bulk-excel-import .excel-compact-change {

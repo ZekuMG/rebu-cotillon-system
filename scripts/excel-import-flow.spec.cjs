@@ -59,9 +59,31 @@ test('importar Excel consolida, crea y bloquea reaplicaciones', async ({ page },
   await page.getByRole('button', { name: /Importar Excel/i }).click();
   await page.locator('input[type="file"]').setInputFiles(workbookPath);
 
+  const lotSearch = page.getByRole('searchbox', { name: 'Buscar en el lote importado' });
+  const lotFilter = page.locator('.excel-result-select select');
+  await expect(lotSearch).toBeVisible();
+  await expect(lotFilter.locator('option[value="applicable"]')).toContainText('Por aplicar');
+  await expect(page.locator('article').filter({ hasText: 'Articulo Duplicado Auditoria' })).toBeVisible();
+  await lotSearch.fill('AUD-NEW');
+  await expect(page.locator('article').filter({ hasText: 'Pack Globos Metalizados Dorados Especial' })).toBeVisible();
+  await expect(page.locator('article').filter({ hasText: 'Articulo Duplicado Auditoria' })).toHaveCount(0);
+  await lotSearch.fill('');
+
   const duplicateRow = page.locator('article').filter({ hasText: 'Articulo Duplicado Auditoria' });
+  await expect(duplicateRow).toHaveClass(/excel-review-row-active/);
+  await expect(duplicateRow).toHaveAttribute('aria-current', 'true');
+  await expect(duplicateRow.getByText('Seleccionado', { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('excel-selected-row.png'), fullPage: true });
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
+  await page.screenshot({ path: testInfo.outputPath('excel-selected-row-dark.png'), fullPage: true });
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
   await expect(duplicateRow.getByText('Codigo duplicado en Excel')).toBeVisible();
   await duplicateRow.getByRole('button', { name: 'Sumar filas' }).click();
+  await expect(duplicateRow.getByText('Codigo duplicado en Excel')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Editor masivo' }).click();
+  await page.getByRole('button', { name: /Importar Excel/i }).click();
+  await expect(duplicateRow).toBeVisible();
   await expect(duplicateRow.getByText('Codigo duplicado en Excel')).toHaveCount(0);
 
   await duplicateRow.click();
@@ -83,6 +105,14 @@ test('importar Excel consolida, crea y bloquea reaplicaciones', async ({ page },
   await expect(duplicateRow).toContainText('55 u.');
   await page.getByRole('button', { name: 'Entendido' }).click();
 
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.locator('input[type="file"]').setInputFiles(workbookPath);
+  await expect(duplicateRow.getByText('Codigo duplicado en Excel')).toBeVisible();
+  await duplicateRow.getByRole('button', { name: 'Sumar filas' }).click();
+  await expect(duplicateRow.getByText('Aplicado', { exact: true })).toBeVisible();
+  await expect(duplicateRow.getByText('Vincular', { exact: true })).toHaveCount(0);
+  await expect(lotFilter.locator('option[value="applicable"]')).toContainText('Por aplicar (0)');
+
   const newProductRow = page.locator('article').filter({ hasText: 'Pack Globos Metalizados Dorados Especial' });
   await newProductRow.click();
   await newProductRow.locator('.excel-target-list button').first().click();
@@ -97,5 +127,16 @@ test('importar Excel consolida, crea y bloquea reaplicaciones', async ({ page },
   await expect(page.getByRole('button', { name: /^Crear producto$/i })).toBeEnabled();
 
   await page.screenshot({ path: testInfo.outputPath('excel-import-flow.png'), fullPage: true });
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('heading', { name: 'Crear productos nuevos' })).toHaveCount(0);
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'archivo-roto.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    buffer: Buffer.from('contenido invalido'),
+  });
+  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(newProductRow).toBeVisible();
   expect(pageErrors).toEqual([]);
 });

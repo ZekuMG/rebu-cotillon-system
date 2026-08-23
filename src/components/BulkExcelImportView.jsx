@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
@@ -22,19 +22,48 @@ import AsyncActionButton from './AsyncActionButton';
 import { FancyPrice } from './FancyPrice';
 import usePendingAction from '../hooks/usePendingAction';
 import { areDuplicatePricesEqual, mergeDuplicateEntries } from '../utils/excelImportDuplicates';
-import { parseExcelMoney } from '../utils/excelImportNumbers';
+import {
+  calculateExcelImportStockDelta,
+  isSafeExcelImportNumber,
+  parseExcelMoney,
+} from '../utils/excelImportNumbers';
 import {
   canApplyExcelImportRow,
   mergeExcelImportProductResult,
 } from '../utils/excelImportOperations';
-import { getExcelImportAliases, productMatchesExcelAlias } from '../utils/productLifecycle';
+import {
+  getExcelImportAliases,
+  normalizeProductLinkCode,
+  normalizeProductLinkText,
+  productHasExcelImportApplication,
+  shouldSaveExcelImportAlias,
+} from '../utils/productLifecycle';
+import {
+  buildExcelImportRowSignature,
+  fingerprintExcelImportBuffer,
+} from '../utils/excelImportIdentity';
+import {
+  clearExcelImportDraft,
+  loadExcelImportDraft,
+  saveExcelImportDraft,
+} from '../utils/excelImportDraftCache';
 
 const REQUIRED_COLUMNS = ['codigo', 'descripcion', 'cantidad', 'precio', 'descuento', 'costo', 'venta'];
 const FIELD_KEYS = ['stock', 'cost', 'price'];
 const MAX_EXCEL_IMPORT_FILE_SIZE_BYTES = 5 * 1024 * 1024;
 const MAX_EXCEL_IMPORT_ROWS = 5000;
 const MAX_EXCEL_IMPORT_COLUMNS = 80;
+const EXCEL_IMPORT_VISIBLE_CHUNK = 75;
 const EXCEL_IMPORT_EXTENSIONS = new Set(['xlsx', 'xls']);
+const EXCEL_IMPORT_RESULT_FILTERS = new Set([
+  'all',
+  'applicable',
+  'unassigned',
+  'blocked',
+  'changes',
+  'unchanged',
+  'applied',
+]);
 
 const normalizeHeader = (value) =>
   String(value ?? '')
@@ -45,6 +74,13 @@ const normalizeHeader = (value) =>
     .replace(/[^a-z0-9]/g, '');
 
 const normalizeCode = (value) => String(value ?? '').trim();
+
+const normalizeSearchText = (value) =>
+  String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
 
 const getFileExtension = (fileName = '') => {
   const parts = String(fileName).toLowerCase().split('.');
@@ -133,7 +169,7 @@ const getFirstValue = (row, key) => {
   return foundKey ? row[foundKey] : '';
 };
 
-const buildImportEntry = (row, rowNumber) => {
+const buildImportEntry = (row, rowNumber, fileFingerprint = '') => {
   const code = normalizeCode(getFirstValue(row, 'Codigo'));
   const description = String(getFirstValue(row, 'Descripcion') ?? '').trim();
   const category = String(getFirstValue(row, 'Categoria') ?? '').trim();
@@ -148,6 +184,7 @@ const buildImportEntry = (row, rowNumber) => {
 
   return {
     rowNumber,
+    fileFingerprint,
     code,
     description,
     category,
@@ -180,12 +217,26 @@ const getEntryInputKey = (field) => {
 
 const getRowBaseErrors = (entry, _product) => {
   const errors = [];
-  if (!entry.quantity || entry.quantity <= 0) errors.push('Cantidad vacia o cero');
-  if (entry.multiplier === '' || entry.multiplier === null || entry.multiplier === undefined || Number(entry.multiplier) < 0) {
+  if (!isSafeExcelImportNumber(entry.quantity, { min: Number.MIN_VALUE }) || Number(entry.quantity) <= 0) {
+    errors.push('Cantidad vacia o cero');
+  }
+  if (
+    entry.multiplier === ''
+    || entry.multiplier === null
+    || entry.multiplier === undefined
+    || !isSafeExcelImportNumber(entry.multiplier, { min: 0 })
+  ) {
     errors.push('Multiplicador invalido');
   }
-  if (!entry.cost || entry.cost <= 0) errors.push('Costo vacio o cero');
-  if (!entry.salePrice || entry.salePrice <= 0) errors.push('Venta vacia o cero');
+  if (!isSafeExcelImportNumber(calculateExcelImportStockDelta(entry))) {
+    errors.push('Variacion de stock invalida');
+  }
+  if (!isSafeExcelImportNumber(entry.cost, { min: Number.MIN_VALUE }) || Number(entry.cost) <= 0) {
+    errors.push('Costo vacio o cero');
+  }
+  if (!isSafeExcelImportNumber(entry.salePrice, { min: Number.MIN_VALUE }) || Number(entry.salePrice) <= 0) {
+    errors.push('Venta vacia o cero');
+  }
   if (entry.salePrice > 0 && entry.cost > 0 && entry.salePrice < entry.cost) {
     errors.push('Venta menor al costo');
   }
@@ -193,7 +244,29 @@ const getRowBaseErrors = (entry, _product) => {
 };
 
 const getStockUnit = (product) => (product?.product_type === 'weight' ? 'g' : 'u.');
-const getStockDelta = (entry) => Number(entry.quantity || 0) * Number(entry.multiplier || 1);
+const getStockDelta = calculateExcelImportStockDelta;
+const getRowImportSignature = (row) => buildExcelImportRowSignature({
+  fileFingerprint: row?.entry?.fileFingerprint,
+  rowNumber: row?.entry?.rowNumber,
+});
+
+const getProductReviewState = (product) => product ? {
+  id: String(product.id ?? ''),
+  stock: Number(product.stock || 0),
+  purchasePrice: Number(product.purchasePrice || 0),
+  price: Number(product.price || 0),
+  barcode: normalizeCode(product.barcode),
+} : null;
+
+const areProductReviewStatesEqual = (left, right) => (
+  Boolean(left)
+  && Boolean(right)
+  && left.id === right.id
+  && left.stock === right.stock
+  && left.purchasePrice === right.purchasePrice
+  && left.price === right.price
+  && left.barcode === right.barcode
+);
 
 const getQuantityBalance = (sourceRow, productRows) => {
   const originalQuantity = Number(sourceRow.entry.originalQuantity || sourceRow.entry.quantity || 0);
@@ -230,6 +303,10 @@ const buildReviewRow = ({
       Number(product.purchasePrice || 0) !== Number(entry.cost || 0) ||
       Number(product.price || 0) !== Number(entry.salePrice || 0)
     : false;
+  const importSignature = buildExcelImportRowSignature({
+    fileFingerprint: entry.fileFingerprint,
+    rowNumber: entry.rowNumber,
+  });
 
   return {
     id: `${entry.code || 'sin-codigo'}-${index}-${Date.now()}`,
@@ -245,7 +322,9 @@ const buildReviewRow = ({
     assignmentQuery: '',
     changeProductMode: false,
     approvals: { stock: false, cost: false, price: false },
-    applied: false,
+    reviewedProductState: getProductReviewState(product),
+    reviewInvalidated: false,
+    applied: Boolean(product && productHasExcelImportApplication(product, importSignature)),
     errors,
     hasChanges,
   };
@@ -253,6 +332,7 @@ const buildReviewRow = ({
 
 const getRowStatus = (row) => {
   if (!row.product) return { label: 'Sin asignar', tone: 'amber' };
+  if (row.reviewInvalidated) return { label: 'Revisar de nuevo', tone: 'amber' };
   const selectedCount = FIELD_KEYS.filter((field) => row.approvals[field]).length;
   if (hasBlockingErrorsForApply(row)) return { label: 'Revisar', tone: 'red' };
   if (selectedCount === 0 && row.applied) return { label: 'Aplicado', tone: 'green' };
@@ -266,7 +346,13 @@ const getRowStatus = (row) => {
 
 const isFieldEligible = (row, field) => {
   if (!row.product || row.applied) return false;
-  if (field === 'stock') return Number(row.entry.quantity || 0) > 0 && Number(row.entry.multiplier || 0) >= 0;
+  if (field === 'stock') {
+    const stockDelta = getStockDelta(row.entry);
+    return Number(row.entry.quantity || 0) > 0
+      && Number(row.entry.multiplier ?? 1) >= 0
+      && stockDelta !== 0
+      && isSafeExcelImportNumber(stockDelta);
+  }
   if (field === 'cost') return Number(row.entry.cost || 0) > 0 && Number(row.product.purchasePrice || 0) !== Number(row.entry.cost || 0);
   if (field === 'price') return Number(row.entry.salePrice || 0) > 0 && Number(row.product.price || 0) !== Number(row.entry.salePrice || 0);
   return false;
@@ -277,7 +363,9 @@ const hasSelectedFieldChange = (row) => FIELD_KEYS.some((field) => row.approvals
 const isFieldInvalidForRow = (row, field) => {
   const errors = row?.errors || [];
   if (field === 'stock') {
-    return errors.includes('Cantidad vacia o cero') || errors.includes('Multiplicador invalido');
+    return errors.includes('Cantidad vacia o cero')
+      || errors.includes('Multiplicador invalido')
+      || errors.includes('Variacion de stock invalida');
   }
   if (field === 'cost') {
     return errors.includes('Costo vacio o cero') || errors.includes('Venta menor al costo');
@@ -298,11 +386,11 @@ const hasExcelLinkData = (row) =>
   Boolean(normalizeCode(row?.entry?.code) || String(row?.entry?.description || '').trim());
 
 const shouldSaveExcelLinkForRow = (row) =>
-  Boolean(
-      row?.product &&
-      hasExcelLinkData(row) &&
-      (row.manualAssigned || row.createdFromExcel || row.linkedByExcelAlias),
-  );
+  Boolean(hasExcelLinkData(row) && shouldSaveExcelImportAlias({
+    product: row?.product,
+    entry: row?.entry,
+    isNewAssociation: Boolean(row?.manualAssigned || row?.createdFromExcel),
+  }));
 
 const hasBarcodeAssignmentChange = (row) =>
   Boolean(
@@ -338,6 +426,12 @@ const getRowErrorHints = (errors = []) =>
       return {
         title: 'Equivalencia sin valor',
         detail: 'Edita Stock y coloca cuantas unidades reales suma cada unidad comprada. Puede ser 0 si no queres sumar stock.',
+      };
+    }
+    if (error === 'Variacion de stock invalida') {
+      return {
+        title: 'Variacion de stock fuera de rango',
+        detail: 'Reduce la cantidad o la equivalencia antes de aplicar el lote.',
       };
     }
     if (error === 'Costo vacio o cero') {
@@ -391,11 +485,22 @@ const statusAccentClass = {
 export default function BulkExcelImportView({
   inventory = [],
   categories = [],
+  cacheScope = '',
+  canCreateInventory = false,
+  canEditInventory = false,
   onApplyImport,
   onUndoImport,
   onCreateProducts,
 }) {
   const fileInputRef = useRef(null);
+  const parseRequestRef = useRef(0);
+  const mountedRef = useRef(true);
+  const saveRequestRef = useRef(0);
+  const createDialogRef = useRef(null);
+  const createDialogCloseRef = useRef(null);
+  const previousFocusedElementRef = useRef(null);
+  const isCreatingProductsRef = useRef(false);
+  const isDraftHydratedRef = useRef(false);
   const [fileName, setFileName] = useState('');
   const [fileError, setFileError] = useState('');
   const [rows, setRows] = useState([]);
@@ -404,13 +509,21 @@ export default function BulkExcelImportView({
   const [isParsing, setIsParsing] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [resultFilter, setResultFilter] = useState('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [visibleRowLimit, setVisibleRowLimit] = useState(EXCEL_IMPORT_VISIBLE_CHUNK);
   const [selectedCreateRowIds, setSelectedCreateRowIds] = useState([]);
   const [createDrafts, setCreateDrafts] = useState([]);
   const [isCreatePanelOpen, setIsCreatePanelOpen] = useState(false);
   const [isCreatingProducts, setIsCreatingProducts] = useState(false);
   const [lastApplyBatch, setLastApplyBatch] = useState(null);
   const [isUndoingImport, setIsUndoingImport] = useState(false);
+  const [isDraftHydrated, setIsDraftHydrated] = useState(false);
+  const [cacheStatus, setCacheStatus] = useState('loading');
+  const draftStateRef = useRef(null);
   const { runAction: runImportAction } = usePendingAction();
+  const isOperationBusy = !isDraftHydrated || isParsing || isApplying || isCreatingProducts || isUndoingImport;
+  isCreatingProductsRef.current = isCreatingProducts;
+  isDraftHydratedRef.current = isDraftHydrated;
 
   const barcodeLookup = useMemo(() => {
     const map = new Map();
@@ -421,17 +534,235 @@ export default function BulkExcelImportView({
     return map;
   }, [inventory]);
 
-  const findProductForEntry = (entry) => {
+  const inventoryById = useMemo(() => {
+    const map = new Map();
+    (inventory || []).forEach((product) => {
+      if (product?.id !== undefined && product?.id !== null) map.set(String(product.id), product);
+    });
+    return map;
+  }, [inventory]);
+
+  const excelAliasLookup = useMemo(() => {
+    const byCode = new Map();
+    const byDescription = new Map();
+    (inventory || []).forEach((product) => {
+      getExcelImportAliases(product).forEach((alias) => {
+        if (alias.normalizedCode && !byCode.has(alias.normalizedCode)) {
+          byCode.set(alias.normalizedCode, product);
+        }
+        if (alias.normalizedDescription && !byDescription.has(alias.normalizedDescription)) {
+          byDescription.set(alias.normalizedDescription, product);
+        }
+      });
+    });
+    return { byCode, byDescription };
+  }, [inventory]);
+
+  const findProductForEntry = useCallback((entry) => {
     const code = normalizeCode(entry?.code);
     if (code && barcodeLookup.has(code)) {
       return { product: barcodeLookup.get(code), linkedByExcelAlias: false };
     }
 
-    const linkedProduct = (inventory || []).find((product) => productMatchesExcelAlias(product, entry));
+    const aliasCode = normalizeProductLinkCode(entry?.code);
+    const aliasDescription = normalizeProductLinkText(entry?.description);
+    const linkedProduct = (
+      (aliasCode && excelAliasLookup.byCode.get(aliasCode))
+      || (aliasDescription && excelAliasLookup.byDescription.get(aliasDescription))
+    );
     return linkedProduct
       ? { product: linkedProduct, linkedByExcelAlias: true }
       : { product: null, linkedByExcelAlias: false };
+  }, [barcodeLookup, excelAliasLookup]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsDraftHydrated(false);
+    setCacheStatus('loading');
+
+    if (typeof window === 'undefined' || !cacheScope) {
+      setIsDraftHydrated(true);
+      setCacheStatus(cacheScope ? 'ready' : 'disabled');
+      return () => { cancelled = true; };
+    }
+
+    loadExcelImportDraft({
+      storage: window.localStorage,
+      indexedDB: window.indexedDB,
+      scope: cacheScope,
+    }).then((draft) => {
+      if (cancelled) return;
+      if (draft) {
+        setFileName(draft.fileName || '');
+        setRows(draft.rows || []);
+        setActiveTargetBySource(draft.activeTargetBySource || {});
+        setActiveSourceRowId(draft.activeSourceRowId || '');
+        setResultFilter(EXCEL_IMPORT_RESULT_FILTERS.has(draft.resultFilter) ? draft.resultFilter : 'all');
+        setSearchTerm(draft.searchTerm || '');
+        setLastApplyBatch(draft.lastApplyBatch || null);
+      }
+      setIsDraftHydrated(true);
+      setCacheStatus(draft ? 'restored' : 'ready');
+    }).catch(() => {
+      if (cancelled) return;
+      setIsDraftHydrated(true);
+      setCacheStatus('error');
+    });
+
+    return () => { cancelled = true; };
+  }, [cacheScope]);
+
+  useEffect(() => {
+    if ((inventory || []).length === 0) return;
+    setRows((currentRows) => {
+      let changed = false;
+      const nextRows = currentRows.map((row, index) => {
+        let product = row.product?.id !== undefined && row.product?.id !== null
+          ? inventoryById.get(String(row.product.id)) || row.product
+          : null;
+        let linkedByExcelAlias = row.linkedByExcelAlias;
+
+        if (!product && !row.productCleared) {
+          const found = findProductForEntry(row.entry);
+          product = found.product;
+          linkedByExcelAlias = found.linkedByExcelAlias;
+        }
+        if (!product) return row;
+
+        const rebuilt = buildReviewRow({
+          entry: row.entry,
+          product,
+          duplicateOptions: row.duplicateOptions,
+          duplicateResolved: row.duplicateResolved,
+          linkedByExcelAlias,
+        }, index);
+        const nextReviewState = getProductReviewState(product);
+        const hadApprovals = FIELD_KEYS.some((field) => Boolean(row.approvals?.[field]));
+        const reviewChanged = Boolean(
+          row.reviewedProductState
+          && !areProductReviewStatesEqual(row.reviewedProductState, nextReviewState),
+        );
+        const invalidateReview = hadApprovals && reviewChanged && !row.applied;
+        const productChanged = product !== row.product;
+        if (!productChanged && !invalidateReview && areProductReviewStatesEqual(row.reviewedProductState, nextReviewState)) {
+          return row;
+        }
+        changed = true;
+        const hasDurableSignature = Boolean(getRowImportSignature(rebuilt));
+        return {
+          ...rebuilt,
+          ...row,
+          product,
+          linkedByExcelAlias,
+          errors: rebuilt.errors,
+          hasChanges: rebuilt.hasChanges,
+          approvals: invalidateReview
+            ? { stock: false, cost: false, price: false }
+            : row.approvals,
+          reviewedProductState: nextReviewState,
+          reviewInvalidated: Boolean(row.reviewInvalidated || invalidateReview),
+          applied: hasDurableSignature ? rebuilt.applied : Boolean(row.applied),
+        };
+      });
+      return changed ? nextRows : currentRows;
+    });
+  }, [findProductForEntry, inventory, inventoryById, isDraftHydrated]);
+
+  draftStateRef.current = {
+    fileName,
+    rows,
+    activeTargetBySource,
+    activeSourceRowId,
+    resultFilter,
+    searchTerm,
+    lastApplyBatch,
   };
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !isDraftHydrated || !cacheScope) return undefined;
+    const timeoutId = window.setTimeout(() => {
+      const requestId = saveRequestRef.current + 1;
+      saveRequestRef.current = requestId;
+      setCacheStatus('saving');
+      saveExcelImportDraft({
+        storage: window.localStorage,
+        indexedDB: window.indexedDB,
+        scope: cacheScope,
+      }, draftStateRef.current).then((result) => {
+        if (!mountedRef.current || saveRequestRef.current !== requestId) return;
+        setCacheStatus(result.success ? 'saved' : 'error');
+      });
+    }, 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    activeSourceRowId,
+    activeTargetBySource,
+    fileName,
+    lastApplyBatch,
+    resultFilter,
+    rows,
+    searchTerm,
+    cacheScope,
+    isDraftHydrated,
+  ]);
+
+  useEffect(() => () => {
+    if (
+      typeof window !== 'undefined'
+      && cacheScope
+      && isDraftHydratedRef.current
+      && draftStateRef.current
+    ) {
+      void saveExcelImportDraft({
+        storage: window.localStorage,
+        indexedDB: window.indexedDB,
+        scope: cacheScope,
+      }, draftStateRef.current);
+    }
+  }, [cacheScope]);
+
+  useEffect(() => {
+    if (!isCreatePanelOpen) return undefined;
+    previousFocusedElementRef.current = document.activeElement;
+    const focusTimer = window.setTimeout(() => createDialogCloseRef.current?.focus(), 0);
+    const handleDialogKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        if (!isCreatingProductsRef.current) setIsCreatePanelOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = [...(createDialogRef.current?.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) || [])];
+      if (focusable.length === 0) {
+        event.preventDefault();
+        createDialogRef.current?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleDialogKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener('keydown', handleDialogKeyDown);
+      previousFocusedElementRef.current?.focus?.();
+    };
+  }, [isCreatePanelOpen]);
 
   const availableCategories = useMemo(
     () => [...new Set((categories || []).map((category) => String(category || '').trim()).filter(Boolean))],
@@ -547,21 +878,104 @@ export default function BulkExcelImportView({
     [rows],
   );
 
+  const rowGroups = useMemo(() => {
+    const groupBySourceId = new Map();
+    primaryRows.forEach((primaryRow) => {
+      groupBySourceId.set(String(primaryRow.id), {
+        primaryRow,
+        associatedRows: [],
+        productRows: [primaryRow],
+      });
+    });
+    rows.forEach((row) => {
+      if (!row.isAssociated) return;
+      const group = groupBySourceId.get(String(row.sourceRowId));
+      if (!group) return;
+      group.associatedRows.push(row);
+      group.productRows.push(row);
+    });
+    return [...groupBySourceId.values()];
+  }, [primaryRows, rows]);
+
+  const getGroupFlags = useCallback((group) => {
+    const productRows = group?.productRows || [];
+    const assignedRows = productRows.filter((row) => row.product);
+    return {
+      applicable: productRows.some((row) => isRowApplicable(row)),
+      unassigned: productRows.some((row) => !row.product),
+      blocked: productRows.some((row) => row.product && hasBlockingErrorsForApply(row)),
+      changes: productRows.some((row) => row.product && !row.applied && row.hasChanges),
+      unchanged: assignedRows.length > 0
+        && assignedRows.every((row) => !row.applied && !row.hasChanges)
+        && assignedRows.length === productRows.length,
+      applied: productRows.some((row) => row.applied),
+    };
+  }, []);
+
   const resultFilterCounts = useMemo(() => ({
-    all: primaryRows.length,
-    unassigned: primaryRows.filter((row) => !row.product).length,
-    blocked: primaryRows.filter((row) => row.product && hasBlockingErrorsForApply(row)).length,
-    applied: primaryRows.filter((row) => row.applied).length,
-  }), [primaryRows]);
+    all: rowGroups.length,
+    applicable: rowGroups.filter((group) => getGroupFlags(group).applicable).length,
+    unassigned: rowGroups.filter((group) => getGroupFlags(group).unassigned).length,
+    blocked: rowGroups.filter((group) => getGroupFlags(group).blocked).length,
+    changes: rowGroups.filter((group) => getGroupFlags(group).changes).length,
+    unchanged: rowGroups.filter((group) => getGroupFlags(group).unchanged).length,
+    applied: rowGroups.filter((group) => getGroupFlags(group).applied).length,
+  }), [getGroupFlags, rowGroups]);
 
-  const visiblePrimaryRows = useMemo(() => {
-    if (resultFilter === 'unassigned') return primaryRows.filter((row) => !row.product);
-    if (resultFilter === 'blocked') return primaryRows.filter((row) => row.product && hasBlockingErrorsForApply(row));
-    if (resultFilter === 'applied') return primaryRows.filter((row) => row.applied);
-    return primaryRows;
-  }, [primaryRows, resultFilter]);
+  const primaryRowSearchText = useMemo(() => {
+    const textBySource = new Map(primaryRows.map((row) => [String(row.id), '']));
+    rows.forEach((row) => {
+      const sourceId = String(row.sourceRowId || row.id);
+      if (!textBySource.has(sourceId)) return;
+      const aliasText = getExcelImportAliases(row.product)
+        .map((alias) => `${alias.code || ''} ${alias.description || ''}`)
+        .join(' ');
+      const rowText = [
+        row.entry?.code,
+        row.entry?.description,
+        row.entry?.category,
+        row.entry?.rowNumber,
+        row.product?.id,
+        row.product?.title,
+        row.product?.barcode,
+        row.product?.category,
+        aliasText,
+      ].filter(Boolean).join(' ');
+      textBySource.set(sourceId, `${textBySource.get(sourceId)} ${normalizeSearchText(rowText)}`);
+    });
+    return textBySource;
+  }, [primaryRows, rows]);
 
-  const parseWorkbookRows = (sheetRows) => {
+  const visibleRowGroups = useMemo(() => {
+    const searchWords = normalizeSearchText(searchTerm).split(/\s+/).filter(Boolean);
+    return rowGroups.filter((group) => {
+      const row = group.primaryRow;
+      const flags = getGroupFlags(group);
+      const matchesFilter = (
+        resultFilter === 'all'
+        || (resultFilter === 'applicable' && flags.applicable)
+        || (resultFilter === 'unassigned' && flags.unassigned)
+        || (resultFilter === 'blocked' && flags.blocked)
+        || (resultFilter === 'changes' && flags.changes)
+        || (resultFilter === 'unchanged' && flags.unchanged)
+        || (resultFilter === 'applied' && flags.applied)
+      );
+      if (!matchesFilter || searchWords.length === 0) return matchesFilter;
+      const haystack = primaryRowSearchText.get(String(row.id)) || '';
+      return searchWords.every((word) => haystack.includes(word));
+    });
+  }, [getGroupFlags, primaryRowSearchText, resultFilter, rowGroups, searchTerm]);
+
+  const renderedRowGroups = useMemo(
+    () => visibleRowGroups.slice(0, visibleRowLimit),
+    [visibleRowGroups, visibleRowLimit],
+  );
+
+  useEffect(() => {
+    setVisibleRowLimit(EXCEL_IMPORT_VISIBLE_CHUNK);
+  }, [resultFilter, searchTerm, rows.length]);
+
+  const parseWorkbookRows = (sheetRows, fileFingerprint) => {
     const headers = Object.keys(sheetRows[0] || {}).map(normalizeHeader);
     const missing = REQUIRED_COLUMNS.filter((column) => !headers.includes(column));
     if (missing.length > 0) {
@@ -569,17 +983,18 @@ export default function BulkExcelImportView({
     }
 
     const entries = sheetRows
-      .map((row, index) => buildImportEntry(row, index + 2))
+      .map((row, index) => buildImportEntry(row, index + 2, fileFingerprint))
       .filter((entry) => entry.code || entry.description || entry.quantity || entry.cost || entry.salePrice);
 
-    const groupedByCode = entries.reduce((acc, entry) => {
+    const groupedByCode = entries.reduce((groups, entry) => {
       const key = entry.code || `sin-codigo-${entry.rowNumber}`;
-      acc[key] = acc[key] || [];
-      acc[key].push(entry);
-      return acc;
-    }, {});
+      const currentGroup = groups.get(key) || [];
+      currentGroup.push(entry);
+      groups.set(key, currentGroup);
+      return groups;
+    }, new Map());
 
-    return Object.values(groupedByCode).map((group, index) => {
+    return [...groupedByCode.values()].map((group, index) => {
       const isDuplicate = group.length > 1;
       const entry = group[0];
       const { product, linkedByExcelAlias } = findProductForEntry(entry);
@@ -599,13 +1014,23 @@ export default function BulkExcelImportView({
   const handleFileChange = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (isOperationBusy) {
+      event.target.value = '';
+      return;
+    }
+    if (rows.length > 0 && !window.confirm('Esto reemplazara el borrador actual. Queres continuar?')) {
+      event.target.value = '';
+      return;
+    }
+    const requestId = parseRequestRef.current + 1;
+    parseRequestRef.current = requestId;
     setIsParsing(true);
     setFileError('');
-    setFileName(file.name);
 
     try {
       validateExcelImportFile(file);
       const buffer = await file.arrayBuffer();
+      const fileFingerprint = await fingerprintExcelImportBuffer(buffer);
       const XLSX = await import('xlsx');
       const workbook = XLSX.read(buffer, {
         type: 'array',
@@ -638,18 +1063,24 @@ export default function BulkExcelImportView({
         throw new Error(`El archivo tiene demasiadas filas. El limite es ${MAX_EXCEL_IMPORT_ROWS}.`);
       }
 
-      setRows(parseWorkbookRows(sheetRows));
+      const parsedRows = parseWorkbookRows(sheetRows, fileFingerprint);
+      if (parseRequestRef.current !== requestId) return;
+      setRows(parsedRows);
+      setFileName(file.name);
       setActiveTargetBySource({});
+      setActiveSourceRowId(parsedRows[0]?.id || '');
       setSelectedCreateRowIds([]);
       setCreateDrafts([]);
       setIsCreatePanelOpen(false);
       setResultFilter('all');
+      setSearchTerm('');
       setLastApplyBatch(null);
     } catch (error) {
-      setRows([]);
-      setFileError(error?.message || 'No se pudo leer el archivo.');
+      if (parseRequestRef.current === requestId) {
+        setFileError(error?.message || 'No se pudo leer el archivo. El borrador anterior se mantuvo.');
+      }
     } finally {
-      setIsParsing(false);
+      if (parseRequestRef.current === requestId) setIsParsing(false);
       event.target.value = '';
     }
   };
@@ -863,6 +1294,8 @@ export default function BulkExcelImportView({
           isAssociated: row.isAssociated,
           sourceRowId: row.sourceRowId,
           applied: row.applied,
+          reviewedProductState: getProductReviewState(row.product),
+          reviewInvalidated: row.reviewInvalidated,
         };
         return {
           ...nextRow,
@@ -879,7 +1312,12 @@ export default function BulkExcelImportView({
     setRows((prev) =>
       prev.map((row) => {
         if (row.id !== rowId || !isFieldEligible(row, field) || isFieldInvalidForRow(row, field)) return row;
-        return { ...row, approvals: { ...row.approvals, [field]: !row.approvals[field] } };
+        return {
+          ...row,
+          approvals: { ...row.approvals, [field]: !row.approvals[field] },
+          reviewedProductState: getProductReviewState(row.product),
+          reviewInvalidated: false,
+        };
       }),
     );
   };
@@ -888,7 +1326,12 @@ export default function BulkExcelImportView({
     setRows((prev) =>
       prev.map((row) => {
         if (!isFieldEligible(row, field) || isFieldInvalidForRow(row, field)) return row;
-        return { ...row, approvals: { ...row.approvals, [field]: value } };
+        return {
+          ...row,
+          approvals: { ...row.approvals, [field]: value },
+          reviewedProductState: getProductReviewState(row.product),
+          reviewInvalidated: value ? false : row.reviewInvalidated,
+        };
       }),
     );
   };
@@ -898,6 +1341,9 @@ export default function BulkExcelImportView({
   };
 
   const clearImport = () => {
+    if (isOperationBusy) return;
+    if (rows.length > 0 && !window.confirm('Se eliminara el borrador de esta importacion. Queres continuar?')) return;
+    parseRequestRef.current += 1;
     setRows([]);
     setActiveTargetBySource({});
     setActiveSourceRowId('');
@@ -907,10 +1353,19 @@ export default function BulkExcelImportView({
     setCreateDrafts([]);
     setIsCreatePanelOpen(false);
     setResultFilter('all');
+    setSearchTerm('');
     setLastApplyBatch(null);
+    if (typeof window !== 'undefined') {
+      void clearExcelImportDraft({
+        storage: window.localStorage,
+        indexedDB: window.indexedDB,
+        scope: cacheScope,
+      });
+    }
   };
 
   const openCreatePanel = (rowIds) => {
+    if (isOperationBusy || !canCreateInventory) return;
     const requestedIds = new Set((rowIds || []).map(String));
     const targetRows = rows.filter(
       (row) => requestedIds.has(String(row.id)) && !row.product && row.duplicateResolved,
@@ -945,7 +1400,7 @@ export default function BulkExcelImportView({
   };
 
   const handleCreateProducts = async () => {
-    if (!onCreateProducts || validCreateDrafts.length === 0) return;
+    if (isOperationBusy || !canCreateInventory || !onCreateProducts || validCreateDrafts.length === 0) return;
     return runImportAction('excel-create-products', async () => {
       const submittedDraftByRowId = new Map(
         validCreateDrafts.map((draft) => [String(draft.rowId), draft]),
@@ -1088,10 +1543,17 @@ export default function BulkExcelImportView({
           description: row.entry.description,
           rowNumber: row.entry.rowNumber,
         },
+        importApplication: {
+          signature: getRowImportSignature(row),
+          fileFingerprint: row.entry.fileFingerprint,
+          rowNumber: row.entry.rowNumber,
+          code: row.entry.code,
+          description: row.entry.description,
+        },
         approvals: row.approvals,
         quantity: getStockDelta(row.entry),
         importedQuantity: Number(row.entry.quantity || 0),
-        multiplier: Number(row.entry.multiplier || 1),
+        multiplier: Number(row.entry.multiplier ?? 1),
         before,
         after,
       };
@@ -1123,6 +1585,7 @@ export default function BulkExcelImportView({
     }));
 
   const handleApplyRows = async (targetRows = applicableRows) => {
+    if (isOperationBusy || !canEditInventory) return;
     const rowsToApply = targetRows.filter((row) => isRowApplicable(row));
     if (rowsToApply.length === 0 || !onApplyImport) return;
     const productIds = rowsToApply.map((row) => String(row.product.id));
@@ -1148,10 +1611,13 @@ export default function BulkExcelImportView({
           const payloadRow = payload.find((item) => item.rowId === row.id);
           const appliedResult = appliedResultByRowId.get(row.id);
           const actualAfter = appliedResult?.after;
+          const mergedProduct = mergeExcelImportProductResult(row.product, payloadRow.after, actualAfter);
           return {
             ...row,
-            product: mergeExcelImportProductResult(row.product, payloadRow.after, actualAfter),
+            product: mergedProduct,
             approvals: { stock: false, cost: false, price: false },
+            reviewedProductState: getProductReviewState(mergedProduct),
+            reviewInvalidated: false,
             applied: true,
             manualAssigned: false,
             linkedByExcelAlias: false,
@@ -1183,7 +1649,7 @@ export default function BulkExcelImportView({
   const handleApply = async () => handleApplyRows(applicableRows);
 
   const handleUndoLastApply = async () => {
-    if (!lastApplyBatch?.items?.length || !onUndoImport) return;
+    if (isOperationBusy || !canEditInventory || !lastApplyBatch?.items?.length || !onUndoImport) return;
     return runImportAction('excel-undo', async () => {
       setIsUndoingImport(true);
       try {
@@ -1200,26 +1666,29 @@ export default function BulkExcelImportView({
           if (!undoneIds.has(row.id)) return row;
           const undoItem = itemByRowId.get(row.id);
           if (!undoItem) return row;
+          const restoredProduct = row.product
+            ? {
+                ...row.product,
+                stock: undoItem.before.stock,
+                purchasePrice: undoItem.before.purchasePrice,
+                price: undoItem.before.price,
+                barcode: undoItem.before.barcode,
+                supplierLinks: undoItem.before.supplierLinks,
+                supplier_links: undoItem.before.supplierLinks,
+                isActive: undoItem.before.isActive,
+                is_active: undoItem.before.isActive,
+              }
+            : row.product;
           return {
             ...row,
-            product: row.product
-              ? {
-                  ...row.product,
-                  stock: undoItem.before.stock,
-                  purchasePrice: undoItem.before.purchasePrice,
-                  price: undoItem.before.price,
-                  barcode: undoItem.before.barcode,
-                  supplierLinks: undoItem.before.supplierLinks,
-                  supplier_links: undoItem.before.supplierLinks,
-                  isActive: undoItem.before.isActive,
-                  is_active: undoItem.before.isActive,
-                }
-              : row.product,
+            product: restoredProduct,
             approvals: {
               stock: Boolean(undoItem.approvals?.stock),
               cost: Boolean(undoItem.approvals?.cost),
               price: Boolean(undoItem.approvals?.price),
             },
+            reviewedProductState: getProductReviewState(restoredProduct),
+            reviewInvalidated: false,
             applied: false,
           };
         }),
@@ -1260,27 +1729,39 @@ export default function BulkExcelImportView({
               <button
                 type="button"
                 onClick={clearImport}
-                className="h-8 w-8 rounded-lg border border-slate-200 text-slate-500 hover:bg-white hover:text-red-500 flex items-center justify-center transition-colors"
+                disabled={isOperationBusy}
+                className="h-8 w-8 rounded-lg border border-slate-200 text-slate-500 hover:bg-white hover:text-red-500 flex items-center justify-center transition-colors disabled:cursor-not-allowed disabled:opacity-40"
                 title="Limpiar importacion"
+                aria-label="Limpiar importacion"
               >
                 <X size={15} />
               </button>
             )}
           </div>
 
-          <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleFileChange} className="hidden" />
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleFileChange} disabled={isOperationBusy} className="hidden" />
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="excel-upload-button mt-4 w-full rounded-xl border border-dashed border-emerald-300 bg-emerald-50/70 px-4 py-5 text-emerald-800 hover:bg-emerald-50 hover:border-emerald-400 transition-colors flex flex-col items-center gap-2"
+            disabled={isOperationBusy}
+            className="excel-upload-button mt-4 w-full rounded-xl border border-dashed border-emerald-300 bg-emerald-50/70 px-4 py-5 text-emerald-800 hover:bg-emerald-50 hover:border-emerald-400 transition-colors flex flex-col items-center gap-2 disabled:cursor-not-allowed disabled:opacity-55"
           >
-            {isParsing ? <Loader2 size={24} className="animate-spin" /> : <Upload size={24} />}
+            {isParsing || !isDraftHydrated ? <Loader2 size={24} className="animate-spin" /> : <Upload size={24} />}
             <span className="excel-upload-title text-xs font-black">{fileName || 'Seleccionar archivo .xlsx o .xls'}</span>
             <span className="excel-upload-fields text-[10px] font-bold text-emerald-600">Codigo, Descripcion, Cantidad, Precio, Descuento, Costo, Venta</span>
           </button>
 
+          <p className={`mt-2 text-[9px] font-black ${cacheStatus === 'error' ? 'text-red-600' : 'text-slate-400'}`} aria-live="polite">
+            {cacheStatus === 'loading' && 'Recuperando borrador...'}
+            {cacheStatus === 'saving' && 'Guardando borrador...'}
+            {cacheStatus === 'saved' && 'Borrador guardado'}
+            {cacheStatus === 'restored' && 'Borrador recuperado'}
+            {cacheStatus === 'error' && 'No se pudo guardar el borrador en este equipo'}
+            {cacheStatus === 'disabled' && 'Borrador desactivado: falta identificar al usuario'}
+          </p>
+
           {fileError && (
-            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-[11px] font-bold text-red-700 flex gap-2">
+            <div role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-[11px] font-bold text-red-700 flex gap-2">
               <AlertTriangle size={15} className="shrink-0" />
               {fileError}
             </div>
@@ -1357,7 +1838,7 @@ export default function BulkExcelImportView({
                 </button>
                 <button
                   type="button"
-                  disabled={selectedCreateRowIds.length === 0}
+                  disabled={selectedCreateRowIds.length === 0 || isOperationBusy || !canCreateInventory}
                   onClick={() => openCreatePanel(selectedCreateRowIds)}
                   className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-[9px] font-black text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-40"
                 >
@@ -1382,24 +1863,56 @@ export default function BulkExcelImportView({
         </div>
       </section>
 
-      <section className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col min-h-0">
+      <section
+        className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col min-h-0"
+        aria-busy={isOperationBusy}
+        inert={isOperationBusy ? '' : undefined}
+      >
         <div className="excel-review-header px-4 py-3 border-b border-slate-200 bg-slate-800 text-white flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-black">Revision del lote</h3>
             <p className="text-[10px] text-slate-300 font-bold">Asigna el producto y confirma solo los valores que cambian.</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+            <label className="excel-result-search relative flex h-8 min-w-[190px] max-w-[260px] flex-1 items-center rounded-md border border-white/10 bg-black/10">
+              <Search size={13} className="pointer-events-none absolute left-2.5 text-slate-400" />
+              <input
+                type="search"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                name="excel-import-search"
+                autoComplete="off"
+                placeholder="Buscar codigo o producto…"
+                aria-label="Buscar en el lote importado"
+                className="h-full w-full bg-transparent pl-8 pr-8 text-[10px] font-bold text-white outline-none placeholder:text-slate-400 focus:ring-1 focus:ring-inset focus:ring-sky-400/70"
+              />
+              {searchTerm ? (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-1.5 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-white/10 hover:text-white"
+                  title="Limpiar busqueda"
+                  aria-label="Limpiar busqueda"
+                >
+                  <X size={11} />
+                </button>
+              ) : null}
+            </label>
             <label className="excel-result-select relative flex h-8 items-center gap-2 rounded-md border border-white/10 bg-black/10 pl-2 pr-1">
               <Filter size={12} className="text-slate-400" />
               <span className="text-[8px] font-black uppercase tracking-wider text-slate-400">Mostrar</span>
               <select
                 value={resultFilter}
                 onChange={(event) => setResultFilter(event.target.value)}
-                className="h-full min-w-[126px] cursor-pointer appearance-none bg-transparent pl-1 pr-6 text-[10px] font-black text-white outline-none"
+                aria-label="Filtrar resultados del lote"
+                className="h-full min-w-[126px] cursor-pointer appearance-none bg-transparent pl-1 pr-6 text-[10px] font-black text-white outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
               >
                 <option value="all">Todos ({resultFilterCounts.all})</option>
+                <option value="applicable">Por aplicar ({resultFilterCounts.applicable})</option>
                 <option value="unassigned">Sin asignar ({resultFilterCounts.unassigned})</option>
                 <option value="blocked">Bloqueados ({resultFilterCounts.blocked})</option>
+                <option value="changes">Con cambios ({resultFilterCounts.changes})</option>
+                <option value="unchanged">Sin cambios ({resultFilterCounts.unchanged})</option>
                 <option value="applied">Aplicados ({resultFilterCounts.applied})</option>
               </select>
               <span className="pointer-events-none absolute right-2 text-[9px] text-slate-400">▼</span>
@@ -1408,7 +1921,7 @@ export default function BulkExcelImportView({
               <AsyncActionButton
                 onAction={handleUndoLastApply}
                 pending={isUndoingImport}
-                disabled={isUndoingImport || isApplying}
+                disabled={isOperationBusy || !canEditInventory}
                 loadingLabel="Deshaciendo..."
                 className="excel-undo-apply inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-amber-300/60 bg-amber-400/15 px-3 text-[9px] font-black uppercase tracking-wide text-amber-50 transition-colors hover:bg-amber-400/25 disabled:cursor-not-allowed disabled:opacity-35"
                 title={`Deshacer ${lastApplyBatch.count || lastApplyBatch.items.length} producto(s) aplicados`}
@@ -1420,7 +1933,7 @@ export default function BulkExcelImportView({
             <AsyncActionButton
               onAction={handleApply}
               pending={isApplying}
-              disabled={applicableRows.length === 0 || isApplying}
+              disabled={applicableRows.length === 0 || isOperationBusy || !canEditInventory}
               loadingLabel="Aplicando..."
               className="excel-apply-all inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-emerald-300/40 bg-emerald-500 px-3 text-[9px] font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-950/20 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-35"
             >
@@ -1442,24 +1955,28 @@ export default function BulkExcelImportView({
               <p className="font-black text-slate-600">Carga un Excel para revisar productos.</p>
               <p className="text-xs font-bold mt-1 max-w-md">El cruce se hace solo por codigo de barras. Si no existe, vas a elegir el producto manualmente.</p>
             </div>
-          ) : visiblePrimaryRows.length === 0 ? (
+          ) : visibleRowGroups.length === 0 ? (
             <div className="h-full min-h-[300px] flex flex-col items-center justify-center text-center p-8 text-slate-400">
               <Filter size={32} className="mb-3 text-slate-500" />
-              <p className="font-black text-slate-600">No hay artículos en este estado.</p>
+              <p className="font-black text-slate-600">No hay articulos para esta busqueda y filtro.</p>
               <button
                 type="button"
-                onClick={() => setResultFilter('all')}
+                onClick={() => {
+                  setResultFilter('all');
+                  setSearchTerm('');
+                }}
                 className="mt-2 text-[10px] font-black text-sky-600 hover:text-sky-500"
               >
-                Ver todos los resultados
+                Limpiar busqueda y filtros
               </button>
             </div>
           ) : (
             <div className="divide-y divide-slate-100">
-              {visiblePrimaryRows.map((row, rowIndex) => {
+              {renderedRowGroups.map((rowGroup, rowIndex) => {
+                const row = rowGroup.primaryRow;
                 const status = getRowStatus(row);
-                const associatedRows = rows.filter((candidate) => candidate.sourceRowId === row.id);
-                const productRows = [row, ...associatedRows];
+                const associatedRows = rowGroup.associatedRows;
+                const productRows = rowGroup.productRows;
                 const activeTargetId = activeTargetBySource[row.id] || 'article';
                 const activeReviewRow = activeTargetId === 'article'
                   ? null
@@ -1488,6 +2005,7 @@ export default function BulkExcelImportView({
                 return (
                   <article
                     key={row.id}
+                    aria-current={isActiveSource ? 'true' : undefined}
                     onClick={() => {
                       setActiveSourceRowId(row.id);
                     }}
@@ -1616,7 +2134,7 @@ export default function BulkExcelImportView({
                                         event.stopPropagation();
                                         handleApplyRows([targetRow]);
                                       }}
-                                      disabled={!isRowApplicable(targetRow) || isApplying}
+                                      disabled={!isRowApplicable(targetRow) || isOperationBusy || !canEditInventory}
                                       className="excel-target-apply inline-flex h-7 items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2 text-[8px] font-black uppercase tracking-wide text-emerald-800 shadow-sm shadow-emerald-950/5 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
                                       title={isRowApplicable(targetRow) ? 'Aplicar solo esta fila' : 'Marca campos o cambia el producto asignado'}
                                     >
@@ -1700,7 +2218,8 @@ export default function BulkExcelImportView({
                                 <button
                                   type="button"
                                   onClick={() => openCreatePanel([activeReviewRow.id])}
-                                  className="excel-create-inline mt-1.5 flex w-full items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50/60 px-2 py-1.5 text-left transition-colors hover:bg-emerald-50"
+                                  disabled={isOperationBusy || !canCreateInventory}
+                                  className="excel-create-inline mt-1.5 flex w-full items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50/60 px-2 py-1.5 text-left transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-45"
                                 >
                                   <span className="min-w-0">
                                     <span className="block text-[9px] font-black uppercase tracking-wider text-emerald-700">
@@ -1959,7 +2478,7 @@ export default function BulkExcelImportView({
                                           <button
                                             type="button"
                                             onClick={() => handleApplyRows([associatedRow])}
-                                            disabled={!canApplyAssociatedRow || isApplying}
+                                            disabled={!canApplyAssociatedRow || isOperationBusy || !canEditInventory}
                                             className="excel-target-apply shrink-0 inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-white disabled:text-slate-400"
                                             title={canApplyAssociatedRow ? 'Aplicar solo este asociado' : 'Marca Stock, Costo o Venta para aplicar'}
                                           >
@@ -2086,6 +2605,17 @@ export default function BulkExcelImportView({
                   </article>
                 );
               })}
+              {renderedRowGroups.length < visibleRowGroups.length && (
+                <div className="flex justify-center bg-slate-50/70 px-4 py-4">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleRowLimit((limit) => limit + EXCEL_IMPORT_VISIBLE_CHUNK)}
+                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-[10px] font-black text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                  >
+                    Mostrar {Math.min(EXCEL_IMPORT_VISIBLE_CHUNK, visibleRowGroups.length - renderedRowGroups.length)} mas
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -2093,7 +2623,15 @@ export default function BulkExcelImportView({
 
       {isCreatePanelOpen && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
-          <div className="flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-600/70 bg-[#0f1e33] shadow-2xl">
+          <div
+            ref={createDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="excel-create-dialog-title"
+            aria-busy={isCreatingProducts}
+            tabIndex={-1}
+            className="flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden overscroll-contain rounded-xl border border-slate-600/70 bg-[#0f1e33] shadow-2xl"
+          >
             <header className="flex items-center justify-between gap-4 border-b border-slate-600/60 bg-[#102139] px-4 py-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -2101,7 +2639,7 @@ export default function BulkExcelImportView({
                     <PackagePlus size={17} />
                   </span>
                   <div>
-                    <h3 className="text-sm font-black text-slate-50">Crear productos nuevos</h3>
+                    <h3 id="excel-create-dialog-title" className="text-sm font-black text-slate-50">Crear productos nuevos</h3>
                     <p className="text-[10px] font-bold text-slate-300">
                       Completa solo lo necesario antes de agregarlos al inventario.
                     </p>
@@ -2109,10 +2647,13 @@ export default function BulkExcelImportView({
                 </div>
               </div>
               <button
+                ref={createDialogCloseRef}
                 type="button"
                 onClick={() => setIsCreatePanelOpen(false)}
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-500/70 bg-slate-900/20 text-slate-300 transition hover:bg-slate-700/50 hover:text-white"
+                disabled={isCreatingProducts}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-500/70 bg-slate-900/20 text-slate-300 transition hover:bg-slate-700/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                 title="Cerrar"
+                aria-label="Cerrar panel de creacion"
               >
                 <X size={16} />
               </button>
@@ -2288,14 +2829,15 @@ export default function BulkExcelImportView({
                 <button
                   type="button"
                   onClick={() => setIsCreatePanelOpen(false)}
-                  className="rounded-lg border border-slate-500/70 bg-slate-900/20 px-4 py-2 text-[11px] font-black text-slate-200 transition hover:bg-slate-700/50"
+                  disabled={isCreatingProducts}
+                  className="rounded-lg border border-slate-500/70 bg-slate-900/20 px-4 py-2 text-[11px] font-black text-slate-200 transition hover:bg-slate-700/50 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Cancelar
                 </button>
                 <AsyncActionButton
                   onAction={handleCreateProducts}
                   pending={isCreatingProducts}
-                  disabled={validCreateDrafts.length === 0 || isCreatingProducts}
+                  disabled={validCreateDrafts.length === 0 || isOperationBusy || !canCreateInventory}
                   loadingLabel="Creando..."
                   className="inline-flex items-center gap-2 rounded-lg border border-emerald-300/25 bg-emerald-500/80 px-4 py-2 text-[11px] font-black text-white transition hover:bg-emerald-400 disabled:border-slate-600/40 disabled:bg-slate-700/45 disabled:text-slate-400"
                 >
@@ -2651,6 +3193,12 @@ function CompactReviewSummary({
 
       {activeRow?.errors?.length > 0 && (
         <CompactErrorHelp errors={activeRow.errors} />
+      )}
+
+      {activeRow?.reviewInvalidated && (
+        <p role="status" className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[10px] font-bold text-amber-800">
+          Este producto cambio desde la ultima revision. Volve a marcar los campos que quieras aplicar.
+        </p>
       )}
 
       {missingCount > 0 && (

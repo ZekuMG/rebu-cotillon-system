@@ -10,6 +10,55 @@
 // corto le tapábamos la app con una pantalla de crash a gente que estaba
 // cargando bien.
 export const BLANK_SCREEN_TIMEOUT_MS = 8000;
+export const DYNAMIC_IMPORT_RELOAD_COOLDOWN_MS = 30000;
+
+const getErrorText = (error) => [
+  error?.message,
+  error?.stack,
+  error?.source,
+].filter(Boolean).join('\n');
+
+export const isDynamicImportLoadError = (error) => (
+  /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed|chunkloaderror|loading chunk .* failed/i
+    .test(getErrorText(error))
+);
+
+export const getDynamicImportRequestUrl = (error) => {
+  const match = getErrorText(error).match(/https?:\/\/[^\s)\]}]+/i);
+  return match?.[0]?.replace(/[.,;:]+$/, '') || '';
+};
+
+export const isViteDevelopmentModuleUrl = (value) => {
+  try {
+    const url = new URL(value);
+    return (
+      url.pathname.startsWith('/src/') ||
+      url.pathname.startsWith('/@') ||
+      url.pathname.includes('/node_modules/.vite/')
+    );
+  } catch {
+    return false;
+  }
+};
+
+export const shouldAutoReloadDynamicImport = ({
+  error,
+  lastReloadAt,
+  now = Date.now(),
+  cooldownMs = DYNAMIC_IMPORT_RELOAD_COOLDOWN_MS,
+} = {}) => {
+  if (!isDynamicImportLoadError(error)) return false;
+
+  const normalizedNow = Number(now);
+  const normalizedLastReloadAt = Number(lastReloadAt);
+  const normalizedCooldownMs = Number(cooldownMs);
+  if (!Number.isFinite(normalizedNow) || !Number.isFinite(normalizedCooldownMs) || normalizedCooldownMs < 0) {
+    return false;
+  }
+  if (!Number.isFinite(normalizedLastReloadAt) || normalizedLastReloadAt <= 0) return true;
+
+  return normalizedNow - normalizedLastReloadAt >= normalizedCooldownMs;
+};
 
 // Un tiempo sólo sirve si es un número finito y no negativo. Cualquier otra cosa
 // (null, NaN, Infinity, texto) significa que no sabemos cuánto pasó, y sin ese

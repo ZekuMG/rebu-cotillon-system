@@ -1,9 +1,9 @@
 import React, { lazy, Suspense, useRef, useState, useEffect, useMemo, useCallback } from 'react';
-import { 
+import {
   Search, Save, CheckSquare, Square, 
   Scale, Package, ArrowRight, Loader2, RotateCcw,
   FileText, X, User, Edit3, ChevronDown, Plus, Minus, Trash2, PackageX,
-  Camera, Image as ImageIcon, LogIn, CheckCircle, AlertTriangle, ExternalLink,
+  Camera, Image as ImageIcon, LogIn, LogOut, CheckCircle, AlertTriangle, ExternalLink,
   Pause, Play, StopCircle, Crosshair, RefreshCw, Link2, LayoutGrid, List,
   Eye, Undo2, Bell, Check, Wand2, Tags
 } from 'lucide-react';
@@ -25,6 +25,7 @@ import {
   getProductActiveState,
   productHasCasaAlbertoLink,
 } from '../utils/productLifecycle';
+import { SUPPLIER_PRICE_REPORT_PERIODS } from '../utils/supplierPriceReport';
 
 const BULK_EDITOR_TOOL_MODE_STORAGE_KEY = 'rebu_bulk_editor_tool_mode_v1';
 const SUPPLIER_PRICE_VIEW_MODE_STORAGE_KEY = 'rebu_supplier_price_view_mode_v1';
@@ -115,6 +116,7 @@ const getInitialSupplierPriceViewMode = () => {
 };
 
 export default function BulkEditorView({ 
+  currentUser,
   inventory: realInventory, 
   categories, 
   onSaveSingle, 
@@ -134,10 +136,13 @@ export default function BulkEditorView({
   onImageImportTaskChange,
   imageImportOpenRequest = 0,
   onSaveSupplierPriceChecks,
+  onExportSupplierPriceReport,
   onApplySupplierPriceUpdates,
   onUndoSupplierPriceUpdates,
   onUpdateCasaAlbertoLinks,
   isOfflineReadOnly = false,
+  canCreateInventory = false,
+  canEditInventory = false,
   supplierOpenRequest = 0,
 }) {
   const buildEditStateFromInventory = (inventory) => {
@@ -213,6 +218,16 @@ export default function BulkEditorView({
     found: 0,
     errors: 0,
   });
+  const [isSupplierReportMenuOpen, setIsSupplierReportMenuOpen] = useState(false);
+  const [isExportingSupplierReport, setIsExportingSupplierReport] = useState(false);
+  const [supplierSessionState, setSupplierSessionState] = useState({
+    status: 'idle',
+    isLikelyLoggedIn: false,
+    manualLoginRequired: false,
+    hasWindow: false,
+    error: '',
+  });
+  const [isSupplierSessionBusy, setIsSupplierSessionBusy] = useState(false);
   const supplierAutoCheckedRef = useRef(false);
   const supplierLinkDetectionStopRef = useRef(false);
   const supplierPriceCheckStopRef = useRef(false);
@@ -668,17 +683,128 @@ export default function BulkEditorView({
     setIsImageImportModalOpen(true);
   };
 
+  const applySupplierSessionResult = useCallback((result, fallbackStatus = 'disconnected') => {
+    const loginState = result?.loginState || result || {};
+    const isLikelyLoggedIn = Boolean(loginState.isLikelyLoggedIn);
+    const manualLoginRequired = Boolean(
+      result?.manualLoginRequired || loginState.hasVisiblePasswordInput || loginState.isLoginText
+    );
+    setSupplierSessionState({
+      status: isLikelyLoggedIn ? 'connected' : manualLoginRequired ? 'manual_required' : fallbackStatus,
+      isLikelyLoggedIn,
+      manualLoginRequired,
+      hasWindow: Boolean(loginState.hasWindow),
+      error: result?.success === false ? (result.error || 'No se pudo comprobar la sesion.') : '',
+    });
+  }, []);
+
+  const markSupplierSessionRequired = useCallback(() => {
+    setSupplierSessionState((current) => ({
+      ...current,
+      status: 'manual_required',
+      isLikelyLoggedIn: false,
+      manualLoginRequired: true,
+      error: '',
+    }));
+  }, []);
+
+  const handleConnectSupplierSession = async () => {
+    if (!window.electronAPI?.supplierSessionConnect) {
+      setSupplierSessionState((current) => ({ ...current, status: 'unsupported', error: '' }));
+      Swal.fire('Electron requerido', 'La sesion automatica funciona desde la app de escritorio.', 'info');
+      return;
+    }
+
+    setIsSupplierSessionBusy(true);
+    setSupplierSessionState((current) => ({ ...current, status: 'checking', error: '' }));
+    try {
+      const result = await window.electronAPI.supplierSessionConnect();
+      applySupplierSessionResult(result, result?.success === false ? 'error' : 'disconnected');
+    } catch (error) {
+      setSupplierSessionState((current) => ({
+        ...current,
+        status: 'error',
+        isLikelyLoggedIn: false,
+        error: error?.message || 'No se pudo comprobar la sesion.',
+      }));
+    } finally {
+      setIsSupplierSessionBusy(false);
+    }
+  };
+
   const handleOpenSupplierLogin = async () => {
     if (!window.electronAPI?.supplierImageOpenLogin) {
       Swal.fire('Electron requerido', 'Esta accion necesita ejecutarse desde la app de escritorio.', 'info');
       return;
     }
 
-    const result = await window.electronAPI.supplierImageOpenLogin();
-    if (!result?.success) {
-      Swal.fire('No se pudo abrir el proveedor', result?.error || 'Reinicia Electron y volve a intentar.', 'error');
+    setIsSupplierSessionBusy(true);
+    try {
+      const result = await window.electronAPI.supplierImageOpenLogin();
+      applySupplierSessionResult(result, result?.success === false ? 'error' : 'manual_required');
+      if (!result?.success) {
+        Swal.fire('No se pudo abrir el proveedor', result?.error || 'Reinicia Electron y volve a intentar.', 'error');
+      }
+    } finally {
+      setIsSupplierSessionBusy(false);
     }
   };
+
+  const handleLogoutSupplierSession = async () => {
+    if (!window.electronAPI?.supplierSessionLogout) return;
+    setIsSupplierSessionBusy(true);
+    try {
+      const result = await window.electronAPI.supplierSessionLogout();
+      applySupplierSessionResult(result, result?.success === false ? 'error' : 'disconnected');
+      if (!result?.success) {
+        Swal.fire('No se pudo cerrar la sesion', result?.error || 'Volvé a intentar.', 'error');
+      }
+    } finally {
+      setIsSupplierSessionBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    const shouldMonitorSession = activeToolMode === 'supplier' || isImageImportModalOpen;
+    if (!shouldMonitorSession) return undefined;
+    if (!window.electronAPI?.supplierSessionConnect || !window.electronAPI?.supplierImageLoginState) {
+      setSupplierSessionState((current) => ({ ...current, status: 'unsupported', error: '' }));
+      return undefined;
+    }
+
+    let cancelled = false;
+    const restoreSession = async () => {
+      setSupplierSessionState((current) => ({ ...current, status: 'checking', error: '' }));
+      try {
+        const result = await window.electronAPI.supplierSessionConnect();
+        if (!cancelled) applySupplierSessionResult(result, result?.success === false ? 'error' : 'disconnected');
+      } catch (error) {
+        if (!cancelled) {
+          setSupplierSessionState((current) => ({
+            ...current,
+            status: 'error',
+            isLikelyLoggedIn: false,
+            error: error?.message || 'No se pudo comprobar la sesion.',
+          }));
+        }
+      }
+    };
+    const pollSession = async () => {
+      try {
+        const loginState = await window.electronAPI.supplierImageLoginState();
+        if (!cancelled) applySupplierSessionResult(loginState, 'disconnected');
+      } catch {
+        // La restauracion inicial ya muestra errores; un sondeo aislado no debe interrumpir el trabajo.
+      }
+    };
+
+    restoreSession();
+    const intervalId = window.setInterval(pollSession, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activeToolMode, isImageImportModalOpen, applySupplierSessionResult]);
 
   const updateImageImportRow = (rowId, patch) => {
     setImageImportRows((prev) => prev.map((row) => (row.rowId === rowId ? { ...row, ...patch } : row)));
@@ -748,6 +874,7 @@ export default function BulkEditorView({
         });
 
         if (result?.status === 'login_required') {
+          markSupplierSessionRequired();
           updateImageImportRow(row.rowId, {
             status: 'login_required',
             approved: false,
@@ -828,7 +955,7 @@ export default function BulkEditorView({
 
   const toggleImageImportApproval = (rowId) => {
     setImageImportRows((prev) => prev.map((row) => (
-      row.rowId === rowId && row.status === 'found'
+      row.rowId === rowId && ['found', 'apply_error'].includes(row.status)
         ? { ...row, approved: !row.approved }
         : row
     )));
@@ -836,7 +963,7 @@ export default function BulkEditorView({
 
   const handleSelectImageCandidate = (rowId, candidateIndex) => {
     setImageImportRows((prev) => prev.map((row) => {
-      if (row.rowId !== rowId || row.status !== 'found') return row;
+      if (row.rowId !== rowId || !['found', 'apply_error'].includes(row.status)) return row;
       const candidate = row.candidates?.[candidateIndex];
       if (!candidate) return row;
       return {
@@ -860,7 +987,9 @@ export default function BulkEditorView({
   };
 
   const handleApplyImageImports = async () => {
-    const rowsToApply = imageImportRows.filter((row) => row.status === 'found' && row.approved && row.imageDataUrl);
+    const rowsToApply = imageImportRows.filter((row) => (
+      ['found', 'apply_error'].includes(row.status) && row.approved && row.imageDataUrl
+    ));
     if (rowsToApply.length === 0 || !onApplyProductImageImports) return;
 
     setIsApplyingImages(true);
@@ -879,10 +1008,28 @@ export default function BulkEditorView({
           return { ...row, status: 'applied', approved: false, message: 'Foto aplicada en Rebu' };
         }
         if (failedById.has(String(row.productId))) {
-          return { ...row, status: 'error', approved: false, message: failedById.get(String(row.productId)) };
+          return {
+            ...row,
+            status: row.imageDataUrl ? 'apply_error' : 'error',
+            approved: Boolean(row.imageDataUrl),
+            message: `No se aplico: ${failedById.get(String(row.productId))}`,
+          };
         }
         return row;
       }));
+
+      if (failedById.size > 0) {
+        const firstError = [...failedById.values()][0];
+        await Swal.fire({
+          icon: appliedIds.size > 0 ? 'warning' : 'error',
+          title: appliedIds.size > 0 ? 'Algunas fotos quedaron pendientes' : 'No se pudieron guardar las fotos',
+          text: appliedIds.size > 0
+            ? `${appliedIds.size} foto(s) aplicadas y ${failedById.size} pendiente(s). ${firstError}`
+            : `${firstError}. Las fotos elegidas quedaron listas para reintentar.`,
+          confirmButtonText: 'Entendido',
+          confirmButtonColor: '#0f172a',
+        });
+      }
     } finally {
       setIsApplyingImages(false);
     }
@@ -1714,6 +1861,7 @@ export default function BulkEditorView({
       }
 
       const status = result?.status === 'login_required' ? 'login_required' : 'error';
+      if (status === 'login_required') markSupplierSessionRequired();
       const rowState = {
         status,
         message: result?.message || 'No se pudo chequear el precio.',
@@ -2001,6 +2149,7 @@ export default function BulkEditorView({
         });
 
         if (result?.status === 'login_required') {
+          markSupplierSessionRequired();
           summary.login_required += 1;
           setSupplierLinkDetectionProgress((current) => ({
             ...current,
@@ -2293,7 +2442,8 @@ export default function BulkEditorView({
 
   const imageImportStats = imageImportRows.reduce((acc, row) => {
     acc[row.status] = (acc[row.status] || 0) + 1;
-    if (row.status === 'found') {
+    if (row.status === 'found' || row.status === 'apply_error') {
+      if (row.status === 'apply_error') acc.found += 1;
       if (row.approved) acc.approved += 1;
       if (row.matchQuality === 'title_similarity') {
         acc.foundByName += 1;
@@ -2308,6 +2458,7 @@ export default function BulkEditorView({
     found: 0,
     applied: 0,
     error: 0,
+    apply_error: 0,
     not_found: 0,
     login_required: 0,
     approved: 0,
@@ -2339,6 +2490,7 @@ export default function BulkEditorView({
         not_found: 'Sin foto',
         login_required: 'Login',
         error: 'Error',
+        apply_error: 'Reintentar',
         pending: 'Pendiente',
       }[row.status],
     ].some((value) => String(value || '').toLowerCase().includes(normalizedImageImportSearchTerm));
@@ -2369,7 +2521,7 @@ export default function BulkEditorView({
       found: imageImportStats.found,
       approved: imageImportStats.approved,
       applied: imageImportStats.applied,
-      errors: imageImportStats.error + imageImportStats.login_required,
+      errors: imageImportStats.error + imageImportStats.apply_error + imageImportStats.login_required,
       modalOpen: isImageImportModalOpen,
       updatedAt: Date.now(),
     });
@@ -2380,6 +2532,7 @@ export default function BulkEditorView({
     imageImportStats.approved,
     imageImportStats.applied,
     imageImportStats.error,
+    imageImportStats.apply_error,
     imageImportStats.login_required,
     isApplyingImages,
     isSearchingImages,
@@ -2394,8 +2547,118 @@ export default function BulkEditorView({
     if (status === 'searching') return { label: 'Buscando', className: 'border-amber-200 bg-amber-50 text-amber-700' };
     if (status === 'not_found') return { label: 'Sin foto', className: 'border-slate-200 bg-slate-50 text-slate-500' };
     if (status === 'login_required') return { label: 'Login', className: 'border-amber-200 bg-amber-50 text-amber-700' };
+    if (status === 'apply_error') return { label: 'Reintentar', className: 'border-amber-200 bg-amber-50 text-amber-700' };
     if (status === 'error') return { label: 'Error', className: 'border-red-200 bg-red-50 text-red-700' };
     return { label: 'Pendiente', className: 'border-slate-200 bg-white text-slate-500' };
+  };
+
+  const renderSupplierSessionControl = ({ variant = 'light', className = '' } = {}) => {
+    const isDark = variant === 'dark';
+    const isConnected = supplierSessionState.status === 'connected';
+    const isChecking = supplierSessionState.status === 'checking' || isSupplierSessionBusy;
+    const needsManualAccess = supplierSessionState.status === 'manual_required';
+    const isUnsupported = supplierSessionState.status === 'unsupported';
+    const statusLabel = isConnected
+      ? 'Sesion activa'
+      : isChecking
+        ? 'Comprobando sesion'
+        : needsManualAccess
+          ? 'Acceso requerido'
+          : supplierSessionState.status === 'error'
+            ? 'No se pudo comprobar'
+            : isUnsupported
+              ? 'Solo disponible en Electron'
+              : 'Sesion sin conectar';
+    const statusDescription = isConnected
+      ? 'Rebu puede consultar Casa Alberto con la sesion guardada en este equipo.'
+      : needsManualAccess
+        ? 'La sesion vencio. Usa el acceso manual una vez y Rebu la conservara.'
+        : supplierSessionState.status === 'error'
+          ? (supplierSessionState.error || 'Reintenta la conexion o usa el acceso manual.')
+          : isUnsupported
+            ? 'Abri la app de escritorio para usar la sesion del proveedor.'
+            : 'Inicia la sesion guardada sin abrir la ventana del proveedor.';
+    const statusTone = isConnected
+      ? (isDark ? 'border-emerald-400/35 bg-emerald-400/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-700')
+      : needsManualAccess
+        ? (isDark ? 'border-amber-400/35 bg-amber-400/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-700')
+        : supplierSessionState.status === 'error'
+          ? (isDark ? 'border-rose-400/35 bg-rose-400/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700')
+          : (isDark ? 'border-slate-600 bg-slate-950/25 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600');
+
+    return (
+      <div className={`mt-3 rounded-lg border p-2.5 ${isDark ? 'border-slate-700/80 bg-slate-950/20' : 'border-slate-200 bg-slate-50'} ${className}`}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className={`text-[9px] font-black uppercase tracking-[0.12em] ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+              Sesion proveedor
+            </p>
+            <p aria-live="polite" className={`mt-1 inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-black ${statusTone}`}>
+              {isChecking ? <Loader2 size={11} className="animate-spin" /> : isConnected ? <CheckCircle size={11} /> : <AlertTriangle size={11} />}
+              {statusLabel}
+            </p>
+          </div>
+        </div>
+        <p className={`mt-2 text-[10px] font-bold leading-snug ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+          {statusDescription}
+        </p>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {isConnected ? (
+            <button
+              type="button"
+              onClick={handleLogoutSupplierSession}
+              disabled={isChecking || isUnsupported}
+              className={`flex h-9 items-center justify-center gap-1.5 rounded-md border px-2 text-[11px] font-black transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                isDark
+                  ? 'border-rose-400/30 bg-rose-400/10 text-rose-100 hover:bg-rose-400/15'
+                  : 'border-rose-200 bg-white text-rose-700 hover:bg-rose-50'
+              }`}
+            >
+              <LogOut size={13} />
+              Cerrar sesion
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleConnectSupplierSession}
+              disabled={isChecking || isUnsupported}
+              className={`flex h-9 items-center justify-center gap-1.5 rounded-md border px-2 text-[11px] font-black transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                isDark
+                  ? 'border-emerald-400/35 bg-emerald-400/15 text-emerald-100 hover:bg-emerald-400/20'
+                  : 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700'
+              }`}
+            >
+              {isChecking ? <Loader2 size={13} className="animate-spin" /> : <LogIn size={13} />}
+              Iniciar sesion
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleOpenSupplierLogin}
+            disabled={isChecking || isUnsupported}
+            className={`flex h-9 items-center justify-center gap-1.5 rounded-md border px-2 text-[11px] font-black transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+              isDark
+                ? 'border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-800'
+                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <ExternalLink size={13} />
+            {isConnected ? 'Abrir proveedor' : 'Acceso manual'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const handleSupplierPriceReportExport = async (days) => {
+    if (!onExportSupplierPriceReport || isExportingSupplierReport) return;
+    setIsSupplierReportMenuOpen(false);
+    setIsExportingSupplierReport(true);
+    try {
+      await onExportSupplierPriceReport(days);
+    } finally {
+      setIsExportingSupplierReport(false);
+    }
   };
 
   const renderCasaAlbertoPanel = () => {
@@ -2854,14 +3117,7 @@ export default function BulkEditorView({
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={handleOpenSupplierLogin}
-                className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-md border border-slate-600/80 bg-slate-900/60 text-xs font-black text-slate-100 transition-colors hover:bg-slate-800"
-              >
-                <LogIn size={14} />
-                Abrir login proveedor
-              </button>
+              {renderSupplierSessionControl({ variant: 'dark' })}
             </section>
 
             <section className="rounded-lg border border-sky-400/25 bg-sky-400/10 p-3">
@@ -3185,6 +3441,55 @@ export default function BulkEditorView({
                     </button>
                   );
                 })}
+              </div>
+              <div
+                className="relative"
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) setIsSupplierReportMenuOpen(false);
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setIsSupplierReportMenuOpen((open) => !open)}
+                  disabled={isOfflineReadOnly || isExportingSupplierReport || !onExportSupplierPriceReport}
+                  aria-expanded={isSupplierReportMenuOpen}
+                  aria-haspopup="menu"
+                  className="flex h-10 items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-950/25 px-3 text-[10px] font-black uppercase tracking-[0.08em] text-slate-200 transition-colors hover:border-sky-400/50 hover:bg-sky-400/10 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-45"
+                  title="Crear un PDF con las aprobaciones y reversiones registradas"
+                >
+                  {isExportingSupplierReport ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+                  {isExportingSupplierReport ? 'Generando...' : 'Historial PDF'}
+                  {!isExportingSupplierReport ? <ChevronDown size={12} /> : null}
+                </button>
+                {isSupplierReportMenuOpen ? (
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-full z-40 mt-1 w-64 overflow-hidden rounded-lg border border-slate-600/90 bg-[#12233a] shadow-2xl shadow-black/35"
+                  >
+                    <div className="border-b border-slate-700/80 px-3 py-2.5">
+                      <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-200">Cambios registrados</p>
+                      <p className="mt-1 text-[10px] font-bold leading-snug text-slate-400">
+                        Incluye costo y venta anterior/nueva, fecha y usuario.
+                      </p>
+                    </div>
+                    <div className="p-1.5">
+                      {SUPPLIER_PRICE_REPORT_PERIODS.map((period) => (
+                        <button
+                          key={period.days}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => handleSupplierPriceReportExport(period.days)}
+                          className="flex h-9 w-full items-center justify-between rounded-md px-2.5 text-left text-[11px] font-black text-slate-200 transition-colors hover:bg-sky-400/12 hover:text-sky-100"
+                        >
+                          <span>{period.label}</span>
+                          <span className="rounded border border-slate-600/80 bg-slate-950/25 px-1.5 py-0.5 text-[9px] text-slate-400">
+                            {period.shortLabel}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
               <button
                 type="button"
@@ -4474,7 +4779,7 @@ export default function BulkEditorView({
                   Fotos de productos
                 </h3>
                 <p className="mt-0.5 text-[11px] font-bold text-slate-500">
-                  1. Abrir sesion · 2. Probar 10 · 3. Aplicar aprobadas
+                  1. Confirmar sesion · 2. Probar 10 · 3. Aplicar aprobadas
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -4494,20 +4799,7 @@ export default function BulkEditorView({
 
             <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] overflow-hidden">
               <aside className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain border-r border-slate-200 bg-white p-3 custom-scrollbar">
-                <section className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
-                  <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">Sesion proveedor</p>
-                  <p className="mt-1 text-[11px] font-bold leading-snug text-slate-600">
-                    Inicia sesion manualmente. Rebu usa esa sesion para buscar, sin guardar clave.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleOpenSupplierLogin}
-                    className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition-colors hover:bg-slate-50"
-                  >
-                    <LogIn size={14} />
-                    Abrir login
-                  </button>
-                </section>
+                {renderSupplierSessionControl()}
                 <section className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-2.5">
                   <p className="mb-2 text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">Buscar fotos</p>
                   <div className="grid grid-cols-2 gap-2">
@@ -4601,7 +4893,7 @@ export default function BulkEditorView({
                     ['Sin foto', imageImportStats.not_found],
                     ['Aprobadas', imageImportStats.approved],
                     ['Aplicadas', imageImportStats.applied],
-                    ['Problemas', imageImportStats.error + imageImportStats.login_required],
+                    ['Problemas', imageImportStats.error + imageImportStats.apply_error + imageImportStats.login_required],
                   ].map(([label, value]) => (
                     <div key={label} className="rounded-lg border border-slate-200 bg-white p-2">
                       <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">{label}</p>
@@ -4613,7 +4905,7 @@ export default function BulkEditorView({
                 <div className="mt-auto rounded-lg border border-amber-200 bg-amber-50 p-2.5">
                   <p className="flex items-start gap-1.5 text-[10px] font-bold leading-snug text-amber-800">
                     <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-                    Si aparece login, abri la sesion y volve a buscar. No se intenta saltar bloqueos del proveedor.
+                    Si la sesion vence, usa Acceso manual una vez y luego volve a buscar. Rebu no guarda tu clave.
                   </p>
                 </div>
               </aside>
@@ -4709,7 +5001,7 @@ export default function BulkEditorView({
                                 <button
                                   type="button"
                                   onClick={() => toggleImageImportApproval(row.rowId)}
-                                  disabled={row.status !== 'found' || isApplyingImages}
+                                  disabled={!['found', 'apply_error'].includes(row.status) || isApplyingImages}
                                   className={`mx-auto flex h-6 w-6 items-center justify-center rounded-md border transition-colors ${
                                     row.approved
                                       ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
@@ -4979,6 +5271,9 @@ export default function BulkEditorView({
           <BulkExcelImportView
             inventory={sandboxInventory}
             categories={categories}
+            cacheScope={currentUser?.id ? `user:${currentUser.id}` : ''}
+            canCreateInventory={canCreateInventory}
+            canEditInventory={canEditInventory}
             onApplyImport={onApplyExcelImport}
             onUndoImport={onUndoExcelImport}
             onCreateProducts={onCreateExcelProducts}

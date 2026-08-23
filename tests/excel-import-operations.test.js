@@ -7,6 +7,34 @@ import {
   mergeExcelImportProductResult,
   runExcelImportBatch,
 } from '../src/utils/excelImportOperations.js';
+import {
+  getExcelImportDraftStorageKey,
+  loadExcelImportDraft,
+  saveExcelImportDraft,
+} from '../src/utils/excelImportDraftCache.js';
+import {
+  calculateExcelImportStockDelta,
+  isSafeExcelImportNumber,
+} from '../src/utils/excelImportNumbers.js';
+import {
+  buildExcelImportRowSignature,
+  fingerprintExcelImportBuffer,
+} from '../src/utils/excelImportIdentity.js';
+import {
+  productHasExcelImportApplication,
+  recordExcelImportApplication,
+  shouldSaveExcelImportAlias,
+  upsertExcelImportAlias,
+} from '../src/utils/productLifecycle.js';
+
+const createMemoryStorage = () => {
+  const values = new Map();
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+  };
+};
 
 test('una fila aplicada no puede volver a ejecutarse sin deshacer', () => {
   const applicableChange = {
@@ -17,6 +45,69 @@ test('una fila aplicada no puede volver a ejecutarse sin deshacer', () => {
 
   assert.equal(canApplyExcelImportRow({ ...applicableChange, applied: false }), true);
   assert.equal(canApplyExcelImportRow({ ...applicableChange, applied: true }), false);
+});
+
+test('un vinculo de Excel existente no vuelve a aparecer como pendiente', () => {
+  const supplierLinks = upsertExcelImportAlias({}, {
+    code: 'ABC-10',
+    description: 'Globo estrella',
+  }, '2026-08-23T10:00:00.000Z');
+  const product = { id: 'p1', supplierLinks };
+
+  assert.equal(shouldSaveExcelImportAlias({
+    product,
+    entry: { code: 'ABC-10', description: 'Globo estrella' },
+    isNewAssociation: true,
+  }), false);
+  assert.equal(shouldSaveExcelImportAlias({
+    product,
+    entry: { code: 'NUEVO-20', description: 'Producto distinto' },
+    isNewAssociation: true,
+  }), true);
+});
+
+test('la firma aplicada queda en supplier_links y no se duplica', () => {
+  const signature = buildExcelImportRowSignature({
+    fileFingerprint: 'abc123',
+    rowNumber: 7,
+  });
+  const firstLinks = recordExcelImportApplication({}, {
+    signature,
+    fileFingerprint: 'abc123',
+    rowNumber: 7,
+    code: 'P-7',
+    description: 'Producto siete',
+  }, '2026-08-23T10:00:00.000Z');
+  const secondLinks = recordExcelImportApplication(firstLinks, {
+    signature,
+    fileFingerprint: 'abc123',
+    rowNumber: 7,
+    code: 'P-7',
+    description: 'Producto siete',
+  }, '2026-08-23T11:00:00.000Z');
+
+  assert.equal(productHasExcelImportApplication({ supplierLinks: secondLinks }, signature), true);
+  assert.equal(secondLinks.excel_import.applications.length, 1);
+  assert.equal(secondLinks.excel_import.applications[0].appliedAt, '2026-08-23T11:00:00.000Z');
+});
+
+test('la identidad del Excel es estable por contenido y cambia por fila', async () => {
+  const firstBuffer = new TextEncoder().encode('mismo excel').buffer;
+  const secondBuffer = new TextEncoder().encode('otro excel').buffer;
+  const firstFingerprint = await fingerprintExcelImportBuffer(firstBuffer);
+  const repeatedFingerprint = await fingerprintExcelImportBuffer(firstBuffer);
+  const secondFingerprint = await fingerprintExcelImportBuffer(secondBuffer);
+
+  assert.equal(firstFingerprint, repeatedFingerprint);
+  assert.notEqual(firstFingerprint, secondFingerprint);
+  assert.equal(
+    buildExcelImportRowSignature({ fileFingerprint: firstFingerprint, rowNumber: 2 }),
+    buildExcelImportRowSignature({ fileFingerprint: repeatedFingerprint, rowNumber: 2 }),
+  );
+  assert.notEqual(
+    buildExcelImportRowSignature({ fileFingerprint: firstFingerprint, rowNumber: 2 }),
+    buildExcelImportRowSignature({ fileFingerprint: firstFingerprint, rowNumber: 3 }),
+  );
 });
 
 test('una fila sin producto, con errores o sin cambios tampoco es aplicable', () => {
@@ -84,4 +175,83 @@ test('la interfaz prioriza los valores reales devueltos por la base', () => {
   assert.deepEqual(product.supplier_links, supplierLinks);
   assert.equal(product.isActive, true);
   assert.equal(product.is_active, true);
+});
+
+test('el multiplicador cero no suma stock y los desbordes se rechazan', () => {
+  assert.equal(calculateExcelImportStockDelta({ quantity: 8, multiplier: 0 }), 0);
+  assert.equal(calculateExcelImportStockDelta({ quantity: 8 }), 8);
+  assert.equal(isSafeExcelImportNumber(Number.MAX_SAFE_INTEGER), true);
+  assert.equal(isSafeExcelImportNumber(Number.MAX_SAFE_INTEGER + 1), false);
+});
+
+test('el borrador de Excel conserva filas, asignaciones, busqueda y filtro', async () => {
+  const storage = createMemoryStorage();
+  const now = Date.UTC(2026, 7, 23);
+  const cache = { storage, indexedDB: null, scope: 'user:operador-1' };
+  const rows = [{
+    id: 'fila-1',
+    entry: { code: 'ABC', description: 'Globo estrella' },
+    product: {
+      id: 'producto-1',
+      title: 'Globo estrella dorado',
+      stock: 4,
+      purchasePrice: 100,
+      price: 200,
+      image: 'data:image/png;base64,no-debe-guardarse',
+    },
+    approvals: { stock: true, cost: false, price: true },
+    errors: [],
+  }];
+
+  const saved = await saveExcelImportDraft(cache, {
+    fileName: 'productos.xlsx',
+    rows,
+    resultFilter: 'applicable',
+    searchTerm: 'estrella',
+  }, now);
+  assert.equal(saved.success, true);
+
+  const restored = await loadExcelImportDraft(cache, now + 1000);
+  assert.equal(restored.fileName, 'productos.xlsx');
+  assert.equal(restored.resultFilter, 'applicable');
+  assert.equal(restored.searchTerm, 'estrella');
+  assert.equal(restored.rows[0].product.title, 'Globo estrella dorado');
+  assert.equal(restored.rows[0].product.image, undefined);
+  assert.deepEqual(restored.rows[0].approvals, { stock: true, cost: false, price: true });
+});
+
+test('un borrador vencido se descarta y una importacion vacia limpia el cache', async () => {
+  const storage = createMemoryStorage();
+  const now = Date.UTC(2026, 7, 23);
+  const cache = { storage, indexedDB: null, scope: 'user:operador-1' };
+  const storageKey = getExcelImportDraftStorageKey(cache.scope);
+  await saveExcelImportDraft(cache, {
+    fileName: 'productos.xlsx',
+    rows: [{ id: 'fila-1', entry: { code: 'ABC' } }],
+  }, now - (15 * 24 * 60 * 60 * 1000));
+
+  assert.equal(await loadExcelImportDraft(cache, now), null);
+  assert.equal(storage.getItem(storageKey), null);
+
+  await saveExcelImportDraft(cache, {
+    fileName: 'productos.xlsx',
+    rows: [{ id: 'fila-2', entry: { code: 'DEF' } }],
+  }, now);
+  await saveExcelImportDraft(cache, { rows: [] }, now);
+  assert.equal(storage.getItem(storageKey), null);
+});
+
+test('los borradores quedan aislados por usuario', async () => {
+  const storage = createMemoryStorage();
+  const now = Date.UTC(2026, 7, 23);
+  const userOne = { storage, indexedDB: null, scope: 'user:uno' };
+  const userTwo = { storage, indexedDB: null, scope: 'user:dos' };
+
+  await saveExcelImportDraft(userOne, {
+    fileName: 'privado.xlsx',
+    rows: [{ id: 'fila-1', entry: { code: 'ABC' } }],
+  }, now);
+
+  assert.equal(await loadExcelImportDraft(userTwo, now), null);
+  assert.equal((await loadExcelImportDraft(userOne, now))?.fileName, 'privado.xlsx');
 });

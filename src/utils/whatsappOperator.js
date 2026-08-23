@@ -218,6 +218,10 @@ export const whatsappOperator = {
     method: 'POST',
     body: { enabled, phone },
   }),
+  createBudgetDraft: (phone) => request('/budgets', {
+    method: 'POST',
+    body: { phone },
+  }),
   updateBudgetDraft: (id, payload) => request(`/budgets/${encodeURIComponent(id)}`, {
     method: 'POST',
     body: payload,

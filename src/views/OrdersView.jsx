@@ -20,6 +20,7 @@ import {
 import { hasPermission } from '../utils/userPermissions';
 import { isOrderStockPending } from '../utils/orderStockPolicy';
 import useIncrementalFeed from '../hooks/useIncrementalFeed';
+import { formatRecordCode as codigoDeRegistro } from '../utils/recordCode';
 
 const RECORD_TYPE_LABELS = { budget: 'Presupuesto', order: 'Pedido' };
 const STATUS_STYLES = {
@@ -74,7 +75,7 @@ const getSharedRecordId = (recordOrType, id, budgetId) => {
   return recordOrType === 'order' && budgetId ? budgetId : id;
 };
 const formatRecordCode = (recordOrType, id, budgetId) =>
-  `ID-${String(getSharedRecordId(recordOrType, id, budgetId) || '').slice(0, 8).toUpperCase() || 'SINID'}`;
+  codigoDeRegistro(getSharedRecordId(recordOrType, id, budgetId));
 
 const getOrderItemStockTone = (item, linkedProduct) => {
   if (!linkedProduct || linkedProduct.stock === undefined || linkedProduct.stock === null) {

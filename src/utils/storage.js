@@ -7,6 +7,7 @@ import {
   getUserAvatarStoragePaths,
   USER_AVATAR_STORAGE_BUCKET,
 } from './userAvatarStorage';
+import { getProductImageStorageErrorMessage } from './productImageStorageErrors';
 
 const BUCKET = 'product-images';
 const THUMB_SIZE = 320;
@@ -152,14 +153,17 @@ export const uploadProductImage = async (file) => {
       }),
   ]);
 
-  if (error) {
-    console.error('Error subiendo imagen:', error);
-    throw new Error(error.message || 'Error al subir la imagen');
-  }
-
-  if (thumbError) {
-    console.error('Error subiendo miniatura:', thumbError);
-    throw new Error(thumbError.message || 'Error al subir la miniatura');
+  if (error || thumbError) {
+    const uploadedPaths = [data?.path, thumbData?.path].filter(Boolean);
+    if (uploadedPaths.length > 0) {
+      const { error: cleanupError } = await supabase.storage.from(BUCKET).remove(uploadedPaths);
+      if (cleanupError) {
+        console.warn('No se pudieron limpiar los archivos de una subida incompleta:', cleanupError);
+      }
+    }
+    const uploadError = error || thumbError;
+    console.error('Error subiendo foto de producto:', uploadError);
+    throw new Error(getProductImageStorageErrorMessage(uploadError));
   }
 
   const { data: urlData } = supabase.storage

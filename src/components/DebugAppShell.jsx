@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import App from '../App.jsx';
 // El umbral y la regla de "¿esto es pantalla blanca?" viven en el util para
@@ -6,9 +6,19 @@ import App from '../App.jsx';
 // (auth, consultas iniciales, primer pintado del árbol) tranquilamente pasa los
 // 4,5 s en una PC lenta, y con el umbral corto le tapábamos la app con la
 // pantalla de crash a un usuario que estaba cargando bien.
-import { BLANK_SCREEN_TIMEOUT_MS, shouldReportBlankScreen } from '../utils/bootSplash.js';
+import {
+  BLANK_SCREEN_TIMEOUT_MS,
+  DYNAMIC_IMPORT_RELOAD_COOLDOWN_MS,
+  getDynamicImportRequestUrl,
+  isDynamicImportLoadError,
+  isViteDevelopmentModuleUrl,
+  shouldAutoReloadDynamicImport,
+  shouldReportBlankScreen,
+} from '../utils/bootSplash.js';
 
 const DEBUG_LOG_LIMIT = 40;
+const DYNAMIC_IMPORT_RELOAD_KEY = 'rebu_dynamic_import_reload_at';
+const DYNAMIC_IMPORT_PROBE_INTERVAL_MS = 1500;
 
 // El flag arranca en false acá, al importar el módulo, y NO dentro del useEffect
 // de abajo. Los efectos corren de hijo a padre: el useEffect de App lo pone en
@@ -96,6 +106,82 @@ class DebugErrorBoundary extends React.Component {
 
 function DebugCrashScreen({ crash, logs }) {
   const debugDump = useMemo(() => buildDebugDump(crash, logs), [crash, logs]);
+  const dynamicImportFailure = isDynamicImportLoadError(crash);
+  const failedModuleUrl = useMemo(() => getDynamicImportRequestUrl(crash), [crash]);
+  const shouldProbeVite = isViteDevelopmentModuleUrl(failedModuleUrl);
+  const [recoveryStatus, setRecoveryStatus] = useState(
+    dynamicImportFailure ? 'waiting' : 'idle',
+  );
+  const recoveryProbeInFlightRef = useRef(false);
+  const recoveryReloadStartedRef = useRef(false);
+
+  const rememberReload = useCallback(() => {
+    try {
+      window.sessionStorage.setItem(DYNAMIC_IMPORT_RELOAD_KEY, String(Date.now()));
+    } catch {
+      // sessionStorage puede estar bloqueado; la recuperación manual sigue disponible.
+    }
+  }, []);
+
+  const reloadApp = useCallback(() => {
+    rememberReload();
+    window.location.reload();
+  }, [rememberReload]);
+
+  const tryDynamicImportRecovery = useCallback(async () => {
+    if (!dynamicImportFailure) return false;
+    if (recoveryProbeInFlightRef.current || recoveryReloadStartedRef.current) return false;
+
+    recoveryProbeInFlightRef.current = true;
+    setRecoveryStatus('checking');
+    try {
+      if (shouldProbeVite) {
+        const response = await fetch(failedModuleUrl, { cache: 'no-store' });
+        if (!response.ok) {
+          setRecoveryStatus('waiting');
+          return false;
+        }
+      }
+
+      recoveryReloadStartedRef.current = true;
+      setRecoveryStatus('reloading');
+      reloadApp();
+      return true;
+    } catch {
+      setRecoveryStatus('waiting');
+      return false;
+    } finally {
+      recoveryProbeInFlightRef.current = false;
+    }
+  }, [dynamicImportFailure, failedModuleUrl, reloadApp, shouldProbeVite]);
+
+  useEffect(() => {
+    if (!dynamicImportFailure) return undefined;
+
+    let lastReloadAt = 0;
+    try {
+      lastReloadAt = Number(window.sessionStorage.getItem(DYNAMIC_IMPORT_RELOAD_KEY) || 0);
+    } catch {
+      lastReloadAt = 0;
+    }
+
+    if (!shouldAutoReloadDynamicImport({ error: crash, lastReloadAt })) {
+      setRecoveryStatus('manual');
+      return undefined;
+    }
+
+    if (!shouldProbeVite) {
+      void tryDynamicImportRecovery();
+      return undefined;
+    }
+
+    void tryDynamicImportRecovery();
+    const intervalId = window.setInterval(() => {
+      void tryDynamicImportRecovery();
+    }, DYNAMIC_IMPORT_PROBE_INTERVAL_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [crash, dynamicImportFailure, shouldProbeVite, tryDynamicImportRecovery]);
 
   const handleCopyDebug = async () => {
     try {
@@ -104,6 +190,13 @@ function DebugCrashScreen({ crash, logs }) {
       // Si falla clipboard, no rompemos el fallback.
     }
   };
+
+  const recoveryCopy = {
+    checking: 'Comprobando si el servidor local volvió…',
+    waiting: 'Esperando que vuelva el servidor local…',
+    reloading: 'Conexión recuperada. Recargando…',
+    manual: 'La recarga automática ya se intentó. Podés reintentar manualmente.',
+  }[recoveryStatus];
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,#e2e8f0_0%,#f8fafc_46%,#e2e8f0_100%)] p-6 text-slate-900">
@@ -114,14 +207,25 @@ function DebugCrashScreen({ crash, logs }) {
               <AlertTriangle size={24} />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-rose-500">Modo Debug</p>
-              <h1 className="mt-1 text-2xl font-black text-slate-900">Quedó la pantalla en blanco</h1>
+              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-rose-500">
+                {dynamicImportFailure ? 'Recuperación de conexión' : 'Modo Debug'}
+              </p>
+              <h1 className="mt-1 text-2xl font-black text-slate-900">
+                {dynamicImportFailure ? 'Se interrumpió la aplicación local' : 'Quedó la pantalla en blanco'}
+              </h1>
               <p className="mt-2 text-sm font-medium text-slate-600">
-                Es normal: dar aviso para arreglar este bug.
+                {dynamicImportFailure
+                  ? 'Los datos ya guardados están protegidos. Rebu volverá a cargar cuando el módulo esté disponible.'
+                  : 'Es normal: dar aviso para arreglar este bug.'}
               </p>
               <p className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
                 {crash?.message || 'Se detectó una falla y activamos el fallback de depuración.'}
               </p>
+              {dynamicImportFailure && recoveryCopy && (
+                <p className="mt-2 text-xs font-bold text-amber-700" role="status" aria-live="polite">
+                  {recoveryCopy}
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -130,11 +234,13 @@ function DebugCrashScreen({ crash, logs }) {
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
-              onClick={() => window.location.reload()}
+              onClick={dynamicImportFailure
+                ? () => void tryDynamicImportRecovery()
+                : () => window.location.reload()}
               className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-black text-white transition hover:bg-slate-800"
             >
               <RefreshCw size={16} />
-              Force reload
+              {dynamicImportFailure ? 'Reintentar ahora' : 'Force reload'}
             </button>
             <button
               type="button"
@@ -249,24 +355,28 @@ export default function DebugAppShell() {
     };
 
     const handleWindowError = (event) => {
-      raiseCrash({
+      const nextCrash = {
         type: 'runtime',
         message: event?.error?.message || event?.message || 'Error no controlado en tiempo de ejecución.',
         stack: event?.error?.stack || '',
         source: event?.filename
           ? `${event.filename}:${event.lineno || 0}:${event.colno || 0}`
           : 'window.error',
-      });
+      };
+      if (isDynamicImportLoadError(nextCrash)) nextCrash.type = 'dynamic-import';
+      raiseCrash(nextCrash);
     };
 
     const handleUnhandledRejection = (event) => {
       const reason = event?.reason;
-      raiseCrash({
+      const nextCrash = {
         type: 'promise',
         message: reason?.message || serializeDebugValue(reason) || 'Promise rechazada sin manejar.',
         stack: reason?.stack || '',
         source: 'unhandledrejection',
-      });
+      };
+      if (isDynamicImportLoadError(nextCrash)) nextCrash.type = 'dynamic-import';
+      raiseCrash(nextCrash);
     };
 
     // Reloj monótono: con Date.now() un ajuste de hora o una suspensión de la PC

@@ -3,6 +3,11 @@ import test from 'node:test';
 import {
   shouldReportBlankScreen,
   BLANK_SCREEN_TIMEOUT_MS,
+  DYNAMIC_IMPORT_RELOAD_COOLDOWN_MS,
+  getDynamicImportRequestUrl,
+  isDynamicImportLoadError,
+  isViteDevelopmentModuleUrl,
+  shouldAutoReloadDynamicImport,
 } from '../src/utils/bootSplash.js';
 
 test('si la app ya está lista no se reporta nada', () => {
@@ -96,4 +101,39 @@ test('con valores inválidos no se reporta: ante la duda, no molestar', () => {
 
 test('el umbral que se exporta es el que usa el detector', () => {
   assert.equal(BLANK_SCREEN_TIMEOUT_MS, 8000);
+});
+
+test('reconoce el fallo de import dinamico reportado por Vite', () => {
+  const error = {
+    message: 'Failed to fetch dynamically imported module: http://127.0.0.1:5173/src/views/DashboardView.jsx',
+  };
+
+  assert.equal(isDynamicImportLoadError(error), true);
+  assert.equal(
+    getDynamicImportRequestUrl(error),
+    'http://127.0.0.1:5173/src/views/DashboardView.jsx',
+  );
+  assert.equal(isViteDevelopmentModuleUrl(getDynamicImportRequestUrl(error)), true);
+});
+
+test('un error de Supabase no se confunde con un modulo dinamico', () => {
+  assert.equal(isDynamicImportLoadError({ message: 'AuthRetryableFetchError: Failed to fetch' }), false);
+  assert.equal(getDynamicImportRequestUrl({ message: 'Failed to fetch' }), '');
+});
+
+test('la recuperacion automatica recarga una sola vez dentro de la ventana', () => {
+  const error = { message: 'ChunkLoadError: Loading chunk DashboardView failed' };
+  const now = 100000;
+
+  assert.equal(shouldAutoReloadDynamicImport({ error, lastReloadAt: 0, now }), true);
+  assert.equal(shouldAutoReloadDynamicImport({
+    error,
+    lastReloadAt: now - DYNAMIC_IMPORT_RELOAD_COOLDOWN_MS + 1,
+    now,
+  }), false);
+  assert.equal(shouldAutoReloadDynamicImport({
+    error,
+    lastReloadAt: now - DYNAMIC_IMPORT_RELOAD_COOLDOWN_MS,
+    now,
+  }), true);
 });

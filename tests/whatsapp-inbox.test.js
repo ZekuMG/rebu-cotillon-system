@@ -478,7 +478,7 @@ test('la bandeja expone atención, lectura, bloqueos, adjuntos y recuperación',
   assert.match(botSettingsPanel, /centralLeaseExpired/);
   assert.match(botSettingsPanel, /centralWhatsappConnected/);
   assert.match(botSettingsPanel, /wa-central-pulse/);
-  assert.match(botSettingsPanel, /La asignación de la máquina se aplica inmediatamente/);
+  assert.match(botSettingsPanel, /Los cambios de acá se aplican en el momento/);
   assert.match(view, /overview\?\.actor\?\.role \|\| ''\)\.toLowerCase\(\) === 'system'/);
   assert.match(centralMachineHelper, /expectedDeviceId: currentCentralMachine\?\.machine\?\.device_id \|\| ''/);
   assert.match(view, /claimCentralMachineForDevice/);
@@ -490,21 +490,43 @@ test('la bandeja expone atención, lectura, bloqueos, adjuntos y recuperación',
   assert.match(view, /background: true/);
   assert.match(botSettingsPanel, /Número autorizado/);
   assert.match(botSettingsPanel, /onTestModeChange/);
-  assert.match(botSettingsPanel, /Permisos y respuestas automáticas/);
+  assert.match(botSettingsPanel, /Reglas y permisos/);
+  assert.match(botSettingsPanel, /Temas que puede responder automáticamente/);
   assert.match(botSettingsPanel, /Prueba segura/);
   assert.match(botSettingsPanel, /Frases que no debe decir/);
   assert.match(botSettingsPanel, /Palabras que requieren una persona/);
   assert.match(botSettingsPanel, /value=\{ruleDraft\.always_do\}/);
   assert.match(botSettingsPanel, /parseList\(ruleDraft\.always_do\)/);
   assert.match(botSettingsPanel, /Hay cambios sin guardar/);
+  // Personalidad: cada valor de CHOICES tiene que existir también en la lista
+  // blanca del bot (BOT_VOICE_CHOICES) y en su mapa de instrucciones. Si no,
+  // se elige, se guarda y Blacky sigue escribiendo igual. El test que compara
+  // los dos repos vive del lado del bot (test/node-bot.test.js).
+  assert.match(botSettingsPanel, /\['playful', 'Divertido'\][\s\S]*?\['festive', 'Fiestero'\][\s\S]*?\['youthful', 'Juvenil'\][\s\S]*?\['formal', 'Formal'\]/);
+  assert.match(botSettingsPanel, /address_style: \[\['vos', 'Voseo'\], \['tu', 'Tuteo neutro'\], \['usted', 'Usted'\], \['mirror', 'Como el cliente'\]\]/);
+  assert.match(botSettingsPanel, /reply_length: \[\['ultra_brief', 'De una línea'\]/);
+  assert.match(botSettingsPanel, /\['high', 'Muchos'\], \['very_high', 'De fiesta'\]/);
+  assert.match(botSettingsPanel, /slang_level: \[\['neutral', 'Neutro'\]/);
+  assert.match(botSettingsPanel, /follow_up: \[\['minimal', 'Casi ninguna'\]/);
+  assert.match(botSettingsPanel, /closing_style: \[\['neutral', 'Sin cierre fijo'\]/);
+  assert.match(botSettingsPanel, /slang_level: 'natural',\s*\n\s*follow_up: 'light',\s*\n\s*closing_style: 'neutral',/);
+  assert.match(botSettingsPanel, /Detalles de estilo<small>Si los dejás como están/);
+  assert.match(botSettingsPanel, /label="Modismos argentinos"[\s\S]*?label="Repreguntas al cliente"[\s\S]*?label="Cómo se despide"/);
   assert.match(botSettingsPanel, /aria-haspopup="listbox"/);
   assert.match(botSettingsPanel, /className="wa-bot-choice-menu" role="listbox"/);
   assert.match(botSettingsPanel, /aria-selected=\{value === id\}/);
-  assert.match(botSettingsPanel, /Cómo trabaja Blacky/);
+  assert.doesNotMatch(botSettingsPanel, /wa-section-copy/);
+  assert.doesNotMatch(botSettingsPanel, /<em>\{index \+ 1\}<\/em>/);
+  assert.match(botSettingsPanel, /id: 'mode', label: 'Funcionamiento'/);
+  assert.match(botSettingsPanel, /id: 'voice', label: 'Personalidad'/);
+  assert.match(botSettingsPanel, /id: 'rules', label: 'Reglas y permisos'/);
+  assert.match(botSettingsPanel, /LEGACY_SECTIONS = \{[\s\S]*?identity: 'voice'[\s\S]*?limits: 'rules'/);
+  assert.match(botSettingsPanel, /className="wa-bot-tool-links"/);
+  assert.match(botSettingsPanel, /Volver a la configuración/);
   assert.match(botSettingsPanel, /className="wa-bot-mode-options"/);
   assert.match(botSettingsPanel, /available: false/);
   assert.match(botSettingsPanel, /id: 'copilot',[\s\S]*?available: true/);
-  assert.match(botSettingsPanel, /Solo observar continúa pausado/);
+  assert.match(botSettingsPanel, /label: 'Solo observar'/);
   assert.doesNotMatch(botSettingsPanel, /wa-bot-nav-intro/);
   assert.match(botSettingsPanel, /event\.key !== 'Tab'/);
   assert.match(botSettingsPanel, /previousFocusRef\.current\?\.focus/);
@@ -512,14 +534,18 @@ test('la bandeja expone atención, lectura, bloqueos, adjuntos y recuperación',
   assert.match(styles, /\.wa-bot-settings-modal\s*\{/);
   assert.match(styles, /\.wa-bot-choice-menu\s*\{[\s\S]*?position:\s*absolute/);
   assert.match(styles, /\.wa-bot-modal-body\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) 340px/);
-  assert.match(styles, /\.wa-bot-settings-nav\s*\{[\s\S]*?grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\)/);
-  assert.match(styles, /\.wa-bot-settings-nav\.with-central\s*\{[\s\S]*?repeat\(6, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /\.wa-bot-settings-nav\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.doesNotMatch(styles, /\.wa-bot-settings-nav\.with-central/);
+  assert.doesNotMatch(styles, /\.wa-bot-settings-nav > button > em/);
+  assert.match(styles, /\.wa-bot-subhead\s*\{/);
+  assert.match(styles, /\.wa-bot-tool-head\s*\{/);
+  assert.match(styles, /\.wa-bot-tool-links\s*\{/);
   assert.match(styles, /\.wa-central-station\.current\s*\{/);
   assert.match(styles, /\.wa-central-pulse\.active\s*\{/);
   assert.match(styles, /\.wa-central-pulse\.expired\s*\{/);
   assert.match(styles, /grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/);
-  assert.match(styles, /\.wa-bot-modal-body\.central-focus\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
-  assert.match(styles, /\.wa-bot-modal-body\.central-focus \.wa-bot-modal-preview\s*\{[\s\S]*?display:\s*none/);
+  assert.match(styles, /\.wa-bot-modal-body\.tool-focus\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(styles, /\.wa-bot-modal-body\.tool-focus \.wa-bot-modal-preview\s*\{[\s\S]*?display:\s*none/);
   assert.match(styles, /\.wa-bot-test-result\s*\{/);
   assert.match(styles, /\.wa-bot-test-mode\s*\{/);
   assert.match(styles, /\.wa-test-mode-chip\s*\{/);
@@ -547,7 +573,10 @@ test('la bandeja expone atención, lectura, bloqueos, adjuntos y recuperación',
   assert.match(view, /if \(activeActionRef\.current\) return null/);
   assert.match(view, /activeActionRef\.current = key/);
   assert.match(view, /setBusy\(\(currentBusy\) => \(currentBusy === key \? '' : currentBusy\)\)/);
-  assert.match(view, /if \(current\) return current/);
+  // Antes loadOverview reponía la selección con setPhone((current) => ...).
+  // Ahora refrescar, filtrar o marcar como leído no tocan la conversación
+  // elegida porque directamente ya no hay ningún setPhone ahí adentro.
+  assert.doesNotMatch(view, /setPhone\(\(current\)/);
   assert.match(view, /draftsByPhoneRef\.current\.set\(phone, draft\)/);
   assert.match(view, /draftsByPhoneRef\.current\.get\(phone\)/);
   assert.match(view, /if \(next\) draftsByPhoneRef\.current\.set\(phone, next\)/);
@@ -677,7 +706,8 @@ test('la bandeja expone atención, lectura, bloqueos, adjuntos y recuperación',
   assert.match(view, /menuOpen \? 'menu-open' : ''/);
   assert.match(view, /const replyable = canGenerate[\s\S]*?&& inbound/);
   assert.match(view, /canGenerate=\{canReply && !testChat && testModeAllowsCurrent\}/);
-  assert.match(view, /target\?\.closest\?\.\('button, a, audio, video, input, textarea, \[role="menu"\]'\)/);
+  assert.doesNotMatch(view, /target\?\.closest\?\.\('button, a, audio, video, input, textarea, \[role="menu"\]'\)/);
+  assert.match(view, /className="wa-message-menu-trigger"[\s\S]*?onToggleMenu\(String\(displayRow\.id\)\)/);
   assert.match(view, /onToggleMenu\(String\(displayRow\.id\)\)/);
   assert.match(view, /const editable = canMutate[\s\S]*?!inbound[\s\S]*?statusRow\.status === 'sent'/);
   assert.match(view, /const deletable = canMutate[\s\S]*?!inbound[\s\S]*?statusRow\.status === 'sent'/);
@@ -692,6 +722,52 @@ test('la bandeja expone atención, lectura, bloqueos, adjuntos y recuperación',
   assert.match(styles, /\.wa-message-dialog-backdrop\s*\{[\s\S]*?position:\s*fixed/);
   assert.match(styles, /\.wa-bot-mode-options > button\s*\{[\s\S]*?min-height:\s*64px/);
   assert.match(styles, /\.wa-menu-actions > button\.wa-menu-action-wide\s*\{[\s\S]*?grid-column:\s*1\s*\/\s*-1/);
+});
+
+test('la bandeja abre sin conversación elegida y siempre deja volver a la lista', async () => {
+  const view = await readFile(resolve(root, 'src/views/WhatsAppInboxView.jsx'), 'utf8');
+  const styles = await readFile(resolve(root, 'src/views/WhatsAppInboxView.css'), 'utf8');
+
+  // Arranca vacía: nadie entra a un chat que no pidió abrir.
+  assert.match(view, /const \[phone, setPhone\] = useState\(''\)/);
+
+  // Refrescar la lista (incluido el refresco silencioso que dispara "marcar
+  // como leído") no puede elegir conversación por su cuenta.
+  const loadOverviewStart = view.indexOf('const loadOverview');
+  const loadOverviewEnd = view.indexOf('const loadDetail');
+  assert.ok(loadOverviewStart > 0 && loadOverviewEnd > loadOverviewStart);
+  const loadOverview = view.slice(loadOverviewStart, loadOverviewEnd);
+  assert.doesNotMatch(loadOverview, /setPhone\(/);
+  assert.doesNotMatch(loadOverview, /conversations\?\.\[0\]\?\.phone/);
+  assert.doesNotMatch(loadOverview, /row\.handoff \|\| row\.failed_message/);
+
+  // El ref que sólo servía para sostener esa autoselección no quedó dando vueltas.
+  assert.doesNotMatch(view, /manualListRef/);
+
+  // Sólo se elige tocando una fila de la lista o volviendo atrás.
+  assert.match(view, /setPhone\(row\.phone\)/);
+  assert.match(view, /className=\{`wa-inbox[\s\S]*?\$\{phone \? 'has-selection' : ''\}/);
+
+  // Sin selección se ve la bienvenida, que ahora es la primera pantalla del día.
+  assert.match(view, /!current \? \([\s\S]{0,400}?wa-empty wa-empty-welcome/);
+  assert.match(view, /Seleccioná una conversación/);
+  assert.match(view, /lista de la izquierda/);
+  assert.match(styles, /\.wa-empty-welcome\s*\{[\s\S]*?flex-direction:\s*column/);
+
+  // El botón de volver se ve siempre, no sólo en pantalla angosta.
+  assert.match(styles, /\.wa-back\s*\{[\s\S]*?display:\s*inline-flex/);
+  assert.match(view, /aria-label="Volver a la lista"/);
+  assert.match(view, /title="Volver a la lista"/);
+
+  // En angosto la lista y el chat se turnan según haya selección, y ahí dentro
+  // ya no hace falta redeclarar .wa-back.
+  const narrowStart = styles.indexOf('@media (max-width: 820px)');
+  const narrowEnd = styles.indexOf('@media', narrowStart + 10);
+  assert.ok(narrowStart > 0 && narrowEnd > narrowStart);
+  const narrow = styles.slice(narrowStart, narrowEnd);
+  assert.match(narrow, /\.wa-inbox\.has-selection \.wa-list\s*\{[\s\S]*?display:\s*none/);
+  assert.match(narrow, /\.wa-inbox:not\(\.has-selection\) \.wa-chat\s*\{[\s\S]*?display:\s*none/);
+  assert.doesNotMatch(narrow, /\.wa-back\s*\{/);
 });
 
 test('el sidebar cuenta conversaciones y emite un aviso silenciable', async () => {
@@ -794,7 +870,8 @@ test('envíos manuales y presupuestos conservan claves idempotentes estables', a
   );
 
   assert.match(view, /manualSendOperationRef/);
-  assert.match(view, /budget-text:\$\{entry\.id\}/);
+  assert.doesNotMatch(view, /budget-text:/);
+  assert.match(view, /content: `Presupuesto \$\{codigo\} por \$\{formatMoney\(value\.total\)\}`/);
   assert.match(view, /budget-pdf:\$\{entry\.id\}/);
   assert.match(view, /budget_delivery_incomplete/);
   assert.match(migration, /permissions_override/);
@@ -890,4 +967,285 @@ test('la bandeja ya no anuncia "QR Detectado" mientras espera el escaneo', async
 
   assert.doesNotMatch(view, /QR Detectado/);
   assert.match(view, /describeWhatsAppConnection/);
+});
+
+test('normalización de búsqueda elimina tildes, mayúsculas y espacios', async () => {
+  const { normalizeSearchText } = await import('../src/utils/whatsappInboxHelpers.js');
+
+  assert.equal(normalizeSearchText('  Cotillón  '), 'cotillon');
+  assert.equal(normalizeSearchText('GIRASOLES'), 'girasoles');
+  assert.equal(normalizeSearchText('Áéíóú Üñ'), 'aeiou un');
+  assert.equal(normalizeSearchText(''), '');
+  assert.equal(normalizeSearchText(null), '');
+});
+
+test('prioridad por colores según tiempo sin respuesta (verde 5m-1h, amarillo 1-3h, rojo +3h)', async () => {
+  const { unansweredPriority } = await import('../src/utils/whatsappInboxHelpers.js');
+  const now = new Date('2026-08-19T14:00:00Z').getTime();
+
+  // Menos de 5 minutos: neutro/gris
+  const rowRecent = {
+    latest_message: { direction: 'inbound', created_at: '2026-08-19T13:57:00Z' },
+  };
+  assert.equal(unansweredPriority(rowRecent, now)?.tone, 'unanswered');
+  assert.equal(unansweredPriority(rowRecent, now)?.color, 'gray');
+
+  // Entre 5 minutos y 1 hora: verde
+  const rowGreen = {
+    latest_message: { direction: 'inbound', created_at: '2026-08-19T13:30:00Z' },
+  };
+  assert.equal(unansweredPriority(rowGreen, now)?.tone, 'unanswered-green');
+  assert.equal(unansweredPriority(rowGreen, now)?.color, 'green');
+
+  // Entre 1 hora y 3 horas: amarillo
+  const rowYellow = {
+    latest_message: { direction: 'inbound', created_at: '2026-08-19T12:00:00Z' },
+  };
+  assert.equal(unansweredPriority(rowYellow, now)?.tone, 'unanswered-yellow');
+  assert.equal(unansweredPriority(rowYellow, now)?.color, 'yellow');
+
+  // Más de 3 horas: rojo
+  const rowRed = {
+    latest_message: { direction: 'inbound', created_at: '2026-08-19T10:00:00Z' },
+  };
+  assert.equal(unansweredPriority(rowRed, now)?.tone, 'unanswered-red');
+  assert.equal(unansweredPriority(rowRed, now)?.color, 'red');
+
+  // Mensajes salientes respondidos: null (no aplica prioridad sin responder)
+  const rowOutbound = {
+    latest_message: { direction: 'outbound', created_at: '2026-08-19T10:00:00Z' },
+  };
+  assert.equal(unansweredPriority(rowOutbound, now), null);
+
+  // Chat de prueba: null
+  const rowTest = {
+    latest_message: { direction: 'inbound', created_at: '2026-08-19T10:00:00Z', metadata: { test_fixture: true } },
+  };
+  assert.equal(unansweredPriority(rowTest, now), null);
+});
+
+test('la bandeja conserva el ancho izquierdo al abrir el panel derecho y soporta respuestas citadas y visor ampliado', async () => {
+  const view = await readFile(resolve(root, 'src/views/WhatsAppInboxView.jsx'), 'utf8');
+  const styles = await readFile(resolve(root, 'src/views/WhatsAppInboxView.css'), 'utf8');
+
+  // 1. Panel izquierdo no se achica
+  assert.match(styles, /\.wa-inbox\.context-open \.wa-line\s*\{[\s\S]*?grid-template-columns:\s*minmax\(340px,\s*390px\)/);
+
+  // 2. Visor de imágenes en pantalla grande con zoom
+  assert.match(view, /wa-image-gallery/);
+  assert.match(view, /toggleFullscreenMode/);
+  assert.match(view, /ZoomIn/);
+  assert.match(view, /ZoomOut/);
+  assert.match(styles, /\.wa-image-gallery\.is-fullscreen/);
+  assert.match(styles, /\.wa-image-gallery-tool/);
+
+  // 3. Respuestas citadas
+  assert.match(view, /QuotedMessage/);
+  assert.match(view, /wa-replying-bar/);
+  assert.match(view, /data-message-action="reply"/);
+  assert.match(styles, /\.wa-quoted-bubble/);
+  assert.match(styles, /\.wa-replying-bar/);
+
+  // 4. Búsqueda y resaltado
+  assert.match(view, /highlightMatches/);
+  assert.match(view, /wa-search-clear/);
+  assert.match(styles, /\.wa-search-match/);
+  assert.match(styles, /\.wa-search-clear/);
+
+  // 5. Prioridades por color en estilos
+  assert.match(styles, /\.unanswered-green/);
+  assert.match(styles, /\.unanswered-yellow/);
+  assert.match(styles, /\.unanswered-red/);
+});
+
+test('gestión de etiquetas y persistencia en whatsappTags', async () => {
+  const {
+    SYSTEM_TAGS,
+    getTagById,
+    toggleTagForPhone,
+    getTagsForPhone,
+  } = await import('../src/utils/whatsappTags.js');
+
+  assert.ok(SYSTEM_TAGS.length >= 6);
+  assert.equal(getTagById('budget').label, 'Presupuesto');
+  assert.equal(getTagById('order').label, 'Pedido');
+  assert.equal(getTagById('vip').label, 'Cliente Frecuente');
+
+  let tagsMap = {};
+  tagsMap = toggleTagForPhone(tagsMap, '5491112345678', 'budget');
+  assert.deepEqual(tagsMap['5491112345678'], ['budget']);
+
+  tagsMap = toggleTagForPhone(tagsMap, '5491112345678', 'vip');
+  assert.deepEqual(tagsMap['5491112345678'], ['budget', 'vip']);
+
+  const loadedTags = getTagsForPhone(tagsMap, '5491112345678');
+  assert.equal(loadedTags.length, 2);
+  assert.equal(loadedTags[0].id, 'budget');
+  assert.equal(loadedTags[1].id, 'vip');
+
+  // Toggle off
+  tagsMap = toggleTagForPhone(tagsMap, '5491112345678', 'budget');
+  assert.deepEqual(tagsMap['5491112345678'], ['vip']);
+});
+
+test('cálculo de historial de ventas para socios vinculados en WhatsApp', async () => {
+  const { calculateMemberSalesStats } = await import('../src/utils/whatsappTags.js');
+
+  const member = {
+    id: 'm-101',
+    memberNumber: '0042',
+    name: 'Carolina Gómez',
+    phone: '11 4455-6677',
+    dni: '38111222',
+  };
+
+  const sampleTransactions = [
+    {
+      id: 'tx-1',
+      date: '2026-08-15T14:30:00Z',
+      total: 12500,
+      client: { id: 'm-101', name: 'Carolina Gómez' },
+      items: [{ name: 'Globos Pastel', quantity: 2 }],
+      status: 'completed',
+    },
+    {
+      id: 'tx-2',
+      date: '2026-08-18T18:00:00Z',
+      total: 7500,
+      client: { memberNumber: '0042', name: 'Carolina Gómez' },
+      items: [{ name: 'Guirnalda Feliz Cumple', quantity: 1 }],
+      status: 'completed',
+    },
+    {
+      id: 'tx-voided',
+      date: '2026-08-10T10:00:00Z',
+      total: 50000,
+      client: { id: 'm-101' },
+      status: 'voided', // Debe ignorarse
+    },
+    {
+      id: 'tx-other',
+      date: '2026-08-18T19:00:00Z',
+      total: 3000,
+      client: { id: 'other-client' },
+      status: 'completed',
+    },
+  ];
+
+  const stats = calculateMemberSalesStats(member, sampleTransactions);
+  assert.equal(stats.ticketCount, 2);
+  assert.equal(stats.totalSpent, 20000);
+  assert.equal(stats.averageTicket, 10000);
+  assert.equal(stats.lastPurchaseDate, '2026-08-18T18:00:00Z');
+  assert.equal(stats.recentTransactions.length, 2);
+  assert.equal(stats.recentTransactions[0].id, 'tx-2'); // Orden descendente por fecha
+});
+
+test('interfaz de WhatsApp soporta búsqueda interna, menú contextual, etiquetas, doble clic y rediseño de contacto', async () => {
+  const view = await readFile(resolve(root, 'src/views/WhatsAppInboxView.jsx'), 'utf8');
+  const styles = await readFile(resolve(root, 'src/views/WhatsAppInboxView.css'), 'utf8');
+
+  // 1. Búsqueda dentro del chat
+  assert.match(view, /ChatSearchBar/);
+  assert.match(view, /wa-chat-search-bar/);
+  assert.match(view, /matchingMessageIds/);
+  assert.match(styles, /\.wa-chat-search-bar/);
+  assert.match(styles, /\.wa-chat-search-counter/);
+
+  // 2. Menú contextual con clic derecho
+  assert.match(view, /WhatsAppContextMenu/);
+  assert.match(view, /onContextMenu/);
+  assert.match(styles, /\.wa-context-menu/);
+  assert.match(styles, /\.wa-context-menu-head/);
+
+  // 3. Sistema de etiquetas y selector modal
+  assert.match(view, /WhatsAppTagSelectorModal/);
+  assert.match(view, /wa-tag-filter-bar/);
+  assert.match(view, /wa-tag-pill/);
+  assert.match(view, /wa-row-tags/);
+  assert.match(styles, /\.wa-tag-pill/);
+  assert.match(styles, /\.wa-row-tags/);
+  assert.match(styles, /\.wa-tag-modal/);
+
+  // 4. Doble clic para abrir Contacto
+  assert.match(view, /onDoubleClick/);
+  assert.match(view, /setContextMode\('contact'\)/);
+
+  // 5. Rediseño de Contacto (foto grande, historial de ventas, fotos compartidas)
+  assert.match(view, /wa-contact-avatar-hero/);
+  assert.match(view, /wa-contact-name-lg/);
+  assert.match(view, /wa-contact-sales-box/);
+  assert.match(view, /wa-contact-media-section/);
+  assert.match(styles, /\.wa-avatar-hero/);
+  assert.match(styles, /\.wa-contact-sales-box/);
+  assert.match(styles, /\.wa-contact-media-grid/);
+
+  // 6. Filas centradas con número en la misma línea
+  assert.match(styles, /\.wa-row-middle/);
+  assert.match(styles, /\.wa-row-middle \.unread/);
+
+  // 7. Modificación y persistencia de apodos / nombres
+  assert.match(view, /WhatsAppRenameContactModal/);
+  assert.match(view, /wa-contact-edit-name-btn/);
+  assert.match(view, /wa-contact-name-edit-form/);
+  assert.match(styles, /\.wa-contact-edit-name-btn/);
+  assert.match(styles, /\.wa-rename-modal/);
+});
+
+test('resolución de nombres de contacto prioriza apodo, agenda, socio y pushname y preserva nombres en búsqueda', async () => {
+  const { resolveContactName, setContactAlias } = await import('../src/utils/whatsappTags.js');
+  const { mergeConversationBatches } = await import('../src/utils/inboxLoadProgress.js');
+
+  const phone = '5491154830409';
+  const row = { phone, customer_name: 'Original WhatsApp' };
+
+  // 1. Sin nada configurado: usa el nombre original de WhatsApp
+  assert.equal(resolveContactName(row), 'Original WhatsApp');
+
+  // 2. Con socio vinculado: usa el nombre del socio
+  const members = [{ phone: '1154830409', name: 'Ramiro Socio' }];
+  assert.equal(resolveContactName(row, { members }), 'Ramiro Socio');
+
+  // 3. Con contacto en Agenda: tiene prioridad sobre el socio
+  const agendaContacts = [{ phone: '011 5483-0409', name: 'Ramiro Agenda' }];
+  assert.equal(resolveContactName(row, { members, agendaContacts }), 'Ramiro Agenda');
+
+  // 4. Con apodo personalizado en Rebu: máxima prioridad
+  const aliases = { [phone]: 'Mi Amigo Ramiro' };
+  assert.equal(resolveContactName(row, { members, agendaContacts, aliases }), 'Mi Amigo Ramiro');
+
+  // 5. Asignar y quitar apodos con setContactAlias
+  const nextAliases = setContactAlias({}, phone, 'Super Ramiro');
+  assert.equal(nextAliases[phone], 'Super Ramiro');
+  const clearedAliases = setContactAlias(nextAliases, phone, '');
+  assert.equal(clearedAliases[phone], undefined);
+
+  // 6. mergeConversationBatches no borra el nombre si la búsqueda devuelve customer_name nulo
+  const existingBatches = [{ phone, customer_name: 'Test' }];
+  const searchResultsFromBackend = [{ phone, customer_name: null }];
+  const merged = mergeConversationBatches(existingBatches, searchResultsFromBackend);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].customer_name, 'Test');
+});
+
+test('búsqueda de mensajes dentro de los chats y resaltado visual con animación', async () => {
+  const view = await readFile(resolve(root, 'src/views/WhatsAppInboxView.jsx'), 'utf8');
+  const styles = await readFile(resolve(root, 'src/views/WhatsAppInboxView.css'), 'utf8');
+
+  // 1. Selector de mensaje con soporte para múltiples IDs agrupados
+  assert.match(view, /data-msg-ids/);
+  assert.match(view, /data-msg-ids~=/);
+  assert.match(view, /wa-msg-highlight/);
+
+  // 2. Resaltado de coincidencias con <mark>
+  assert.match(view, /highlightMatches/);
+  assert.match(view, /wa-search-match/);
+  assert.match(styles, /mark\.wa-search-match/);
+
+  // 3. Barra de búsqueda y animación de pulso
+  assert.match(styles, /\.wa-chat-search-bar/);
+  assert.match(styles, /\.wa-chat-search-counter/);
+  assert.match(styles, /\.wa-chat-search-nav/);
+  assert.match(styles, /@keyframes waMsgHighlightPulse/);
+  assert.match(styles, /\.wa-message\.wa-msg-highlight/);
 });

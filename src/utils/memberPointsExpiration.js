@@ -257,6 +257,7 @@ export const buildPointExpirationReport = (members = [], transactions = [], opti
     const upcomingPoints = upcomingLots.reduce((acc, lot) => acc + Number(lot.remaining || 0), 0);
 
     return {
+      member: seed.member,
       memberId: seed.memberId,
       memberNumber: seed.memberNumber,
       name: seed.name,
@@ -284,21 +285,40 @@ export const buildPointExpirationReport = (members = [], transactions = [], opti
         dateKey: key,
         displayDate: formatDisplayDate(lot.expiresAt),
         points: 0,
-        memberIds: new Set(),
+        memberMap: new Map(),
       };
 
-      current.points += Number(lot.remaining || 0);
-      current.memberIds.add(String(memberReport.memberId));
+      const lotPoints = Number(lot.remaining || 0);
+      current.points += lotPoints;
+
+      const memberKey = String(memberReport.memberId || memberReport.memberNumber || memberReport.name);
+      const existingMember = current.memberMap.get(memberKey) || {
+        member: memberReport.member,
+        memberId: memberReport.memberId,
+        memberNumber: memberReport.memberNumber,
+        name: memberReport.name,
+        currentPoints: memberReport.currentPoints,
+        expiringPoints: 0,
+      };
+      existingMember.expiringPoints += lotPoints;
+      current.memberMap.set(memberKey, existingMember);
+
       upcomingGroupsMap.set(key, current);
     });
   });
 
   const upcomingGroups = Array.from(upcomingGroupsMap.values())
-    .map((group) => ({
-      ...group,
-      memberCount: group.memberIds.size,
-      memberIds: undefined,
-    }))
+    .map((group) => {
+      const membersList = Array.from(group.memberMap.values())
+        .sort((a, b) => b.expiringPoints - a.expiringPoints || a.name.localeCompare(b.name));
+      return {
+        dateKey: group.dateKey,
+        displayDate: group.displayDate,
+        points: group.points,
+        memberCount: membersList.length,
+        members: membersList,
+      };
+    })
     .sort((a, b) => a.dateKey.localeCompare(b.dateKey));
 
   return {

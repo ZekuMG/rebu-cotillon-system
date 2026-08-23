@@ -9,9 +9,11 @@ const {
   normalizeWhatsAppBotRequestPath,
   resolveWhatsAppBotBaseUrl,
 } = require('./electron-whatsapp-bridge.cjs');
+const { buildSupplierPriceReportHtml } = require('./electron-supplier-price-report.cjs');
 
 let mainWindow;
 let supplierImageLoginWindow;
+let supplierSessionVerified = false;
 
 const updateManager = createUpdateManager({
   autoUpdater,
@@ -598,6 +600,56 @@ const generateWhatsAppBudgetPdf = async (payload = {}) => {
   }
 };
 
+const generateSupplierPriceReportPdf = async (report = {}) => {
+  const changes = Array.isArray(report?.changes) ? report.changes : [];
+  if (changes.length === 0) {
+    throw new Error('El período seleccionado no contiene cambios aprobados.');
+  }
+
+  const pdfWindow = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  const temporaryHtmlPath = path.join(
+    app.getPath('temp'),
+    `rebu-casa-alberto-${randomUUID()}.html`,
+  );
+
+  try {
+    fs.writeFileSync(temporaryHtmlPath, buildSupplierPriceReportHtml({ report }), 'utf8');
+    await pdfWindow.loadFile(temporaryHtmlPath);
+    await pdfWindow.webContents.executeJavaScript(`
+      (async () => {
+        if (document.fonts && document.fonts.ready) await document.fonts.ready;
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      })()
+    `, true);
+    const pdfData = await pdfWindow.webContents.printToPDF({
+      printBackground: true,
+      pageSize: 'A4',
+      landscape: true,
+      marginsType: 0,
+      preferCSSPageSize: true,
+    });
+    if (!Buffer.isBuffer(pdfData) || pdfData.length < MIN_VALID_PDF_BYTES) {
+      throw new Error('El PDF del historial quedó incompleto. No se guardó ningún archivo.');
+    }
+    return pdfData;
+  } finally {
+    if (!pdfWindow.isDestroyed()) pdfWindow.destroy();
+    try {
+      fs.unlinkSync(temporaryHtmlPath);
+    } catch {
+      // El temporal puede no existir si la carga falló antes de escribirlo.
+    }
+  }
+};
+
 const waitForWebContentsLoad = (webContents, timeoutMs = 10000) =>
   new Promise((resolve) => {
     let settled = false;
@@ -717,9 +769,25 @@ const normalizeSupplierNavigationUrl = (targetUrl) => {
   }
 };
 
+const ensureSupplierSessionWindow = ({ show = false } = {}) => {
+  if (!supplierImageLoginWindow || supplierImageLoginWindow.isDestroyed()) {
+    supplierImageLoginWindow = createSupplierBrowserWindow({ show, width: 1120, height: 780 });
+    supplierImageLoginWindow.on('closed', () => {
+      supplierImageLoginWindow = null;
+    });
+    return { supplierWindow: supplierImageLoginWindow, reused: false };
+  }
+
+  if (show) {
+    supplierImageLoginWindow.show();
+    supplierImageLoginWindow.focus();
+  }
+  return { supplierWindow: supplierImageLoginWindow, reused: true };
+};
+
 const getSupplierLoginState = async () => {
   if (!supplierImageLoginWindow || supplierImageLoginWindow.isDestroyed()) {
-    return { hasWindow: false, url: '', isLikelyLoggedIn: false };
+    return { hasWindow: false, url: '', isLikelyLoggedIn: supplierSessionVerified };
   }
 
   const url = supplierImageLoginWindow.webContents.getURL();
@@ -750,7 +818,71 @@ const getSupplierLoginState = async () => {
     !/login/i.test(url || '') &&
     !pageState?.hasVisiblePasswordInput;
 
-  return { hasWindow: true, url, isLikelyLoggedIn, hasVisiblePasswordInput: Boolean(pageState?.hasVisiblePasswordInput), isLoginText };
+  if (isLikelyLoggedIn) supplierSessionVerified = true;
+  if (pageState?.hasVisiblePasswordInput || isLoginText || /login\.php/i.test(url || '')) {
+    supplierSessionVerified = false;
+  }
+
+  return {
+    hasWindow: true,
+    url,
+    isLikelyLoggedIn: isLikelyLoggedIn || supplierSessionVerified,
+    hasVisiblePasswordInput: Boolean(pageState?.hasVisiblePasswordInput),
+    isLoginText,
+  };
+};
+
+const restoreSupplierSession = async () => {
+  const { supplierWindow, reused } = ensureSupplierSessionWindow({ show: false });
+  const currentState = await getSupplierLoginState();
+  if (currentState.isLikelyLoggedIn || currentState.hasVisiblePasswordInput) {
+    return {
+      success: true,
+      reused,
+      manualLoginRequired: !currentState.isLikelyLoggedIn,
+      loginState: currentState,
+    };
+  }
+
+  await loadUrlAndWait(
+    supplierWindow,
+    `${SUPPLIER_DEFAULT_ORIGIN}${SUPPLIER_RESTRICTED_PATH}`,
+    18000,
+  );
+  await delay(250);
+  const loginState = await getSupplierLoginState();
+  return {
+    success: true,
+    reused,
+    manualLoginRequired: !loginState.isLikelyLoggedIn,
+    loginState,
+  };
+};
+
+const clearSupplierSession = async () => {
+  supplierSessionVerified = false;
+  if (supplierImageLoginWindow && !supplierImageLoginWindow.isDestroyed()) {
+    supplierImageLoginWindow.destroy();
+    supplierImageLoginWindow = null;
+  }
+
+  const supplierSession = session.fromPartition(SUPPLIER_IMAGE_PARTITION);
+  const supplierCookies = await supplierSession.cookies.get({ domain: 'cotilloncasaalberto.com.ar' });
+  await Promise.all(supplierCookies.map((cookie) => {
+    const hostname = String(cookie.domain || 'cotilloncasaalberto.com.ar').replace(/^\./, '');
+    const protocol = cookie.secure ? 'https:' : 'http:';
+    const cookieUrl = `${protocol}//${hostname}${cookie.path || '/'}`;
+    return supplierSession.cookies.remove(cookieUrl, cookie.name).catch(() => undefined);
+  }));
+
+  for (const origin of ['http://cotilloncasaalberto.com.ar', 'https://cotilloncasaalberto.com.ar']) {
+    await supplierSession.clearStorageData({
+      origin,
+      storages: ['cookies', 'localstorage', 'indexdb', 'cachestorage'],
+    }).catch(() => undefined);
+  }
+  await supplierSession.flushStorageData();
+  return { success: true, loginState: { hasWindow: false, url: '', isLikelyLoggedIn: false } };
 };
 
 const buildSupplierSearchScript = (searchValue) => `
@@ -2027,6 +2159,17 @@ app.on('ready', () => {
     }
   });
 
+  ipcMain.handle('capture-export-pdf', async (event) => {
+    try {
+      if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+      const pdfData = await createValidatedPdf(mainWindow.webContents);
+      return { success: true, base64: pdfData.toString('base64'), sizeBytes: pdfData.length };
+    } catch (error) {
+      console.error('Error capturando PDF:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
   ipcMain.handle('generate-whatsapp-budget-pdf', async (event, payload) => {
     try {
       if (!isTrustedIpcSender(event)) {
@@ -2036,6 +2179,35 @@ app.on('ready', () => {
     } catch (error) {
       console.error('Error generando presupuesto de WhatsApp:', error);
       return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('save-supplier-price-report-pdf', async (event, payload = {}) => {
+    try {
+      if (!isTrustedIpcSender(event)) {
+        return { success: false, error: 'Origen IPC no autorizado' };
+      }
+
+      const isPackaged = app.isPackaged;
+      const basePath = isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath();
+      const suggestedPath = path.join(
+        basePath,
+        sanitizePdfFileName(payload?.defaultName || 'Cambios Casa Alberto.pdf'),
+      );
+      const { filePath } = await dialog.showSaveDialog(mainWindow, {
+        title: 'Guardar historial de precios de Casa Alberto',
+        defaultPath: suggestedPath,
+        filters: [{ name: 'Documentos PDF', extensions: ['pdf'] }],
+      });
+      if (!filePath) return { success: false, canceled: true };
+
+      const resolvedFilePath = filePath.toLowerCase().endsWith('.pdf') ? filePath : `${filePath}.pdf`;
+      const pdfData = await generateSupplierPriceReportPdf(payload?.report || {});
+      fs.writeFileSync(resolvedFilePath, pdfData);
+      return { success: true, filePath: resolvedFilePath, sizeBytes: pdfData.length };
+    } catch (error) {
+      console.error('Error generando historial PDF de Casa Alberto:', error);
+      return { success: false, error: error?.message || 'No se pudo generar el historial PDF.' };
     }
   });
 
@@ -2083,21 +2255,32 @@ app.on('ready', () => {
     if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
 
     try {
-      if (supplierImageLoginWindow && !supplierImageLoginWindow.isDestroyed()) {
-        supplierImageLoginWindow.show();
-        supplierImageLoginWindow.focus();
-        return { success: true, reused: true, loginState: await getSupplierLoginState() };
+      const { supplierWindow, reused } = ensureSupplierSessionWindow({ show: true });
+      const currentState = await getSupplierLoginState();
+      if (!reused || (!currentState.isLikelyLoggedIn && !currentState.hasVisiblePasswordInput)) {
+        await loadUrlAndWait(supplierWindow, SUPPLIER_LOGIN_URL, 18000);
       }
-
-      supplierImageLoginWindow = createSupplierBrowserWindow({ show: true, width: 1120, height: 780 });
-      supplierImageLoginWindow.on('closed', () => {
-        supplierImageLoginWindow = null;
-      });
-
-      await loadUrlAndWait(supplierImageLoginWindow, SUPPLIER_LOGIN_URL, 18000);
-      return { success: true, loginState: await getSupplierLoginState() };
+      return { success: true, reused, loginState: await getSupplierLoginState() };
     } catch (error) {
       return { success: false, error: error?.message || 'No se pudo abrir el login del proveedor.' };
+    }
+  });
+
+  ipcMain.handle('supplier-session-connect', async (event) => {
+    if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+    try {
+      return await restoreSupplierSession();
+    } catch (error) {
+      return { success: false, error: error?.message || 'No se pudo recuperar la sesion del proveedor.' };
+    }
+  });
+
+  ipcMain.handle('supplier-session-logout', async (event) => {
+    if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+    try {
+      return await clearSupplierSession();
+    } catch (error) {
+      return { success: false, error: error?.message || 'No se pudo cerrar la sesion del proveedor.' };
     }
   });
 
@@ -2144,7 +2327,9 @@ app.on('ready', () => {
     const barcode = String(request?.barcode || '').trim();
     const title = String(request?.title || '').trim();
     const searchMode = String(request?.searchMode || '').trim();
-    return searchSupplierImageByBarcode({ barcode, title, searchMode });
+    const result = await searchSupplierImageByBarcode({ barcode, title, searchMode });
+    if (result?.status === 'login_required') supplierSessionVerified = false;
+    return result;
   });
 
   ipcMain.handle('supplier-price-search', async (event, request) => {
@@ -2152,12 +2337,14 @@ app.on('ready', () => {
       return { status: 'error', message: 'Origen IPC no autorizado' };
     }
 
-    return searchSupplierPrice({
+    const result = await searchSupplierPrice({
       productUrl: request?.productUrl,
       casaAlbertoId: request?.casaAlbertoId,
       supplierCode: request?.supplierCode || request?.providerCode,
       title: request?.title,
     });
+    if (result?.status === 'login_required') supplierSessionVerified = false;
+    return result;
   });
 
   ipcMain.handle('openai-image-edit', async (event, request) => {

@@ -7,6 +7,7 @@ import {
   Bot,
   Check,
   ChevronDown,
+  ChevronLeft,
   Download,
   FileText,
   FlaskConical,
@@ -35,6 +36,11 @@ const DEFAULT_VALUE = {
     address_style: 'vos',
     reply_length: 'brief',
     emoji_level: 'low',
+    // Los matices arrancan en el valor que describe cómo escribe Blacky hoy:
+    // dejarlos así no le agrega ninguna instrucción al bot.
+    slang_level: 'natural',
+    follow_up: 'light',
+    closing_style: 'neutral',
   },
   messages: {
     welcome_options: 'Puedo ayudarte con una consulta rápida o, si preferís, podés pedirme hablar con una persona del equipo.',
@@ -106,14 +112,29 @@ const payloadFromDraft = (draft, ruleDraft) => ({
   },
 });
 
+// Tres secciones, no siete pasos. Antes la nav numeraba de 1 a 7 y cada sección
+// repetía el número en grande: un panel de ajustes sueltos, que se tocan en
+// cualquier orden, parecía un asistente que había que completar en orden.
 const SECTIONS = [
-  { id: 'mode', label: 'Funcionamiento', help: 'Cuándo responde Blacky' },
-  { id: 'identity', label: 'Identidad y tono', help: 'Cómo se presenta y escribe' },
-  { id: 'messages', label: 'Mensajes clave', help: 'Qué dice en momentos importantes' },
-  { id: 'capabilities', label: 'Permisos del bot', help: 'Qué puede consultar o preparar' },
-  { id: 'limits', label: 'Contexto y límites', help: 'Reglas propias y derivaciones' },
+  { id: 'mode', label: 'Funcionamiento', help: 'Cuándo responde' },
+  { id: 'voice', label: 'Personalidad', help: 'Cómo se presenta y qué dice' },
+  { id: 'rules', label: 'Reglas y permisos', help: 'Qué puede hacer y qué no' },
 ];
 
+// `identity`+`messages` ahora son `voice`, y `capabilities`+`limits` son
+// `rules`. Cualquier entrada externa con un id viejo tiene que caer en la
+// sección nueva y no en un panel en blanco.
+const LEGACY_SECTIONS = {
+  identity: 'voice',
+  messages: 'voice',
+  capabilities: 'rules',
+  limits: 'rules',
+};
+
+const resolveSection = (id) => LEGACY_SECTIONS[id] || id || 'mode';
+
+// Central e historial no son "configurar a Blacky": son el equipo y el número.
+// Por eso salen de la nav y viven como accesos aparte, en el pie.
 const CENTRAL_SECTION = {
   id: 'central',
   label: 'Máquina central',
@@ -151,15 +172,26 @@ const MODE_OPTIONS = [
   },
 ];
 
+// La app propone, el bot dispone: cada valor de acá tiene que estar también en
+// BOT_VOICE_CHOICES y en VOICE_INSTRUCTIONS (src/bot-behavior.js del bot). Si
+// falta en la lista blanca, el bot lo reemplaza en silencio por el default: el
+// dueño lo elige, lo ve guardado y Blacky sigue escribiendo igual.
 const CHOICES = {
   tone: [
     ['cheerful', 'Alegre'],
+    ['playful', 'Divertido'],
+    ['festive', 'Fiestero'],
+    ['youthful', 'Juvenil'],
     ['warm', 'Cálido'],
     ['professional', 'Profesional'],
+    ['formal', 'Formal'],
   ],
-  address_style: [['vos', 'Voseo'], ['usted', 'Usted']],
-  reply_length: [['brief', 'Breves'], ['balanced', 'Equilibradas'], ['detailed', 'Detalladas']],
-  emoji_level: [['none', 'Sin emojis'], ['low', 'Pocos'], ['medium', 'Moderados']],
+  address_style: [['vos', 'Voseo'], ['tu', 'Tuteo neutro'], ['usted', 'Usted'], ['mirror', 'Como el cliente']],
+  reply_length: [['ultra_brief', 'De una línea'], ['brief', 'Breves'], ['balanced', 'Equilibradas'], ['detailed', 'Detalladas']],
+  emoji_level: [['none', 'Sin emojis'], ['low', 'Pocos'], ['medium', 'Moderados'], ['high', 'Muchos'], ['very_high', 'De fiesta']],
+  slang_level: [['neutral', 'Neutro'], ['natural', 'Los justos'], ['high', 'Bien argentino']],
+  follow_up: [['minimal', 'Casi ninguna'], ['light', 'Las justas'], ['active', 'Siempre una']],
+  closing_style: [['neutral', 'Sin cierre fijo'], ['warm', 'Cálida'], ['festive', 'De fiesta'], ['invite', 'Invita al local']],
 };
 
 const CHOICE_LABELS = Object.fromEntries(
@@ -182,6 +214,19 @@ const AUTO_TOPICS = [
   ['payment', 'Medios de pago'],
   ['order_info', 'Retiros y envíos'],
 ];
+
+// Encabezado de las dos herramientas que ya no son pasos de la nav. Necesitan
+// título propio (la nav no las nombra) y una forma clara de volver.
+function ToolHead({ title, detail, onBack }) {
+  return (
+    <div className="wa-bot-tool-head">
+      <button type="button" onClick={onBack} aria-label="Volver a la configuración" title="Volver a la configuración">
+        <ChevronLeft />
+      </button>
+      <div><strong>{title}</strong>{detail && <small>{detail}</small>}</div>
+    </div>
+  );
+}
 
 function ChoiceRow({ value, options, onChange, label }) {
   const [open, setOpen] = useState(false);
@@ -312,7 +357,7 @@ export default function WhatsAppBotSettingsPanel({
 }) {
   const initialDraft = useMemo(() => formValue(value), [value]);
   const initialRuleDraft = useMemo(() => createRuleDraft(initialDraft), [initialDraft]);
-  const [section, setSection] = useState(initialSection || 'mode');
+  const [section, setSection] = useState(resolveSection(initialSection));
   const [draft, setDraft] = useState(initialDraft);
   const [ruleDraft, setRuleDraft] = useState(initialRuleDraft);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
@@ -339,14 +384,16 @@ export default function WhatsAppBotSettingsPanel({
     [initialDraft, initialRuleDraft],
   );
   const dirty = JSON.stringify(payload) !== JSON.stringify(originalPayload);
-  const visibleSections = useMemo(
+  const visibleSections = SECTIONS;
+  // Accesos del pie: el equipo y el número, no la personalidad del bot.
+  const toolSections = useMemo(
     () => [
-      ...SECTIONS,
       ...(canManageHistory ? [HISTORY_SECTION] : []),
       ...(canManageCentralMachine ? [CENTRAL_SECTION] : []),
     ],
     [canManageCentralMachine, canManageHistory],
   );
+  const toolSection = toolSections.find(({ id }) => id === section) || null;
   const assignedCentralMachine = centralMachine?.machine || null;
   const isThisCentralMachine = Boolean(
     assignedCentralMachine?.device_id
@@ -549,28 +596,27 @@ export default function WhatsAppBotSettingsPanel({
             <span><Bot /></span>
             <div>
               <strong id="wa-bot-settings-title" ref={titleRef} tabIndex="-1">Configurar Blacky</strong>
-              <small>Administrá su funcionamiento, personalidad, respuestas y límites desde un solo lugar.</small>
+              <small>Funcionamiento, personalidad y reglas.</small>
             </div>
           </div>
           <div className="wa-bot-modal-version">
-            <span>{version ? `Versión ${version}` : 'Perfil de Blacky'}</span>
+            <span title={version ? `Versión ${version}` : undefined}>Perfil de Blacky</span>
             <button type="button" onClick={requestClose} aria-label="Cerrar configuración del bot"><X /></button>
           </div>
         </header>
 
         {loading ? <LoadingState /> : loadError ? <ErrorState onRetry={onRetry} /> : (
           <>
-            <div className={`wa-bot-modal-body ${section === 'central' ? 'central-focus' : ''}`}>
-              <nav className={`wa-bot-settings-nav ${canManageCentralMachine ? 'with-central' : ''}`} aria-label="Secciones de configuración">
-                {visibleSections.map(({ id, label, help }, index) => (
+            <div className={`wa-bot-modal-body ${toolSection ? 'tool-focus' : ''}`}>
+              <nav className="wa-bot-settings-nav" aria-label="Secciones de configuración">
+                {visibleSections.map(({ id, label, help }) => (
                   <button
                     key={id}
                     type="button"
                     className={section === id ? 'active' : ''}
-                    aria-current={section === id ? 'step' : undefined}
+                    aria-current={section === id ? 'true' : undefined}
                     onClick={() => setSection(id)}
                   >
-                    <em>{index + 1}</em>
                     <span><strong>{label}</strong><small>{help}</small></span>
                   </button>
                 ))}
@@ -579,11 +625,6 @@ export default function WhatsAppBotSettingsPanel({
               <main className="wa-bot-settings-content">
                 {section === 'mode' && (
                   <div className="wa-bot-settings-section">
-                    <div className="wa-section-copy">
-                      <span>1</span>
-                      <div><strong>Cómo trabaja Blacky</strong><small>Elegí si Blacky responde por su cuenta o si prepara opciones para que una persona las revise. Solo observar continúa pausado.</small></div>
-                    </div>
-
                     <div className={`wa-bot-current-state ${availableModeActive ? 'on' : 'off'}`}>
                       <i aria-hidden="true" />
                       <span>
@@ -597,7 +638,7 @@ export default function WhatsAppBotSettingsPanel({
                         <span><FlaskConical /></span>
                         <div>
                           <strong>Modo test</strong>
-                          <small>Limita Blacky y todas sus pruebas a una sola conversación.</small>
+                          <small>Blacky trabaja en una sola conversación.</small>
                         </div>
                         <button
                           type="button"
@@ -661,7 +702,7 @@ export default function WhatsAppBotSettingsPanel({
                     <div className="wa-bot-mode-field">
                       <div>
                         <strong>Tipo de respuesta</strong>
-                        <small>El cambio se aplica en el momento y no necesita el botón Guardar cambios.</small>
+                        <small>Se aplica al instante, sin Guardar.</small>
                       </div>
                       <div className="wa-bot-mode-options" role="group" aria-label="Tipo de respuesta de Blacky">
                         {MODE_OPTIONS.map((option) => {
@@ -687,22 +728,23 @@ export default function WhatsAppBotSettingsPanel({
                     {!businessProfileReady && (
                       <div className="wa-bot-mode-notice warning" role="status">
                         <AlertCircle />
-                        <span><strong>Faltan datos del negocio</strong><small>Blacky puede quedar activo, pero algunas consultas se derivarán hasta completar esos datos.</small></span>
+                        <span><strong>Faltan datos del negocio</strong><small>Algunas consultas se derivarán hasta completarlos.</small></span>
                       </div>
                     )}
                     <div className="wa-bot-mode-notice">
                       <ShieldCheck />
-                      <span><strong>La atención humana siempre sigue disponible</strong><small>Si el cliente pide una persona o Blacky no puede confirmar algo, la conversación queda marcada para revisión.</small></span>
+                      <span><strong>La atención humana siempre está disponible</strong><small>Si el cliente pide una persona, el chat queda marcado para revisión.</small></span>
                     </div>
                   </div>
                 )}
 
                 {canManageCentralMachine && section === 'central' && (
                   <div className="wa-bot-settings-section wa-central-machine-section">
-                    <div className="wa-section-copy">
-                      <span>6</span>
-                      <div><strong>Máquina central de WhatsApp</strong><small>Esta PC mantendrá activo el servicio, la conexión y el envío de mensajes. Solo Sistema puede cambiarla.</small></div>
-                    </div>
+                    <ToolHead
+                      title="Máquina central de WhatsApp"
+                      detail="La PC que mantiene la conexión y los envíos. Solo Sistema puede cambiarla."
+                      onBack={() => setSection('mode')}
+                    />
 
                     <section className={`wa-central-station ${centralLeaseExpired ? 'stale' : isThisCentralMachine ? 'current' : assignedCentralMachine ? 'remote' : 'empty'}`}>
                       <header>
@@ -892,13 +934,11 @@ export default function WhatsAppBotSettingsPanel({
 
                 {canManageHistory && section === 'history' && (
                   <div className="wa-bot-settings-section">
-                    <div className="wa-section-copy">
-                      <span><Archive /></span>
-                      <div>
-                        <strong>{historyState.title}</strong>
-                        <small>{historyState.detail}</small>
-                      </div>
-                    </div>
+                    <ToolHead
+                      title={historyState.title}
+                      detail={historyState.detail}
+                      onBack={() => setSection('mode')}
+                    />
 
                     {historyError && (
                       <div className="wa-bot-inline-error" role="alert">
@@ -1045,12 +1085,8 @@ export default function WhatsAppBotSettingsPanel({
                   </div>
                 )}
 
-                {section === 'identity' && (
+                {section === 'voice' && (
                   <div className="wa-bot-settings-section">
-                    <div className="wa-section-copy">
-                      <span>2</span>
-                      <div><strong>Identidad y forma de hablar</strong><small>Configura la personalidad general. El saludo cambia automáticamente según la hora.</small></div>
-                    </div>
                     <div className="wa-bot-field-grid">
                       <label>Nombre del asistente<input value={draft.identity.name} maxLength={40} onChange={(event) => update('identity', { name: event.target.value })} /></label>
                       <label>Cómo se presenta<input value={draft.identity.role} maxLength={90} onChange={(event) => update('identity', { role: event.target.value })} /></label>
@@ -1061,27 +1097,24 @@ export default function WhatsAppBotSettingsPanel({
                       <ChoiceRow label="Extensión habitual" value={draft.voice.reply_length} options={CHOICES.reply_length} onChange={(reply_length) => update('voice', { reply_length })} />
                       <ChoiceRow label="Uso de emojis" value={draft.voice.emoji_level} options={CHOICES.emoji_level} onChange={(emoji_level) => update('voice', { emoji_level })} />
                     </div>
-                  </div>
-                )}
 
-                {section === 'messages' && (
-                  <div className="wa-bot-settings-section">
-                    <div className="wa-section-copy">
-                      <span>3</span>
-                      <div><strong>Mensajes importantes</strong><small>Son bases de respuesta: Blacky puede adaptarlas al contexto sin cambiar su intención.</small></div>
+                    <h4 className="wa-bot-subhead">Detalles de estilo<small>Si los dejás como están, Blacky escribe igual que hasta ahora.</small></h4>
+                    <div className="wa-bot-choice-grid">
+                      <ChoiceRow label="Modismos argentinos" value={draft.voice.slang_level} options={CHOICES.slang_level} onChange={(slang_level) => update('voice', { slang_level })} />
+                      <ChoiceRow label="Repreguntas al cliente" value={draft.voice.follow_up} options={CHOICES.follow_up} onChange={(follow_up) => update('voice', { follow_up })} />
+                      <ChoiceRow label="Cómo se despide" value={draft.voice.closing_style} options={CHOICES.closing_style} onChange={(closing_style) => update('voice', { closing_style })} />
                     </div>
+
+                    <h4 className="wa-bot-subhead">Mensajes clave<small>Blacky los adapta al contexto sin cambiarles la intención.</small></h4>
                     <label>Opciones al presentarse<small>Se agrega después de “Soy Blacky...”.</small><textarea value={draft.messages.welcome_options} maxLength={500} onChange={(event) => update('messages', { welcome_options: event.target.value })} /></label>
                     <label>Cuando pide hablar con una persona<small>El horario del local se agrega automáticamente.</small><textarea value={draft.messages.human_handoff} maxLength={500} onChange={(event) => update('messages', { human_handoff: event.target.value })} /></label>
                     <label>Cuando no puede confirmar algo<small>Evita inventar información y deja el chat para revisión.</small><textarea value={draft.messages.uncertain_answer} maxLength={500} onChange={(event) => update('messages', { uncertain_answer: event.target.value })} /></label>
                   </div>
                 )}
 
-                {section === 'capabilities' && (
+                {section === 'rules' && (
                   <div className="wa-bot-settings-section">
-                    <div className="wa-section-copy">
-                      <span>4</span>
-                      <div><strong>Permisos y respuestas automáticas</strong><small>Desactivar una herramienta hace que Blacky derive esa parte a una persona.</small></div>
-                    </div>
+                    <h4 className="wa-bot-subhead">Qué puede hacer<small>Lo que apagues, lo deriva a una persona.</small></h4>
                     <div className="wa-bot-toggle-list">
                       {CAPABILITIES.map(([id, label, help]) => (
                         <button key={id} type="button" onClick={() => toggleCapability(id)} aria-pressed={draft.capabilities[id]}>
@@ -1101,15 +1134,8 @@ export default function WhatsAppBotSettingsPanel({
                         ))}
                       </div>
                     </div>
-                  </div>
-                )}
 
-                {section === 'limits' && (
-                  <div className="wa-bot-settings-section">
-                    <div className="wa-section-copy">
-                      <span>5</span>
-                      <div><strong>Contexto y reglas propias</strong><small>Escribí una indicación por línea. No hace falta usar lenguaje técnico.</small></div>
-                    </div>
+                    <h4 className="wa-bot-subhead">Reglas propias<small>Una indicación por línea, en tus palabras.</small></h4>
                     <label>Contexto adicional<small>Ejemplo: “Atendemos principalmente cumpleaños y eventos familiares”.</small><textarea value={draft.guidance.business_context} maxLength={2400} onChange={(event) => update('guidance', { business_context: event.target.value })} /></label>
                     <label>Qué debe hacer siempre<small>Una regla por línea.</small><textarea value={ruleDraft.always_do} onChange={(event) => setRuleDraft((current) => ({ ...current, always_do: event.target.value }))} placeholder={'Preguntar la cantidad cuando falte\nDar alternativas si no hay coincidencia exacta'} /></label>
                     <label>Frases que no debe decir<small>Si una respuesta contiene alguna, no se envía y pasa a revisión.</small><textarea value={ruleDraft.never_say} onChange={(event) => setRuleDraft((current) => ({ ...current, never_say: event.target.value }))} placeholder={'Te lo reservo\nPago confirmado'} /></label>
@@ -1178,16 +1204,24 @@ export default function WhatsAppBotSettingsPanel({
             </div>
 
             <footer className="wa-bot-modal-footer">
-              <span className={dirty ? 'dirty' : ''}>
-                {dirty
-                  ? 'Tenés cambios sin guardar'
-                  : section === 'central'
-                    ? 'La asignación de la máquina se aplica inmediatamente'
-                    : version ? `Configuración guardada · versión ${version}` : 'Configuración lista'}
-              </span>
+              {dirty || toolSection ? (
+                <span className={dirty ? 'dirty' : ''}>
+                  {dirty
+                    ? 'Tenés cambios sin guardar'
+                    : 'Los cambios de acá se aplican en el momento'}
+                </span>
+              ) : (
+                <div className="wa-bot-tool-links">
+                  {toolSections.map(({ id, label }) => (
+                    <button key={id} type="button" onClick={() => setSection(id)}>
+                      {id === 'central' ? <Server /> : <Archive />}{label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div>
                 <button type="button" className="wa-secondary-action" disabled={effectiveBusy} onClick={requestClose}>Cerrar</button>
-                {(section !== 'central' || dirty) && (
+                {(!toolSection || dirty) && (
                   <button type="button" className="wa-primary-action" disabled={effectiveBusy || !dirty} onClick={() => onSave(payload)}>
                     {busy ? <Loader2 className="animate-spin" /> : <FileText />}{busy ? 'Guardando…' : 'Guardar cambios'}
                   </button>

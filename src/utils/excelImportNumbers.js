@@ -30,3 +30,18 @@ export const parseExcelMoney = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+export const MAX_SAFE_EXCEL_IMPORT_NUMBER = Number.MAX_SAFE_INTEGER;
+
+export const isSafeExcelImportNumber = (
+  value,
+  { min = -MAX_SAFE_EXCEL_IMPORT_NUMBER, max = MAX_SAFE_EXCEL_IMPORT_NUMBER } = {},
+) => {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) && numberValue >= min && numberValue <= max;
+};
+
+export const calculateExcelImportStockDelta = (entry = {}) => {
+  const quantity = Number(entry.quantity ?? 0);
+  const multiplier = Number(entry.multiplier ?? 1);
+  return quantity * multiplier;
+};

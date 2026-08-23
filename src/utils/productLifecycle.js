@@ -277,6 +277,74 @@ export const productMatchesExcelAlias = (product = {}, entry = {}) => {
   ));
 };
 
+export const shouldSaveExcelImportAlias = ({
+  product = null,
+  entry = {},
+  isNewAssociation = false,
+} = {}) => Boolean(
+  product
+  && isNewAssociation
+  && (normalizeProductLinkCode(entry.code) || normalizeProductLinkText(entry.description))
+  && !productMatchesExcelAlias(product, entry)
+);
+
+export const getExcelImportApplications = (product = {}) => {
+  const excelImport = getProductSupplierLinks(product).excel_import;
+  if (!excelImport || typeof excelImport !== 'object' || Array.isArray(excelImport)) return [];
+  const applications = Array.isArray(excelImport.applications) ? excelImport.applications : [];
+  return applications.filter((application) => (
+    application
+    && typeof application === 'object'
+    && !Array.isArray(application)
+    && String(application.signature || '').trim()
+  ));
+};
+
+export const productHasExcelImportApplication = (product = {}, signature = '') => {
+  const safeSignature = String(signature || '').trim();
+  if (!safeSignature) return false;
+  return getExcelImportApplications(product).some(
+    (application) => String(application.signature || '').trim() === safeSignature,
+  );
+};
+
+export const recordExcelImportApplication = (
+  supplierLinks = {},
+  application = {},
+  now = new Date().toISOString(),
+) => {
+  const signature = String(application.signature || '').trim().slice(0, 180);
+  if (!signature) return supplierLinks || {};
+
+  const safeLinks = supplierLinks && typeof supplierLinks === 'object' && !Array.isArray(supplierLinks)
+    ? supplierLinks
+    : {};
+  const excelImport = safeLinks.excel_import && typeof safeLinks.excel_import === 'object' && !Array.isArray(safeLinks.excel_import)
+    ? safeLinks.excel_import
+    : {};
+  const currentApplications = getExcelImportApplications({ supplierLinks: safeLinks });
+  const nextApplication = {
+    signature,
+    fileFingerprint: String(application.fileFingerprint || '').trim().slice(0, 128),
+    rowNumber: String(application.rowNumber ?? '').trim().slice(0, 80),
+    code: normalizeProductLinkCode(application.code).slice(0, 120),
+    description: String(application.description || '').trim().slice(0, 220),
+    appliedAt: now,
+  };
+  const nextApplications = [
+    nextApplication,
+    ...currentApplications.filter((item) => String(item.signature || '').trim() !== signature),
+  ].slice(0, 80);
+
+  return {
+    ...safeLinks,
+    excel_import: {
+      ...excelImport,
+      applications: nextApplications,
+    },
+  };
+};
+
 export const upsertExcelImportAlias = (supplierLinks = {}, link = {}, now = new Date().toISOString()) => {
   const code = normalizeProductLinkCode(link.code);
   const description = String(link.description || '').trim();
