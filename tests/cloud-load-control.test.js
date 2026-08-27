@@ -5,8 +5,15 @@ import {
   doesCloudLoadCoverRequest,
   fetchCloudPayloadWithMutationGuard,
   fetchCloudPayloadWithRetries,
+  getIncrementalSyncCutoff,
+  getLatestCloudRecordTimestamp,
+  getProductSnapshotScope,
+  mergeCloudRecordsById,
+  PRODUCT_SNAPSHOT_SCOPE_FULL,
+  PRODUCT_SNAPSHOT_SCOPE_PARTIAL,
   recordCloudSourceMutations,
   resolveCoveredCloudLoadResult,
+  shouldUseIncrementalProductSync,
   summarizeCloudResults,
 } from '../src/utils/cloudLoadControl.js';
 import {
@@ -17,6 +24,84 @@ import {
 } from '../src/utils/supabaseSchemaFallback.js';
 
 const recoverableNetworkError = Object.assign(new Error('Failed to fetch'), { code: 'NETWORK' });
+
+test('el corte incremental solapa unos minutos y rechaza fechas invalidas o futuras', () => {
+  const now = Date.parse('2026-08-25T15:00:00.000Z');
+
+  assert.equal(
+    getIncrementalSyncCutoff('2026-08-25T14:55:00.000Z', { now }),
+    '2026-08-25T14:50:00.000Z',
+  );
+  assert.equal(getIncrementalSyncCutoff('fecha-invalida', { now }), null);
+  assert.equal(getIncrementalSyncCutoff('2026-08-25T15:10:01.000Z', { now }), null);
+  assert.equal(getIncrementalSyncCutoff('2026-08-24T14:59:59.000Z', { now }), null);
+});
+
+test('la fusion incremental reemplaza cambios y elimina productos desactivados', () => {
+  const merged = mergeCloudRecordsById(
+    [
+      { id: 1, title: 'Vela', isActive: true, price: 10 },
+      { id: 2, title: 'Globo', isActive: true, price: 20 },
+    ],
+    [
+      { id: 1, title: 'Vela', isActive: true, price: 12 },
+      { id: 2, title: 'Globo', isActive: false, price: 20 },
+      { id: 3, title: 'Bengala', isActive: true, price: 30 },
+    ],
+    {
+      keepRecord: (record) => record.isActive !== false,
+      compareRecords: (left, right) => left.title.localeCompare(right.title),
+    },
+  );
+
+  assert.deepEqual(merged, [
+    { id: 3, title: 'Bengala', isActive: true, price: 30 },
+    { id: 1, title: 'Vela', isActive: true, price: 12 },
+  ]);
+});
+
+test('productos solo sincroniza incrementalmente sobre un inventario completo y reciente', () => {
+  const now = Date.parse('2026-08-25T15:00:00.000Z');
+  const validState = {
+    inventoryScope: PRODUCT_SNAPSHOT_SCOPE_FULL,
+    inventoryCount: 2838,
+    productsSyncedThrough: '2026-08-25T14:30:00.000Z',
+    productsFullSyncedAt: '2026-08-25T12:00:00.000Z',
+    now,
+  };
+
+  assert.equal(shouldUseIncrementalProductSync(validState), true);
+  assert.equal(shouldUseIncrementalProductSync({ ...validState, inventoryScope: PRODUCT_SNAPSHOT_SCOPE_PARTIAL }), false);
+  assert.equal(shouldUseIncrementalProductSync({ ...validState, inventoryCount: 0 }), false);
+  assert.equal(shouldUseIncrementalProductSync({ ...validState, productsSyncedThrough: null }), false);
+  assert.equal(shouldUseIncrementalProductSync({ ...validState, productsFullSyncedAt: '2026-08-24T14:59:59.000Z' }), false);
+  assert.equal(shouldUseIncrementalProductSync({ ...validState, force: true }), false);
+});
+
+test('un snapshot legacy no declara inventario completo ni habilita deltas', () => {
+  assert.equal(
+    getProductSnapshotScope({ inventory: [{ id: 1 }] }),
+    PRODUCT_SNAPSHOT_SCOPE_PARTIAL,
+  );
+  assert.equal(
+    getProductSnapshotScope({ inventory: [{ id: 1 }], inventoryScope: PRODUCT_SNAPSHOT_SCOPE_FULL }),
+    PRODUCT_SNAPSHOT_SCOPE_FULL,
+  );
+});
+
+test('la marca de productos avanza solo con timestamps recibidos del servidor', () => {
+  assert.equal(
+    getLatestCloudRecordTimestamp([
+      { id: 1, updated_at: '2026-08-25T14:20:00.000Z' },
+      { id: 2, updated_at: '2026-08-25T14:40:00.000Z' },
+    ], { fallback: '2026-08-25T14:30:00.000Z' }),
+    '2026-08-25T14:40:00.000Z',
+  );
+  assert.equal(
+    getLatestCloudRecordTimestamp([], { fallback: '2026-08-25T14:30:00.000Z' }),
+    '2026-08-25T14:30:00.000Z',
+  );
+});
 
 test('una carga activa cubre otra solicitud si ya incluye todo su alcance', () => {
   assert.equal(

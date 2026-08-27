@@ -1,3 +1,4 @@
+-- Unique timestamp retained so Supabase can track this migration independently.
 begin;
 
 do $$

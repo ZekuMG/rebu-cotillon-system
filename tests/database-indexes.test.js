@@ -19,3 +19,16 @@ test('la migracion de rendimiento solo agrega los indices de lectura esperados',
   });
   assert.doesNotMatch(sql, /^\s*(update|delete|truncate|drop)\b/im);
 });
+
+test('la sincronizacion incremental de productos tiene un indice compatible y aditivo', () => {
+  const sql = readFileSync(
+    'supabase/migrations/20260826021015_products_incremental_sync_index.sql',
+    'utf8',
+  );
+
+  assert.match(
+    sql,
+    /create index if not exists products_updated_at_id_idx\s+on public\.products \(updated_at, id\)/i,
+  );
+  assert.doesNotMatch(sql, /^\s*(update|delete|truncate|drop)\b/im);
+});

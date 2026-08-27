@@ -15,6 +15,7 @@ export const CLOUD_SELECTS = {
     'expiration_date',
     'is_active',
     'created_at',
+    'updated_at',
   ].join(','),
   productsList: [
     'id',
@@ -32,6 +33,7 @@ export const CLOUD_SELECTS = {
     'expiration_date',
     'is_active',
     'created_at',
+    'updated_at',
   ].join(','),
   clients: [
     'id',

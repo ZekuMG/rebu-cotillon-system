@@ -24,6 +24,7 @@ export default defineConfig([
     },
     rules: {
       ...js.configs.recommended.rules,
+      'react/jsx-no-undef': 'error',
       'react/jsx-uses-vars': 'error',
       ...reactHooks.configs.recommended.rules,
       ...reactRefresh.configs.vite.rules,

@@ -4,11 +4,18 @@ import assert from 'node:assert/strict';
 import {
   getTransactionSnapshotScope,
   saleRowsRequireHistoryLogs,
+  shouldHydrateFullTransactionHistory,
   shouldUseIncrementalMetricsSync,
   shouldUseIncrementalTransactionSync,
   TRANSACTION_SNAPSHOT_SCOPE_FULL,
   TRANSACTION_SNAPSHOT_SCOPE_PARTIAL,
 } from '../src/utils/transactionSync.js';
+
+test('Dashboard diario no hidrata el historial completo antes de la carga progresiva', () => {
+  assert.equal(shouldHydrateFullTransactionHistory({ progressive: true, fullRequested: false }), false);
+  assert.equal(shouldHydrateFullTransactionHistory({ progressive: false, fullRequested: false }), true);
+  assert.equal(shouldHydrateFullTransactionHistory({ progressive: true, fullRequested: true }), true);
+});
 
 test('un snapshot anterior sin alcance declarado se considera parcial', () => {
   assert.equal(

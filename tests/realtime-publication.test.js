@@ -26,7 +26,7 @@ const readQuotedTables = (path) => Array.from(
   .sort();
 
 test('migracion y diagnostico cubren todas las tablas Realtime de Rebu', () => {
-  const migrationTables = readQuotedTables('supabase/migrations/20260728_realtime_publication.sql');
+  const migrationTables = readQuotedTables('supabase/migrations/20260728000000_realtime_publication.sql');
   const diagnosticTables = readQuotedTables('supabase/diagnostics/verify_realtime_publication.sql');
 
   assert.deepEqual(migrationTables, EXPECTED_REALTIME_TABLES);

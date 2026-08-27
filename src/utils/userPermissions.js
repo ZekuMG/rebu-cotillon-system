@@ -153,6 +153,24 @@ export const APP_PERMISSION_GROUPS = [
     actions: [],
   },
   {
+    id: 'ai-images',
+    label: 'Estudio de imágenes IA',
+    viewKey: 'aiImages.view',
+    actions: [
+      { key: 'aiImages.generate', label: 'Generar imágenes' },
+      { key: 'aiImages.edit', label: 'Editar imágenes' },
+    ],
+  },
+  {
+    id: 'catalog',
+    label: 'Catálogo web',
+    viewKey: 'catalog.view',
+    actions: [
+      { key: 'catalog.edit', label: 'Importar y editar fichas' },
+      { key: 'catalog.publish', label: 'Publicar, despublicar y archivar' },
+    ],
+  },
+  {
     id: 'user-management',
     label: 'Gestión de usuarios',
     viewKey: 'userManagement.view',
@@ -181,6 +199,7 @@ export const APP_TAB_PERMISSION_MAP = {
   sessions: 'sessions.view',
   extras: 'extras.view',
   'bulk-editor': 'bulkEditor.view',
+  'ai-images': 'aiImages.view',
   'user-management': 'userManagement.view',
 };
 
@@ -290,6 +309,12 @@ const OWNER_PRESET = {
   'extras.rewards.manage': true,
   'extras.expenses.manage': true,
   'bulkEditor.view': true,
+  'aiImages.view': true,
+  'aiImages.generate': true,
+  'aiImages.edit': true,
+  'catalog.view': true,
+  'catalog.edit': true,
+  'catalog.publish': true,
   'pos.view': true,
   'userManagement.view': true,
   'userManagement.permissions.editSeller': true,
@@ -394,7 +419,7 @@ export const canAccessTab = (user, tabKey) => {
 };
 
 export const getDefaultTabForUser = (user) => {
-  const priority = ['dashboard', 'pos', 'whatsapp', 'inventory', 'clients', 'agenda', 'orders', 'history', 'extras', 'reports', 'metrics', 'logs', 'sessions', 'bulk-editor', 'user-management'];
+  const priority = ['dashboard', 'pos', 'whatsapp', 'inventory', 'clients', 'agenda', 'orders', 'history', 'extras', 'reports', 'metrics', 'logs', 'sessions', 'bulk-editor', 'ai-images', 'user-management'];
   return priority.find((tabKey) => canAccessTab(user, tabKey)) || 'settings';
 };
 

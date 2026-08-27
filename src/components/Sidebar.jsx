@@ -18,6 +18,7 @@ import {
   SlidersHorizontal,
   Sun,
   Users,
+  WandSparkles,
 } from 'lucide-react';
 import {
   getRoleLabel,
@@ -244,6 +245,7 @@ export default function Sidebar({
   const canViewLogs = canAccessTab(currentUser, 'logs');
   const canViewSessions = canAccessTab(currentUser, 'sessions');
   const canViewBulkEditor = canAccessTab(currentUser, 'bulk-editor');
+  const canViewAiImages = canAccessTab(currentUser, 'ai-images');
   const canManageUsers = canAccessTab(currentUser, 'user-management');
   const navAccentColor = currentUserPresentation?.nameColor || '#c026d3';
   const sidebarLayoutStorageKey = getSidebarLayoutStorageKey(currentUser);
@@ -266,11 +268,13 @@ export default function Sidebar({
     { id: 'orders', tab: 'orders', section: 'top', canView: canViewOrders, icon: ClipboardList, label: 'Pedidos' },
     { id: 'metrics', tab: 'metrics', section: 'top', canView: canViewMetrics, icon: BarChart3, label: 'Métricas' },
     { id: 'bulk-editor', tab: 'bulk-editor', section: 'top', canView: canViewBulkEditor, icon: Percent, label: 'Productos (Avanzado)' },
+    { id: 'ai-images', tab: 'ai-images', section: 'top', canView: canViewAiImages, icon: WandSparkles, label: 'Estudio de imágenes IA' },
     { id: 'ticket-test', tab: 'ticket-test', section: 'top', canView: Boolean(currentUser), icon: FileText, label: 'Prueba Tickets' },
     { id: 'reports', tab: 'reports', section: 'bottom', canView: canViewReports, icon: FileBarChart, label: 'Reportes de Caja' },
     { id: 'history', tab: 'history', section: 'bottom', canView: canAccessTab(currentUser, 'history'), icon: History, label: 'Historial de Ventas' },
   ]), [
     canViewAgenda,
+    canViewAiImages,
     canViewBulkEditor,
     canViewClients,
     canViewDashboard,

@@ -4,7 +4,7 @@ import {
   Scale, Package, ArrowRight, Loader2, RotateCcw,
   FileText, X, User, Edit3, ChevronDown, Plus, Minus, Trash2, PackageX,
   Camera, Image as ImageIcon, LogIn, LogOut, CheckCircle, AlertTriangle, ExternalLink,
-  Pause, Play, StopCircle, Crosshair, RefreshCw, Link2, LayoutGrid, List,
+  Pause, Play, StopCircle, Crosshair, RefreshCw, Link2,
   Eye, Undo2, Bell, Check, Wand2, Tags
 } from 'lucide-react';
 import AsyncActionButton from '../components/AsyncActionButton';
@@ -28,7 +28,6 @@ import {
 import { SUPPLIER_PRICE_REPORT_PERIODS } from '../utils/supplierPriceReport';
 
 const BULK_EDITOR_TOOL_MODE_STORAGE_KEY = 'rebu_bulk_editor_tool_mode_v1';
-const SUPPLIER_PRICE_VIEW_MODE_STORAGE_KEY = 'rebu_supplier_price_view_mode_v1';
 const ImageCleanupWorkspace = lazy(() => import('../components/ImageCleanupWorkspace'));
 const WhatsAppCatalogExportView = lazy(() => import('../components/WhatsAppCatalogExportView'));
 
@@ -50,9 +49,8 @@ const IMAGE_IMPORT_LIMIT_OPTIONS = [
 ];
 
 const normalizeToolMode = (mode) => (
-  mode === 'bulk' || mode === 'supplier' || mode === 'image-cleanup' || mode === 'whatsapp-catalog' ? mode : 'excel'
+  mode === 'excel' || mode === 'supplier' || mode === 'image-cleanup' || mode === 'whatsapp-catalog' ? mode : 'bulk'
 );
-const normalizeSupplierPriceViewMode = (mode) => (mode === 'list' ? 'list' : 'cards');
 const clampSupplierPercent = (value, fallback) => {
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue)) return fallback;
@@ -99,19 +97,10 @@ const detectCasaAlbertoUnitDivisor = (...values) => {
 
 const getInitialToolMode = () => {
   try {
-    if (typeof window === 'undefined') return 'excel';
+    if (typeof window === 'undefined') return 'bulk';
     return normalizeToolMode(window.localStorage.getItem(BULK_EDITOR_TOOL_MODE_STORAGE_KEY));
   } catch {
-    return 'excel';
-  }
-};
-
-const getInitialSupplierPriceViewMode = () => {
-  try {
-    if (typeof window === 'undefined') return 'cards';
-    return normalizeSupplierPriceViewMode(window.localStorage.getItem(SUPPLIER_PRICE_VIEW_MODE_STORAGE_KEY));
-  } catch {
-    return 'cards';
+    return 'bulk';
   }
 };
 
@@ -194,9 +183,8 @@ export default function BulkEditorView({
   const [productImagePreview, setProductImagePreview] = useState('');
   const imageImportPausedRef = useRef(false);
   const imageImportStopRef = useRef(false);
-  const [supplierPriceFilter, setSupplierPriceFilter] = useState('all');
+  const [supplierPriceFilter, setSupplierPriceFilter] = useState('attention');
   const [supplierPriceSearchTerm, setSupplierPriceSearchTerm] = useState('');
-  const [supplierPriceViewMode, setSupplierPriceViewMode] = useState(getInitialSupplierPriceViewMode);
   const [supplierPriceRows, setSupplierPriceRows] = useState({});
   const [supplierPriceOverrides, setSupplierPriceOverrides] = useState({});
   const [supplierCostExtraPercent, setSupplierCostExtraPercent] = useState(Math.round(CASA_ALBERTO_COST_EXTRA_RATE * 100));
@@ -228,7 +216,6 @@ export default function BulkEditorView({
     error: '',
   });
   const [isSupplierSessionBusy, setIsSupplierSessionBusy] = useState(false);
-  const supplierAutoCheckedRef = useRef(false);
   const supplierLinkDetectionStopRef = useRef(false);
   const supplierPriceCheckStopRef = useRef(false);
   const supplierPriceCheckPausedRef = useRef(false);
@@ -254,14 +241,6 @@ export default function BulkEditorView({
       // La preferencia es solo comodidad local; si falla, la vista sigue funcionando.
     }
   }, [activeToolMode]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(SUPPLIER_PRICE_VIEW_MODE_STORAGE_KEY, normalizeSupplierPriceViewMode(supplierPriceViewMode));
-    } catch {
-      // Preferencia visual local solamente.
-    }
-  }, [supplierPriceViewMode]);
 
   useEffect(() => {
     if (!imageImportOpenRequest || imageImportRows.length === 0) return;
@@ -1354,12 +1333,31 @@ export default function BulkEditorView({
     }));
   };
 
+  const clearSupplierPriceOverrides = (groupKeys = []) => {
+    const keysToClear = new Set((Array.isArray(groupKeys) ? groupKeys : [groupKeys]).filter(Boolean).map(String));
+    if (keysToClear.size === 0) return;
+    setSupplierPriceOverrides((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      keysToClear.forEach((key) => {
+        if (Object.prototype.hasOwnProperty.call(next, key)) {
+          delete next[key];
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  };
+
   const clearSupplierPriceOverride = (groupKey, fields = []) => {
+    if (!fields || fields.length === 0) {
+      clearSupplierPriceOverrides([groupKey]);
+      return;
+    }
     setSupplierPriceOverrides((prev) => {
       const current = prev[groupKey] || {};
       const next = { ...current };
-      const fieldsToClear = fields.length ? fields : Object.keys(next);
-      fieldsToClear.forEach((field) => {
+      fields.forEach((field) => {
         delete next[field];
       });
       if (Object.keys(next).length === 0) {
@@ -1780,7 +1778,17 @@ export default function BulkEditorView({
     Swal.fire('Modo sin conexion', 'Reconecta la nube antes de chequear o aprobar costos de Casa Alberto.', 'info');
   };
 
-  const handleCheckSupplierPriceGroup = async (group) => {
+  const showSupplierActionFailure = (message) => {
+    Swal.fire({
+      icon: 'error',
+      title: 'No se pudo guardar el control de costos',
+      text: message || 'Reintenta en unos segundos.',
+      confirmButtonText: 'Entendido',
+      confirmButtonColor: '#0f172a',
+    });
+  };
+
+  const handleCheckSupplierPriceGroup = async (group, { rethrowErrors = false } = {}) => {
     if (isOfflineReadOnly) {
       showSupplierOfflineNotice();
       return null;
@@ -1869,6 +1877,20 @@ export default function BulkEditorView({
       };
       setSupplierPriceRows((prev) => ({ ...prev, [group.key]: rowState }));
       return { ...rowState, groupKey: group.key };
+    } catch (error) {
+      const message = error?.message || 'No se pudo guardar el control de costos.';
+      console.error('Error chequeando costo de proveedor:', error);
+      setSupplierPriceRows((prev) => ({
+        ...prev,
+        [group.key]: {
+          status: 'error',
+          message,
+          lastCheckedAt: new Date().toISOString(),
+        },
+      }));
+      if (rethrowErrors) throw error;
+      showSupplierActionFailure(message);
+      return { status: 'error', message, groupKey: group.key };
     } finally {
       setCheckingSupplierGroupKey('');
     }
@@ -1903,7 +1925,7 @@ export default function BulkEditorView({
           summary.stopped = true;
           break;
         }
-        const result = await handleCheckSupplierPriceGroup(group);
+        const result = await handleCheckSupplierPriceGroup(group, { rethrowErrors: true });
         if (result?.status === 'changed') summary.changed += 1;
         else if (result?.status === 'price_down') summary.price_down += 1;
         else if (result?.status === 'reviewed') summary.reviewed += 1;
@@ -1922,6 +1944,9 @@ export default function BulkEditorView({
         icon: summary.changed > 0 ? 'warning' : 'success',
         confirmButtonColor: '#0f172a',
       });
+    } catch (error) {
+      console.error('Error en el chequeo masivo de costos:', error);
+      showSupplierActionFailure(error?.message || 'El chequeo se detuvo antes de guardar todos los resultados.');
     } finally {
       setIsCheckingSupplierPrices(false);
       supplierPriceCheckStopRef.current = false;
@@ -1982,7 +2007,7 @@ export default function BulkEditorView({
       ...prev,
       [group.key]: {
         ...(prev[group.key] || {}),
-        status: 'reviewed',
+        status: 'approved',
         supplierPrice,
         rawSupplierPrice: priceInfo.rawSupplierPrice,
         unitSupplierPrice: priceInfo.unitSupplierPrice,
@@ -2041,49 +2066,57 @@ export default function BulkEditorView({
       showSupplierOfflineNotice();
       return;
     }
-    const productsToUndo = getSelectedProductsForGroup(group);
-    const result = await onUndoSupplierPriceUpdates?.(productsToUndo.map((product) => {
-      const tracking = getCasaAlbertoPriceTracking(product);
-      const priceInfo = getSupplierPriceInfo(group);
-      const previousPurchasePrice = Number(
-        tracking.previousPurchasePrice ??
-        tracking.previousSupplierPrice ??
-        group.previousPurchasePrice ??
-        group.previousSupplierPrice ??
-        0
-      );
-      return {
-        productId: product.id,
-        previousPurchasePrice,
-        supplierPrice: priceInfo.rawSupplierPrice || Number(tracking.lastSupplierPrice || 0),
-        rawSupplierPrice: priceInfo.rawSupplierPrice || Number(tracking.rawSupplierPrice || tracking.lastSupplierPrice || 0),
-        unitSupplierPrice: priceInfo.unitSupplierPrice || Number(tracking.unitSupplierPrice || tracking.lastSupplierPrice || 0),
-        unitDivisor: priceInfo.unitDivisor || Number(tracking.unitDivisor || 1),
-        supplierCode: group.supplierCode,
-        casaAlbertoId: group.casaAlbertoId,
-        productUrl: group.productUrl,
-        foundTitle: group.supplierTitle,
-        sourceUrl: group.sourceUrl || group.productUrl,
-      };
-    }));
-    updateSandboxProducts(result?.products);
-    clearSupplierPriceOverride(group.key);
-    setSupplierPriceRows((prev) => ({
-      ...prev,
-      [group.key]: {
-        ...(prev[group.key] || {}),
-        status: 'changed',
-        lastCheckedAt: new Date().toISOString(),
-        message: 'Aprobacion deshecha. Revisa nuevamente antes de aprobar.',
-      },
-    }));
+    try {
+      const productsToUndo = getSelectedProductsForGroup(group);
+      const result = await onUndoSupplierPriceUpdates?.(productsToUndo.map((product) => {
+        const tracking = getCasaAlbertoPriceTracking(product);
+        const priceInfo = getSupplierPriceInfo(group);
+        const previousPurchasePrice = Number(
+          tracking.previousPurchasePrice ??
+          tracking.previousSupplierPrice ??
+          group.previousPurchasePrice ??
+          group.previousSupplierPrice ??
+          0
+        );
+        return {
+          productId: product.id,
+          previousPurchasePrice,
+          supplierPrice: priceInfo.rawSupplierPrice || Number(tracking.lastSupplierPrice || 0),
+          rawSupplierPrice: priceInfo.rawSupplierPrice || Number(tracking.rawSupplierPrice || tracking.lastSupplierPrice || 0),
+          unitSupplierPrice: priceInfo.unitSupplierPrice || Number(tracking.unitSupplierPrice || tracking.lastSupplierPrice || 0),
+          unitDivisor: priceInfo.unitDivisor || Number(tracking.unitDivisor || 1),
+          supplierCode: group.supplierCode,
+          casaAlbertoId: group.casaAlbertoId,
+          productUrl: group.productUrl,
+          foundTitle: group.supplierTitle,
+          sourceUrl: group.sourceUrl || group.productUrl,
+        };
+      }));
+      updateSandboxProducts(result?.products);
+      clearSupplierPriceOverride(group.key);
+      setSupplierPriceRows((prev) => ({
+        ...prev,
+        [group.key]: {
+          ...(prev[group.key] || {}),
+          status: 'changed',
+          lastCheckedAt: new Date().toISOString(),
+          message: 'Aprobacion deshecha. Revisa nuevamente antes de aprobar.',
+        },
+      }));
+    } catch (error) {
+      console.error('Error deshaciendo costo de proveedor:', error);
+      showSupplierActionFailure(error?.message || 'No se pudo deshacer la aprobación.');
+    }
   };
 
   const handleApproveSelectedSupplierGroups = async () => {
     const targetGroups = selectedSupplierGroups.filter((group) => getSupplierPriceInfo(group).hasSupplierPrice);
+    const completedKeys = new Set();
     for (const group of targetGroups) {
       await handleApproveSupplierGroup(group);
+      completedKeys.add(group.key);
     }
+    clearSupplierPriceOverrides(Array.from(completedKeys));
     setSelectedSupplierGroupKeys([]);
   };
 
@@ -2212,33 +2245,38 @@ export default function BulkEditorView({
             continue;
           }
 
-          const saveResult = await onSaveSupplierPriceChecks?.([{
-            productId: product.id,
-            ...pricePayload,
-            previousSupplierPrice: Number(product.purchasePrice || 0),
-            reviewStatus: detectedStatus,
-            lastCheckedAt: new Date().toISOString(),
-            lastChangedAt: hasCostDelta ? new Date().toISOString() : null,
-            supplierCode: result.supplierCode || '',
-            casaAlbertoId: detectedCasaAlbertoId,
-            productUrl: detectedProductUrl,
-            foundTitle: result.foundTitle || '',
-            sourceUrl: result.sourceUrl || detectedProductUrl,
-            imageUrl: result.imageUrl || '',
-            priceText: result.priceText || '',
-            matchedBy,
-            inventoryBarcode: product.barcode || '',
-            searchedQuery: result.searchedQuery || product.barcode || product.title || '',
-            message: matchedBy === 'title_search'
-              ? 'Enlace detectado por nombre.'
-              : matchedBy === 'trimmed_barcode'
-                ? 'Enlace detectado con codigo corregido.'
-                : 'Enlace detectado por codigo.',
-          }]);
-          updateSandboxProducts(saveResult?.products);
-          summary.found += 1;
-          if (detectedStatus === 'changed') summary.changed += 1;
-          else summary.reviewed += 1;
+          try {
+            const saveResult = await onSaveSupplierPriceChecks?.([{
+              productId: product.id,
+              ...pricePayload,
+              previousSupplierPrice: Number(product.purchasePrice || 0),
+              reviewStatus: detectedStatus,
+              lastCheckedAt: new Date().toISOString(),
+              lastChangedAt: hasCostDelta ? new Date().toISOString() : null,
+              supplierCode: result.supplierCode || '',
+              casaAlbertoId: detectedCasaAlbertoId,
+              productUrl: detectedProductUrl,
+              foundTitle: result.foundTitle || '',
+              sourceUrl: result.sourceUrl || detectedProductUrl,
+              imageUrl: result.imageUrl || '',
+              priceText: result.priceText || '',
+              matchedBy,
+              inventoryBarcode: product.barcode || '',
+              searchedQuery: result.searchedQuery || product.barcode || product.title || '',
+              message: matchedBy === 'title_search'
+                ? 'Enlace detectado por nombre.'
+                : matchedBy === 'trimmed_barcode'
+                  ? 'Enlace detectado con codigo corregido.'
+                  : 'Enlace detectado por codigo.',
+            }]);
+            updateSandboxProducts(saveResult?.products);
+            summary.found += 1;
+            if (detectedStatus === 'changed') summary.changed += 1;
+            else summary.reviewed += 1;
+          } catch (saveError) {
+            console.error('Error guardando enlace de Casa Alberto detectado:', saveError);
+            summary.errors += 1;
+          }
         } else if (result?.status === 'not_found') {
           summary.not_found += 1;
         } else {
@@ -2261,6 +2299,9 @@ export default function BulkEditorView({
         icon: summary.found > 0 ? 'success' : 'info',
         confirmButtonColor: '#0f172a',
       });
+    } catch (detectError) {
+      console.error('Error general en detección de enlaces:', detectError);
+      Swal.fire('Atención', detectError?.message || 'Hubo un inconveniente durante la detección de enlaces.', 'warning');
     } finally {
       setIsDetectingSupplierLinks(false);
       supplierLinkDetectionStopRef.current = false;
@@ -2299,26 +2340,31 @@ export default function BulkEditorView({
       showSupplierOfflineNotice();
       return;
     }
-    const draft = supplierLinkDrafts[group.key] || {};
-    const cleanLink = {
-      foundTitle: String(draft.foundTitle || '').trim(),
-      providerCode: String(draft.supplierCode || '').trim(),
-      casaAlbertoId: String(draft.casaAlbertoId || '').trim(),
-      productUrl: String(draft.productUrl || '').trim(),
-      matchedBy: 'manual_price_tracking',
-    };
-    if (!cleanLink.providerCode && !cleanLink.casaAlbertoId && !cleanLink.productUrl) {
-      Swal.fire('Falta referencia', 'Agrega ID Casa Alberto, codigo proveedor o URL del producto antes de guardar.', 'info');
-      return;
-    }
-    const productsToUpdate = getSelectedProductsForGroup(group);
-    const result = await onUpdateCasaAlbertoLinks?.({
-      productIds: productsToUpdate.map((product) => product.id),
-      link: cleanLink,
-    });
+    try {
+      const draft = supplierLinkDrafts[group.key] || {};
+      const cleanLink = {
+        foundTitle: String(draft.foundTitle || '').trim(),
+        providerCode: String(draft.supplierCode || '').trim(),
+        casaAlbertoId: String(draft.casaAlbertoId || '').trim(),
+        productUrl: String(draft.productUrl || '').trim(),
+        matchedBy: 'manual_price_tracking',
+      };
+      if (!cleanLink.providerCode && !cleanLink.casaAlbertoId && !cleanLink.productUrl) {
+        Swal.fire('Falta referencia', 'Agrega ID Casa Alberto, codigo proveedor o URL del producto antes de guardar.', 'info');
+        return;
+      }
+      const productsToUpdate = getSelectedProductsForGroup(group);
+      const result = await onUpdateCasaAlbertoLinks?.({
+        productIds: productsToUpdate.map((product) => product.id),
+        link: cleanLink,
+      });
 
-    updateSandboxProducts(result?.products);
-    setSupplierLinkEditKey('');
+      updateSandboxProducts(result?.products);
+      setSupplierLinkEditKey('');
+    } catch (error) {
+      console.error('Error guardando enlace de proveedor:', error);
+      showSupplierActionFailure(error?.message || 'No se pudo guardar la vinculación.');
+    }
   };
 
   const handleUnlinkSupplierGroup = async (group) => {
@@ -2326,26 +2372,31 @@ export default function BulkEditorView({
       showSupplierOfflineNotice();
       return;
     }
-    const result = await Swal.fire({
-      title: 'Desvincular Casa Alberto',
-      text: 'El producto queda en Rebu, pero deja de seguir este proveedor.',
-      icon: 'warning',
-      showCancelButton: true,
-      confirmButtonText: 'Desvincular',
-      cancelButtonText: 'Cancelar',
-      reverseButtons: true,
-      confirmButtonColor: '#be123c',
-    });
-    if (!result.isConfirmed) return;
+    try {
+      const result = await Swal.fire({
+        title: 'Desvincular Casa Alberto',
+        text: 'El producto queda en Rebu, pero deja de seguir este proveedor.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: 'Desvincular',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        confirmButtonColor: '#be123c',
+      });
+      if (!result.isConfirmed) return;
 
-    const productsToUnlink = getSelectedProductsForGroup(group);
-    const updateResult = await onUpdateCasaAlbertoLinks?.({
-      productIds: productsToUnlink.map((product) => product.id),
-      link: { unlink: true },
-    });
-    updateSandboxProducts(updateResult?.products);
-    setSupplierDetailGroupKey('');
-    setSupplierLinkEditKey('');
+      const productsToUnlink = getSelectedProductsForGroup(group);
+      const updateResult = await onUpdateCasaAlbertoLinks?.({
+        productIds: productsToUnlink.map((product) => product.id),
+        link: { unlink: true },
+      });
+      updateSandboxProducts(updateResult?.products);
+      setSupplierDetailGroupKey('');
+      setSupplierLinkEditKey('');
+    } catch (error) {
+      console.error('Error desvinculando de Casa Alberto:', error);
+      showSupplierActionFailure(error?.message || 'No se pudo desvincular el producto.');
+    }
   };
 
   const handleApproveSupplierLinkSuggestion = async (suggestion) => {
@@ -2354,46 +2405,51 @@ export default function BulkEditorView({
       showSupplierOfflineNotice();
       return;
     }
-    const { product, result, matchedBy } = suggestion;
-    const supplierPrice = Number(result.supplierPrice || 0);
-    const nextGroup = {
-      key: `suggestion:${product.id}:${result.casaAlbertoId || result.productUrl || result.supplierCode || Date.now()}`,
-      products: [product],
-      supplierTitle: result.foundTitle || product.title || '',
-      supplierCode: result.supplierCode || product.barcode || '',
-      priceText: result.priceText || '',
-      supplierPrice,
-      rawSupplierPrice: supplierPrice,
-      tracking: {},
-    };
-    const pricePayload = buildSupplierPricePayload(nextGroup, product, {
-      supplierPrice,
-      unitDivisor: result.unitDivisor,
-    });
-    const status = getSupplierStatusForPrice([product], pricePayload.unitSupplierPrice);
-    const saveResult = await onSaveSupplierPriceChecks?.([{
-      productId: product.id,
-      ...pricePayload,
-      previousSupplierPrice: Number(product.purchasePrice || 0),
-      reviewStatus: status,
-      lastCheckedAt: new Date().toISOString(),
-      lastChangedAt: status === 'changed' || status === 'price_down' ? new Date().toISOString() : null,
-      supplierCode: result.supplierCode || '',
-      casaAlbertoId: result.casaAlbertoId || '',
-      productUrl: result.productUrl || result.sourceUrl || '',
-      foundTitle: result.foundTitle || '',
-      sourceUrl: result.sourceUrl || result.productUrl || '',
-      imageUrl: result.imageUrl || '',
-      priceText: result.priceText || '',
-      matchedBy,
-      inventoryBarcode: product.barcode || '',
-      searchedQuery: result.searchedQuery || product.title || product.barcode || '',
-      message: matchedBy === 'trimmed_barcode'
-        ? 'Enlace revisado con codigo corregido.'
-        : 'Enlace revisado por nombre.',
-    }]);
-    updateSandboxProducts(saveResult?.products);
-    setSupplierLinkSuggestions((prev) => prev.filter((entry) => entry !== suggestion));
+    try {
+      const { product, result, matchedBy } = suggestion;
+      const supplierPrice = Number(result.supplierPrice || 0);
+      const nextGroup = {
+        key: `suggestion:${product.id}:${result.casaAlbertoId || result.productUrl || result.supplierCode || Date.now()}`,
+        products: [product],
+        supplierTitle: result.foundTitle || product.title || '',
+        supplierCode: result.supplierCode || product.barcode || '',
+        priceText: result.priceText || '',
+        supplierPrice,
+        rawSupplierPrice: supplierPrice,
+        tracking: {},
+      };
+      const pricePayload = buildSupplierPricePayload(nextGroup, product, {
+        supplierPrice,
+        unitDivisor: result.unitDivisor,
+      });
+      const status = getSupplierStatusForPrice([product], pricePayload.unitSupplierPrice);
+      const saveResult = await onSaveSupplierPriceChecks?.([{
+        productId: product.id,
+        ...pricePayload,
+        previousSupplierPrice: Number(product.purchasePrice || 0),
+        reviewStatus: status,
+        lastCheckedAt: new Date().toISOString(),
+        lastChangedAt: status === 'changed' || status === 'price_down' ? new Date().toISOString() : null,
+        supplierCode: result.supplierCode || '',
+        casaAlbertoId: result.casaAlbertoId || '',
+        productUrl: result.productUrl || result.sourceUrl || '',
+        foundTitle: result.foundTitle || '',
+        sourceUrl: result.sourceUrl || result.productUrl || '',
+        imageUrl: result.imageUrl || '',
+        priceText: result.priceText || '',
+        matchedBy,
+        inventoryBarcode: product.barcode || '',
+        searchedQuery: result.searchedQuery || product.title || product.barcode || '',
+        message: matchedBy === 'trimmed_barcode'
+          ? 'Enlace revisado con codigo corregido.'
+          : 'Enlace revisado por nombre.',
+      }]);
+      updateSandboxProducts(saveResult?.products);
+      setSupplierLinkSuggestions((prev) => prev.filter((entry) => entry !== suggestion));
+    } catch (error) {
+      console.error('Error aprobando sugerencia de enlace:', error);
+      showSupplierActionFailure(error?.message || 'No se pudo guardar el enlace sugerido.');
+    }
   };
 
   const dismissSupplierLinkSuggestion = (suggestion) => {
@@ -2422,18 +2478,10 @@ export default function BulkEditorView({
     window.open(targetUrl, '_blank', 'noopener,noreferrer');
   };
 
-  const checkAllSupplierPricesRef = useRef(handleCheckAllSupplierPrices);
-  checkAllSupplierPricesRef.current = handleCheckAllSupplierPrices;
-
   const openSupplierPriceMode = useCallback(() => {
     setActiveToolMode('supplier');
-    if (supplierAutoCheckedRef.current || casaAlbertoGroups.length === 0) return;
-
-    supplierAutoCheckedRef.current = true;
-    window.setTimeout(() => {
-      checkAllSupplierPricesRef.current();
-    }, 0);
-  }, [casaAlbertoGroups.length]);
+    setSupplierPriceFilter('attention');
+  }, []);
 
   useEffect(() => {
     if (!supplierOpenRequest) return;
@@ -3418,30 +3466,6 @@ export default function BulkEditorView({
                 {areAllVisibleSupplierGroupsSelected ? <CheckSquare size={14} /> : <Square size={14} />}
                 {areAllVisibleSupplierGroupsSelected ? `Quitar visibles (${selectedVisibleSupplierGroupsCount})` : `Seleccionar visibles${visibleCasaAlbertoGroups.length ? ` (${visibleCasaAlbertoGroups.length})` : ''}`}
               </button>
-              <div className="flex h-10 items-center rounded-md border border-slate-700 bg-slate-950/25 p-1">
-                {[
-                  { mode: 'cards', label: 'Tarjetas', icon: LayoutGrid },
-                  { mode: 'list', label: 'Lista', icon: List },
-                ].map((option) => {
-                  const Icon = option.icon;
-                  const isActive = supplierPriceViewMode === option.mode;
-                  return (
-                    <button
-                      key={option.mode}
-                      type="button"
-                      onClick={() => setSupplierPriceViewMode(option.mode)}
-                      className={`flex h-8 items-center gap-1.5 rounded px-2.5 text-[10px] font-black uppercase tracking-[0.08em] transition-colors ${
-                        isActive
-                          ? 'bg-sky-400/18 text-sky-100'
-                          : 'text-slate-500 hover:bg-slate-800/70 hover:text-slate-200'
-                      }`}
-                    >
-                      <Icon size={13} />
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
               <div
                 className="relative"
                 onBlur={(event) => {
@@ -3644,78 +3668,6 @@ export default function BulkEditorView({
               <div className="flex h-full min-h-[320px] items-center justify-center rounded-xl border border-dashed border-slate-700/80 bg-[#0f1e33]/70">
                 <p className="text-sm font-black text-slate-400">No hay enlaces en este filtro.</p>
               </div>
-            ) : supplierPriceViewMode === 'list' ? (
-              <div className="overflow-x-auto rounded-xl border border-slate-700/80 bg-[#0f1e33] custom-scrollbar">
-                <div className="grid min-w-[1180px] grid-cols-[36px_58px_minmax(220px,1.4fr)_120px_minmax(220px,1.1fr)_120px_120px_120px_120px_210px] items-center gap-2 border-b border-slate-700/80 bg-slate-950/30 px-3 py-2 text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
-                  <span>OK</span>
-                  <span>Foto</span>
-                  <span>Casa Alberto</span>
-                  <span>ID</span>
-                  <span>Producto Rebu</span>
-                  <span>Proveedor</span>
-                  <span>Costo calc.</span>
-                  <span>Costo Rebu</span>
-                  <span>Chequeo</span>
-                  <span>Acciones</span>
-                </div>
-                <div className="divide-y divide-slate-700/65">
-                  {visibleCasaAlbertoGroups.map((group) => {
-                    const meta = getSupplierPriceStatusMeta(group.status);
-                    const math = getSupplierCardMath(group);
-                    const primaryProduct = group.products[0] || {};
-                    const selectedCount = getSupplierSelectedCount(group);
-                    const isSelected = selectedSupplierGroupKeys.map(String).includes(String(group.key));
-                    return (
-                      <div
-                        key={group.key}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => setSupplierDetailGroupKey(group.key)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') setSupplierDetailGroupKey(group.key);
-                        }}
-                        className="grid min-h-[72px] min-w-[1180px] cursor-pointer grid-cols-[36px_58px_minmax(220px,1.4fr)_120px_minmax(220px,1.1fr)_120px_120px_120px_120px_210px] items-center gap-2 px-3 py-2 transition-colors hover:bg-sky-400/8"
-                      >
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            toggleSupplierGroupSelection(group.key);
-                          }}
-                          className={`flex h-6 w-6 items-center justify-center rounded-md border ${
-                            isSelected ? 'border-emerald-300 bg-emerald-400/20 text-emerald-100' : 'border-slate-600 text-slate-500'
-                          }`}
-                          title="Seleccionar grupo"
-                        >
-                          {isSelected ? <Check size={14} /> : null}
-                        </button>
-                        {renderSupplierImage(group, 'h-12 w-12')}
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className={`h-2 w-2 shrink-0 rounded-full ${meta.railClassName}`} />
-                            <p className="truncate text-xs font-black text-white" title={group.supplierTitle}>{group.supplierTitle}</p>
-                          </div>
-                          <p className="mt-1 truncate text-[10px] font-bold text-slate-500">{meta.label} - {group.supplierCode || 'Sin codigo proveedor'}</p>
-                        </div>
-                        <p className="truncate text-[11px] font-black text-slate-300">{group.casaAlbertoId || '-'}</p>
-                        <div className="min-w-0">
-                          <p className="truncate text-xs font-black text-white" title={primaryProduct.title}>
-                            {primaryProduct.title || 'Sin producto Rebu'}
-                          </p>
-                          <p className="mt-1 text-[10px] font-bold text-slate-500">{selectedCount}/{group.products.length} seleccionados</p>
-                        </div>
-                        <p className="text-[12px] font-black text-slate-100">{math.hasSupplierPrice ? formatSupplierMoney(math.supplierPrice) : '-'}</p>
-                        <p className="text-[12px] font-black text-sky-100">{math.hasSupplierPrice ? formatSupplierMoney(math.estimatedCost) : '-'}</p>
-                        <p className="text-[12px] font-black text-slate-100">{formatSupplierMoney(primaryProduct.purchasePrice)}</p>
-                        <p className="text-[11px] font-black text-slate-300">{formatSupplierDate(group.lastCheckedAt)}</p>
-                        <div onClick={(event) => event.stopPropagation()}>
-                          {renderSupplierActions(group, { compact: true })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
             ) : (
               <div className="space-y-3">
                 {visibleCasaAlbertoGroups.map((group) => {
@@ -3728,7 +3680,7 @@ export default function BulkEditorView({
                   const priceDeltaLabel = hasSupplierPrice && group.previousSupplierPrice
                     ? calculateDiffPercent(Number(group.previousSupplierPrice), supplierPrice)
                     : null;
-                  const isGroupSelected = selectedSupplierGroupKeys.map(String).includes(String(group.key));
+                  const isGroupSelected = selectedSupplierGroupKeySet.has(String(group.key));
 
                   return (
                     <article
@@ -3739,7 +3691,7 @@ export default function BulkEditorView({
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') setSupplierDetailGroupKey(group.key);
                       }}
-                      className="overflow-hidden rounded-xl border border-slate-700/80 bg-[#0f1e33] transition-colors hover:border-sky-400/35 hover:bg-[#12243c]"
+                      className="supplier-price-virtual-item overflow-hidden rounded-xl border border-slate-700/80 bg-[#0f1e33] transition-colors hover:border-sky-400/35 hover:bg-[#12243c]"
                     >
                       <div className={`h-1 ${meta.railClassName}`} />
                       <div className="grid gap-2.5 p-2.5 min-[1500px]:grid-cols-[minmax(280px,0.95fr)_minmax(460px,1.35fr)_220px]">
@@ -5209,14 +5161,6 @@ export default function BulkEditorView({
         <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
-            onClick={() => setActiveToolMode('excel')}
-            className={modeButtonClass('excel')}
-          >
-            <FileText size={14} />
-            Importar Excel
-          </button>
-          <button
-            type="button"
             onClick={() => setActiveToolMode('bulk')}
             className={modeButtonClass('bulk')}
           >
@@ -5225,11 +5169,19 @@ export default function BulkEditorView({
           </button>
           <button
             type="button"
+            onClick={() => setActiveToolMode('excel')}
+            className={modeButtonClass('excel')}
+          >
+            <FileText size={14} />
+            Importar Excel
+          </button>
+          <button
+            type="button"
             onClick={openSupplierPriceMode}
             className={modeButtonClass('supplier')}
           >
-            <Link2 size={14} />
-            Casa Alberto
+            <Scale size={14} />
+            <span>Control de costos</span>
             {supplierPriceBadgeCount > 0 ? (
               <span className="ml-1 rounded-md bg-amber-400 px-1.5 py-0.5 text-[9px] font-black text-slate-950">
                 {supplierPriceBadgeCount}

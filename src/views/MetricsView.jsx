@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowRight,
   BarChart3,
   Boxes,
   CalendarDays,
@@ -22,8 +23,10 @@ import {
 import {
   Area,
   AreaChart,
+  Bar,
   CartesianGrid,
   Cell,
+  ComposedChart,
   Legend,
   Line,
   LineChart,
@@ -42,6 +45,15 @@ import { formatCurrency, formatNumber } from '../utils/helpers';
 import { hasPermission } from '../utils/userPermissions';
 
 const COLORS = ['#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#f97316', '#64748b'];
+const WEEKDAY_SEQUENCE = [
+  { key: 'lun', label: 'Lun' },
+  { key: 'mar', label: 'Mar' },
+  { key: 'mie', label: 'Mié' },
+  { key: 'jue', label: 'Jue' },
+  { key: 'vie', label: 'Vie' },
+  { key: 'sab', label: 'Sáb' },
+  { key: 'dom', label: 'Dom' },
+];
 const PIE_SEMANTIC_COLORS = {
   'mercado pago': '#38bdf8',
   efectivo: '#34d399',
@@ -187,26 +199,35 @@ const getComparisonLabel = (metrics) =>
     : 'Sin comparación anterior';
 
 const BASE_SECTIONS = [
-  { id: 'summary', label: 'Resumen', icon: BarChart3 },
-  { id: 'sales', label: 'Ventas', icon: TrendingUp },
-  { id: 'profit', label: 'Ganancias', icon: WalletCards, permission: 'metrics.viewProfit' },
-  { id: 'products', label: 'Productos', icon: ShoppingBag },
-  { id: 'categories', label: 'Categorías', icon: Boxes },
-  { id: 'payments', label: 'Pagos', icon: CreditCard },
-  { id: 'clients', label: 'Socios', icon: Users, permission: 'metrics.viewClients' },
-  { id: 'stock', label: 'Stock', icon: PackageSearch },
-  { id: 'orders', label: 'Pedidos', icon: FileText },
-  { id: 'users', label: 'Usuarios', icon: ShieldCheck, permission: 'metrics.viewUsers' },
-  { id: 'cash', label: 'Caja', icon: CalendarDays },
+  { id: 'summary', label: 'Resumen', icon: BarChart3, group: 'overview', question: '¿Cómo terminó el período y qué requiere atención?' },
+  { id: 'sales', label: 'Ventas', icon: TrendingUp, group: 'sales', question: '¿Cuándo se vende y cómo cambia el ritmo?' },
+  { id: 'products', label: 'Productos', icon: ShoppingBag, group: 'sales', question: '¿Qué productos explican el ingreso y el margen?' },
+  { id: 'categories', label: 'Categorías', icon: Boxes, group: 'sales', question: '¿Qué familias de productos sostienen el resultado?' },
+  { id: 'payments', label: 'Pagos', icon: CreditCard, group: 'sales', question: '¿Cómo se cobra y dónde se concentra el dinero?' },
+  { id: 'clients', label: 'Socios', icon: Users, group: 'sales', question: '¿Quién vuelve, cuánto aporta y con qué frecuencia?', permission: 'metrics.viewClients' },
+  { id: 'profit', label: 'Ganancias', icon: WalletCards, group: 'control', question: '¿Qué queda después de costos y gastos?', permission: 'metrics.viewProfit' },
+  { id: 'stock', label: 'Stock', icon: PackageSearch, group: 'control', question: '¿Dónde está el capital y qué necesita reposición?' },
+  { id: 'orders', label: 'Pedidos', icon: FileText, group: 'control', question: '¿Qué trabajo pendiente puede convertirse en cobro?' },
+  { id: 'cash', label: 'Caja', icon: CalendarDays, group: 'control', question: '¿Qué pasó en caja y en sus cierres?' },
+  { id: 'users', label: 'Usuarios', icon: ShieldCheck, group: 'team', question: '¿Cómo se distribuye el desempeño del equipo?', permission: 'metrics.viewUsers' },
+];
+
+const SECTION_GROUPS = [
+  { id: 'overview', label: 'Panorama' },
+  { id: 'sales', label: 'Venta' },
+  { id: 'control', label: 'Control' },
+  { id: 'team', label: 'Equipo' },
 ];
 
 const SelectField = ({ label, value, onChange, children, className = '' }) => (
   <label className={`flex min-w-0 flex-col gap-0.5 ${className}`}>
     <span className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">{label}</span>
     <select
+      name={`metrics-${normalizeMetricText(label).replace(/\s+/g, '-')}`}
+      autoComplete="off"
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-700 outline-none transition focus:border-fuchsia-300 focus:ring-2 focus:ring-fuchsia-100"
+      className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-700 outline-none transition focus-visible:border-fuchsia-300 focus-visible:ring-2 focus-visible:ring-fuchsia-100"
     >
       {children}
     </select>
@@ -217,10 +238,12 @@ const InputField = ({ label, value, onChange, type = 'text', className = '' }) =
   <label className={`flex min-w-0 flex-col gap-0.5 ${className}`}>
     <span className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">{label}</span>
     <input
+      name={`metrics-${normalizeMetricText(label).replace(/\s+/g, '-')}`}
+      autoComplete="off"
       type={type}
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-700 outline-none transition focus:border-fuchsia-300 focus:ring-2 focus:ring-fuchsia-100"
+      className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-700 outline-none transition focus-visible:border-fuchsia-300 focus-visible:ring-2 focus-visible:ring-fuchsia-100"
     />
   </label>
 );
@@ -433,9 +456,11 @@ const MetricLensSelect = ({ label, value, onChange, children, className = '' }) 
   <label className={`metrics-lens-select flex min-h-8 min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-slate-50/80 px-2 py-1 ${className}`}>
     <span className="shrink-0 text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">{label}</span>
     <select
+      name={`metrics-${normalizeMetricText(label).replace(/\s+/g, '-')}`}
+      autoComplete="off"
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className="min-w-0 flex-1 bg-transparent text-[11px] font-black text-slate-800 outline-none"
+      className="min-w-0 flex-1 bg-transparent text-[11px] font-black text-slate-800 outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-100"
     >
       {children}
     </select>
@@ -487,8 +512,8 @@ const ModernToggleChip = ({ checked, onChange, label }) => (
 );
 
 const Panel = ({ title, icon: Icon, hint, children, action }) => (
-  <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-    <div className="mb-2 flex items-center justify-between gap-3">
+  <section className="metrics-panel border border-slate-200 bg-white p-3">
+    <div className="metrics-panel-header mb-2 flex items-center justify-between gap-3">
       <div className="flex min-w-0 items-center gap-2">
         {Icon && <Icon size={17} className="shrink-0 text-fuchsia-500" />}
         <h3 className="truncate text-sm font-black text-slate-800">{title}</h3>
@@ -501,21 +526,12 @@ const Panel = ({ title, icon: Icon, hint, children, action }) => (
 );
 
 const MetricCard = ({ label, value, sublabel, change, tone = 'slate', hidden = false, hint, invertChange = false }) => {
-  const toneClass = {
-    slate: 'text-slate-900 bg-slate-50 border-slate-200',
-    emerald: 'text-emerald-700 bg-emerald-50 border-emerald-200',
-    sky: 'text-sky-700 bg-sky-50 border-sky-200',
-    amber: 'text-amber-700 bg-amber-50 border-amber-200',
-    rose: 'text-rose-700 bg-rose-50 border-rose-200',
-    violet: 'text-violet-700 bg-violet-50 border-violet-200',
-  }[tone] || 'text-slate-900 bg-slate-50 border-slate-200';
-
   const changeLabel = Number.isFinite(change) ? `${change >= 0 ? '+' : ''}${formatNumber(change, 1)}%` : null;
   const isGoodChange = invertChange ? change <= 0 : change >= 0;
-  const changeClass = isGoodChange ? 'text-emerald-600 bg-emerald-50' : 'text-rose-600 bg-rose-50';
+  const changeClass = isGoodChange ? 'is-good' : 'is-bad';
 
   return (
-    <div className={`min-h-[78px] rounded-lg border px-3 py-2.5 ${toneClass}`}>
+    <div className={`metrics-metric-cell metrics-metric-${tone} min-h-[78px] px-3 py-2.5`}>
       <div className="flex items-center justify-between gap-2">
         <p className="truncate text-[9px] font-black uppercase tracking-[0.12em] opacity-70">{label}</p>
         {hint && <HintIcon hint={hint} size={13} />}
@@ -526,7 +542,7 @@ const MetricCard = ({ label, value, sublabel, change, tone = 'slate', hidden = f
       <div className="mt-1.5 flex min-h-[18px] items-center justify-between gap-2">
         <p className="truncate text-[10px] font-semibold opacity-70">{hidden ? 'Permiso requerido' : sublabel}</p>
         {!hidden && changeLabel && (
-          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-black ${changeClass}`}>
+          <span className={`metrics-change-text shrink-0 text-[10px] font-black ${changeClass}`}>
             {changeLabel}
           </span>
         )}
@@ -636,7 +652,7 @@ const ChartFrame = ({ height = 300, children }) => {
     <div ref={frameRef} className="min-w-0 overflow-hidden" style={{ width: '100%', minWidth: 1, height, minHeight: height }}>
       {width > 8 ? children : (
         <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-400">
-          Preparando gráfico...
+          Preparando gráfico…
         </div>
       )}
     </div>
@@ -688,6 +704,21 @@ const EvolutionChartTooltip = ({ active, payload, label }) => {
   );
 };
 
+const HourlyChartTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload || {};
+  return (
+    <div className="metrics-chart-tooltip border border-slate-200 bg-white px-3 py-2 text-xs">
+      <p className="mb-1 font-black text-slate-700">{label}</p>
+      <p className="font-semibold text-violet-700">Compras: {formatNumber(row.salesCount || 0)}</p>
+      <p className="font-semibold text-sky-700">Ingreso: {formatCurrency(row.revenue || 0)}</p>
+      <p className="mt-1 text-[10px] font-semibold text-slate-500">
+        Ticket medio: {formatCurrency(row.salesCount ? row.revenue / row.salesCount : 0)}
+      </p>
+    </div>
+  );
+};
+
 const Table = ({ columns, rows, emptyText, onRowClick, isRowSelected }) => (
   <div className="overflow-hidden rounded-lg border border-slate-200">
     <div className="custom-scrollbar max-h-[340px] overflow-auto">
@@ -720,7 +751,7 @@ const Table = ({ columns, rows, emptyText, onRowClick, isRowSelected }) => (
                   event.preventDefault();
                   onRowClick(row, index);
                 } : undefined}
-                className={`${isInteractive ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-fuchsia-200' : ''} ${selected ? 'bg-fuchsia-50/80' : 'hover:bg-slate-50'}`}
+                className={`${isInteractive ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-200' : ''} ${selected ? 'bg-fuchsia-50/80' : 'hover:bg-slate-50'}`}
               >
                 {columns.map((column) => (
                   <td
@@ -746,14 +777,14 @@ const Table = ({ columns, rows, emptyText, onRowClick, isRowSelected }) => (
 );
 
 const StatStrip = ({ items = [] }) => (
-  <div className={`grid grid-cols-1 gap-2 sm:grid-cols-2 ${
+  <div className={`metrics-stat-strip grid grid-cols-1 sm:grid-cols-2 ${
     items.length === 5 ? 'xl:grid-cols-5' : 'xl:grid-cols-4'
   }`}>
     {items.map((item) => (
             <div
               key={item.label}
               title={typeof item.value === 'string' ? item.value : undefined}
-              className={`rounded-lg border px-3 py-2 ${item.tone || 'border-slate-200 bg-slate-50 text-slate-700'}`}
+              className={`metrics-stat-cell border-slate-200 px-3 py-2 ${item.tone || 'text-slate-700'}`}
             >
         <p className="text-[9px] font-black uppercase tracking-[0.12em] opacity-70">{item.label}</p>
         <div className="mt-1 truncate text-base font-black">{item.value}</div>
@@ -905,7 +936,7 @@ const PieMetricPanel = ({
           </>
         ) : (
           <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-400">
-            Preparando gráfico...
+            Preparando gráfico…
           </div>
         )}
       </div>
@@ -1029,12 +1060,12 @@ export default function MetricsView({
   const [summaryEvolutionMetrics, setSummaryEvolutionMetrics] = useState(['revenue']);
   const [pieSelections, setPieSelections] = useState({});
   const [productLookupQuery, setProductLookupQuery] = useState('');
+  const contentScrollRef = useRef(null);
 
   const canViewProfit = hasPermission(currentUser, 'metrics.viewProfit');
   const canViewUsers = hasPermission(currentUser, 'metrics.viewUsers');
   const canViewClients = hasPermission(currentUser, 'metrics.viewClients');
   const canExport = hasPermission(currentUser, 'metrics.export');
-  const canConfigureAlerts = hasPermission(currentUser, 'metrics.configureAlerts');
 
   useEffect(() => {
     setSummaryEvolutionMetrics((current) => {
@@ -1136,18 +1167,25 @@ export default function MetricsView({
   const isProfitUnverified = false;
   const profitStatusLabel = null;
   const profitStatusDetail = 'Ingreso cobrado - gastos';
-  const profitStatusTone = metrics.current.stats.profit >= 0
-      ? 'emerald'
-      : 'rose';
 
   const sections = useMemo(() => {
     return BASE_SECTIONS.filter((section) => !section.permission || hasPermission(currentUser, section.permission));
   }, [currentUser]);
+  const sectionGroups = useMemo(() => SECTION_GROUPS.map((group) => ({
+    ...group,
+    sections: sections.filter((section) => section.group === group.id),
+  })).filter((group) => group.sections.length), [sections]);
+  const activeSectionMeta = sections.find((section) => section.id === activeSection) || sections[0] || BASE_SECTIONS[0];
+  const activeSectionGroup = SECTION_GROUPS.find((group) => group.id === activeSectionMeta.group) || SECTION_GROUPS[0];
 
   useEffect(() => {
     if (sections.some((section) => section.id === activeSection)) return;
     setActiveSection('summary');
   }, [activeSection, sections]);
+
+  useEffect(() => {
+    contentScrollRef.current?.scrollTo({ top: 0 });
+  }, [activeSection]);
 
   const updateFilter = (key, value) => setFilters((prev) => ({ ...prev, [key]: value }));
   const resetFilters = () => setFilters(DEFAULT_FILTERS);
@@ -1193,8 +1231,7 @@ export default function MetricsView({
   const _periodUnitPlural = metrics.current.periodLabelPlural || 'días';
   const hourlyPulseSeries = useMemo(() => {
     const rowsByHour = new Map((metrics.current.hourStats || []).map((row) => [String(row.key).padStart(2, '0'), row]));
-    return Array.from({ length: 14 }, (_, index) => {
-      const hour = index + 8;
+    const fullDay = Array.from({ length: 24 }, (_, hour) => {
       const key = String(hour).padStart(2, '0');
       const row = rowsByHour.get(key) || {};
       return {
@@ -1204,9 +1241,40 @@ export default function MetricsView({
         revenue: Number(row.revenue || 0),
       };
     });
+
+    const activeHours = fullDay
+      .map((row, index) => (row.salesCount > 0 || row.revenue > 0 ? index : -1))
+      .filter((index) => index >= 0);
+    if (!activeHours.length) return fullDay.slice(8, 22);
+
+    const firstHour = Math.max(0, activeHours[0] - 1);
+    const lastHour = Math.min(23, activeHours[activeHours.length - 1] + 1);
+    return fullDay.slice(firstHour, lastHour + 1);
   }, [metrics]);
   const showHourlyPulse =
     hourlyPulseSeries.some((row) => Number(row.salesCount || 0) > 0);
+  const hourlyPeak = hourlyPulseSeries.reduce((best, row) => (
+    Number(row.salesCount || 0) > Number(best?.salesCount || 0) ? row : best
+  ), null);
+  const hourlySalesTotal = hourlyPulseSeries.reduce((sum, row) => sum + Number(row.salesCount || 0), 0);
+  const hourlyPeakShare = hourlySalesTotal && hourlyPeak
+    ? (Number(hourlyPeak.salesCount || 0) / hourlySalesTotal) * 100
+    : 0;
+  const weeklyRhythmSeries = useMemo(() => {
+    const rowsByWeekday = new Map((metrics.current.weekdayStats || []).map((row) => [
+      normalizePieName(row.key || row.label).slice(0, 3),
+      row,
+    ]));
+    return WEEKDAY_SEQUENCE.map((weekday) => {
+      const row = rowsByWeekday.get(weekday.key) || {};
+      return {
+        key: weekday.key,
+        label: weekday.label,
+        salesCount: Number(row.salesCount || 0),
+        revenue: Number(row.revenue || 0),
+      };
+    });
+  }, [metrics]);
 
   const renderSummary = () => {
     const stats = metrics.current.stats;
@@ -1218,7 +1286,6 @@ export default function MetricsView({
     const grossMarginRate = revenue ? (grossProfit / revenue) * 100 : 0;
     const netMarginRate = revenue ? (netProfit / revenue) * 100 : 0;
     const costRate = revenue ? (cost / revenue) * 100 : 0;
-    const expenseRate = revenue ? (expensesTotal / revenue) * 100 : 0;
 
     const profitControlInsight = !canViewProfit
       ? null
@@ -1238,7 +1305,7 @@ export default function MetricsView({
             ? {
                 tone: 'danger',
                 title: 'Resultado de caja negativo',
-                text: `El resultado operativo arroja una pérdida neta de ${formatCurrency(Math.abs(netProfit))}. Se sugiere auditar costos de reposición y egresos.`,
+                text: `Los gastos registrados dejan la caja ${formatCurrency(Math.abs(netProfit))} por debajo de lo cobrado. Conviene revisar los egresos del período.`,
               }
             : netMarginRate < 8
               ? {
@@ -1248,184 +1315,204 @@ export default function MetricsView({
                 }
               : {
                   tone: 'success',
-                  title: 'Salud de caja sólida & rentabilidad positiva',
-                  text: `Margen neto saludable del ${formatNumber(netMarginRate, 1)}% (${formatCurrency(netProfit)}) tras cubrir todos los costos y gastos del rango.`,
+                  title: 'Caja operativa positiva',
+                  text: `Después de los gastos registrados queda un ${formatNumber(netMarginRate, 1)}% de lo cobrado (${formatCurrency(netProfit)}). El margen de mercadería se muestra por separado.`,
                 };
 
     const topProduct = metrics.current.productStats[0] || null;
+    const strongestPeriod = metrics.current.dailySeries.reduce((best, row) => (
+      Number(row.revenue || 0) > Number(best?.revenue || 0) ? row : best
+    ), null);
+    const topPayment = metrics.current.paymentStats[0] || null;
+    const paymentTotal = metrics.current.paymentStats.reduce((sum, item) => sum + Number(item.value || 0), 0);
+    const topPaymentShare = paymentTotal && topPayment ? (Number(topPayment.value || 0) / paymentTotal) * 100 : 0;
+    const topProductShare = revenue && topProduct ? (Number(topProduct.revenue || 0) / revenue) * 100 : 0;
+    const summarySignals = [
+      {
+        label: 'Mejor tramo',
+        value: strongestPeriod?.label || '-',
+        detail: strongestPeriod ? `${formatCurrency(strongestPeriod.revenue)} · pico ${hourlyPeak?.label || 'sin hora'}` : 'Sin ventas',
+        section: 'sales',
+      },
+      {
+        label: 'Cobro dominante',
+        value: topPayment?.name || '-',
+        detail: topPayment ? `${formatNumber(topPaymentShare, 1)}% · ${formatCurrency(topPayment.value)}` : 'Sin pagos',
+        section: 'payments',
+      },
+      {
+        label: 'Producto líder',
+        value: topProduct?.name || '-',
+        detail: topProduct ? `${formatNumber(topProductShare, 1)}% del ingreso · ${formatNumber(topProduct.qty)} ${topProduct.type === 'weight' ? 'g' : 'un.'}` : 'Sin productos',
+        section: 'products',
+      },
+    ];
+    const allowedSectionIds = new Set(sections.map((section) => section.id));
+    const guidedRecommendations = metrics.recommendations
+      .filter((item) => !item.section || allowedSectionIds.has(item.section))
+      .slice(0, 3);
+    const recommendationRows = guidedRecommendations.length
+      ? guidedRecommendations
+      : [{ title: 'Sin alertas críticas', detail: 'Los indicadores del período no requieren atención inmediata.', tone: 'success', section: null }];
 
     return (
-      <div className="space-y-4">
-        {/* DIAGNÓSTICO INTELIGENTE DE SALUD FINANCIERA */}
+      <div className="metrics-summary space-y-4">
         {profitControlInsight && (
-          <div className={`rounded-xl border p-3.5 flex items-start gap-3 shadow-xs transition-all ${
-            profitControlInsight.tone === 'danger'
-              ? 'border-rose-200 bg-rose-50/90 text-rose-900'
-              : profitControlInsight.tone === 'warning'
-                ? 'border-amber-200 bg-amber-50/90 text-amber-900'
-                : 'border-emerald-200 bg-emerald-50/90 text-emerald-950'
-          }`}>
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-xs ${
-              profitControlInsight.tone === 'danger'
-                ? 'bg-rose-500 text-white'
-                : profitControlInsight.tone === 'warning'
-                  ? 'bg-amber-500 text-white'
-                  : 'bg-emerald-600 text-white'
-            }`}>
-              {profitControlInsight.tone === 'danger' ? <AlertTriangle size={16} /> : profitControlInsight.tone === 'warning' ? <AlertTriangle size={16} /> : <Sparkles size={16} />}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[10px] font-black uppercase tracking-[0.14em] opacity-75">Diagnóstico Rebu</span>
-                <span className="text-[10px] font-bold opacity-60">•</span>
-                <span className="text-xs font-black">{profitControlInsight.title}</span>
-              </div>
-              <p className="text-[12px] font-semibold mt-0.5 opacity-90 leading-snug">{profitControlInsight.text}</p>
-            </div>
-          </div>
+          <section className={`metrics-diagnostic-line is-${profitControlInsight.tone}`}>
+            {profitControlInsight.tone === 'success' ? <Sparkles size={15} /> : <AlertTriangle size={15} />}
+            <strong>{profitControlInsight.title}</strong>
+            <span>{profitControlInsight.text}</span>
+          </section>
         )}
 
-        {/* TARJETAS PRINCIPALES KPI */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-          <MetricCard
-            label="Ingreso bruto"
-            value={<FancyPrice amount={revenue} />}
-            sublabel={metrics.range.label}
-            change={metrics.changes.revenue}
-            tone="sky"
-            hint="Total vendido en el rango filtrado antes de restar costos o gastos."
-          />
-          <MetricCard
-            label="Costo vendido"
-            value={<FancyPrice amount={cost} />}
-            sublabel={`${formatNumber(costRate, 1)}% de ventas`}
-            tone="slate"
-            hidden={!canViewProfit}
-            hint="Costo de la mercadería vendida según inventario o foto guardada."
-          />
-          <MetricCard
-            label="Margen bruto"
-            value={<FancyPrice amount={grossProfit} />}
-            sublabel={`${formatNumber(grossMarginRate, 1)}% margen`}
-            tone="emerald"
-            hidden={!canViewProfit}
-            hint="Ingreso bruto menos costo vendido."
-          />
-          <MetricCard
-            label="Gastos"
-            value={<FancyPrice amount={expensesTotal} />}
-            sublabel={`${metrics.current.filteredExpenses.length} mov. (${formatNumber(expenseRate, 1)}%)`}
-            change={metrics.changes.expenses}
-            invertChange
-            tone="rose"
-            hint="Suma total de gastos y egresos registrados en el rango."
-          />
-          <MetricCard
-            label="Resultado caja"
-            value={profitStatusLabel || <FancyPrice amount={netProfit} />}
-            sublabel={profitStatusLabel ? profitStatusDetail : `Margen neto ${formatNumber(netMarginRate, 1)}%`}
-            change={metrics.changes.profit}
-            tone={profitStatusTone}
-            hidden={!canViewProfit}
-            hint="Ingreso cobrado menos gastos registrados (flujo de caja libre)."
-          />
-          <MetricCard
-            label="Ventas & Ticket"
-            value={<FancyPrice amount={stats.averageTicket} />}
-            sublabel={`${formatNumber(stats.salesCount)} tickets emitidos`}
-            change={metrics.changes.averageTicket}
-            tone="violet"
-            hint="Ticket promedio por cada venta realizada."
-          />
-        </div>
+        <section className="metrics-reading-band" aria-label="Lectura principal del período">
+          <div className="metrics-reading-primary">
+            <span>Ingreso bruto</span>
+            <strong><FancyPrice amount={revenue} /></strong>
+            <small>{metrics.range.label}</small>
+          </div>
+          {canViewProfit && (
+            <div>
+              <span>Margen mercadería</span>
+              <strong><FancyPrice amount={grossProfit} /></strong>
+              <small>{formatNumber(grossMarginRate, 1)}% antes de gastos</small>
+            </div>
+          )}
+          <div>
+            <span>Resultado de caja</span>
+            <strong>{canViewProfit ? (profitStatusLabel || <FancyPrice amount={netProfit} />) : 'Restringido'}</strong>
+            <small>{canViewProfit ? `${formatNumber(netMarginRate, 1)}% sobre lo cobrado` : 'Permiso requerido'}</small>
+          </div>
+          <div>
+            <span>Compras</span>
+            <strong>{formatNumber(stats.salesCount)}</strong>
+            <small>tickets emitidos</small>
+          </div>
+          <div>
+            <span>Ticket medio</span>
+            <strong><FancyPrice amount={stats.averageTicket} /></strong>
+            <small>{Number.isFinite(metrics.changes.averageTicket) ? `${metrics.changes.averageTicket >= 0 ? '+' : ''}${formatNumber(metrics.changes.averageTicket, 1)}% vs. anterior` : 'sin comparación'}</small>
+          </div>
+        </section>
 
-        {/* ECUACIÓN DE CAJA FINANCIERA (Cobrado - Costo - Gastos = Resultado) */}
         {canViewProfit && (
-          <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-xs">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
-              <div className="flex items-center gap-2">
-                <WalletCards size={16} className="text-fuchsia-600" />
-                <h3 className="text-xs font-black uppercase tracking-wider text-slate-800">Ecuación de Caja del Período</h3>
-              </div>
-              <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-black ${
-                netMarginRate >= 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
-              }`}>
-                Margen Neto: {formatNumber(netMarginRate, 1)}%
-              </span>
+          <section className="metrics-cash-equation" aria-label="Composición de caja">
+            <div className="metrics-equation-title">
+              <WalletCards size={15} />
+              <span>Composición de caja</span>
             </div>
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-              <div className="rounded-lg border border-sky-100 bg-sky-50/60 p-2.5">
-                <span className="text-[9px] font-black uppercase tracking-wider text-sky-600 block">1. Cobrado</span>
-                <span className="text-sm font-black text-sky-900 block mt-0.5"><FancyPrice amount={revenue} /></span>
-                <span className="text-[10px] font-medium text-slate-500 block mt-0.5">Ventas totales</span>
-              </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
-                <span className="text-[9px] font-black uppercase tracking-wider text-slate-500 block">2. Costo Mercadería</span>
-                <span className="text-sm font-black text-slate-800 block mt-0.5"><FancyPrice amount={cost} /></span>
-                <span className="text-[10px] font-medium text-slate-500 block mt-0.5">{formatNumber(costRate, 1)}% sobre cobros</span>
-              </div>
-              <div className="rounded-lg border border-rose-100 bg-rose-50/60 p-2.5">
-                <span className="text-[9px] font-black uppercase tracking-wider text-rose-600 block">3. Gastos Operativos</span>
-                <span className="text-sm font-black text-rose-800 block mt-0.5"><FancyPrice amount={expensesTotal} /></span>
-                <span className="text-[10px] font-medium text-slate-500 block mt-0.5">{metrics.current.filteredExpenses.length} movimientos</span>
-              </div>
-              <div className={`rounded-lg border p-2.5 ${
-                netProfit >= 0 ? 'border-emerald-200 bg-emerald-50/80 text-emerald-900' : 'border-rose-200 bg-rose-50/80 text-rose-900'
-              }`}>
-                <span className="text-[9px] font-black uppercase tracking-wider opacity-75 block">4. Resultado Neto</span>
-                <span className="text-sm font-black block mt-0.5"><FancyPrice amount={netProfit} /></span>
-                <span className="text-[10px] font-medium opacity-80 block mt-0.5">{netMarginRate >= 0 ? 'Superávit en caja' : 'Déficit operativo'}</span>
-              </div>
-            </div>
-          </div>
+            <div><small>Cobrado</small><strong><FancyPrice amount={revenue} /></strong></div>
+            <b aria-hidden="true">−</b>
+            <div><small>Gastos registrados</small><strong><FancyPrice amount={expensesTotal} /></strong></div>
+            <b aria-hidden="true">=</b>
+            <div className={netProfit >= 0 ? 'is-positive' : 'is-negative'}><small>Resultado</small><strong><FancyPrice amount={netProfit} /></strong></div>
+            <p>Costo vendido: <strong>{formatCurrency(cost)}</strong> ({formatNumber(costRate, 1)}% del ingreso), usado para leer margen de mercadería.</p>
+          </section>
         )}
 
-        {/* EVOLUCIÓN TEMPORAL DE CAJA & VENTAS */}
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.45fr_0.9fr]">
-          <Panel
-            title={isHourlyMode ? 'Evolución por horario' : 'Evolución del período'}
-            icon={TrendingUp}
-            action={(
-              <div className="inline-flex flex-wrap gap-1 rounded-md border border-slate-200 bg-slate-50 p-0.5">
-                {summaryEvolutionOptions.map((option) => (
-                  <label
-                    key={option.id}
-                    className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded border px-2 text-[10px] font-black transition ${
-                      summaryEvolutionMetrics.includes(option.id)
-                        ? option.tone
-                        : 'border-transparent text-slate-500 hover:bg-white'
-                    }`}
+        <section className="metrics-guided-reading" aria-labelledby="metrics-guided-reading-title">
+          <header>
+            <Sparkles size={15} aria-hidden="true" />
+            <div>
+              <h3 id="metrics-guided-reading-title">Cómo leer este período</h3>
+              <p>Seguí las señales para pasar del resultado al detalle que lo explica.</p>
+            </div>
+          </header>
+          <div className="metrics-insight-line">
+            <div className="metrics-summary-patterns">
+              {summarySignals.map((signal) => {
+                const targetSection = sections.find((section) => section.id === signal.section);
+                return (
+                  <button
+                    key={signal.label}
+                    type="button"
+                    onClick={() => setActiveSection(signal.section)}
+                    aria-label={`${signal.label}: ${signal.value}. Abrir ${targetSection?.label || 'detalle'}`}
                   >
-                    <input
-                      type="checkbox"
-                      checked={summaryEvolutionMetrics.includes(option.id)}
-                      onChange={() => toggleSummaryEvolutionMetric(option.id)}
-                      className="h-3 w-3 rounded border-slate-300"
-                    />
-                    {option.label}
-                  </label>
-                ))}
+                    <span>{signal.label}</span>
+                    <strong title={signal.value}>{signal.value}</strong>
+                    <small>{signal.detail}</small>
+                    <em>Ver {targetSection?.label || 'detalle'} <ArrowRight size={11} aria-hidden="true" /></em>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="metrics-recommendations">
+              <div className="metrics-recommendations-title">
+                <AlertTriangle size={14} aria-hidden="true" />
+                <span>Próximas decisiones</span>
               </div>
-            )}
-            hint={`Compara ingreso bruto, cantidad de ventas y, si tenés permiso, resultado de caja por ${periodUnit}.`}
-          >
+              {recommendationRows.map((item, index) => {
+                const targetSection = item.section ? sections.find((section) => section.id === item.section) : null;
+                const content = (
+                  <>
+                    <i aria-hidden="true" />
+                    <p>
+                      <strong>{item.title}</strong>
+                      <span>{item.detail}</span>
+                      {targetSection && <em>Revisar {targetSection.label} <ArrowRight size={11} aria-hidden="true" /></em>}
+                    </p>
+                  </>
+                );
+                return targetSection ? (
+                  <button
+                    key={`${item.title}-${index}`}
+                    type="button"
+                    className={`is-${item.tone || 'info'}`}
+                    onClick={() => setActiveSection(targetSection.id)}
+                    aria-label={`${item.title}. Revisar ${targetSection.label}`}
+                  >
+                    {content}
+                  </button>
+                ) : (
+                  <div key={`${item.title}-${index}`} className={`is-${item.tone || 'info'}`}>{content}</div>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+
+        <div className="metrics-analysis-grid">
+          <section className="metrics-chart-section">
+            <header>
+              <div>
+                <p>Evolución del período</p>
+                <span>Ingreso, resultado y gastos por {periodUnit}</span>
+              </div>
+              <div className="metrics-series-controls" role="group" aria-label="Series visibles">
+                {summaryEvolutionOptions.map((option) => {
+                  const isSelected = summaryEvolutionMetrics.includes(option.id);
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => toggleSummaryEvolutionMetric(option.id)}
+                      className={isSelected ? 'is-active' : ''}
+                      aria-pressed={isSelected}
+                    >
+                      <i style={{ backgroundColor: option.color }} />
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </header>
             {metrics.current.dailySeries.length ? (
-              <ChartFrame height={260}>
+              <ChartFrame height={300}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={metrics.current.dailySeries}>
+                  <AreaChart data={metrics.current.dailySeries} margin={{ top: 8, right: 10, left: 2, bottom: 0 }}>
                     <defs>
                       {summaryEvolutionOptions.map((option) => (
                         <linearGradient key={option.id} id={`metrics-${option.id}`} x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={option.color} stopOpacity={0.22} />
-                          <stop offset="95%" stopColor={option.color} stopOpacity={0} />
+                          <stop offset="4%" stopColor={option.color} stopOpacity={0.2} />
+                          <stop offset="96%" stopColor={option.color} stopOpacity={0} />
                         </linearGradient>
                       ))}
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                    <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={(value) => `$${formatNumber(value)}`} />
-                    <Tooltip content={<EvolutionChartTooltip />} />
-                    <Legend verticalAlign="top" height={24} />
+                    <CartesianGrid vertical={false} stroke="#dbe5ef" strokeOpacity={0.72} />
+                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 10 }} stroke="#7c8da3" minTickGap={18} />
+                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10 }} stroke="#7c8da3" tickFormatter={(value) => `$${formatNumber(value)}`} width={66} />
+                    <Tooltip content={<EvolutionChartTooltip />} cursor={{ stroke: '#94a3b8', strokeOpacity: 0.35 }} />
                     {activeEvolutionOptions.map((option) => (
                       <Area
                         key={option.id}
@@ -1434,89 +1521,50 @@ export default function MetricsView({
                         name={option.label}
                         stroke={option.color}
                         fill={`url(#metrics-${option.id})`}
-                        strokeWidth={2}
+                        strokeWidth={2.2}
+                        dot={false}
+                        activeDot={{ r: 3.5 }}
                       />
                     ))}
                   </AreaChart>
                 </ResponsiveContainer>
               </ChartFrame>
             ) : <EmptyState />}
+          </section>
 
-            {showHourlyPulse && (
-              <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
-                <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
-                  <p className="min-w-0 truncate text-[11px] font-semibold text-slate-500">
-                    <span className="font-black uppercase tracking-[0.12em] text-slate-600">Pulso horario</span>
-                    <span className="mx-1 text-slate-400">·</span>
-                    Movimientos acumulados por hora
-                  </p>
-                  <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-black text-violet-700">
-                    08:00 a 21:00
-                  </span>
-                </div>
-                <AreaMetricPanel
-                  data={hourlyPulseSeries}
-              areas={[{ key: 'salesCount', label: 'Movimientos', color: '#8b5cf6' }]}
-                  yFormatter={(value) => formatNumber(value)}
-                  height={110}
-                  showLegend={false}
-                />
+          <section className="metrics-chart-section metrics-hourly-section">
+            <header>
+              <div>
+                <p>Compras por hora</p>
+                <span>{isHourlyMode ? 'Ritmo de la jornada seleccionada' : 'Patrón acumulado del período'}</span>
               </div>
-            )}
-          </Panel>
-
-          <div className="space-y-4">
-            {/* PRODUCTO LÍDER */}
-            {topProduct && (
-              <Panel title="Producto Líder" icon={ShoppingBag}>
-                <div className="flex items-center justify-between gap-2 p-1">
-                  <div className="min-w-0 flex-1">
-                    <span className="text-sm font-black text-slate-900 block truncate" title={topProduct.name}>
-                      {topProduct.name}
-                    </span>
-                    <span className="text-[11px] text-slate-500 font-semibold block mt-0.5">
-                      {formatNumber(topProduct.qty)} {topProduct.type === 'weight' ? 'g vendidos' : 'unidades vendidas'}
-                    </span>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <span className="text-sm font-black text-emerald-700 block">
-                      <FancyPrice amount={topProduct.revenue} />
-                    </span>
-                    {canViewProfit && Number(topProduct.cost) > 0 && (
-                      <span className="text-[10px] text-slate-400 font-medium block">
-                        Costo: <FancyPrice amount={topProduct.cost} />
-                      </span>
-                    )}
-                  </div>
+            </header>
+            {showHourlyPulse ? (
+              <>
+                <div className="metrics-hourly-reading">
+                  <div><span>Hora pico</span><strong>{hourlyPeak?.label || '-'}</strong></div>
+                  <div><span>Compras</span><strong>{formatNumber(hourlyPeak?.salesCount || 0)}</strong></div>
+                  <div><span>Peso del pico</span><strong>{formatNumber(hourlyPeakShare, 1)}%</strong></div>
                 </div>
-              </Panel>
-            )}
-
-            {/* ALERTAS Y RECOMENDACIONES */}
-            <Panel title="Alertas y Recomendaciones" icon={Sparkles} action={canConfigureAlerts ? <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-black text-slate-500">Calculadas</span> : null}>
-              <div className="space-y-2">
-                {metrics.recommendations.length ? metrics.recommendations.slice(0, 3).map((item, index) => {
-                  const toneClass = {
-                    danger: 'border-rose-200 bg-rose-50 text-rose-700',
-                    warning: 'border-amber-200 bg-amber-50 text-amber-700',
-                    success: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-                    info: 'border-sky-200 bg-sky-50 text-sky-700',
-                  }[item.tone] || 'border-slate-200 bg-slate-50 text-slate-700';
-                  return (
-                    <div key={`${item.title}-${index}`} className={`rounded-lg border px-3 py-2 ${toneClass}`}>
-                      <p className="text-xs font-black">{item.title}</p>
-                      <p className="mt-0.5 text-[11px] font-semibold opacity-80">{item.detail}</p>
-                    </div>
-                  );
-                }) : (
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm font-bold text-emerald-700">
-                    No hay alertas críticas en los filtros actuales.
-                  </div>
-                )}
-              </div>
-            </Panel>
-          </div>
+                <ChartFrame height={238}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={hourlyPulseSeries} margin={{ top: 12, right: 4, left: -16, bottom: 0 }}>
+                      <CartesianGrid vertical={false} stroke="#dbe5ef" strokeOpacity={0.72} />
+                      <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 10 }} stroke="#7c8da3" interval="preserveStartEnd" minTickGap={8} />
+                      <YAxis yAxisId="sales" axisLine={false} tickLine={false} allowDecimals={false} tick={{ fontSize: 10 }} stroke="#7c8da3" />
+                      <YAxis yAxisId="revenue" orientation="right" hide />
+                      <Tooltip content={<HourlyChartTooltip />} cursor={{ fill: 'rgba(139, 92, 246, 0.06)' }} />
+                      <Bar yAxisId="sales" dataKey="salesCount" name="Compras" fill="#8b5cf6" fillOpacity={0.72} radius={[3, 3, 0, 0]} maxBarSize={24} />
+                      <Line yAxisId="revenue" type="monotone" dataKey="revenue" name="Ingreso" stroke="#0ea5e9" strokeWidth={2} dot={false} activeDot={{ r: 3.5 }} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </ChartFrame>
+                <p className="metrics-chart-footnote">Barras: cantidad de compras · línea: ingreso</p>
+              </>
+            ) : <EmptyState text="Sin compras para construir el patrón horario." />}
+          </section>
         </div>
+
       </div>
     );
   };
@@ -1538,13 +1586,33 @@ export default function MetricsView({
           },
         ]}
       />
-      <Panel title={isHourlyMode ? 'Ritmo por horario' : 'Ritmo de ventas'} icon={TrendingUp}>
-        <AreaMetricPanel
-          data={metrics.current.dailySeries}
-          areas={[{ key: 'revenue', label: 'Ingreso', color: '#0ea5e9' }]}
-          height={280}
-        />
-      </Panel>
+      <div className={`grid grid-cols-1 gap-4 ${isHourlyMode ? '' : 'xl:grid-cols-[1.25fr_0.75fr]'}`}>
+        <Panel title={isHourlyMode ? 'Ritmo por horario' : 'Ritmo de ventas'} icon={TrendingUp}>
+          <AreaMetricPanel
+            data={metrics.current.dailySeries}
+            areas={[{ key: 'revenue', label: 'Ingreso', color: '#0ea5e9' }]}
+            height={280}
+          />
+        </Panel>
+        {!isHourlyMode && (
+          <Panel title="Ritmo por día de la semana" icon={CalendarDays} hint="Acumula todas las compras del rango por día de la semana para revelar patrones repetidos.">
+            <ChartFrame height={280}>
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={weeklyRhythmSeries} margin={{ top: 12, right: 4, left: -12, bottom: 0 }}>
+                  <CartesianGrid vertical={false} stroke="#dbe5ef" strokeOpacity={0.72} />
+                  <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 10 }} stroke="#7c8da3" />
+                  <YAxis yAxisId="sales" axisLine={false} tickLine={false} allowDecimals={false} tick={{ fontSize: 10 }} stroke="#7c8da3" />
+                  <YAxis yAxisId="revenue" orientation="right" hide />
+                  <Tooltip content={<HourlyChartTooltip />} cursor={{ fill: 'rgba(139, 92, 246, 0.06)' }} />
+                  <Bar yAxisId="sales" dataKey="salesCount" name="Compras" fill="#8b5cf6" fillOpacity={0.68} radius={[3, 3, 0, 0]} maxBarSize={34} />
+                  <Line yAxisId="revenue" type="monotone" dataKey="revenue" name="Ingreso" stroke="#0ea5e9" strokeWidth={2} dot={false} activeDot={{ r: 3.5 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </ChartFrame>
+            <p className="metrics-chart-footnote">Barras: compras · línea: ingreso acumulado</p>
+          </Panel>
+        )}
+      </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <Panel title={isHourlyMode ? 'Detalle por horario' : 'Detalle por periodo'} icon={TrendingUp}>
           <Table
@@ -1689,14 +1757,16 @@ export default function MetricsView({
             icon={ShoppingBag}
             action={(
               <label className="relative block w-[180px] sm:w-[260px]">
-                <Search size={14} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+                <Search size={14} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
                 <input
+                  name="metrics-product-search"
+                  autoComplete="off"
                   type="search"
                   value={productLookupQuery}
                   onChange={(event) => setProductLookupQuery(event.target.value)}
-                  placeholder="Buscar producto"
+                  placeholder="Buscar producto…"
                   aria-label="Buscar producto por nombre"
-                  className="h-8 w-full rounded-md border border-slate-200 bg-slate-50 pl-7 pr-2 text-[11px] font-bold text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-fuchsia-300 focus:bg-white focus:ring-2 focus:ring-fuchsia-100"
+                  className="h-8 w-full rounded-md border border-slate-200 bg-slate-50 pl-7 pr-2 text-[11px] font-bold text-slate-700 outline-none transition placeholder:text-slate-400 focus-visible:border-fuchsia-300 focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-fuchsia-100"
                 />
               </label>
             )}
@@ -2105,6 +2175,29 @@ export default function MetricsView({
         <MetricCard label="Bajo stock" value={formatNumber(metrics.stockStats.lowStock.length)} sublabel="Menos de 10 unidades" tone="amber" />
         <MetricCard label="Por vencer" value={formatNumber(metrics.stockStats.expiring.length)} sublabel="Ventana de 14 días" tone="violet" />
       </div>
+      <section className={`metrics-stock-valuation ${canViewProfit ? '' : 'is-restricted'}`} aria-label="Valorización del stock actual">
+        <div className="metrics-stock-valuation-title">
+          <WalletCards size={15} />
+          <span>Capital en stock</span>
+          <small>Foto actual, independiente del rango de ventas</small>
+        </div>
+        {canViewProfit && (
+          <div>
+            <span>Valor a costo</span>
+            <strong><FancyPrice amount={metrics.stockStats.totalCost} /></strong>
+          </div>
+        )}
+        <div>
+          <span>Valor a venta</span>
+          <strong><FancyPrice amount={metrics.stockStats.totalRetail} /></strong>
+        </div>
+        {canViewProfit && (
+          <div className="is-projected">
+            <span>Margen proyectado</span>
+            <strong><FancyPrice amount={metrics.stockStats.projectedMargin} /></strong>
+          </div>
+        )}
+      </section>
       <Panel title="Estado del stock" icon={PackageSearch}>
         <PieMetricPanel
           data={stockPieData}
@@ -2335,17 +2428,17 @@ export default function MetricsView({
 
   return (
     <div className="metrics-view flex h-full min-h-0 flex-col bg-slate-100">
-      <div className="relative z-20 shrink-0 border-b border-slate-200 bg-white px-3 py-2 shadow-sm">
+      <div className="metrics-header relative z-20 shrink-0 border-b border-slate-200 bg-white px-3 py-2">
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <BarChart3 size={18} className="text-fuchsia-600" />
+                <BarChart3 size={18} className="text-fuchsia-600" aria-hidden="true" />
                 <h2 className="text-lg font-black text-slate-900">Métricas</h2>
-                <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] text-slate-500">
+                <span className="metrics-header-context text-[9px] font-black uppercase tracking-[0.1em] text-slate-500">
                   {metrics.range.label}
                 </span>
-                <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-semibold text-slate-500">
+                <span className="metrics-header-context text-[9px] font-semibold text-slate-500">
                   {getComparisonLabel(metrics)}
                 </span>
               </div>
@@ -2356,25 +2449,25 @@ export default function MetricsView({
                 type="button"
                 onClick={handleRefresh}
                 disabled={!onRefresh || isRefreshing}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-black text-slate-600 transition hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60"
+                className="metrics-header-action inline-flex h-8 items-center gap-1.5 px-2.5 text-[11px] font-black text-slate-600 transition disabled:cursor-wait disabled:opacity-60"
               >
-                <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+                <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} aria-hidden="true" />
                 Actualizar
               </button>
               {canExport && (
                 <>
-                  <button type="button" onClick={handleCsvExport} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2.5 text-[11px] font-black text-sky-700 transition hover:bg-sky-100">
-                    <Download size={14} /> CSV
+                  <button type="button" onClick={handleCsvExport} className="metrics-header-action inline-flex h-8 items-center gap-1.5 px-2.5 text-[11px] font-black text-sky-700 transition">
+                    <Download size={14} aria-hidden="true" /> CSV
                   </button>
-                  <button type="button" onClick={handlePdfExport} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-fuchsia-200 bg-fuchsia-50 px-2.5 text-[11px] font-black text-fuchsia-700 transition hover:bg-fuchsia-100">
-                    <Printer size={14} /> PDF
+                  <button type="button" onClick={handlePdfExport} className="metrics-header-action inline-flex h-8 items-center gap-1.5 px-2.5 text-[11px] font-black text-fuchsia-700 transition">
+                    <Printer size={14} aria-hidden="true" /> PDF
                   </button>
                 </>
               )}
             </div>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+          <div className="metrics-filter-line border-y border-slate-200 bg-slate-50 p-2">
             <div className="grid grid-cols-2 items-end gap-2 md:grid-cols-4 xl:grid-cols-[0.9fr_0.85fr_0.9fr_1fr_1.7fr_auto_auto]">
             <SelectField label="Rango" value={filters.preset} onChange={(value) => updateFilter('preset', value)}>
               <option value="today">Hoy</option>
@@ -2422,7 +2515,7 @@ export default function MetricsView({
                   : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
               }`}
             >
-              <SlidersHorizontal size={14} />
+              <SlidersHorizontal size={14} aria-hidden="true" />
               Avanzados{hasAdvancedFilters ? ' *' : ''}
             </button>
             <button type="button" onClick={resetFilters} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-black text-slate-600 transition hover:bg-slate-100">
@@ -2455,36 +2548,49 @@ export default function MetricsView({
             )}
           </div>
 
-          <div className="custom-scrollbar flex gap-1.5 overflow-x-auto pb-1">
-            {sections.map((section) => {
-              const Icon = section.icon;
-              const isActive = activeSection === section.id;
-              return (
-                <button
-                  key={section.id}
-                  type="button"
-                  onClick={() => setActiveSection(section.id)}
-                  className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-black transition ${
-                    isActive
-                      ? 'border-fuchsia-200 bg-fuchsia-600 text-white shadow-sm'
-                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <Icon size={14} />
-                  {section.label}
-                </button>
-              );
-            })}
+          <nav className="metrics-section-nav custom-scrollbar flex overflow-x-auto" aria-label="Áreas de análisis">
+            {sectionGroups.map((group) => (
+              <div key={group.id} className="metrics-section-group">
+                <span className="metrics-section-group-label">{group.label}</span>
+                {group.sections.map((section) => {
+                  const Icon = section.icon;
+                  const isActive = activeSection === section.id;
+                  return (
+                    <button
+                      key={section.id}
+                      id={`metrics-section-tab-${section.id}`}
+                      type="button"
+                      onClick={() => setActiveSection(section.id)}
+                      className={`metrics-section-tab inline-flex h-8 shrink-0 items-center gap-1.5 px-2.5 text-[11px] font-black transition ${isActive ? 'is-active' : ''}`}
+                      aria-current={isActive ? 'page' : undefined}
+                      aria-controls="metrics-active-section"
+                    >
+                      <Icon size={14} aria-hidden="true" />
+                      {section.label}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+          <div className="metrics-section-guide" aria-live="polite">
+            <span>{activeSectionGroup.label}</span>
+            <strong>{activeSectionMeta.question}</strong>
           </div>
         </div>
       </div>
 
-      <div className="custom-scrollbar flex-1 overflow-y-auto p-3">
-        <div className="rebu-content-frame pb-8">
+      <div ref={contentScrollRef} className="custom-scrollbar flex-1 overflow-y-auto p-3">
+        <div
+          id="metrics-active-section"
+          className="rebu-content-frame pb-8"
+          role="region"
+          aria-labelledby={`metrics-section-tab-${activeSectionMeta.id}`}
+        >
           {metrics.current.filteredTransactions.length === 0 && metrics.current.filteredExpenses.length === 0 && activeSection !== 'stock' ? (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
               <div className="flex items-center gap-2">
-                <Search size={16} />
+                <Search size={16} aria-hidden="true" />
                 No hay ventas ni gastos para los filtros activos. Algunas secciones pueden mostrar inventario, pedidos o caja igualmente.
               </div>
             </div>

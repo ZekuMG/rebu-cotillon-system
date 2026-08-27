@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import { CLOUD_SELECTS, isHistoryLogAction } from '../src/utils/cloudSelects.js';
 import {
@@ -18,9 +19,65 @@ import {
   getOfflineAvatarFingerprint,
   hydrateSharedUsersSnapshotAvatars,
 } from '../src/utils/offlineSnapshots.js';
+import {
+  formatLocalDateOnlyAR,
+  parseLocalDateOnly,
+} from '../src/utils/helpers.js';
 
-test('la carga base incluye supplier_links', () => {
-  assert.ok(CLOUD_SELECTS.productsList.split(',').includes('supplier_links'));
+test('las fechas de vencimiento conservan el día local', () => {
+  const date = parseLocalDateOnly('2026-08-24');
+
+  assert.equal(date.getFullYear(), 2026);
+  assert.equal(date.getMonth(), 7);
+  assert.equal(date.getDate(), 24);
+  assert.equal(
+    formatLocalDateOnlyAR('2026-08-24', { day: '2-digit', month: '2-digit', year: '2-digit' }),
+    '24/08/26',
+  );
+  assert.equal(parseLocalDateOnly('2026-02-30'), null);
+});
+
+test('los lotes sensibles verifican filas actualizadas y resultados parciales', async () => {
+  const [appSource, historySource, eslintSource] = await Promise.all([
+    readFile(new URL('../src/App.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/views/HistoryView.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../eslint.config.js', import.meta.url), 'utf8'),
+  ]);
+  const categoryHandler = appSource.slice(
+    appSource.indexOf('const handleEditCategory'),
+    appSource.indexOf('const handleBatchUpdateProductCategory'),
+  );
+  const offerHandler = appSource.slice(
+    appSource.indexOf('const handleDeleteOffer'),
+    appSource.indexOf('const handleAddExpense'),
+  );
+
+  assert.match(historySource, /import AsyncActionButton from '\.\.\/components\/AsyncActionButton'/);
+  assert.match(eslintSource, /'react\/jsx-no-undef': 'error'/);
+  assert.match(categoryHandler, /Promise\.allSettled/);
+  assert.match(categoryHandler, /rollbackProductChanges/);
+  assert.match(categoryHandler, /\.select\('id'\)[\s\S]+?\.maybeSingle\(\)/);
+  assert.match(offerHandler, /failedCleanupCount/);
+  assert.match(offerHandler, /result\.status === 'fulfilled'/);
+  assert.match(offerHandler, /Oferta desactivada/);
+});
+
+test('la carga base conserva los campos criticos de productos y ventas', () => {
+  const productColumns = CLOUD_SELECTS.productsList.split(',');
+  for (const column of ['id', 'stock', 'product_type', 'supplier_links', 'updated_at']) {
+    assert.ok(productColumns.includes(column), `Falta ${column} en la carga de productos`);
+  }
+
+  for (const column of [
+    'payment_breakdown',
+    'installments',
+    'status',
+    'user_id',
+    'sale_items(product_id',
+  ]) {
+    assert.ok(CLOUD_SELECTS.sales.includes(column), `Falta ${column} en la carga de ventas`);
+  }
+  assert.match(CLOUD_SELECTS.sales, /sale_items\([^)]*subtotal[^)]*is_discount[^)]*product_type/);
 });
 
 test('el snapshot offline de usuarios no conserva avatares pesados', () => {

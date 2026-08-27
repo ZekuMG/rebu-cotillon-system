@@ -24,6 +24,7 @@ import { formatNumber } from '../../utils/helpers';
 import usePendingAction from '../../hooks/usePendingAction';
 import { hasPermission } from '../../utils/userPermissions';
 import { buildAdjustedProductImageFile, readImageFileAsDataUrl } from '../../utils/productImageEditor';
+import { normalizeProductPurchasePrice } from '../../utils/productLifecycle';
 
 // ==========================================
 // COMPONENTE: Selector multi-categoría
@@ -534,7 +535,10 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
 
   // ✅ Precio guardado en /g → lo mostramos en /kg
   const displayPrice = productType === 'weight' ? Math.round(Number(product.price) * 1000) : product.price;
-  const displayCost = productType === 'weight' ? Math.round(Number(product.purchasePrice) * 1000) : product.purchasePrice;
+  const normalizedPurchasePrice = normalizeProductPurchasePrice(product.purchasePrice, productType);
+  const displayCost = productType === 'weight'
+    ? Math.round(normalizedPurchasePrice * 1000)
+    : normalizedPurchasePrice;
 
   const handlePriceChange = (val) => {
     if (productType === 'weight') {
@@ -563,10 +567,14 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
   const handleSubmit = async (e) => {
     e.preventDefault();
     await runAction(`edit-product-submit:${product.id}`, async () => {
+      const normalizedProduct = {
+        ...product,
+        purchasePrice: normalizeProductPurchasePrice(product.purchasePrice, productType),
+      };
       if (productType === 'weight' && stockUnit === 'kg') {
-        await onSave(e, { ...product, stock: Math.round(Number(product.stock) * 1000) });
+        await onSave(e, { ...normalizedProduct, stock: Math.round(Number(product.stock) * 1000) });
       } else {
-        await onSave(e);
+        await onSave(e, normalizedProduct);
       }
     });
   };

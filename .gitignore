@@ -64,3 +64,8 @@ database supabas/
 
 # Scripts sueltos de analisis de otras sesiones. No son parte de la app.
 _rebu_analysis_temp/
+
+# Temporary release worktrees, local Supabase CLI state and manual source backups.
+/hotfix-build-v1.2.32/
+/supabase/.temp/
+/src/*.bak-*

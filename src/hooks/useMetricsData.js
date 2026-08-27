@@ -6,6 +6,7 @@ import {
   getCostBasisStatus,
   getItemCostInfo,
   getMetricProductKey,
+  getTransactionDate,
   parseMetricDate,
 } from '../utils/salesMetricsCore';
 import {
@@ -106,10 +107,6 @@ const isInRange = (date, range) => {
   if (range.end && date > range.end) return false;
   return true;
 };
-
-const getTransactionDate = (tx) =>
-  parseAnyDate(tx?.createdAt || tx?.created_at || tx?.sortDate || `${tx?.date || ''} ${tx?.time || tx?.timestamp || ''}`) ||
-  parseAnyDate(tx?.date);
 
 const getRecordDate = (record) =>
   parseAnyDate(record?.createdAt || record?.created_at || record?.date || record?.pickupDate || record?.pickup_date);
@@ -897,6 +894,7 @@ const buildRecommendations = ({ current, previous, stockStats, orderStats, membe
       tone: 'danger',
       title: 'Reponer stock crítico',
       detail: `${stockStats.outOfStock.length} sin stock y ${stockStats.lowStock.length} con menos de 10 unidades.`,
+      section: 'stock',
     });
   }
 
@@ -905,6 +903,7 @@ const buildRecommendations = ({ current, previous, stockStats, orderStats, membe
       tone: 'warning',
       title: 'Productos por vencer',
       detail: `${stockStats.expiring.length} productos vencen o vencieron dentro de la ventana de 14 días.`,
+      section: 'stock',
     });
   }
 
@@ -913,12 +912,14 @@ const buildRecommendations = ({ current, previous, stockStats, orderStats, membe
       tone: 'warning',
       title: 'Caída de ventas',
       detail: `El ingreso bajó ${formatNumber(Math.abs(revenueChange), 1)}% contra el período anterior.`,
+      section: 'sales',
     });
   } else if (revenueChange > 15) {
     recommendations.push({
       tone: 'success',
       title: 'Ventas en crecimiento',
       detail: `El ingreso subió ${formatNumber(revenueChange, 1)}% contra el período anterior.`,
+      section: 'sales',
     });
   }
 
@@ -927,6 +928,7 @@ const buildRecommendations = ({ current, previous, stockStats, orderStats, membe
       tone: 'danger',
       title: 'Revisar resultado de caja',
       detail: `El resultado bajó ${formatNumber(Math.abs(profitChange), 1)}%. Mirá gastos, cobros y descuentos.`,
+      section: 'profit',
     });
   }
 
@@ -935,6 +937,7 @@ const buildRecommendations = ({ current, previous, stockStats, orderStats, membe
       tone: 'warning',
       title: 'Margen bajo',
       detail: `${lowMarginProduct.name} tiene margen estimado de ${formatNumber(lowMarginProduct.marginRate, 1)}%.`,
+      section: 'products',
     });
   }
 
@@ -943,6 +946,7 @@ const buildRecommendations = ({ current, previous, stockStats, orderStats, membe
       tone: 'info',
       title: 'Horario fuerte',
       detail: `${peakHour.label} concentra ${peakHour.salesCount} ventas por ${formatCurrency(peakHour.revenue)}.`,
+      section: 'sales',
     });
   }
 
@@ -951,6 +955,7 @@ const buildRecommendations = ({ current, previous, stockStats, orderStats, membe
       tone: 'info',
       title: 'Pedidos con saldo',
       detail: `Hay ${formatCurrency(orderStats.pendingAmount)} pendientes de cobrar en pedidos filtrados.`,
+      section: 'orders',
     });
   }
 
@@ -959,6 +964,7 @@ const buildRecommendations = ({ current, previous, stockStats, orderStats, membe
       tone: 'info',
       title: 'Activar socios',
       detail: 'No hay ventas asociadas a socios en este rango. Puede servir una acción de fidelización.',
+      section: 'clients',
     });
   }
 

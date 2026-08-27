@@ -4,6 +4,14 @@ export const CASA_ALBERTO_PROVIDER_NAME = 'Cotillon Casa Alberto';
 export const CASA_ALBERTO_COST_EXTRA_RATE = 0.15;
 export const CASA_ALBERTO_SALE_MARKUP_RATE = 0.5;
 
+export const normalizeProductPurchasePrice = (value = 0, productType = 'quantity') => {
+  const numberValue = Number(value || 0);
+  if (!Number.isFinite(numberValue)) return 0;
+  return productType === 'weight'
+    ? Math.round(numberValue * 1000) / 1000
+    : Math.round(numberValue);
+};
+
 export const normalizeProductLinkText = (value = '') =>
   String(value ?? '')
     .trim()
@@ -75,7 +83,7 @@ export const buildCasaAlbertoEstimatedCost = (supplierPrice = 0, options = {}) =
   const costExtraRate = Number.isFinite(Number(options.costExtraRate))
     ? Number(options.costExtraRate)
     : CASA_ALBERTO_COST_EXTRA_RATE;
-  return Number((nextCost * (1 + costExtraRate)).toFixed(2));
+  return normalizeProductPurchasePrice(nextCost * (1 + costExtraRate));
 };
 
 export const roundUpToNextTen = (value = 0) => {

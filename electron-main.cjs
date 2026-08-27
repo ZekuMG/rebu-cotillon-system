@@ -785,15 +785,21 @@ const ensureSupplierSessionWindow = ({ show = false } = {}) => {
   return { supplierWindow: supplierImageLoginWindow, reused: true };
 };
 
-const getSupplierLoginState = async () => {
-  if (!supplierImageLoginWindow || supplierImageLoginWindow.isDestroyed()) {
-    return { hasWindow: false, url: '', isLikelyLoggedIn: supplierSessionVerified };
+const inspectSupplierLoginState = async (supplierWindow, { allowCached = true } = {}) => {
+  if (!supplierWindow || supplierWindow.isDestroyed()) {
+    return {
+      hasWindow: false,
+      url: '',
+      isLikelyLoggedIn: allowCached && supplierSessionVerified,
+      hasVisiblePasswordInput: false,
+      isLoginText: false,
+    };
   }
 
-  const url = supplierImageLoginWindow.webContents.getURL();
+  const url = supplierWindow.webContents.getURL();
   let pageState = null;
   try {
-    pageState = await supplierImageLoginWindow.webContents.executeJavaScript(
+    pageState = await supplierWindow.webContents.executeJavaScript(
       `(() => {
         const passwordInputs = Array.from(document.querySelectorAll('input[type="password"]'));
         const visiblePasswordInputs = passwordInputs.filter((input) => {
@@ -813,12 +819,12 @@ const getSupplierLoginState = async () => {
   }
   const normalized = String(pageState?.text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const isLoginText = normalized.includes('usuario') && (normalized.includes('clave') || normalized.includes('contrasena'));
-  const isLikelyLoggedIn =
+  const pageShowsAuthenticatedAccess =
     /index_restringido|seccion_detalle|pedido/i.test(url || '') &&
     !/login/i.test(url || '') &&
     !pageState?.hasVisiblePasswordInput;
 
-  if (isLikelyLoggedIn) supplierSessionVerified = true;
+  if (pageShowsAuthenticatedAccess) supplierSessionVerified = true;
   if (pageState?.hasVisiblePasswordInput || isLoginText || /login\.php/i.test(url || '')) {
     supplierSessionVerified = false;
   }
@@ -826,34 +832,57 @@ const getSupplierLoginState = async () => {
   return {
     hasWindow: true,
     url,
-    isLikelyLoggedIn: isLikelyLoggedIn || supplierSessionVerified,
+    isLikelyLoggedIn: pageShowsAuthenticatedAccess || (allowCached && supplierSessionVerified),
     hasVisiblePasswordInput: Boolean(pageState?.hasVisiblePasswordInput),
     isLoginText,
   };
 };
 
-const restoreSupplierSession = async () => {
-  const { supplierWindow, reused } = ensureSupplierSessionWindow({ show: false });
-  const currentState = await getSupplierLoginState();
-  if (currentState.isLikelyLoggedIn || currentState.hasVisiblePasswordInput) {
+const getSupplierLoginState = async () => inspectSupplierLoginState(
+  supplierImageLoginWindow,
+  { allowCached: true },
+);
+
+const verifySupplierSession = async () => {
+  const verificationWindow = createSupplierBrowserWindow({ show: false, width: 900, height: 700 });
+  try {
+    await loadUrlAndWait(
+      verificationWindow,
+      `${SUPPLIER_DEFAULT_ORIGIN}${SUPPLIER_RESTRICTED_PATH}`,
+      18000,
+    );
+    await delay(250);
+    const verifiedState = await inspectSupplierLoginState(verificationWindow, { allowCached: false });
+    const hasLoginWindow = Boolean(supplierImageLoginWindow && !supplierImageLoginWindow.isDestroyed());
     return {
       success: true,
-      reused,
-      manualLoginRequired: !currentState.isLikelyLoggedIn,
-      loginState: currentState,
+      verified: true,
+      verificationMethod: 'restricted_page',
+      manualLoginRequired: !verifiedState.isLikelyLoggedIn,
+      loginState: {
+        ...verifiedState,
+        hasWindow: hasLoginWindow,
+      },
     };
+  } finally {
+    if (!verificationWindow.isDestroyed()) verificationWindow.destroy();
   }
+};
 
+const restoreSupplierSession = async () => {
+  const { supplierWindow, reused } = ensureSupplierSessionWindow({ show: false });
   await loadUrlAndWait(
     supplierWindow,
     `${SUPPLIER_DEFAULT_ORIGIN}${SUPPLIER_RESTRICTED_PATH}`,
     18000,
   );
   await delay(250);
-  const loginState = await getSupplierLoginState();
+  const loginState = await inspectSupplierLoginState(supplierWindow, { allowCached: false });
   return {
     success: true,
     reused,
+    verified: true,
+    verificationMethod: 'restricted_page',
     manualLoginRequired: !loginState.isLikelyLoggedIn,
     loginState,
   };
@@ -2256,11 +2285,22 @@ app.on('ready', () => {
 
     try {
       const { supplierWindow, reused } = ensureSupplierSessionWindow({ show: true });
-      const currentState = await getSupplierLoginState();
-      if (!reused || (!currentState.isLikelyLoggedIn && !currentState.hasVisiblePasswordInput)) {
-        await loadUrlAndWait(supplierWindow, SUPPLIER_LOGIN_URL, 18000);
-      }
-      return { success: true, reused, loginState: await getSupplierLoginState() };
+      const verification = await verifySupplierSession();
+      const hasVerifiedAccess = Boolean(verification?.loginState?.isLikelyLoggedIn);
+      await loadUrlAndWait(
+        supplierWindow,
+        hasVerifiedAccess ? getSupplierRestrictedUrl() : SUPPLIER_LOGIN_URL,
+        18000,
+      );
+      await delay(250);
+      return {
+        success: true,
+        reused,
+        verified: true,
+        verificationMethod: 'restricted_page',
+        manualLoginRequired: !hasVerifiedAccess,
+        loginState: await inspectSupplierLoginState(supplierWindow, { allowCached: false }),
+      };
     } catch (error) {
       return { success: false, error: error?.message || 'No se pudo abrir el login del proveedor.' };
     }
@@ -2272,6 +2312,16 @@ app.on('ready', () => {
       return await restoreSupplierSession();
     } catch (error) {
       return { success: false, error: error?.message || 'No se pudo recuperar la sesion del proveedor.' };
+    }
+  });
+
+  ipcMain.handle('supplier-session-verify', async (event) => {
+    if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+    try {
+      return await verifySupplierSession();
+    } catch (error) {
+      supplierSessionVerified = false;
+      return { success: false, error: error?.message || 'No se pudo comprobar el acceso a Casa Alberto.' };
     }
   });
 

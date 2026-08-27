@@ -58,6 +58,107 @@ export const recordCloudSourceMutations = (versions = {}, sources = []) => {
   return versions;
 };
 
+export const getIncrementalSyncCutoff = (
+  savedAt,
+  {
+    overlapMs = 5 * 60 * 1000,
+    maxAgeMs = 24 * 60 * 60 * 1000,
+    now = Date.now(),
+  } = {},
+) => {
+  const savedAtMs = Date.parse(savedAt);
+  const safeOverlapMs = Math.max(0, Number(overlapMs) || 0);
+  const safeMaxAgeMs = Math.max(0, Number(maxAgeMs) || 0);
+  const snapshotAgeMs = now - savedAtMs;
+
+  if (
+    !Number.isFinite(savedAtMs) ||
+    savedAtMs <= 0 ||
+    savedAtMs > now + safeOverlapMs ||
+    snapshotAgeMs > safeMaxAgeMs
+  ) {
+    return null;
+  }
+
+  return new Date(Math.max(0, savedAtMs - safeOverlapMs)).toISOString();
+};
+
+export const PRODUCT_SNAPSHOT_SCOPE_FULL = 'full';
+export const PRODUCT_SNAPSHOT_SCOPE_PARTIAL = 'partial';
+
+export const getProductSnapshotScope = (snapshot) => (
+  Array.isArray(snapshot?.inventory) &&
+  snapshot?.inventoryScope === PRODUCT_SNAPSHOT_SCOPE_FULL
+    ? PRODUCT_SNAPSHOT_SCOPE_FULL
+    : PRODUCT_SNAPSHOT_SCOPE_PARTIAL
+);
+
+export const getLatestCloudRecordTimestamp = (
+  records = [],
+  { fallback = null, fields = ['updated_at', 'updatedAt'] } = {},
+) => {
+  let latestTimestampMs = Date.parse(fallback);
+  if (!Number.isFinite(latestTimestampMs)) latestTimestampMs = 0;
+
+  (Array.isArray(records) ? records : []).forEach((record) => {
+    const rawTimestamp = fields
+      .map((field) => record?.[field])
+      .find((value) => value !== undefined && value !== null && value !== '');
+    const timestampMs = Date.parse(rawTimestamp);
+    if (Number.isFinite(timestampMs) && timestampMs > latestTimestampMs) {
+      latestTimestampMs = timestampMs;
+    }
+  });
+
+  return latestTimestampMs > 0 ? new Date(latestTimestampMs).toISOString() : null;
+};
+
+export const shouldUseIncrementalProductSync = ({
+  force = false,
+  inventoryScope = PRODUCT_SNAPSHOT_SCOPE_PARTIAL,
+  inventoryCount = 0,
+  productsSyncedThrough = null,
+  productsFullSyncedAt = null,
+  now = Date.now(),
+  fullSyncMaxAgeMs = 24 * 60 * 60 * 1000,
+} = {}) => {
+  const fullSyncedAtMs = Date.parse(productsFullSyncedAt);
+  const syncedThroughMs = Date.parse(productsSyncedThrough);
+  const fullSyncAgeMs = now - fullSyncedAtMs;
+
+  return (
+    !force &&
+    inventoryScope === PRODUCT_SNAPSHOT_SCOPE_FULL &&
+    Number(inventoryCount) > 0 &&
+    Number.isFinite(syncedThroughMs) &&
+    Number.isFinite(fullSyncedAtMs) &&
+    fullSyncAgeMs >= 0 &&
+    fullSyncAgeMs <= Math.max(0, Number(fullSyncMaxAgeMs) || 0)
+  );
+};
+
+export const mergeCloudRecordsById = (
+  currentRecords = [],
+  changedRecords = [],
+  { keepRecord = () => true, compareRecords = null } = {},
+) => {
+  const recordsById = new Map();
+
+  (Array.isArray(currentRecords) ? currentRecords : []).forEach((record) => {
+    if (record?.id === undefined || record?.id === null) return;
+    recordsById.set(String(record.id), record);
+  });
+  (Array.isArray(changedRecords) ? changedRecords : []).forEach((record) => {
+    if (record?.id === undefined || record?.id === null) return;
+    recordsById.set(String(record.id), record);
+  });
+
+  const nextRecords = Array.from(recordsById.values()).filter(keepRecord);
+  return typeof compareRecords === 'function'
+    ? nextRecords.sort(compareRecords)
+    : nextRecords;
+};
+
 const captureCloudMutationVersions = (versions = {}, sources = []) =>
   Object.fromEntries(sources.map((source) => [source, Number(versions[source] || 0)]));
 

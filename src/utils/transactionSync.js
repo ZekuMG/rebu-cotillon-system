@@ -44,6 +44,11 @@ export const shouldUseIncrementalTransactionSync = ({
   snapshotScope === TRANSACTION_SNAPSHOT_SCOPE_FULL
 );
 
+export const shouldHydrateFullTransactionHistory = ({
+  fullRequested = false,
+  progressive = false,
+} = {}) => Boolean(fullRequested || !progressive);
+
 export const shouldUseIncrementalMetricsSync = ({
   fullRequested = false,
   includeTransactions = true,

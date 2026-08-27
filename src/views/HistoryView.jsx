@@ -32,7 +32,6 @@ import { FancyPrice } from '../components/FancyPrice';
 import AsyncActionButton from '../components/AsyncActionButton';
 import { TransactionDetailModal } from '../components/modals/HistoryModals';
 import UserDisplayBadge from '../components/UserDisplayBadge';
-import usePendingAction from '../hooks/usePendingAction';
 import {
   getPaymentBreakdownDisplayItems,
   getPaymentSummary,
@@ -88,6 +87,37 @@ const getLogSortDate = (log) => {
   const createdAtDate = log?.createdAt || log?.created_at ? new Date(log.createdAt || log.created_at) : null;
   if (createdAtDate && !Number.isNaN(createdAtDate.getTime())) return createdAtDate;
   return parseHistoryDateTime(log?.date, log?.timestamp || log?.time) || normalizeDate(log?.date) || null;
+};
+
+const parseExpenseDate = (exp) => {
+  if (!exp) return null;
+  if (exp instanceof Date) return Number.isNaN(exp.getTime()) ? null : exp;
+  if (typeof exp === 'string') {
+    const d = new Date(exp);
+    if (!Number.isNaN(d.getTime())) return d;
+    return normalizeDate(exp);
+  }
+  if (exp.parsedDate instanceof Date && !Number.isNaN(exp.parsedDate.getTime())) return exp.parsedDate;
+  if (exp.sortDate instanceof Date && !Number.isNaN(exp.sortDate.getTime())) return exp.sortDate;
+
+  const createdAtDate = exp.createdAt || exp.created_at ? new Date(exp.createdAt || exp.created_at) : null;
+  if (createdAtDate && !Number.isNaN(createdAtDate.getTime())) return createdAtDate;
+
+  return parseHistoryDateTime(exp.date, exp.timestamp || exp.time) || normalizeDate(exp.date) || null;
+};
+
+const getExpenseCategoryBadgeStyle = (category = '') => {
+  const normalized = String(category || '').trim().toLowerCase();
+  if (normalized.includes('proveedor')) {
+    return 'bg-amber-50 text-amber-700 border-amber-200';
+  }
+  if (normalized.includes('servicio') || normalized.includes('operativ')) {
+    return 'bg-blue-50 text-blue-700 border-blue-200';
+  }
+  if (normalized.includes('retiro') || normalized.includes('socio')) {
+    return 'bg-purple-50 text-purple-700 border-purple-200';
+  }
+  return 'bg-slate-50 text-slate-700 border-slate-200';
 };
 
 const normalizeHistoryAction = (value = '') =>
@@ -472,7 +502,6 @@ const filterHistoryTransactions = ({
   const [selectedTx, setSelectedTx] = useState(null);
   const [isSoftReloading, setIsSoftReloading] = useState(false);
   const [historyReloadKey, setHistoryReloadKey] = useState(0);
-  const { isPending, runAction } = usePendingAction();
 
   const {
     transactions: remoteTransactions,
@@ -1630,11 +1659,11 @@ const filterHistoryTransactions = ({
                 <button
                   type="button"
                   onClick={handleSoftReload}
-                  disabled={isPending('history-soft-reload') || isSoftReloading}
+                  disabled={isSoftReloading}
                   className={`${HEADER_BUTTON_CLASS} text-slate-500 hover:text-slate-800 disabled:opacity-40`}
                   title="Recargar ventas"
                 >
-                  <RefreshCw size={12} className={isPending('history-soft-reload') || isSoftReloading ? 'animate-spin' : ''} />
+                  <RefreshCw size={12} className={isSoftReloading ? 'animate-spin' : ''} />
                 </button>
               )}
 
@@ -1827,7 +1856,7 @@ const filterHistoryTransactions = ({
                             {!isVoided && !isDeleted && canVoidSale && (
                               <button
                                 type="button"
-                                onClick={() => handleDeleteTransaction(tx, false)}
+                                onClick={() => onDeleteTransaction?.(tx)}
                                 className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 shadow-2xs transition"
                                 title="Anular venta"
                               >
@@ -1837,7 +1866,7 @@ const filterHistoryTransactions = ({
                             {isVoided && canRestoreSale && (
                               <button
                                 type="button"
-                                onClick={() => handleRestoreClick(tx)}
+                                onClick={() => onRestoreTransaction?.(tx)}
                                 className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 shadow-2xs transition"
                                 title="Restaurar venta"
                               >
@@ -1847,7 +1876,7 @@ const filterHistoryTransactions = ({
                             {(isVoided || isDeleted) && canDeleteSale && (
                               <button
                                 type="button"
-                                onClick={() => handleDeleteTransaction(tx, true)}
+                                onClick={() => onDeleteTransaction?.(tx)}
                                 className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-300 bg-slate-100 text-slate-700 hover:bg-red-600 hover:text-white shadow-2xs transition"
                                 title="Eliminar permanentemente"
                               >

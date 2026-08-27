@@ -7,7 +7,9 @@ import {
   isTransactionHistorySnapshotFresh,
   loadTransactionHistorySnapshot,
   normalizeTransactionHistorySnapshot,
+  normalizeStoredTransactionHistorySnapshot,
   saveTransactionHistorySnapshot,
+  TRANSACTION_HISTORY_CACHE_VERSION,
 } from '../src/utils/transactionHistoryCache.js';
 
 const savedAt = '2026-08-03T12:00:00.000Z';
@@ -43,6 +45,29 @@ test('un historial local completo solo se confia durante la ventana definida', (
     now: Date.parse(savedAt) + 180_000,
     maxAgeMs: 120_000,
   }), false);
+});
+
+test('IndexedDB descarta snapshots de una version de cache incompatible', () => {
+  const snapshot = {
+    cacheVersion: TRANSACTION_HISTORY_CACHE_VERSION,
+    savedAt,
+    transactionsScope: 'full',
+    transactions: [{ id: 'sale-1' }],
+  };
+
+  assert.deepEqual(normalizeStoredTransactionHistorySnapshot(snapshot), {
+    savedAt,
+    transactionsScope: 'full',
+    transactions: [{ id: 'sale-1' }],
+  });
+  assert.equal(normalizeStoredTransactionHistorySnapshot({
+    ...snapshot,
+    cacheVersion: TRANSACTION_HISTORY_CACHE_VERSION + 1,
+  }), null);
+  assert.equal(normalizeStoredTransactionHistorySnapshot({
+    ...snapshot,
+    cacheVersion: undefined,
+  }), null);
 });
 
 test('sin IndexedDB la cache se desactiva sin afectar la carga de datos', async () => {

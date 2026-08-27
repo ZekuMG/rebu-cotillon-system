@@ -865,7 +865,7 @@ test('la conversación separa días según Buenos Aires y no agrupa fotos a trav
 test('envíos manuales y presupuestos conservan claves idempotentes estables', async () => {
   const view = await readFile(resolve(root, 'src/views/WhatsAppInboxView.jsx'), 'utf8');
   const migration = await readFile(
-    resolve(root, 'supabase/migrations/20260728_whatsapp_permission_hardening.sql'),
+    resolve(root, 'supabase/migrations/20260728010000_whatsapp_permission_hardening.sql'),
     'utf8',
   );
 
@@ -1139,6 +1139,13 @@ test('cálculo de historial de ventas para socios vinculados en WhatsApp', async
   assert.equal(stats.lastPurchaseDate, '2026-08-18T18:00:00Z');
   assert.equal(stats.recentTransactions.length, 2);
   assert.equal(stats.recentTransactions[0].id, 'tx-2'); // Orden descendente por fecha
+});
+
+test('el panel de contacto deriva el historial del socio antes de renderizarlo', async () => {
+  const view = await readFile(resolve(root, 'src/views/WhatsAppInboxView.jsx'), 'utf8');
+
+  assert.match(view, /const memberSalesStats = useMemo\(/);
+  assert.match(view, /calculateMemberSalesStats\(linkedMember, transactions\)/);
 });
 
 test('interfaz de WhatsApp soporta búsqueda interna, menú contextual, etiquetas, doble clic y rediseño de contacto', async () => {

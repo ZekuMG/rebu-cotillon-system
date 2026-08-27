@@ -223,6 +223,32 @@ export const normalizeDate = (dateStr) => {
   return null;
 };
 
+/**
+ * Interpreta una fecha de calendario YYYY-MM-DD en horario local.
+ * Evita que el navegador la trate como medianoche UTC y muestre el día anterior.
+ */
+export const parseLocalDateOnly = (value) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? '').trim());
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year
+    || date.getMonth() !== month - 1
+    || date.getDate() !== day
+  ) return null;
+
+  return date;
+};
+
+export const formatLocalDateOnlyAR = (value, options = {}) => {
+  const date = parseLocalDateOnly(value);
+  return date ? date.toLocaleDateString('es-AR', options) : '';
+};
+
 // ==========================================
 // Helpers para productos por PESO
 // ==========================================

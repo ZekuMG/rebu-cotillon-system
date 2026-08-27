@@ -1,7 +1,7 @@
 // src/components/dashboard/LowStockAlert.jsx
 import React, { useState } from 'react';
 import { AlertTriangle, Package, CalendarX, Info } from 'lucide-react';
-import { formatNumber } from '../../utils/helpers';
+import { formatLocalDateOnlyAR, formatNumber } from '../../utils/helpers';
 import { getProductImageUrl } from '../../utils/productImages';
 import useIncrementalFeed from '../../hooks/useIncrementalFeed';
 
@@ -151,7 +151,7 @@ export const LowStockAlert = ({ lowStockProducts = [], expiringProducts = [], on
                       </div>
                       <div className="text-right shrink-0">
                         <p className={`font-bold text-[11px] bg-white px-1.5 py-0.5 rounded border ${isExpired ? 'text-red-700 border-red-200' : 'text-orange-700 border-orange-200'}`}>
-                          {new Date(product.expiration_date).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                          {formatLocalDateOnlyAR(product.expiration_date, { day: '2-digit', month: '2-digit', year: '2-digit' })}
                         </p>
                       </div>
                     </button>

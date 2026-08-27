@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  getAppUserDirectoryLoadErrorMessage,
+  isMissingSharedUsersSchemaError,
   mergeAppUserDirectories,
+  resolveLoginUsers,
   shouldLoadPrivateAppUserDirectory,
 } from '../src/utils/appUserLoadControl.js';
 
@@ -47,5 +50,60 @@ test('una lista privada restringida no reemplaza el directorio completo de login
   assert.equal(
     merged.find((user) => user.id === 'seller-1')?.permissionsVersion,
     3,
+  );
+});
+
+test('un error transitorio de Supabase no habilita el usuario Caja legacy', () => {
+  const legacyUsers = [
+    { id: 'legacy-system', role: 'system', isActive: true },
+    { id: 'legacy-seller', role: 'seller', displayName: 'Caja', isActive: true },
+  ];
+
+  assert.deepEqual(resolveLoginUsers({
+    activeUsers: [],
+    authMode: 'supabase',
+    legacyUsers,
+  }), []);
+});
+
+test('el catálogo legacy sigue disponible cuando el modo de autenticación es legacy', () => {
+  const legacyUsers = [
+    { id: 'legacy-system', role: 'system', isActive: true },
+    { id: 'legacy-seller', role: 'seller', displayName: 'Caja', isActive: true },
+  ];
+
+  assert.deepEqual(
+    resolveLoginUsers({ activeUsers: [], authMode: 'legacy', legacyUsers }),
+    legacyUsers,
+  );
+});
+
+test('sólo la ausencia real del esquema compartido se reconoce como modo legacy', () => {
+  assert.equal(isMissingSharedUsersSchemaError({
+    code: 'PGRST205',
+    message: "Could not find the table 'public.app_users_public' in the schema cache",
+  }), true);
+  assert.equal(isMissingSharedUsersSchemaError({
+    code: 'REBU_TIMEOUT',
+    message: 'Carga de usuarios excedió el tiempo de espera.',
+  }), false);
+  assert.equal(isMissingSharedUsersSchemaError({
+    code: '42501',
+    message: 'permission denied for relation app_users_public',
+  }), false);
+});
+
+test('el error de carga explica si falta red, tiempo o permisos', () => {
+  assert.match(
+    getAppUserDirectoryLoadErrorMessage({ offline: true }),
+    /No hay conexión/,
+  );
+  assert.match(
+    getAppUserDirectoryLoadErrorMessage({ error: { code: 'REBU_TIMEOUT' } }),
+    /tardó demasiado/,
+  );
+  assert.match(
+    getAppUserDirectoryLoadErrorMessage({ error: { code: '42501' } }),
+    /no permitió leer/,
   );
 });

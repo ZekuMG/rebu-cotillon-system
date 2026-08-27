@@ -75,6 +75,11 @@ export const normalizeTransactionHistorySnapshot = (snapshot) => {
   };
 };
 
+export const normalizeStoredTransactionHistorySnapshot = (record) => {
+  if (Number(record?.cacheVersion) !== TRANSACTION_HISTORY_CACHE_VERSION) return null;
+  return normalizeTransactionHistorySnapshot(record);
+};
+
 export const isTransactionHistorySnapshotFresh = (
   snapshot,
   { now = Date.now(), maxAgeMs = TRANSACTION_HISTORY_MAX_TRUST_AGE_MS } = {},
@@ -87,7 +92,7 @@ export const isTransactionHistorySnapshotFresh = (
 
 export const loadTransactionHistorySnapshot = async () => {
   const record = await runSnapshotRequest('readonly', (store) => store.get(FULL_TRANSACTIONS_KEY));
-  return normalizeTransactionHistorySnapshot(record);
+  return normalizeStoredTransactionHistorySnapshot(record);
 };
 
 export const saveTransactionHistorySnapshot = async (snapshot) => {

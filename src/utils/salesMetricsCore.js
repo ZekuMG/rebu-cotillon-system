@@ -139,9 +139,28 @@ export const isDateInRange = (date, range) => {
   return true;
 };
 
-export const getTransactionDate = (tx) =>
-  parseMetricDate(tx?.createdAt || tx?.created_at || tx?.sortDate || `${tx?.date || ''} ${tx?.time || tx?.timestamp || ''}`) ||
-  parseMetricDate(tx?.date);
+export const applyMetricClock = (date, clockValue) => {
+  if (!date || !clockValue) return date;
+  const match = String(clockValue).trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (!match) return date;
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const second = Number(match[3] || 0);
+  const meridiem = String(match[4] || '').toUpperCase();
+  if (meridiem === 'PM' && hour < 12) hour += 12;
+  if (meridiem === 'AM' && hour === 12) hour = 0;
+  if (hour > 23 || minute > 59 || second > 59) return date;
+
+  const withClock = new Date(date);
+  withClock.setHours(hour, minute, second, 0);
+  return withClock;
+};
+
+export const getTransactionDate = (tx) => {
+  const date = parseMetricDate(tx?.createdAt || tx?.created_at || tx?.sortDate || tx?.date) || parseMetricDate(tx?.date);
+  return applyMetricClock(date, tx?.time || tx?.timestamp);
+};
 
 export const getRecordDate = (record) =>
   parseMetricDate(record?.createdAt || record?.created_at || record?.date || record?.pickupDate || record?.pickup_date);

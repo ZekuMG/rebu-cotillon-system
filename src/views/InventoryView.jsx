@@ -23,7 +23,7 @@ import {
   ArrowDownUp // âœ¨ AÃ‘ADIDO PARA ORDENAR
 } from 'lucide-react';
 // â™»ï¸ FIX: Importamos FancyPrice junto con helpers
-import { formatStock, formatNumber } from '../utils/helpers';
+import { formatLocalDateOnlyAR, formatStock, formatNumber, parseLocalDateOnly } from '../utils/helpers';
 import { hasPermission } from '../utils/userPermissions';
 import { FancyPrice } from '../components/FancyPrice';
 import { getProductImageUrl } from '../utils/productImages';
@@ -40,8 +40,8 @@ const getExpirationInfo = (dateString) => {
   if (!dateString) return null;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const [year, month, day] = dateString.split('-');
-  const expDate = new Date(year, month - 1, day);
+  const expDate = parseLocalDateOnly(dateString);
+  if (!expDate) return null;
   expDate.setHours(0, 0, 0, 0);
   const diffTime = expDate.getTime() - today.getTime();
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -968,7 +968,7 @@ export default function InventoryView({
                 <div className="flex justify-between items-center text-[13px] border-b border-slate-200 pb-2">
                   <span className="text-slate-500 flex items-center gap-2"><CalendarX size={13} /> Vencimiento</span>
                   <span className={`font-bold ${isExpired ? 'text-red-600' : 'text-slate-700'}`}>
-                    {new Date(selectedProduct.expiration_date).toLocaleDateString('es-AR')}
+                    {formatLocalDateOnlyAR(selectedProduct.expiration_date)}
                   </span>
                 </div>
               )}

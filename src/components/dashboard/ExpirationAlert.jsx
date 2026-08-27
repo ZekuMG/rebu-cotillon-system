@@ -1,6 +1,7 @@
 // src/components/dashboard/ExpirationAlert.jsx
 import React from 'react';
 import { CalendarX, AlertTriangle, Info } from 'lucide-react';
+import { formatLocalDateOnlyAR } from '../../utils/helpers';
 
 export const ExpirationAlert = ({ expiringProducts = [] }) => {
   return (
@@ -40,7 +41,7 @@ export const ExpirationAlert = ({ expiringProducts = [] }) => {
                   <div className="text-right shrink-0">
                     <p className="text-[10px] uppercase font-bold text-slate-400">Fecha</p>
                     <p className={`font-bold text-sm ${isExpired ? 'text-red-700' : 'text-orange-700'}`}>
-                      {new Date(product.expiration_date).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                      {formatLocalDateOnlyAR(product.expiration_date, { day: '2-digit', month: '2-digit', year: '2-digit' })}
                     </p>
                   </div>
                 </div>

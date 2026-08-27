@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   supplierOpenUrl: (targetUrl) => ipcRenderer.invoke('supplier-open-url', targetUrl),
   supplierImageOpenLogin: () => ipcRenderer.invoke('supplier-image-open-login'),
   supplierSessionConnect: () => ipcRenderer.invoke('supplier-session-connect'),
+  supplierSessionVerify: () => ipcRenderer.invoke('supplier-session-verify'),
   supplierSessionLogout: () => ipcRenderer.invoke('supplier-session-logout'),
   supplierImageLoginState: () => ipcRenderer.invoke('supplier-image-login-state'),
   supplierImageSearch: (request) => ipcRenderer.invoke('supplier-image-search', request),

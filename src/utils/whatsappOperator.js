@@ -4,24 +4,28 @@ import { supabase } from '../supabase/client';
 import { CONVERSATION_PAGE_SIZE, INBOX_PAGE_SIZE } from './inboxLoadProgress';
 
 const OPERATOR_PREFIX = '/api/operator';
+const ENABLE_AUTHENTICATED_OPERATOR_SESSION = import.meta.env.VITE_REBU_WHATSAPP_AUTH_SESSION === '1';
 
 const getAccessToken = async () => {
   let token = '';
-  try {
-    const { data } = await supabase.auth.getSession();
-    token = data?.session?.access_token || '';
-  } catch {
-    token = '';
-  }
-  if (!token) {
+  if (ENABLE_AUTHENTICATED_OPERATOR_SESSION) {
     try {
-      const keys = Object.keys(window.localStorage || {});
-      const authKey = keys.find((k) => k.startsWith('sb-') && k.endsWith('-auth-token'));
-      if (authKey) {
-        token = JSON.parse(window.localStorage.getItem(authKey) || '{}')?.access_token || '';
-      }
+      const { data } = await supabase.auth.getSession();
+      token = data?.session?.access_token || '';
     } catch {
       token = '';
+    }
+    // Antes, si no habia sesion en memoria, se leia el token CRUDO de
+    // localStorage. Eso saltea la renovacion de supabase-js y manda un token
+    // viejo: con la sesion persistida es un error garantizado. Se pide la
+    // renovacion por la via normal y, si no sale, se cae a la anon key.
+    if (!token) {
+      try {
+        const { data } = await supabase.auth.refreshSession();
+        token = data?.session?.access_token || '';
+      } catch {
+        token = '';
+      }
     }
   }
   if (!token) {

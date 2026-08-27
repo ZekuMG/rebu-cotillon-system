@@ -11,7 +11,7 @@ test('checkout does not block the POS with a full-screen secure-session warning'
   assert.doesNotMatch(appSource, /Swal\.fire\(\s*['"]Sesion segura requerida['"]/);
 });
 
-test('checkout falls back to the compatible save when the authenticated RPC session is unavailable', () => {
+test('checkout uses the transaction RPC independently from a JWT session', () => {
   const registerSaleStart = appSource.indexOf('const registerSaleTransactionCloud = async');
   const registerSaleEnd = appSource.indexOf('const editSaleTransactionCloud = async', registerSaleStart);
   const registerSaleSource = appSource.slice(registerSaleStart, registerSaleEnd);
@@ -19,6 +19,6 @@ test('checkout falls back to the compatible save when the authenticated RPC sess
   assert.ok(registerSaleStart >= 0 && registerSaleEnd > registerSaleStart);
   assert.match(
     registerSaleSource,
-    /if \(!\(await canUseAuthenticatedTransactionRpcs\(\)\)\) \{\s*console\.warn\([\s\S]*?return null;\s*\}/,
+    /if \(!\(await canUseTransactionRpcs\(\)\)\) \{\s*console\.warn\([\s\S]*?return null;\s*\}/,
   );
 });

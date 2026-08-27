@@ -10,6 +10,7 @@ import {
   getEffectivePermissions,
   normalizePermissionsOverride,
 } from './userPermissions';
+import { runWithSupabaseAuthRecovery } from './supabaseAuthRecovery';
 
 export const APP_USER_NAME_COLORS = [
   '#0f172a',
@@ -407,7 +408,7 @@ export const bootstrapAppUsers = async ({ systemUser, sellerUser }) => {
   if (error) throw error;
 };
 
-export const verifyAppUserLogin = async ({ userId, password }) => {
+const verifyAppUserLoginOnce = async ({ userId, password }) => {
   let { data, error } = await supabase.rpc('verify_app_user_login_auth_bridge', {
     p_user_id: userId,
     p_password: password,
@@ -435,6 +436,12 @@ export const verifyAppUserLogin = async ({ userId, password }) => {
   if (Array.isArray(data)) return normalizeAppUserRecord(data[0] || null);
   return normalizeAppUserRecord(data || null);
 };
+
+export const verifyAppUserLogin = async ({ userId, password }) =>
+  runWithSupabaseAuthRecovery({
+    operation: () => verifyAppUserLoginOnce({ userId, password }),
+    clearSession: (options) => supabase.auth.signOut(options),
+  });
 
 export const signInSupabaseAuthForAppUser = async ({ user, password }) => {
   const email = String(user?.authEmail || user?.auth_email || '').trim();

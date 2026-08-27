@@ -9,12 +9,26 @@ test('supplier session restores silently and logout only clears its isolated par
   ]);
 
   assert.match(mainSource, /ipcMain\.handle\('supplier-session-connect'/);
+  assert.match(mainSource, /ipcMain\.handle\('supplier-session-verify'/);
   assert.match(mainSource, /ensureSupplierSessionWindow\(\{ show: false \}\)/);
   assert.match(mainSource, /ipcMain\.handle\('supplier-session-logout'/);
   assert.match(mainSource, /session\.fromPartition\(SUPPLIER_IMAGE_PARTITION\)/);
   assert.doesNotMatch(mainSource, /defaultSession\.clearStorageData/);
   assert.match(preloadSource, /supplierSessionConnect: \(\) => ipcRenderer\.invoke\('supplier-session-connect'\)/);
+  assert.match(preloadSource, /supplierSessionVerify: \(\) => ipcRenderer\.invoke\('supplier-session-verify'\)/);
   assert.match(preloadSource, /supplierSessionLogout: \(\) => ipcRenderer\.invoke\('supplier-session-logout'\)/);
+});
+
+test('supplier verification reaches the restricted page without trusting the cached flag', async () => {
+  const mainSource = await readFile(new URL('../electron-main.cjs', import.meta.url), 'utf8');
+  const verifyBlock = mainSource.match(/const verifySupplierSession = async \(\) => \{[\s\S]+?\n\};/)?.[0] || '';
+  const restoreBlock = mainSource.match(/const restoreSupplierSession = async \(\) => \{[\s\S]+?\n\};/)?.[0] || '';
+
+  assert.match(verifyBlock, /SUPPLIER_RESTRICTED_PATH/);
+  assert.match(verifyBlock, /allowCached: false/);
+  assert.match(verifyBlock, /verificationMethod: 'restricted_page'/);
+  assert.match(restoreBlock, /allowCached: false/);
+  assert.doesNotMatch(restoreBlock, /currentState\.isLikelyLoggedIn/);
 });
 
 test('primary login action never opens the supplier window', async () => {

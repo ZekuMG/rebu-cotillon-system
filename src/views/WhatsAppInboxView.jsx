@@ -108,9 +108,7 @@ import {
 } from '../utils/whatsappInboxHelpers';
 import {
   SYSTEM_TAGS,
-  getTagById,
   loadChatTags,
-  saveChatTags,
   getTagsForPhone,
   toggleTagForPhone,
   loadMarkedUnreadPhones,
@@ -118,7 +116,6 @@ import {
   loadMutedPhones,
   saveMutedPhones,
   loadContactAliases,
-  saveContactAliases,
   setContactAlias,
   resolveContactName,
   calculateMemberSalesStats,
@@ -3561,6 +3558,10 @@ export default function WhatsAppInboxView({
     if (result?.success === false) setDeviceAccessError('No pudimos abrir la descarga oficial de Tailscale.');
   };
   const linkedMember = linkedMemberMatches.length === 1 ? linkedMemberMatches[0] : null;
+  const memberSalesStats = useMemo(
+    () => calculateMemberSalesStats(linkedMember, transactions),
+    [linkedMember, transactions],
+  );
   const typingLock = detail?.typingLock;
   const lockedByOther = Boolean(
     typingLock
@@ -5064,12 +5065,10 @@ export default function WhatsAppInboxView({
             ) : conversations.length === 0 ? (
               <div className="wa-empty"><MessageCircle /><strong>Sin conversaciones en este filtro</strong><span>{activeFilter.empty}</span></div>
             ) : conversations.map((row) => {
-              const status = statusFor(row);
               const responder = responderFor(row);
               const isMarkedUnread = markedUnreadPhones.has(String(row.phone));
               const isMuted = mutedPhones.has(String(row.phone));
               const unread = Number(row.unread_count || 0);
-              const showUnread = unread > 0 || isMarkedUnread;
               const rowTags = getTagsForPhone(chatTags, row.phone);
               return (
                 <button
