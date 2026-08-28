@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   CalendarRange,
   CreditCard,
@@ -121,6 +122,7 @@ export default function BudgetBuilderModal({
   const [showOffersPanel, setShowOffersPanel] = useState(false);
   const [offerView, setOfferView] = useState('combo');
   const [activePaymentLineIndex, setActivePaymentLineIndex] = useState(0);
+  const [compactSection, setCompactSection] = useState('catalog');
   const initialRecordKey = initialRecord?.id ? `edit-${initialRecord.id}` : 'new';
   const draftStorageKey = `rebu-budget-builder-${initialRecordKey}`;
   const initialDraftRef = useRef({ key: '', draft: { config: DEFAULT_BUDGET_CONFIG, items: [] } });
@@ -186,7 +188,23 @@ export default function BudgetBuilderModal({
   useEffect(() => {
     if (!isOpen) return;
     setActivePaymentLineIndex(0);
+    setCompactSection(initialRecordKey === 'new' ? 'catalog' : 'detail');
   }, [isOpen, initialRecordKey]);
+
+  useEffect(() => {
+    if (!isOpen || typeof document === 'undefined') return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
 
   const filteredInventory = useMemo(() => {
     const searchWords = productSearch.toLowerCase().trim().split(/\s+/).filter(Boolean);
@@ -751,19 +769,19 @@ export default function BudgetBuilderModal({
 
   if (!isOpen) return null;
 
-  return (
-    <div className="budget-builder-modal fixed inset-0 z-[80] bg-slate-950/70 backdrop-blur-sm p-2.5 sm:p-3">
-      <div className="mx-auto flex h-full max-h-[94vh] w-full max-w-[94rem] flex-col overflow-hidden rounded-[22px] border border-slate-700 bg-[#0b1728] shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-700 bg-[#0f1e33] px-3 py-2">
-          <div className="flex items-center gap-2.5">
+  return createPortal((
+    <div className="budget-builder-modal fixed inset-0 z-[100] flex items-center justify-center overflow-hidden bg-slate-950/70 p-1.5 backdrop-blur-sm sm:p-3">
+      <div role="dialog" aria-modal="true" aria-labelledby="budget-builder-title" className="mx-auto flex h-[calc(100dvh-0.75rem)] w-full max-w-[94rem] flex-col overflow-hidden rounded-[18px] border border-slate-700 bg-[#0b1728] shadow-2xl sm:h-[calc(100dvh-1.5rem)] sm:rounded-[22px]">
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-700 bg-[#0f1e33] px-2.5 py-2 sm:px-3">
+          <div className="flex min-w-0 items-center gap-2.5">
             <div className="flex h-8 w-8 items-center justify-center rounded-[12px] border border-sky-400/30 bg-sky-500/15 text-sky-200">
               <FileText size={15} />
             </div>
-            <div>
-              <h2 className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-100">
+            <div className="min-w-0">
+              <h2 id="budget-builder-title" className="truncate text-[10px] font-black uppercase tracking-[0.12em] text-slate-100">
                 {initialRecord ? (initialRecord.type === 'order' ? 'Editar pedido' : 'Editar presupuesto') : 'Crear presupuesto'}
               </h2>
-              <p className="text-[10px] font-medium text-slate-400">
+              <p className="hidden truncate text-[10px] font-medium text-slate-400 sm:block">
                 Armá el presupuesto, definí el cliente y congelá el detalle del pedido.
               </p>
             </div>
@@ -771,14 +789,42 @@ export default function BudgetBuilderModal({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Cerrar constructor de presupuesto"
             className="rounded-[14px] border border-slate-700 bg-[#07111f] p-1.5 text-slate-400 transition hover:border-slate-500 hover:bg-slate-800 hover:text-slate-100"
           >
             <X size={16} />
           </button>
         </div>
 
-        <div className="grid min-h-0 flex-1 gap-0 overflow-x-hidden lg:grid-cols-[0.8fr_1.2fr]">
-          <div className="min-h-0 border-b border-slate-700 bg-[#0b1728] lg:border-b-0 lg:border-r">
+        <div className="grid shrink-0 grid-cols-2 gap-1 border-b border-slate-700 bg-[#0b1728] p-1 xl:hidden">
+          <button
+            type="button"
+            onClick={() => setCompactSection('catalog')}
+            aria-pressed={compactSection === 'catalog'}
+            className={`rounded-[11px] border px-2 py-1.5 text-[10px] font-black uppercase tracking-[0.1em] transition ${
+              compactSection === 'catalog'
+                ? 'border-sky-400/45 bg-sky-500/15 text-sky-100'
+                : 'border-transparent text-slate-400 hover:bg-[#102139] hover:text-slate-200'
+            }`}
+          >
+            Productos
+          </button>
+          <button
+            type="button"
+            onClick={() => setCompactSection('detail')}
+            aria-pressed={compactSection === 'detail'}
+            className={`rounded-[11px] border px-2 py-1.5 text-[10px] font-black uppercase tracking-[0.1em] transition ${
+              compactSection === 'detail'
+                ? 'border-fuchsia-400/45 bg-fuchsia-500/15 text-fuchsia-100'
+                : 'border-transparent text-slate-400 hover:bg-[#102139] hover:text-slate-200'
+            }`}
+          >
+            Cliente y detalle · {draftItems.length}
+          </button>
+        </div>
+
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 overflow-hidden xl:grid-cols-[minmax(390px,0.8fr)_minmax(0,1.2fr)]">
+          <div data-budget-section="catalog" className={`${compactSection === 'catalog' ? 'block' : 'hidden'} min-h-0 bg-[#0b1728] xl:block xl:border-r xl:border-slate-700`}>
             <div className="flex h-full min-h-0 flex-col">
               <div className="border-b border-slate-700 px-2.5 py-1.5">
                 <div className={`flex items-center gap-2 ${fieldShellClass}`}>
@@ -922,7 +968,7 @@ export default function BudgetBuilderModal({
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5 py-1.5 scrollbar-hide" onScroll={handleCatalogScroll}>
-                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-2 2xl:grid-cols-3">
                   {visibleInventory.map((product) => (
                     <button
                       key={`${product.id}-catalog`}
@@ -995,10 +1041,10 @@ export default function BudgetBuilderModal({
             </div>
           </div>
 
-          <div className="min-h-0 bg-[#07111f]">
-            <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-slate-700 bg-[#0b1728] px-2.5 py-1.5">
-                <div className="grid gap-1.5 xl:grid-cols-[0.9fr_1.1fr]">
+          <div data-budget-section="detail" className={`${compactSection === 'detail' ? 'block' : 'hidden'} min-h-0 bg-[#07111f] xl:block`}>
+            <div data-budget-detail-scroll className="flex h-full min-h-0 flex-col overflow-y-auto overflow-x-hidden scrollbar-hide xl:overflow-hidden">
+              <div className="shrink-0 border-b border-slate-700 bg-[#0b1728] px-2.5 py-1.5">
+                <div className="grid gap-1.5 md:grid-cols-[0.9fr_1.1fr]">
                   <div className={panelShellClass}>
                     <div className="flex items-center gap-1.5">
                       <button
@@ -1292,7 +1338,7 @@ export default function BudgetBuilderModal({
                 </div>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-1.5 scrollbar-hide">
+              <div className="shrink-0 overflow-visible px-2.5 pb-20 pt-1.5 xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:overflow-x-hidden xl:py-1.5 xl:scrollbar-hide">
                 <div className="mb-1.5 flex items-center justify-between">
                   <div>
                     <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-300">
@@ -1341,8 +1387,8 @@ export default function BudgetBuilderModal({
                         key={item.id}
                         className="budget-builder-item-row overflow-hidden rounded-[13px] border border-slate-700/80 bg-[#0f1e33] px-1.5 py-[3px] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
                       >
-                        <div className="grid min-w-0 gap-1 sm:grid-cols-[minmax(0,1.52fr)_90px_94px_94px_120px_30px]">
-                          <label className={fieldShellClass}>
+                        <div className="grid min-w-0 gap-1 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.52fr)_90px_94px_94px_120px_30px]">
+                          <label className={`${fieldShellClass} sm:col-span-2 lg:col-span-1`}>
                             <span className="mb-0.5 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">
                               <Package size={11} />
                               Articulo
@@ -1436,7 +1482,7 @@ export default function BudgetBuilderModal({
                           <button
                             type="button"
                             onClick={() => removeDraftItem(item.id)}
-                            className="budget-builder-delete-button flex h-full min-h-[38px] items-center justify-center rounded-[12px] border border-red-200 bg-red-50 text-red-600 transition hover:bg-red-100"
+                            className="budget-builder-delete-button flex h-full min-h-[38px] items-center justify-center rounded-[12px] border border-red-200 bg-red-50 text-red-600 transition hover:bg-red-100 sm:col-span-2 lg:col-span-1"
                           >
                             <Trash2 size={14} />
                           </button>
@@ -1455,7 +1501,7 @@ export default function BudgetBuilderModal({
                 </div>
               </div>
 
-              <div className="border-t border-slate-700 bg-[#0f1e33] px-3 py-2">
+              <div data-budget-footer className="sticky bottom-0 z-10 shrink-0 border-t border-slate-700 bg-[#0f1e33] px-3 py-2 xl:static">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
@@ -1465,7 +1511,7 @@ export default function BudgetBuilderModal({
                       <FancyPrice amount={budgetTotal} />
                     </p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     {!initialRecord && (
                       <button
                         type="button"
@@ -1500,5 +1546,5 @@ export default function BudgetBuilderModal({
         </div>
       </div>
     </div>
-  );
+  ), document.body);
 }

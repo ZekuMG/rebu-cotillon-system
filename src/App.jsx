@@ -7040,11 +7040,23 @@ export default function PartySupplyApp() {
     });
   };
 
-  const savePreparedPdf = async (safeName, restorePdfTheme) => {
+  const savePreparedPdf = async (safeName, restorePdfTheme, pdfData = null) => {
     try {
-      await waitForPdfExportReady();
+      if (window.electronAPI?.saveExportPdf && pdfData) {
+        const result = await window.electronAPI.saveExportPdf({
+          defaultName: `${safeName}.pdf`,
+          data: pdfData,
+        });
 
-      if (window.electronAPI?.saveAsPdf) {
+        if (result.success) {
+          showNotification('success', 'PDF Guardado', `Guardado en: ${result.filePath}`);
+          return true;
+        } else if (!result.canceled) {
+          Swal.fire('Error', 'No se pudo guardar el PDF: ' + result.error, 'error');
+        }
+        return false;
+      } else if (window.electronAPI?.saveAsPdf) {
+        await waitForPdfExportReady();
         const result = await window.electronAPI.saveAsPdf(`${safeName}.pdf`);
 
         if (result.success) {
@@ -7055,6 +7067,7 @@ export default function PartySupplyApp() {
         }
         return false;
       } else {
+        await waitForPdfExportReady();
         window.print();
         showNotification('info', 'Vista de impresi\u00f3n abierta', 'No se detect\u00f3 Electron; us\u00e1 "Guardar como PDF" desde el di\u00e1logo del navegador');
         return true;
@@ -7109,7 +7122,7 @@ export default function PartySupplyApp() {
     }
   };
 
-  const handleExportProducts = (config, items) => {
+  const handleExportProducts = (config, items, { standalone = false } = {}) => {
     const dateStr = formatDateAR(new Date());
     const dataToExport = { config, items, date: dateStr };
     const restorePdfTheme = forceLightThemeForPdfExport();
@@ -7138,7 +7151,11 @@ export default function PartySupplyApp() {
 
     return new Promise((resolve) => {
       window.setTimeout(async () => {
-        const wasExported = await savePreparedPdf(safeName, restorePdfTheme);
+        const wasExported = await savePreparedPdf(
+          safeName,
+          restorePdfTheme,
+          standalone ? dataToExport : null,
+        );
         if (wasExported) {
           addLog('Exportación PDF', logDetails, 'Exportación de catálogo');
         }
@@ -9586,7 +9603,7 @@ export default function PartySupplyApp() {
 
   const handlePrintOrderRecord = (record) => {
     const { config, items } = buildBudgetPdfPayload(record);
-    handleExportProducts(config, items);
+    handleExportProducts(config, items, { standalone: true });
   };
 
   // ==========================================
@@ -14425,8 +14442,9 @@ export default function PartySupplyApp() {
       return { products: mergedProducts };
     } catch (error) {
       console.error('Error aprobando precios de Casa Alberto:', error);
-      showNotification('error', 'Error', error?.message || 'No se pudieron aprobar los costos.');
-      return { products: [] };
+      const message = error?.message || 'No se pudieron aprobar los costos.';
+      showNotification('error', 'Error', message);
+      return { products: [], error: message };
     }
   };
 
@@ -14532,8 +14550,9 @@ export default function PartySupplyApp() {
       return { products: mergedProducts };
     } catch (error) {
       console.error('Error deshaciendo precios de Casa Alberto:', error);
-      showNotification('error', 'Error', error?.message || 'No se pudo deshacer la aprobacion.');
-      return { products: [] };
+      const message = error?.message || 'No se pudo deshacer la aprobacion.';
+      showNotification('error', 'Error', message);
+      return { products: [], error: message };
     }
   };
 
@@ -14588,8 +14607,9 @@ export default function PartySupplyApp() {
       return { products: mergedProducts };
     } catch (error) {
       console.error('Error actualizando enlace Casa Alberto:', error);
-      showNotification('error', 'Error', error?.message || 'No se pudo guardar el enlace.');
-      return { products: [] };
+      const message = error?.message || 'No se pudo guardar el enlace.';
+      showNotification('error', 'Error', message);
+      return { products: [], error: message };
     }
   };
 
@@ -16796,7 +16816,7 @@ export default function PartySupplyApp() {
                                 <AlertTriangle size={14} />
                               </span>
                               <div className="min-w-0 flex-1">
-                                <p className="text-[9px] font-black uppercase tracking-[0.14em] text-amber-200">Control de costos</p>
+                                <p className="text-[9px] font-black uppercase tracking-[0.14em] text-amber-200">Casa Alberto</p>
                                 <p className="mt-0.5 text-[12px] font-black text-white">Cambios de Casa Alberto por revisar</p>
                               </div>
                               <button

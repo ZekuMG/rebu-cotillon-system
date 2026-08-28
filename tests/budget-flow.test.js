@@ -8,6 +8,9 @@ import {
   getBudgetItemsValidationError,
   hydrateBudgetSnapshot,
 } from '../src/utils/budgetHelpers.js';
+import exportPdfModule from '../electron-export-pdf.cjs';
+
+const { buildExportPdfHtml } = exportPdfModule;
 
 test('el PDF de presupuesto depende del snapshot y no del stock vivo', () => {
   const record = {
@@ -34,6 +37,28 @@ test('el PDF de presupuesto depende del snapshot y no del stock vivo', () => {
   assert.equal(payload.items[0].newPrice, 1500);
   assert.equal(Object.hasOwn(payload.items[0], 'stock'), false);
   assert.equal(payload.config.financialSummary.totalAmount, 1500);
+});
+
+test('Electron recibe un documento aislado con los artículos del presupuesto', () => {
+  const html = buildExportPdfHtml({
+    config: {
+      documentTitle: 'PRESUPUESTO',
+      clientName: 'Celeste <script>',
+      financialSummary: { totalAmount: 6500 },
+    },
+    items: [{ title: 'Topper cupcakes', category: 'Adicionales', qty: 1, newPrice: 6500 }],
+  });
+  const preloadSource = readFileSync('preload.cjs', 'utf8');
+  const mainSource = readFileSync('electron-main.cjs', 'utf8');
+
+  assert.match(html, /Topper cupcakes/);
+  assert.match(html, /Celeste &lt;script&gt;/);
+  assert.doesNotMatch(html, /Celeste <script>/);
+  assert.match(preloadSource, /saveExportPdf/);
+  assert.match(mainSource, /createStandaloneExportPdf/);
+  assert.match(mainSource, /ipcMain\.handle\('save-export-pdf'/);
+  const appSource = readFileSync('src/App.jsx', 'utf8');
+  assert.match(appSource, /handleExportProducts\(config, items, \{ standalone: true \}\)/);
 });
 
 test('snapshots históricos incompletos no rompen la vista ni el PDF', () => {

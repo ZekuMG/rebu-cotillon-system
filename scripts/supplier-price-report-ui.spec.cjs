@@ -2,7 +2,7 @@ const { test, expect } = require('playwright/test');
 
 const appUrl = process.env.REBU_SMOKE_URL || 'http://127.0.0.1:5174/?demo=1';
 
-test('Control de costos ofrece archivo de aprobados e historial PDF sin romper el modo navegador', async ({ page }, testInfo) => {
+test('Casa Alberto ofrece archivo de aprobados e historial PDF sin romper el modo navegador', async ({ page }, testInfo) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
 
@@ -37,10 +37,12 @@ test('Control de costos ofrece archivo de aprobados e historial PDF sin romper e
   await expect(notificationsPanel).toHaveCount(0);
 
   await page.getByRole('button', { name: /Productos \(Avanzado\)/i }).click();
-  await page.getByRole('button', { name: /Control de costos/i }).click();
-  await expect(page.getByRole('heading', { name: 'Control de costos' })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Por revisar/i }).first()).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('button', { name: /Aprobados/i }).first()).toBeVisible();
+  await page.getByRole('button', { name: /Casa Alberto/i }).click();
+  await expect(page.getByRole('heading', { name: 'Casa Alberto', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Todos/i }).first()).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: /Revisados/i }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Lista', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Tarjetas', exact: true })).toHaveCount(0);
 
   const reportButton = page.getByRole('button', { name: /Historial PDF/i });
   await expect(reportButton).toBeVisible();

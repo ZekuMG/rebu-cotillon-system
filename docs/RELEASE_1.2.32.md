@@ -8,24 +8,30 @@ Este documento describe cada archivo incluido en el commit de cierre de la versi
 - `.env.example`: separa la activación de RPC transaccionales de Supabase Auth y deja documentado el modo temporal sin JWT.
 - `.gitignore`: excluye worktrees de hotfix, estado local de Supabase CLI y respaldos manuales de código.
 - `docs/RELEASE_1.2.32.md`: conserva este inventario archivo por archivo de la versión.
-- `electron-main.cjs`: verifica la sesión real de Casa Alberto contra una página restringida y expone el nuevo control IPC.
+- `electron-export-pdf.cjs`: genera presupuestos PDF en una ventana aislada para no depender del estado visual de la aplicación.
+- `electron-main.cjs`: verifica la sesión real de Casa Alberto, protege sus credenciales con el cifrado del sistema operativo e inicia el acceso automáticamente.
 - `eslint.config.js`: convierte referencias JSX no definidas en errores de lint.
 - `package.json`: fija la versión 1.2.32, amplía las suites de regresión/smoke y declara `pg` para diagnósticos.
 - `package-lock.json`: alinea la versión, la dependencia `pg` y las resoluciones instaladas.
-- `preload.cjs`: publica al renderer la verificación aislada de la sesión del proveedor.
+- `preload.cjs`: publica al renderer la verificación aislada y el guardado seguro del acceso del proveedor.
 
 ## Scripts operativos y smoke tests
 
 - `scripts/audit-supabase-query-latency.mjs`: mide lecturas incrementales de productos y la carga base de clientes.
 - `scripts/cache-persistence.spec.cjs`: comprueba persistencia e invalidación segura del historial completo en IndexedDB.
+- `scripts/budget-responsive.spec.cjs`: valida el constructor de presupuestos en escritorio, notebook y anchos compactos.
+- `scripts/playtest-general.spec.cjs`: recorre en modo demo los módulos operativos sin permitir tráfico externo.
+- `scripts/playtest-real.spec.cjs`: ofrece un recorrido acotado y de solo lectura contra datos reales para diagnóstico manual.
 - `scripts/run-supabase-diagnostic.mjs`: ejecuta SQL controlado exclusivamente desde `supabase/diagnostics` usando credenciales locales.
 - `scripts/startup-cache-gating.spec.cjs`: verifica que login y Dashboard diario no abran prematuramente el historial pesado.
-- `scripts/supplier-price-report-ui.spec.cjs`: valida el flujo visual de Control de costos, aprobados e historial PDF.
+- `scripts/supplier-price-report-ui.spec.cjs`: valida el flujo visual de Casa Alberto, aprobados e historial PDF.
+- `scripts/supplier-link-suggestions-ui.spec.cjs`: comprueba la comparación y las acciones de enlaces sugeridos de Casa Alberto.
 - `scripts/supplier-session-control.spec.cjs`: prueba verificación real, acceso manual, cierre y aislamiento de la sesión del proveedor.
 
 ## Aplicación y experiencia de usuario
 
-- `src/App.jsx`: integra modo sin JWT, recuperación de sesión, errores detallados, ventas idempotentes, `points_spent`, sincronización incremental, Control de costos y Estudio IA.
+- `src/App.jsx`: integra modo sin JWT, recuperación de sesión, errores detallados, ventas idempotentes, `points_spent`, sincronización incremental, Casa Alberto y Estudio IA.
+- `src/components/BudgetBuilderModal.jsx`: adapta el constructor de presupuestos a resoluciones compactas y lo monta como diálogo accesible.
 - `src/components/Sidebar.jsx`: agrega el acceso con permisos al Estudio de imágenes IA.
 - `src/components/dashboard/ExpirationAlert.jsx`: muestra fechas de vencimiento respetando el día local.
 - `src/components/dashboard/LowStockAlert.jsx`: corrige comparación y formato local de vencimientos.
@@ -54,7 +60,7 @@ Este documento describe cada archivo incluido en el commit de cierre de la versi
 - `src/utils/whatsappOperator.js`: evita reutilizar JWT crudos y limita Auth al modo seguro explícitamente habilitado.
 - `src/views/AiImageStudioView.css`: define el espacio de trabajo adaptable para generar, editar y descargar imágenes.
 - `src/views/AiImageStudioView.jsx`: implementa el Estudio IA con permisos, referencias, prompts, resultados y descarga.
-- `src/views/BulkEditorView.jsx`: reorganiza Casa Alberto como Control de costos con revisión, aprobados, sesiones verificadas y lotes transaccionales.
+- `src/views/BulkEditorView.jsx`: restaura el panel operativo de Casa Alberto con una vista única de tarjetas, configura el acceso automático una sola vez y confirma la persistencia real antes de aprobar, ignorar, deshacer o vincular.
 - `src/views/HistoryView.jsx`: mejora fechas/categorías de gastos y delega correctamente eliminar/restaurar ventas.
 - `src/views/InventoryView.jsx`: corrige el día mostrado y evaluado en vencimientos.
 - `src/views/MetricsView.jsx`: rediseña Métricas por secciones operativas, lectura guiada, caja, gráficos y navegación accesible.
@@ -103,6 +109,7 @@ Este documento describe cada archivo incluido en el commit de cierre de la versi
 - `supabase/migrations/20260827020000_anon_sin_limitantes.sql`: mantiene compatibilidad legacy abriendo el esquema público para el rol `anon`.
 - `supabase/migrations/20260827030000_venta_idempotente.sql`: impide ventas duplicadas mediante clave de operación y lock transaccional.
 - `supabase/migrations/20260827040000_endurecer_anon_v132.sql`: cierra implementaciones `unchecked` y exige grants explícitos para funciones futuras.
+- `supabase/migrations/20260828163500_conflicto_costos_sin_candados.sql`: evita locks inútiles ante conflictos de costos, impide reintentos automáticos y conserva compatibilidad sin JWT.
 - `supabase/tests/web_catalog_security_test.sql`: valida lectura pública y mutaciones protegidas del catálogo web.
 
 ## Pruebas de regresión
@@ -121,9 +128,9 @@ Este documento describe cada archivo incluido en el commit de cierre de la versi
 - `tests/session-self-heal.test.js`: cubre reintentos seguros, concurrencia, timeouts y diagnósticos del autorreparador.
 - `tests/supabase-auth-recovery.test.js`: prueba limpieza de JWT persistidos y tolerancia al desfase de reloj.
 - `tests/supabase-error-diagnostics.test.js`: valida códigos específicos de Auth, permisos y esquema.
-- `tests/supplier-price-batch.test.js`: asegura que Control de costos persista mediante una RPC atómica y autorizada.
+- `tests/supplier-price-batch.test.js`: asegura que Casa Alberto persista mediante una RPC atómica y autorizada, sin confirmar estados locales ante resultados incompletos.
 - `tests/supplier-price-review.test.js`: cubre estados de revisión, agrupación y avisos persistentes por usuario.
-- `tests/supplier-session-control.test.js`: verifica el acceso real a la página restringida sin confiar en caché.
+- `tests/supplier-session-control.test.js`: verifica el acceso real sin caché, el cifrado local y el inicio automático de Casa Alberto.
 - `tests/transaction-history-cache.test.js`: prueba invalidación de versiones incompatibles de IndexedDB.
 - `tests/transaction-sync.test.js`: asegura que el Dashboard progresivo no hidrate innecesariamente todo el historial.
 - `tests/whatsapp-inbox.test.js`: actualiza la migración WhatsApp y valida el historial precalculado del socio.
@@ -131,7 +138,8 @@ Este documento describe cada archivo incluido en el commit de cierre de la versi
 
 ## Validación de cierre
 
-- Regresión: 352 pruebas aprobadas.
+- Regresión: 356 pruebas aprobadas.
+- Flujos visuales focalizados: 8 pruebas aprobadas (presupuesto adaptable, reportes, enlaces y sesión de Casa Alberto).
 - Lint: aprobado.
 - Build Vite de producción: aprobado.
 - Instalador NSIS: `Rebu Cotillón System Setup 1.2.32.exe` generado correctamente.

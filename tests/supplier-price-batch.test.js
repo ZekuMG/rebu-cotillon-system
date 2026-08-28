@@ -42,6 +42,20 @@ test('supplier price batch RPC is bounded, authorized and concurrency safe', asy
   assert.match(migration, /grant execute on function public\.apply_supplier_product_updates_batch\(text, jsonb\)[\s\S]+to authenticated/i);
 });
 
+test('supplier price conflict precheck avoids locks without breaking no-JWT terminals', async () => {
+  const migration = await readSource('../supabase/migrations/20260828163500_conflicto_costos_sin_candados.sql');
+  const precheckPosition = migration.indexOf('-- Filtro barato ANTES de tomar candados');
+  const lockPosition = migration.indexOf('for update of product');
+
+  assert.ok(precheckPosition >= 0, 'la migración debe incluir el prechequeo de conflictos');
+  assert.ok(lockPosition > precheckPosition, 'el prechequeo debe ejecutarse antes de tomar locks');
+  assert.match(migration, /using errcode = 'P0001'/);
+  assert.match(
+    migration,
+    /grant execute on function public\.apply_supplier_product_updates_batch\(text, jsonb\)\s+to anon, authenticated/i,
+  );
+});
+
 test('supplier price UI batches local state and defers offscreen rendering', async () => {
   const [viewSource, cssSource] = await Promise.all([
     readSource('../src/views/BulkEditorView.jsx'),
@@ -72,7 +86,23 @@ test('supplier price checks handle persistence failures without unhandled reject
   assert.match(allChecksSource, /showSupplierActionFailure\(/);
 });
 
-test('supplier price control keeps one operative presentation', async () => {
+test('supplier price actions only change local state after the database confirms every product', async () => {
+  const [appSource, viewSource] = await Promise.all([
+    readSource('../src/App.jsx'),
+    readSource('../src/views/BulkEditorView.jsx'),
+  ]);
+
+  assert.match(viewSource, /const requireSupplierMutationProducts = \(result, expectedCount, fallbackMessage\)/);
+  assert.match(viewSource, /products\.length !== expectedCount/);
+  assert.match(viewSource, /if \(await handleApproveSupplierGroup\(group\)\) completedKeys\.add/);
+  assert.match(viewSource, /if \(await handleIgnoreSupplierGroup\(group\)\) completedKeys\.add/);
+  assert.match(viewSource, /No se pudo confirmar la aprobación de todos los productos/);
+  assert.match(viewSource, /No se pudo confirmar la restauración de todos los productos/);
+  assert.match(viewSource, /No se pudo confirmar la vinculación de todos los productos/);
+  assert.match(appSource, /return \{ products: \[\], error: message \};/);
+});
+
+test('supplier price control keeps one operative card presentation', async () => {
   const viewSource = await readSource('../src/views/BulkEditorView.jsx');
 
   assert.doesNotMatch(viewSource, /SUPPLIER_PRICE_VIEW_MODE_STORAGE_KEY/);

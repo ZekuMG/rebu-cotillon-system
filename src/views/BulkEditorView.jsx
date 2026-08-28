@@ -1,7 +1,7 @@
 import React, { lazy, Suspense, useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Search, Save, CheckSquare, Square, 
-  Scale, Package, ArrowRight, Loader2, RotateCcw,
+  Package, ArrowRight, Loader2, RotateCcw,
   FileText, X, User, Edit3, ChevronDown, Plus, Minus, Trash2, PackageX,
   Camera, Image as ImageIcon, LogIn, LogOut, CheckCircle, AlertTriangle, ExternalLink,
   Pause, Play, StopCircle, Crosshair, RefreshCw, Link2,
@@ -183,7 +183,7 @@ export default function BulkEditorView({
   const [productImagePreview, setProductImagePreview] = useState('');
   const imageImportPausedRef = useRef(false);
   const imageImportStopRef = useRef(false);
-  const [supplierPriceFilter, setSupplierPriceFilter] = useState('attention');
+  const [supplierPriceFilter, setSupplierPriceFilter] = useState('all');
   const [supplierPriceSearchTerm, setSupplierPriceSearchTerm] = useState('');
   const [supplierPriceRows, setSupplierPriceRows] = useState({});
   const [supplierPriceOverrides, setSupplierPriceOverrides] = useState({});
@@ -687,6 +687,54 @@ export default function BulkEditorView({
     }));
   }, []);
 
+  const requestSupplierCredentials = async ({ rejected = false } = {}) => {
+    if (!window.electronAPI?.supplierCredentialsSave) {
+      return { success: false, error: 'La versión de escritorio no permite guardar el acceso de Casa Alberto.' };
+    }
+
+    const promptResult = await Swal.fire({
+      title: rejected ? 'Actualizar acceso de Casa Alberto' : 'Configurar acceso de Casa Alberto',
+      html: `
+        <p style="margin:0 0 16px;color:#64748b;font-size:14px;line-height:1.45;text-align:left">
+          ${rejected
+            ? 'Casa Alberto rechazó los datos guardados. Ingresá los datos actuales.'
+            : 'Ingresalos una sola vez. Rebu los guardará cifrados en este equipo para iniciar sesión automáticamente.'}
+        </p>
+        <label for="supplier-login-username" style="display:block;margin-bottom:6px;color:#334155;font-size:12px;font-weight:800;text-align:left">Usuario</label>
+        <input id="supplier-login-username" class="swal2-input" autocomplete="username" style="width:100%;margin:0 0 14px" />
+        <label for="supplier-login-password" style="display:block;margin-bottom:6px;color:#334155;font-size:12px;font-weight:800;text-align:left">Contraseña</label>
+        <input id="supplier-login-password" class="swal2-input" type="password" autocomplete="current-password" style="width:100%;margin:0" />
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'Guardar e iniciar',
+      cancelButtonText: 'Cancelar',
+      confirmButtonColor: '#059669',
+      focusConfirm: false,
+      didOpen: () => document.getElementById('supplier-login-username')?.focus(),
+      preConfirm: () => {
+        const username = String(document.getElementById('supplier-login-username')?.value || '').trim();
+        const password = String(document.getElementById('supplier-login-password')?.value || '');
+        if (!username || !password) {
+          Swal.showValidationMessage('Completá el usuario y la contraseña.');
+          return false;
+        }
+        return { username, password };
+      },
+    });
+
+    if (!promptResult.isConfirmed || !promptResult.value) return { success: false, canceled: true };
+    const saveResult = await window.electronAPI.supplierCredentialsSave(promptResult.value);
+    promptResult.value.password = '';
+    if (!saveResult?.success) {
+      await Swal.fire(
+        'No se pudo proteger el acceso',
+        saveResult?.error || 'Rebu no pudo guardar los datos cifrados en este equipo.',
+        'error',
+      );
+    }
+    return saveResult;
+  };
+
   const handleConnectSupplierSession = async () => {
     if (!window.electronAPI?.supplierSessionConnect) {
       setSupplierSessionState((current) => ({ ...current, status: 'unsupported', error: '' }));
@@ -697,8 +745,23 @@ export default function BulkEditorView({
     setIsSupplierSessionBusy(true);
     setSupplierSessionState((current) => ({ ...current, status: 'checking', error: '' }));
     try {
-      const result = await window.electronAPI.supplierSessionConnect();
+      let result = await window.electronAPI.supplierSessionConnect();
+      if (result?.credentialsRequired) {
+        const saveResult = await requestSupplierCredentials({ rejected: Boolean(result.credentialsRejected) });
+        if (!saveResult?.success) {
+          applySupplierSessionResult(result, 'manual_required');
+          return;
+        }
+        result = await window.electronAPI.supplierSessionConnect();
+      }
       applySupplierSessionResult(result, result?.success === false ? 'error' : 'disconnected');
+      if (result?.success === false) {
+        await Swal.fire(
+          result?.credentialsRejected ? 'Acceso rechazado' : 'No se pudo iniciar la sesión',
+          result?.error || 'Volvé a intentar o usá el acceso manual.',
+          'error',
+        );
+      }
     } catch (error) {
       setSupplierSessionState((current) => ({
         ...current,
@@ -1788,6 +1851,14 @@ export default function BulkEditorView({
     });
   };
 
+  const requireSupplierMutationProducts = (result, expectedCount, fallbackMessage) => {
+    const products = Array.isArray(result?.products) ? result.products.filter(Boolean) : [];
+    if (products.length !== expectedCount) {
+      throw new Error(result?.error || fallbackMessage || 'La base no confirmó todos los cambios solicitados.');
+    }
+    return products;
+  };
+
   const handleCheckSupplierPriceGroup = async (group, { rethrowErrors = false } = {}) => {
     if (isOfflineReadOnly) {
       showSupplierOfflineNotice();
@@ -1987,35 +2058,47 @@ export default function BulkEditorView({
       return;
     }
 
-    const approvedCost = getSupplierEstimatedCost(priceInfo.unitSupplierPrice);
-    const result = await onApplySupplierPriceUpdates?.(productsToApply.map((product) => ({
-      productId: product.id,
-      ...buildSupplierPricePayload(group, product),
-      previousSupplierPrice: Number(product.purchasePrice || 0),
-      supplierCode: group.supplierCode,
-      casaAlbertoId: group.casaAlbertoId,
-      productUrl: group.productUrl,
-      foundTitle: group.supplierTitle,
-      sourceUrl: group.sourceUrl || group.productUrl,
-      imageUrl: group.supplierImageUrl || '',
-      priceText: group.priceText || '',
-    })));
+    try {
+      const approvedCost = getSupplierEstimatedCost(priceInfo.unitSupplierPrice);
+      const result = await onApplySupplierPriceUpdates?.(productsToApply.map((product) => ({
+        productId: product.id,
+        ...buildSupplierPricePayload(group, product),
+        previousSupplierPrice: Number(product.purchasePrice || 0),
+        supplierCode: group.supplierCode,
+        casaAlbertoId: group.casaAlbertoId,
+        productUrl: group.productUrl,
+        foundTitle: group.supplierTitle,
+        sourceUrl: group.sourceUrl || group.productUrl,
+        imageUrl: group.supplierImageUrl || '',
+        priceText: group.priceText || '',
+      })));
+      const updatedProducts = requireSupplierMutationProducts(
+        result,
+        productsToApply.length,
+        'No se pudo confirmar la aprobación de todos los productos.',
+      );
 
-    updateSandboxProducts(result?.products);
-    clearSupplierPriceOverride(group.key);
-    setSupplierPriceRows((prev) => ({
-      ...prev,
-      [group.key]: {
-        ...(prev[group.key] || {}),
-        status: 'approved',
-        supplierPrice,
-        rawSupplierPrice: priceInfo.rawSupplierPrice,
-        unitSupplierPrice: priceInfo.unitSupplierPrice,
-        unitDivisor: priceInfo.unitDivisor,
-        estimatedCost: approvedCost,
-        lastCheckedAt: new Date().toISOString(),
-      },
-    }));
+      updateSandboxProducts(updatedProducts);
+      clearSupplierPriceOverride(group.key);
+      setSupplierPriceRows((prev) => ({
+        ...prev,
+        [group.key]: {
+          ...(prev[group.key] || {}),
+          status: 'approved',
+          supplierPrice,
+          rawSupplierPrice: priceInfo.rawSupplierPrice,
+          unitSupplierPrice: priceInfo.unitSupplierPrice,
+          unitDivisor: priceInfo.unitDivisor,
+          estimatedCost: approvedCost,
+          lastCheckedAt: new Date().toISOString(),
+        },
+      }));
+      return true;
+    } catch (error) {
+      console.error('Error aprobando costo de proveedor:', error);
+      showSupplierActionFailure(error?.message || 'No se pudo aprobar el costo.');
+      return false;
+    }
   };
 
   const handleIgnoreSupplierGroup = async (group) => {
@@ -2026,39 +2109,55 @@ export default function BulkEditorView({
     const priceInfo = getSupplierPriceInfo(group);
     const supplierPrice = priceInfo.rawSupplierPrice;
     if (!Number.isFinite(supplierPrice) || supplierPrice <= 0) return;
-    const productsToSave = getSelectedProductsForGroup(group);
-    const estimatedCost = getSupplierEstimatedCost(priceInfo.unitSupplierPrice);
-    const result = await onSaveSupplierPriceChecks?.(productsToSave.map((product) => ({
-      productId: product.id,
-      ...buildSupplierPricePayload(group, product),
-      previousSupplierPrice: Number(product.purchasePrice || 0),
-      supplierCode: group.supplierCode,
-      casaAlbertoId: group.casaAlbertoId,
-      productUrl: group.productUrl,
-      foundTitle: group.supplierTitle,
-      sourceUrl: group.sourceUrl || group.productUrl,
-      imageUrl: group.supplierImageUrl || '',
-      priceText: group.priceText || '',
-      reviewStatus: 'ignored',
-      lastCheckedAt: new Date().toISOString(),
-      message: 'Cambio revisado e ignorado manualmente.',
-    })));
-    updateSandboxProducts(result?.products);
-    clearSupplierPriceOverride(group.key);
-    setSupplierPriceRows((prev) => ({
-      ...prev,
-      [group.key]: {
-        ...(prev[group.key] || {}),
-        status: 'ignored',
-        supplierPrice,
-        rawSupplierPrice: priceInfo.rawSupplierPrice,
-        unitSupplierPrice: priceInfo.unitSupplierPrice,
-        unitDivisor: priceInfo.unitDivisor,
-        estimatedCost,
+    try {
+      const productsToSave = getSelectedProductsForGroup(group);
+      if (productsToSave.length === 0) {
+        Swal.fire('Sin productos', 'Selecciona al menos un producto Rebu asociado.', 'info');
+        return false;
+      }
+      const estimatedCost = getSupplierEstimatedCost(priceInfo.unitSupplierPrice);
+      const result = await onSaveSupplierPriceChecks?.(productsToSave.map((product) => ({
+        productId: product.id,
+        ...buildSupplierPricePayload(group, product),
+        previousSupplierPrice: Number(product.purchasePrice || 0),
+        supplierCode: group.supplierCode,
+        casaAlbertoId: group.casaAlbertoId,
+        productUrl: group.productUrl,
+        foundTitle: group.supplierTitle,
+        sourceUrl: group.sourceUrl || group.productUrl,
+        imageUrl: group.supplierImageUrl || '',
+        priceText: group.priceText || '',
+        reviewStatus: 'ignored',
         lastCheckedAt: new Date().toISOString(),
         message: 'Cambio revisado e ignorado manualmente.',
-      },
-    }));
+      })));
+      const updatedProducts = requireSupplierMutationProducts(
+        result,
+        productsToSave.length,
+        'No se pudo confirmar el descarte de todos los productos.',
+      );
+      updateSandboxProducts(updatedProducts);
+      clearSupplierPriceOverride(group.key);
+      setSupplierPriceRows((prev) => ({
+        ...prev,
+        [group.key]: {
+          ...(prev[group.key] || {}),
+          status: 'ignored',
+          supplierPrice,
+          rawSupplierPrice: priceInfo.rawSupplierPrice,
+          unitSupplierPrice: priceInfo.unitSupplierPrice,
+          unitDivisor: priceInfo.unitDivisor,
+          estimatedCost,
+          lastCheckedAt: new Date().toISOString(),
+          message: 'Cambio revisado e ignorado manualmente.',
+        },
+      }));
+      return true;
+    } catch (error) {
+      console.error('Error ignorando costo de proveedor:', error);
+      showSupplierActionFailure(error?.message || 'No se pudo guardar el descarte.');
+      return false;
+    }
   };
 
   const handleUndoSupplierGroup = async (group) => {
@@ -2092,7 +2191,12 @@ export default function BulkEditorView({
           sourceUrl: group.sourceUrl || group.productUrl,
         };
       }));
-      updateSandboxProducts(result?.products);
+      const updatedProducts = requireSupplierMutationProducts(
+        result,
+        productsToUndo.length,
+        'No se pudo confirmar la restauración de todos los productos.',
+      );
+      updateSandboxProducts(updatedProducts);
       clearSupplierPriceOverride(group.key);
       setSupplierPriceRows((prev) => ({
         ...prev,
@@ -2103,9 +2207,11 @@ export default function BulkEditorView({
           message: 'Aprobacion deshecha. Revisa nuevamente antes de aprobar.',
         },
       }));
+      return true;
     } catch (error) {
       console.error('Error deshaciendo costo de proveedor:', error);
       showSupplierActionFailure(error?.message || 'No se pudo deshacer la aprobación.');
+      return false;
     }
   };
 
@@ -2113,19 +2219,19 @@ export default function BulkEditorView({
     const targetGroups = selectedSupplierGroups.filter((group) => getSupplierPriceInfo(group).hasSupplierPrice);
     const completedKeys = new Set();
     for (const group of targetGroups) {
-      await handleApproveSupplierGroup(group);
-      completedKeys.add(group.key);
+      if (await handleApproveSupplierGroup(group)) completedKeys.add(String(group.key));
     }
     clearSupplierPriceOverrides(Array.from(completedKeys));
-    setSelectedSupplierGroupKeys([]);
+    setSelectedSupplierGroupKeys((current) => current.filter((key) => !completedKeys.has(String(key))));
   };
 
   const handleIgnoreSelectedSupplierGroups = async () => {
     const targetGroups = selectedSupplierGroups.filter((group) => getSupplierPriceInfo(group).hasSupplierPrice);
+    const completedKeys = new Set();
     for (const group of targetGroups) {
-      await handleIgnoreSupplierGroup(group);
+      if (await handleIgnoreSupplierGroup(group)) completedKeys.add(String(group.key));
     }
-    setSelectedSupplierGroupKeys([]);
+    setSelectedSupplierGroupKeys((current) => current.filter((key) => !completedKeys.has(String(key))));
   };
 
   const handleDetectCasaAlbertoLinks = async () => {
@@ -2269,7 +2375,12 @@ export default function BulkEditorView({
                   ? 'Enlace detectado con codigo corregido.'
                   : 'Enlace detectado por codigo.',
             }]);
-            updateSandboxProducts(saveResult?.products);
+            const updatedProducts = requireSupplierMutationProducts(
+              saveResult,
+              1,
+              'No se pudo confirmar el enlace detectado.',
+            );
+            updateSandboxProducts(updatedProducts);
             summary.found += 1;
             if (detectedStatus === 'changed') summary.changed += 1;
             else summary.reviewed += 1;
@@ -2358,8 +2469,12 @@ export default function BulkEditorView({
         productIds: productsToUpdate.map((product) => product.id),
         link: cleanLink,
       });
-
-      updateSandboxProducts(result?.products);
+      const updatedProducts = requireSupplierMutationProducts(
+        result,
+        productsToUpdate.length,
+        'No se pudo confirmar la vinculación de todos los productos.',
+      );
+      updateSandboxProducts(updatedProducts);
       setSupplierLinkEditKey('');
     } catch (error) {
       console.error('Error guardando enlace de proveedor:', error);
@@ -2390,7 +2505,12 @@ export default function BulkEditorView({
         productIds: productsToUnlink.map((product) => product.id),
         link: { unlink: true },
       });
-      updateSandboxProducts(updateResult?.products);
+      const updatedProducts = requireSupplierMutationProducts(
+        updateResult,
+        productsToUnlink.length,
+        'No se pudo confirmar la desvinculación de todos los productos.',
+      );
+      updateSandboxProducts(updatedProducts);
       setSupplierDetailGroupKey('');
       setSupplierLinkEditKey('');
     } catch (error) {
@@ -2444,7 +2564,12 @@ export default function BulkEditorView({
           ? 'Enlace revisado con codigo corregido.'
           : 'Enlace revisado por nombre.',
       }]);
-      updateSandboxProducts(saveResult?.products);
+      const updatedProducts = requireSupplierMutationProducts(
+        saveResult,
+        1,
+        'No se pudo confirmar el enlace sugerido.',
+      );
+      updateSandboxProducts(updatedProducts);
       setSupplierLinkSuggestions((prev) => prev.filter((entry) => entry !== suggestion));
     } catch (error) {
       console.error('Error aprobando sugerencia de enlace:', error);
@@ -2480,7 +2605,6 @@ export default function BulkEditorView({
 
   const openSupplierPriceMode = useCallback(() => {
     setActiveToolMode('supplier');
-    setSupplierPriceFilter('attention');
   }, []);
 
   useEffect(() => {
@@ -2620,7 +2744,7 @@ export default function BulkEditorView({
     const statusDescription = isConnected
       ? 'Rebu puede consultar Casa Alberto con la sesion guardada en este equipo.'
       : needsManualAccess
-        ? 'La sesion vencio. Usa el acceso manual una vez y Rebu la conservara.'
+        ? 'Usa Iniciar sesion. La primera vez Rebu te pedira los datos y los guardara cifrados en este equipo.'
         : supplierSessionState.status === 'error'
           ? (supplierSessionState.error || 'Reintenta la conexion o usa el acceso manual.')
           : isUnsupported
@@ -3131,7 +3255,7 @@ export default function BulkEditorView({
                 <Link2 size={16} />
               </span>
               <div>
-                <h2 className="text-base font-black leading-tight">Casa Alberto</h2>
+                <h2 className="text-base font-black leading-tight text-white">Casa Alberto</h2>
                 <p className="mt-0.5 text-[11px] font-bold text-slate-400">Costos del proveedor enlazado</p>
               </div>
             </div>
@@ -3327,6 +3451,7 @@ export default function BulkEditorView({
                     key={option.value}
                     type="button"
                     onClick={() => setSupplierPriceFilter(option.value)}
+                    aria-pressed={supplierPriceFilter === option.value}
                     className={`flex h-8 w-full items-center justify-between rounded-md border px-2.5 text-[11px] font-black transition-colors ${
                       supplierPriceFilter === option.value
                         ? 'border-sky-400/50 bg-sky-400/14 text-sky-100'
@@ -3529,19 +3654,24 @@ export default function BulkEditorView({
 
           <div className="min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
             {supplierLinkSuggestions.length > 0 ? (
-              <section className="mb-4 overflow-hidden rounded-xl border border-amber-400/25 bg-amber-400/8">
-                <div className="flex items-center justify-between gap-3 border-b border-amber-400/20 bg-slate-950/20 px-3 py-2.5">
-                  <div>
-                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-100">Revisar enlaces detectados</p>
-                    <p className="mt-0.5 text-[11px] font-bold text-slate-400">
+              <section className="mb-4 overflow-hidden rounded-lg border border-slate-700/70 bg-[#0b1728]">
+                <div className="h-0.5 bg-amber-400/80" />
+                <div className="flex items-center justify-between gap-4 border-b border-slate-700/60 bg-[#0d1b2e] px-4 py-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
+                      <p className="text-xs font-black tracking-tight text-slate-100">Enlaces por confirmar</p>
+                    </div>
+                    <p className="mt-1 text-[11px] font-semibold text-slate-400">
                       Son coincidencias por codigo corregido o nombre parecido. Confirmalas antes de seguir costos.
                     </p>
                   </div>
-                  <span className="rounded-md border border-amber-400/30 bg-amber-400/12 px-2.5 py-1 text-[10px] font-black text-amber-100">
-                    {supplierLinkSuggestions.length} pendiente(s)
+                  <span className="flex shrink-0 items-center gap-2 text-[10px] font-black tabular-nums text-amber-200">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                    {supplierLinkSuggestions.length} por revisar
                   </span>
                 </div>
-                <div className="max-h-[320px] divide-y divide-amber-400/12 overflow-y-auto custom-scrollbar">
+                <div className="max-h-[340px] divide-y divide-slate-700/55 overflow-y-auto custom-scrollbar">
                   {supplierLinkSuggestions.map((suggestion) => {
                     const productImage = getProductImageUrl(suggestion.product);
                     const sourceUrl = suggestion.result.productUrl || suggestion.result.sourceUrl || '';
@@ -3561,10 +3691,10 @@ export default function BulkEditorView({
                     return (
                       <div
                         key={`${suggestion.product.id}-${suggestion.result.casaAlbertoId}`}
-                        className="grid items-center gap-3 px-3 py-2.5 min-[1366px]:grid-cols-[minmax(260px,1fr)_minmax(300px,1.25fr)_150px_170px]"
+                        className="group grid items-center gap-x-5 gap-y-3 px-4 py-3 transition-colors hover:bg-white/[0.025] min-[1180px]:grid-cols-[minmax(240px,0.95fr)_minmax(310px,1.2fr)_220px_auto]"
                       >
-                        <div className="flex min-w-0 items-center gap-2.5">
-                          <span className="flex h-10 w-10 shrink-0 overflow-hidden rounded-md border border-slate-700 bg-slate-950/35 text-slate-500">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="flex h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-slate-700/70 bg-slate-950/35 text-slate-500">
                             {productImage ? (
                               <img src={productImage} alt={suggestion.product.title} className="h-full w-full object-cover" />
                             ) : (
@@ -3572,58 +3702,63 @@ export default function BulkEditorView({
                             )}
                           </span>
                           <div className="min-w-0">
-                            <p className="truncate text-xs font-black text-white" title={suggestion.product.title}>
+                            <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Producto Rebu</p>
+                            <p className="mt-1 truncate text-xs font-black text-slate-100" title={suggestion.product.title}>
                               {suggestion.product.title}
                             </p>
-                            <p className="mt-0.5 truncate text-[10px] font-bold text-slate-500">
-                              Rebu - {suggestion.product.barcode || 'Sin codigo'}
+                            <p className="mt-0.5 truncate text-[10px] font-semibold tabular-nums text-slate-500">
+                              {suggestion.product.barcode || 'Sin codigo'}
                             </p>
                           </div>
                         </div>
 
-                        <div className="min-w-0 rounded-md border border-slate-700/65 bg-slate-950/20 px-2.5 py-2">
-                          <div className="flex items-center gap-2">
-                            <span className="rounded border border-amber-400/25 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] text-amber-100">
-                              {matchLabel}
-                            </span>
-                            {suggestion.result.casaAlbertoId ? (
-                              <span className="text-[10px] font-black text-slate-500">ID {suggestion.result.casaAlbertoId}</span>
-                            ) : null}
+                        <div className="flex min-w-0 items-center gap-3">
+                          <ArrowRight size={16} className="shrink-0 text-slate-600 transition-colors group-hover:text-amber-300" />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-[0.08em] text-amber-200">
+                                <span className="h-1 w-1 rounded-full bg-amber-400" />
+                                {matchLabel}
+                              </span>
+                              {suggestion.result.casaAlbertoId ? (
+                                <span className="text-[10px] font-bold tabular-nums text-slate-500">ID {suggestion.result.casaAlbertoId}</span>
+                              ) : null}
+                            </div>
+                            <p className="mt-1 truncate text-xs font-black text-slate-100" title={suggestion.result.foundTitle}>
+                              {suggestion.result.foundTitle || 'Producto Casa Alberto'}
+                            </p>
+                            <p className="mt-0.5 truncate text-[10px] font-semibold tabular-nums text-slate-500">
+                              Codigo proveedor {suggestion.result.supplierCode || '-'}
+                            </p>
                           </div>
-                          <p className="mt-1 truncate text-xs font-black text-slate-100" title={suggestion.result.foundTitle}>
-                            {suggestion.result.foundTitle || 'Producto Casa Alberto'}
-                          </p>
-                          <p className="mt-0.5 truncate text-[10px] font-bold text-slate-500">
-                            Codigo proveedor {suggestion.result.supplierCode || '-'}
-                          </p>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-2 min-[1366px]:grid-cols-1">
+                        <div className="grid grid-cols-2 gap-4 min-[1180px]:border-l min-[1180px]:border-slate-700/60 min-[1180px]:pl-4">
                           <div>
                             <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Proveedor</p>
-                            <p className="mt-0.5 text-xs font-black text-slate-100">
+                            <p className="mt-1 text-xs font-black tabular-nums text-slate-100">
                               {Number(suggestion.result.supplierPrice || 0) > 0 ? formatSupplierMoney(suggestion.result.supplierPrice) : '-'}
                             </p>
                             {suggestionDivisor > 1 ? (
-                              <p className="mt-0.5 text-[9px] font-black text-amber-100">
+                              <p className="mt-0.5 text-[9px] font-black tabular-nums text-amber-200">
                                 x{suggestionDivisor} = {formatSupplierMoney(suggestionUnitPrice)}
                               </p>
                             ) : null}
                           </div>
                           <div>
                             <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Costo Rebu calc.</p>
-                            <p className="mt-0.5 text-xs font-black text-sky-100">
+                            <p className="mt-1 text-xs font-black tabular-nums text-slate-100">
                               {suggestionEstimatedCost > 0 ? formatSupplierMoney(suggestionEstimatedCost) : '-'}
                             </p>
                           </div>
                         </div>
 
-                        <div className="flex items-center justify-end gap-2">
+                        <div className="flex items-center justify-end gap-1.5">
                           {sourceUrl ? (
                             <button
                               type="button"
                               onClick={() => openSupplierExternalUrl(sourceUrl)}
-                              className="flex h-8 items-center gap-1.5 rounded-md border border-slate-700 bg-slate-950/30 px-2.5 text-[10px] font-black text-slate-300 hover:border-slate-500"
+                              className="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[10px] font-black text-slate-400 transition-colors hover:bg-slate-800/80 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60"
                             >
                               <ExternalLink size={13} />
                               Fuente
@@ -3632,15 +3767,17 @@ export default function BulkEditorView({
                           <button
                             type="button"
                             onClick={() => handleApproveSupplierLinkSuggestion(suggestion)}
-                            className="h-8 rounded-md border border-emerald-400/35 bg-emerald-400/14 px-3 text-[10px] font-black text-emerald-100 hover:bg-emerald-400/20"
+                            className="flex h-8 items-center gap-1.5 rounded-md bg-emerald-400 px-3 text-[10px] font-black text-emerald-950 transition-colors hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/70"
                           >
+                            <Check size={13} />
                             Guardar enlace
                           </button>
                           <button
                             type="button"
                             onClick={() => dismissSupplierLinkSuggestion(suggestion)}
-                            className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 bg-slate-950/30 text-slate-400 hover:text-white"
+                            className="flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-rose-400/10 hover:text-rose-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300/60"
                             title="Descartar"
+                            aria-label={`Descartar enlace sugerido para ${suggestion.product.title}`}
                           >
                             <X size={13} />
                           </button>
@@ -4857,7 +4994,7 @@ export default function BulkEditorView({
                 <div className="mt-auto rounded-lg border border-amber-200 bg-amber-50 p-2.5">
                   <p className="flex items-start gap-1.5 text-[10px] font-bold leading-snug text-amber-800">
                     <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-                    Si la sesion vence, usa Acceso manual una vez y luego volve a buscar. Rebu no guarda tu clave.
+                    Si la sesion vence, usa Iniciar sesion. Los datos de Casa Alberto se guardan cifrados en este equipo.
                   </p>
                 </div>
               </aside>
@@ -5180,8 +5317,8 @@ export default function BulkEditorView({
             onClick={openSupplierPriceMode}
             className={modeButtonClass('supplier')}
           >
-            <Scale size={14} />
-            <span>Control de costos</span>
+            <Link2 size={14} />
+            <span>Casa Alberto</span>
             {supplierPriceBadgeCount > 0 ? (
               <span className="ml-1 rounded-md bg-amber-400 px-1.5 py-0.5 text-[9px] font-black text-slate-950">
                 {supplierPriceBadgeCount}

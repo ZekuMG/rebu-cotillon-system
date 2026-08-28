@@ -137,13 +137,15 @@ test('el descarte del aviso se guarda por usuario y sobrevive al reinicio', () =
   assert.equal(loadSupplierNoticeDismissal({ id: 'user-2' }, storage), '');
 });
 
-test('abrir Control de costos no inicia chequeos automáticos y prioriza Por revisar', async () => {
+test('abrir Casa Alberto no inicia chequeos automáticos y conserva la vista completa', async () => {
   const source = await readFile(new URL('../src/views/BulkEditorView.jsx', import.meta.url), 'utf8');
   const openModeBlock = source.match(/const openSupplierPriceMode = useCallback\([\s\S]+?\}, \[\]\);/)?.[0] || '';
 
-  assert.match(source, /useState\('attention'\)/);
-  assert.match(source, />Control de costos</);
+  assert.match(source, /useState\('all'\)/);
+  assert.match(source, />Casa Alberto</);
+  assert.doesNotMatch(source, /rebu_supplier_price_view_mode_v1/);
+  assert.doesNotMatch(source, /label: 'Tarjetas'|label: 'Lista'/);
   assert.match(source, /status: 'approved'/);
-  assert.match(openModeBlock, /setSupplierPriceFilter\('attention'\)/);
+  assert.doesNotMatch(openModeBlock, /setSupplierPriceFilter/);
   assert.doesNotMatch(openModeBlock, /handleCheckAllSupplierPrices|setTimeout/);
 });

@@ -17,6 +17,21 @@ test('supplier session restores silently and logout only clears its isolated par
   assert.match(preloadSource, /supplierSessionConnect: \(\) => ipcRenderer\.invoke\('supplier-session-connect'\)/);
   assert.match(preloadSource, /supplierSessionVerify: \(\) => ipcRenderer\.invoke\('supplier-session-verify'\)/);
   assert.match(preloadSource, /supplierSessionLogout: \(\) => ipcRenderer\.invoke\('supplier-session-logout'\)/);
+  assert.match(preloadSource, /supplierCredentialsSave: \(credentials\) => ipcRenderer\.invoke\('supplier-credentials-save', credentials\)/);
+});
+
+test('supplier credentials are encrypted by Electron and used for automatic login', async () => {
+  const mainSource = await readFile(new URL('../electron-main.cjs', import.meta.url), 'utf8');
+
+  assert.match(mainSource, /safeStorage\s*\.encryptString/);
+  assert.match(mainSource, /safeStorage\.decryptString/);
+  assert.match(mainSource, /SUPPLIER_CREDENTIALS_FILE = 'casa-alberto-credentials\.json'/);
+  assert.match(mainSource, /encryptedPayload/);
+  assert.match(mainSource, /buildSupplierAutomaticLoginScript/);
+  assert.match(mainSource, /loginSupplierWithStoredCredentials/);
+  assert.match(mainSource, /verificationMethod: 'automatic_credentials'/);
+  assert.match(mainSource, /ipcMain\.handle\('supplier-credentials-save'/);
+  assert.match(mainSource, /SUPPLIER_LOGIN_URL = 'https:\/\/cotilloncasaalberto\.com\.ar\/pedido\/login\.php'/);
 });
 
 test('supplier verification reaches the restricted page without trusting the cached flag', async () => {
@@ -37,11 +52,15 @@ test('primary login action never opens the supplier window', async () => {
   const manualHandler = viewSource.match(/const handleOpenSupplierLogin = async \(\) => \{([\s\S]*?)\n  \};/i)?.[1] || '';
 
   assert.match(connectHandler, /supplierSessionConnect\(\)/);
+  assert.match(connectHandler, /credentialsRequired/);
+  assert.match(connectHandler, /requestSupplierCredentials/);
+  assert.match(connectHandler, /supplierSessionConnect\(\)[\s\S]+supplierSessionConnect\(\)/);
   assert.doesNotMatch(connectHandler, /supplierImageOpenLogin/);
   assert.match(manualHandler, /supplierImageOpenLogin\(\)/);
   assert.match(viewSource, /onClick=\{handleConnectSupplierSession\}[\s\S]{0,700}Iniciar sesion/);
   assert.match(viewSource, /onClick=\{handleOpenSupplierLogin\}[\s\S]{0,700}(Acceso manual|Abrir proveedor)/);
-  assert.match(viewSource, /Rebu no guarda tu clave/);
+  assert.match(viewSource, /se guardan cifrados en este equipo/);
+  assert.doesNotMatch(viewSource, /Rebu no guarda tu clave/);
 });
 
 test('expired supplier searches invalidate the cached session indicator', async () => {

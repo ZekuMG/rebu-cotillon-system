@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session, safeStorage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -10,6 +10,7 @@ const {
   resolveWhatsAppBotBaseUrl,
 } = require('./electron-whatsapp-bridge.cjs');
 const { buildSupplierPriceReportHtml } = require('./electron-supplier-price-report.cjs');
+const { buildExportPdfHtml } = require('./electron-export-pdf.cjs');
 
 let mainWindow;
 let supplierImageLoginWindow;
@@ -24,9 +25,10 @@ const updateManager = createUpdateManager({
 const APP_NAME = 'Rebu Cotillon System';
 const isDev = !app.isPackaged;
 const SUPPLIER_IMAGE_PARTITION = 'persist:rebu-casa-alberto-images';
-const SUPPLIER_LOGIN_URL = 'http://cotilloncasaalberto.com.ar/pedido/login.php';
-const SUPPLIER_DEFAULT_ORIGIN = 'http://cotilloncasaalberto.com.ar';
+const SUPPLIER_LOGIN_URL = 'https://cotilloncasaalberto.com.ar/pedido/login.php';
+const SUPPLIER_DEFAULT_ORIGIN = 'https://cotilloncasaalberto.com.ar';
 const SUPPLIER_RESTRICTED_PATH = '/pedido/index_restringido.php';
+const SUPPLIER_CREDENTIALS_FILE = 'casa-alberto-credentials.json';
 const OPENAI_IMAGE_EDIT_ENDPOINT = 'https://api.openai.com/v1/images/edits';
 
 const readEnvFileValue = (key) => {
@@ -70,6 +72,52 @@ const writeLocalJson = (fileName, value) => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
   fs.renameSync(temporaryPath, filePath);
+};
+
+const readSupplierCredentials = () => {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return null;
+    const stored = readLocalJson(SUPPLIER_CREDENTIALS_FILE);
+    const encryptedPayload = String(stored.encryptedPayload || '').trim();
+    if (!encryptedPayload) return null;
+    const decryptedPayload = safeStorage.decryptString(Buffer.from(encryptedPayload, 'base64'));
+    const credentials = JSON.parse(decryptedPayload);
+    const username = String(credentials?.username || '').trim();
+    const password = String(credentials?.password || '');
+    return username && password ? { username, password } : null;
+  } catch (error) {
+    console.warn('[supplier-session] No se pudieron leer las credenciales cifradas:', error?.message || error);
+    return null;
+  }
+};
+
+const saveSupplierCredentials = ({ username = '', password = '' } = {}) => {
+  const safeUsername = String(username || '').trim();
+  const safePassword = String(password || '');
+  if (!safeUsername || !safePassword) throw new Error('Completa el usuario y la contraseña de Casa Alberto.');
+  if (safeUsername.length > 160 || safePassword.length > 300) throw new Error('Los datos de acceso no tienen un formato válido.');
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('Windows no habilitó el almacenamiento cifrado para esta aplicación.');
+  }
+
+  const encryptedPayload = safeStorage
+    .encryptString(JSON.stringify({ username: safeUsername, password: safePassword }))
+    .toString('base64');
+  writeLocalJson(SUPPLIER_CREDENTIALS_FILE, {
+    version: 1,
+    encryptedPayload,
+    updatedAt: new Date().toISOString(),
+  });
+  return { success: true, configured: true };
+};
+
+const clearSupplierCredentials = () => {
+  try {
+    const filePath = path.join(app.getPath('userData'), SUPPLIER_CREDENTIALS_FILE);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (error) {
+    console.warn('[supplier-session] No se pudieron limpiar las credenciales cifradas:', error?.message || error);
+  }
 };
 
 const CENTRAL_DEVICE_FILE = 'whatsapp-central-device.json';
@@ -412,7 +460,14 @@ const getPrimaryLocalIp = () => {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const MIN_VALID_PDF_BYTES = 8 * 1024;
+const MIN_VALID_PDF_BYTES = 1024;
+
+const isValidPdfBuffer = (pdfData) => {
+  if (!Buffer.isBuffer(pdfData) || pdfData.length < MIN_VALID_PDF_BYTES) return false;
+  const header = pdfData.subarray(0, 8).toString('latin1');
+  const trailer = pdfData.subarray(Math.max(0, pdfData.length - 1024)).toString('latin1');
+  return header.startsWith('%PDF-') && trailer.includes('%%EOF');
+};
 
 const preparePdfExportCapture = async (webContents) => {
   const state = await webContents.executeJavaScript(`
@@ -478,12 +533,57 @@ const createValidatedPdf = async (webContents) => {
       pageSize: 'A4',
       marginsType: 0,
     });
-    if (pdfData?.length >= MIN_VALID_PDF_BYTES) return pdfData;
+    if (isValidPdfBuffer(pdfData)) return pdfData;
     await delay(250);
     await preparePdfExportCapture(webContents);
   }
 
   throw new Error('Electron gener\u00f3 un PDF vac\u00edo. El archivo no fue guardado; intent\u00e1 nuevamente.');
+};
+
+const createStandaloneExportPdf = async (payload = {}) => {
+  const pdfWindow = new BrowserWindow({
+    show: false,
+    backgroundColor: '#ffffff',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  const temporaryHtmlPath = path.join(app.getPath('temp'), `rebu-export-${randomUUID()}.html`);
+
+  try {
+    fs.writeFileSync(temporaryHtmlPath, buildExportPdfHtml(payload), 'utf8');
+    await pdfWindow.loadFile(temporaryHtmlPath);
+    await pdfWindow.webContents.executeJavaScript(`
+      (async () => {
+        if (document.fonts && document.fonts.ready) await document.fonts.ready;
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      })()
+    `, true);
+
+    let pdfData = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      pdfData = await pdfWindow.webContents.printToPDF({
+        printBackground: true,
+        pageSize: 'A4',
+        marginsType: 0,
+        preferCSSPageSize: true,
+      });
+      if (isValidPdfBuffer(pdfData)) return pdfData;
+      await delay(250);
+    }
+    throw new Error('Electron no pudo crear un PDF válido. No se guardó ningún archivo.');
+  } finally {
+    if (!pdfWindow.isDestroyed()) pdfWindow.destroy();
+    try {
+      fs.unlinkSync(temporaryHtmlPath);
+    } catch {
+      // El temporal puede no existir si la carga falló antes de escribirlo.
+    }
+  }
 };
 
 const escapePdfHtml = (value) => String(value ?? '')
@@ -762,7 +862,6 @@ const normalizeSupplierNavigationUrl = (targetUrl) => {
     const parsedUrl = new URL(String(targetUrl || '').trim(), SUPPLIER_DEFAULT_ORIGIN);
     if (!parsedUrl.hostname.includes('cotilloncasaalberto.com.ar')) return '';
     if (!['http:', 'https:'].includes(parsedUrl.protocol)) return '';
-    if (parsedUrl.protocol === 'https:') parsedUrl.protocol = 'http:';
     return parsedUrl.href;
   } catch {
     return '';
@@ -869,6 +968,134 @@ const verifySupplierSession = async () => {
   }
 };
 
+const buildSupplierAutomaticLoginScript = ({ username = '', password = '' } = {}) => `
+(() => {
+  try {
+    const username = ${JSON.stringify(String(username || ''))};
+    const password = ${JSON.stringify(String(password || ''))};
+    const visible = (element) => {
+      if (!element || element.disabled) return false;
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    };
+    const setInputValue = (input, value) => {
+      const descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+      if (descriptor?.set) descriptor.set.call(input, value);
+      else input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    const passwordInput = Array.from(document.querySelectorAll('input[type="password"]')).find(visible);
+    const form = passwordInput?.form || passwordInput?.closest('form');
+    if (!passwordInput || !form) {
+      return { submitted: false, reason: 'login_form_not_found', url: location.href };
+    }
+
+    const usernameSelectors = [
+      'input[name*="usuario" i]',
+      'input[id*="usuario" i]',
+      'input[name*="user" i]',
+      'input[id*="user" i]',
+      'input[name*="login" i]',
+      'input[id*="login" i]',
+      'input[type="email"]',
+      'input[type="text"]',
+    ];
+    let usernameInput = null;
+    for (const selector of usernameSelectors) {
+      usernameInput = Array.from(form.querySelectorAll(selector)).find((input) => visible(input) && input !== passwordInput);
+      if (usernameInput) break;
+    }
+    if (!usernameInput) {
+      return { submitted: false, reason: 'username_field_not_found', url: location.href };
+    }
+
+    setInputValue(usernameInput, username);
+    setInputValue(passwordInput, password);
+    const rememberInput = Array.from(form.querySelectorAll('input[type="checkbox"]')).find(visible);
+    if (rememberInput && !rememberInput.checked) rememberInput.click();
+
+    const submitControl = Array.from(form.querySelectorAll('button, input[type="submit"], input[type="button"]')).find((element) => {
+      if (!visible(element)) return false;
+      const label = String(element.innerText || element.value || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
+      return element.type === 'submit' || label.includes('ingresar') || label.includes('iniciar');
+    });
+    window.setTimeout(() => {
+      const submitType = String(submitControl?.type || '').toLowerCase();
+      if (submitControl?.click && submitType && submitType !== 'submit') submitControl.click();
+      else if (typeof form.requestSubmit === 'function') form.requestSubmit(submitControl || undefined);
+      else if (submitControl?.click) submitControl.click();
+      else HTMLFormElement.prototype.submit.call(form);
+    }, 0);
+    return { submitted: true, url: location.href };
+  } catch (error) {
+    return {
+      submitted: false,
+      reason: 'login_script_error',
+      message: error?.message || 'No se pudo completar el formulario.',
+      url: location.href,
+    };
+  }
+})()
+`;
+
+const loginSupplierWithStoredCredentials = async (supplierWindow, credentials) => {
+  let loginState = await inspectSupplierLoginState(supplierWindow, { allowCached: false });
+  if (!loginState.hasVisiblePasswordInput && !loginState.isLoginText && !/login\.php/i.test(loginState.url || '')) {
+    await loadUrlAndWait(supplierWindow, SUPPLIER_LOGIN_URL, 18000);
+    await delay(250);
+    loginState = await inspectSupplierLoginState(supplierWindow, { allowCached: false });
+  }
+
+  if (!loginState.hasVisiblePasswordInput && !loginState.isLoginText) {
+    return {
+      success: false,
+      credentialsRequired: false,
+      error: 'Casa Alberto no mostró el formulario de acceso esperado.',
+      loginState,
+    };
+  }
+
+  const navigationPromise = waitForWebContentsLoad(supplierWindow.webContents, 18000);
+  const submission = await supplierWindow.webContents.executeJavaScript(
+    buildSupplierAutomaticLoginScript(credentials),
+    true,
+  );
+  if (!submission?.submitted) {
+    return {
+      success: false,
+      credentialsRequired: false,
+      error: submission?.message || 'No se encontraron los campos de acceso de Casa Alberto.',
+      loginState,
+    };
+  }
+
+  await navigationPromise;
+  await delay(450);
+  const verifiedState = await inspectSupplierLoginState(supplierWindow, { allowCached: false });
+  if (!verifiedState.isLikelyLoggedIn) {
+    clearSupplierCredentials();
+    return {
+      success: false,
+      credentialsRequired: true,
+      credentialsRejected: true,
+      error: 'Casa Alberto rechazó el usuario o la contraseña. Volvé a ingresarlos.',
+      loginState: verifiedState,
+    };
+  }
+
+  return {
+    success: true,
+    verified: true,
+    verificationMethod: 'automatic_credentials',
+    automaticLoginAttempted: true,
+    manualLoginRequired: false,
+    loginState: verifiedState,
+  };
+};
+
 const restoreSupplierSession = async () => {
   const { supplierWindow, reused } = ensureSupplierSessionWindow({ show: false });
   await loadUrlAndWait(
@@ -878,13 +1105,33 @@ const restoreSupplierSession = async () => {
   );
   await delay(250);
   const loginState = await inspectSupplierLoginState(supplierWindow, { allowCached: false });
+  if (loginState.isLikelyLoggedIn) {
+    return {
+      success: true,
+      reused,
+      verified: true,
+      verificationMethod: 'restricted_page',
+      manualLoginRequired: false,
+      loginState,
+    };
+  }
+
+  const storedCredentials = readSupplierCredentials();
+  if (!storedCredentials) {
+    return {
+      success: true,
+      reused,
+      verified: false,
+      credentialsRequired: true,
+      manualLoginRequired: true,
+      loginState,
+    };
+  }
+
+  const automaticResult = await loginSupplierWithStoredCredentials(supplierWindow, storedCredentials);
   return {
-    success: true,
+    ...automaticResult,
     reused,
-    verified: true,
-    verificationMethod: 'restricted_page',
-    manualLoginRequired: !loginState.isLikelyLoggedIn,
-    loginState,
   };
 };
 
@@ -2188,6 +2435,28 @@ app.on('ready', () => {
     }
   });
 
+  ipcMain.handle('save-export-pdf', async (event, payload = {}) => {
+    try {
+      if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+      const isPackaged = app.isPackaged;
+      const basePath = isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath();
+      const suggestedPath = path.join(basePath, sanitizePdfFileName(payload?.defaultName));
+      const { filePath } = await dialog.showSaveDialog(mainWindow, {
+        title: 'Guardar PDF',
+        defaultPath: suggestedPath,
+        filters: [{ name: 'Documentos PDF', extensions: ['pdf'] }],
+      });
+
+      if (!filePath) return { success: false, canceled: true };
+      const pdfData = await createStandaloneExportPdf(payload?.data);
+      fs.writeFileSync(filePath, pdfData);
+      return { success: true, filePath };
+    } catch (error) {
+      console.error('Error generando PDF aislado:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
   ipcMain.handle('capture-export-pdf', async (event) => {
     try {
       if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
@@ -2303,6 +2572,15 @@ app.on('ready', () => {
       };
     } catch (error) {
       return { success: false, error: error?.message || 'No se pudo abrir el login del proveedor.' };
+    }
+  });
+
+  ipcMain.handle('supplier-credentials-save', async (event, credentials = {}) => {
+    if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+    try {
+      return saveSupplierCredentials(credentials);
+    } catch (error) {
+      return { success: false, error: error?.message || 'No se pudieron proteger los datos de Casa Alberto.' };
     }
   });
 
