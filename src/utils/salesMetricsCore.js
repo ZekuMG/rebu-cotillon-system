@@ -163,7 +163,16 @@ export const getTransactionDate = (tx) => {
 };
 
 export const getRecordDate = (record) =>
-  parseMetricDate(record?.createdAt || record?.created_at || record?.date || record?.pickupDate || record?.pickup_date);
+  parseMetricDate(
+    record?.metricDate ||
+      record?.expenseDate ||
+      record?.expense_date ||
+      record?.createdAt ||
+      record?.created_at ||
+      record?.date ||
+      record?.pickupDate ||
+      record?.pickup_date,
+  );
 
 export const getClientName = (tx) => {
   if (!tx?.client) return 'Consumidor Final';

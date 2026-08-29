@@ -109,7 +109,16 @@ const isInRange = (date, range) => {
 };
 
 const getRecordDate = (record) =>
-  parseAnyDate(record?.createdAt || record?.created_at || record?.date || record?.pickupDate || record?.pickup_date);
+  parseAnyDate(
+    record?.metricDate ||
+      record?.expenseDate ||
+      record?.expense_date ||
+      record?.createdAt ||
+      record?.created_at ||
+      record?.date ||
+      record?.pickupDate ||
+      record?.pickup_date,
+  );
 
 const getClientName = (tx) => {
   if (!tx?.client) return 'Consumidor Final';
@@ -1031,6 +1040,10 @@ export default function useMetricsData({
       recommendations,
       changes: {
         revenue: getComparableChange(current.stats.revenue, previous.stats.revenue),
+        grossProfit: getComparableChange(
+          current.stats.revenue - current.stats.cost,
+          previous.stats.revenue - previous.stats.cost,
+        ),
         profit: getComparableChange(current.stats.profit, previous.stats.profit),
         salesCount: getComparableChange(current.stats.salesCount, previous.stats.salesCount),
         averageTicket: getComparableChange(current.stats.averageTicket, previous.stats.averageTicket),

@@ -31,6 +31,7 @@ import {
 } from './utils/storage';
 import { hasProductImage } from './utils/productImages';
 import { formatCurrency, formatDateAR, formatNumber, formatTimeAR, formatTimeFullAR, isTestRecord } from './utils/helpers';
+import { isFutureExpenseDate, normalizeExpenseDateValue } from './utils/expenseDates';
 import {
   mapAgendaContactRecord,
   mapAgendaContactRecords,
@@ -9875,13 +9876,20 @@ export default function PartySupplyApp() {
       const userTypedNote = expenseData.note || ''; 
       const safeDescription = userTypedNote || expenseData.description || 'Gasto General';
       const safeAmount = Number(expenseData.amount) || 0;
+      const safeExpenseDate = normalizeExpenseDateValue(expenseData.expenseDate, new Date());
       const actor = getActorContext();
+
+      if (!safeExpenseDate || isFutureExpenseDate(safeExpenseDate)) {
+        showNotification('warning', 'Fecha no valida', 'Elegí una fecha de hoy o anterior.');
+        return null;
+      }
 
       const payload = {
         description: safeDescription,
         amount: safeAmount,
         category: expenseData.category || 'Varios',
         payment_method: expenseData.paymentMethod || 'Efectivo',
+        expense_date: safeExpenseDate,
         user_id: toOptionalDbId(actor.userId),
         user_role: actor.userRole,
         user_name: actor.userName,
@@ -9890,22 +9898,18 @@ export default function PartySupplyApp() {
       const { data } = await insertWithSchemaFallback('expenses', payload, CLOUD_SELECTS.expenses);
       if (!data?.id) throw new Error('Supabase no devolvió el gasto creado.');
 
-      const createdAt = data.created_at || new Date().toISOString();
-      const newExpense = {
-        id: data.id,
-        createdAt,
+      const [newExpense] = mapExpenseRecords([{
+        ...data,
         description: data.description || safeDescription,
-        amount: Number(data.amount ?? safeAmount) || 0,
+        amount: data.amount ?? safeAmount,
         category: data.category || payload.category,
-        paymentMethod: data.payment_method || payload.payment_method,
-        date: formatDateAR(createdAt),
-        time: formatTimeFullAR(createdAt),
-        user: data.user_name || actor.userName,
-        userId: data.user_id || actor.userId || null,
-        userRole: data.user_role || actor.userRole || 'seller'
-      };
-
-      newExpense.isTest = isTestRecord(newExpense);
+        payment_method: data.payment_method || payload.payment_method,
+        expense_date: data.expense_date || payload.expense_date,
+        created_at: data.created_at || new Date().toISOString(),
+        user_name: data.user_name || actor.userName,
+        user_id: data.user_id || actor.userId || null,
+        user_role: data.user_role || actor.userRole || 'seller',
+      }]);
       markCloudSourceMutation('expenses');
       setExpenses((prev) => {
         const next = [newExpense, ...(prev || [])];
@@ -9915,7 +9919,13 @@ export default function PartySupplyApp() {
       
       await addLog(
         'Nuevo Gasto', 
-        { description: newExpense.description, amount: newExpense.amount, category: newExpense.category, paymentMethod: newExpense.paymentMethod }, 
+        {
+          description: newExpense.description,
+          amount: newExpense.amount,
+          category: newExpense.category,
+          paymentMethod: newExpense.paymentMethod,
+          expenseDate: newExpense.expenseDate,
+        },
         userTypedNote || 'Salida de dinero'
       );
       
@@ -9940,14 +9950,23 @@ export default function PartySupplyApp() {
       const userTypedNote = expenseData.note || '';
       const safeDescription = userTypedNote || expenseData.description || currentExpense.description || 'Gasto General';
       const safeAmount = Number(expenseData.amount) || 0;
+      const safeExpenseDate = normalizeExpenseDateValue(
+        expenseData.expenseDate,
+        currentExpense.expenseDate || currentExpense.expense_date || currentExpense.createdAt || new Date(),
+      );
 
       if (!expenseId || safeAmount <= 0) return null;
+      if (!safeExpenseDate || isFutureExpenseDate(safeExpenseDate)) {
+        showNotification('warning', 'Fecha no valida', 'Elegí una fecha de hoy o anterior.');
+        return null;
+      }
 
       const payload = {
         description: safeDescription,
         amount: safeAmount,
         category: expenseData.category || currentExpense.category || 'Varios',
         payment_method: expenseData.paymentMethod || currentExpense.paymentMethod || 'Efectivo',
+        expense_date: safeExpenseDate,
       };
 
       const { data } = await updateWithSchemaFallback('expenses', expenseId, payload, CLOUD_SELECTS.expenses);
@@ -9960,6 +9979,7 @@ export default function PartySupplyApp() {
         amount: data.amount ?? payload.amount,
         category: data.category || payload.category,
         payment_method: data.payment_method || payload.payment_method,
+        expense_date: data.expense_date || payload.expense_date,
         created_at: data.created_at || currentExpense.created_at || currentExpense.createdAt || new Date().toISOString(),
         user_name: data.user_name || currentExpense.user,
         user_id: data.user_id || currentExpense.userId || null,
@@ -9986,12 +10006,14 @@ export default function PartySupplyApp() {
             amount: currentExpense.amount,
             category: currentExpense.category,
             paymentMethod: currentExpense.paymentMethod,
+            expenseDate: currentExpense.expenseDate || currentExpense.expense_date,
           },
           next: {
             description: updatedExpense.description,
             amount: updatedExpense.amount,
             category: updatedExpense.category,
             paymentMethod: updatedExpense.paymentMethod,
+            expenseDate: updatedExpense.expenseDate,
           },
         },
         'Edicion de gasto'

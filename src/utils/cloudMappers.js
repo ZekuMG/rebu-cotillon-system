@@ -1,4 +1,5 @@
 import { formatDateAR, formatTimeFullAR, isTestRecord } from './helpers';
+import { normalizeExpenseDateValue, parseExpenseDateValue } from './expenseDates';
 import {
   getOrderPaymentHistorySummary,
   getPrimaryPaymentInfo,
@@ -404,17 +405,32 @@ export const mapSaleRecords = (sales = [], parsedLogs = []) =>
 export const mapExpenseRecords = (expenses = []) =>
   expenses.map((expense) => {
     const createdAt = expense.created_at || expense.createdAt || new Date().toISOString();
+    const createdAtDate = getSafeDate(createdAt);
+    const expenseDate = normalizeExpenseDateValue(
+      expense.expense_date || expense.expenseDate || createdAt,
+      createdAt,
+    );
+    const metricDate = parseExpenseDateValue(expenseDate) || createdAtDate;
+    metricDate.setHours(
+      createdAtDate.getHours(),
+      createdAtDate.getMinutes(),
+      createdAtDate.getSeconds(),
+      createdAtDate.getMilliseconds(),
+    );
     const paymentMethod = expense.payment_method || expense.paymentMethod || 'Efectivo';
     const mappedExpense = {
       id: expense.id,
       created_at: createdAt,
       createdAt,
+      expense_date: expenseDate,
+      expenseDate,
+      metricDate,
       description: expense.description || expense.note || 'Gasto General',
       amount: Number(expense.amount || 0),
       category: expense.category || 'Varios',
       paymentMethod,
-      date: formatDateAR(getSafeDate(createdAt)),
-      time: formatTimeFullAR(getSafeDate(createdAt)),
+      date: formatDateAR(metricDate),
+      time: formatTimeFullAR(createdAtDate),
       user: expense.user_name || 'Sistema',
       userId: expense.user_id || null,
       userRole: expense.user_role || null,

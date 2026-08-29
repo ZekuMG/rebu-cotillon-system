@@ -100,6 +100,14 @@ const parseExpenseDate = (exp) => {
   if (exp.parsedDate instanceof Date && !Number.isNaN(exp.parsedDate.getTime())) return exp.parsedDate;
   if (exp.sortDate instanceof Date && !Number.isNaN(exp.sortDate.getTime())) return exp.sortDate;
 
+  if (exp.metricDate instanceof Date && !Number.isNaN(exp.metricDate.getTime())) return exp.metricDate;
+
+  const expenseDate = exp.expenseDate || exp.expense_date;
+  if (expenseDate) {
+    const operationalDate = parseHistoryDateTime(expenseDate, exp.timestamp || exp.time) || normalizeDate(expenseDate);
+    if (operationalDate && !Number.isNaN(operationalDate.getTime())) return operationalDate;
+  }
+
   const createdAtDate = exp.createdAt || exp.created_at ? new Date(exp.createdAt || exp.created_at) : null;
   if (createdAtDate && !Number.isNaN(createdAtDate.getTime())) return createdAtDate;
 

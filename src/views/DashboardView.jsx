@@ -36,7 +36,14 @@ const RETIRED_BOTTOM_WIDGETS = new Set(['chart', 'expirations', 'systemLogs']);
 const BOTTOM_WIDGETS = new Set(DEFAULT_BOTTOM_ORDER);
 
 const resolveActivityDate = (record = {}) => {
-  const directDate = record.metricDate || record.activityDate || record.createdAt || record.created_at || record.date;
+  const directDate =
+    record.metricDate ||
+    record.activityDate ||
+    record.expenseDate ||
+    record.expense_date ||
+    record.createdAt ||
+    record.created_at ||
+    record.date;
   const parsedDirect = parseMetricDate(directDate);
   const parsedDate = parsedDirect ? new Date(parsedDirect.getTime()) : null;
 
@@ -44,7 +51,12 @@ const resolveActivityDate = (record = {}) => {
 
   const rawTime = String(record.time || record.timestamp || '').trim();
   const timeMatch = rawTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-  if (timeMatch && !record.metricDate && !record.createdAt && !record.created_at) {
+  if (
+    timeMatch &&
+    !record.metricDate &&
+    (!record.createdAt || record.expenseDate || record.expense_date) &&
+    (!record.created_at || record.expenseDate || record.expense_date)
+  ) {
     parsedDate.setHours(
       Number(timeMatch[1]) || 0,
       Number(timeMatch[2]) || 0,

@@ -157,6 +157,7 @@ export const CLOUD_SELECTS = {
   expenses: [
     'id',
     'created_at',
+    'expense_date',
     'description',
     'amount',
     'category',

@@ -198,6 +198,26 @@ const getComparisonLabel = (metrics) =>
     ? `${formatComparisonRange(metrics.range)} vs ${formatComparisonRange(metrics.previousRange)}`
     : 'Sin comparación anterior';
 
+const PeriodComparison = ({ context, change, comparisonLabel, invert = false }) => {
+  const hasChange = Number.isFinite(change);
+  const normalizedChange = hasChange && Math.abs(change) < 0.05 ? 0 : change;
+  const isGood = hasChange && (invert ? normalizedChange <= 0 : normalizedChange >= 0);
+
+  return (
+    <p className="metrics-period-comparison">
+      <span>{context}</span>
+      <b
+        className={hasChange ? (isGood ? 'is-good' : 'is-bad') : 'is-neutral'}
+        title={hasChange ? `Variación: ${comparisonLabel}` : 'El período anterior no tiene una base distinta de cero para calcular el porcentaje.'}
+      >
+        {hasChange
+          ? `${normalizedChange >= 0 ? '+' : ''}${formatNumber(normalizedChange, 1)}% vs. anterior`
+          : 'Sin base anterior'}
+      </b>
+    </p>
+  );
+};
+
 const BASE_SECTIONS = [
   { id: 'summary', label: 'Resumen', icon: BarChart3, group: 'overview', question: '¿Cómo terminó el período y qué requiere atención?' },
   { id: 'sales', label: 'Ventas', icon: TrendingUp, group: 'sales', question: '¿Cuándo se vende y cómo cambia el ritmo?' },
@@ -1286,6 +1306,7 @@ export default function MetricsView({
     const grossMarginRate = revenue ? (grossProfit / revenue) * 100 : 0;
     const netMarginRate = revenue ? (netProfit / revenue) * 100 : 0;
     const costRate = revenue ? (cost / revenue) * 100 : 0;
+    const comparisonLabel = getComparisonLabel(metrics);
 
     const profitControlInsight = !canViewProfit
       ? null
@@ -1369,29 +1390,31 @@ export default function MetricsView({
           <div className="metrics-reading-primary">
             <span>Ingreso bruto</span>
             <strong><FancyPrice amount={revenue} /></strong>
-            <small>{metrics.range.label}</small>
+            <PeriodComparison context={metrics.range.label} change={metrics.changes.revenue} comparisonLabel={comparisonLabel} />
           </div>
           {canViewProfit && (
             <div>
               <span>Margen mercadería</span>
               <strong><FancyPrice amount={grossProfit} /></strong>
-              <small>{formatNumber(grossMarginRate, 1)}% antes de gastos</small>
+              <PeriodComparison context={`${formatNumber(grossMarginRate, 1)}% antes de gastos`} change={metrics.changes.grossProfit} comparisonLabel={comparisonLabel} />
             </div>
           )}
           <div>
             <span>Resultado de caja</span>
             <strong>{canViewProfit ? (profitStatusLabel || <FancyPrice amount={netProfit} />) : 'Restringido'}</strong>
-            <small>{canViewProfit ? `${formatNumber(netMarginRate, 1)}% sobre lo cobrado` : 'Permiso requerido'}</small>
+            {canViewProfit
+              ? <PeriodComparison context={`${formatNumber(netMarginRate, 1)}% sobre lo cobrado`} change={metrics.changes.profit} comparisonLabel={comparisonLabel} />
+              : <small>Permiso requerido</small>}
           </div>
           <div>
             <span>Compras</span>
             <strong>{formatNumber(stats.salesCount)}</strong>
-            <small>tickets emitidos</small>
+            <PeriodComparison context="tickets emitidos" change={metrics.changes.salesCount} comparisonLabel={comparisonLabel} />
           </div>
           <div>
             <span>Ticket medio</span>
             <strong><FancyPrice amount={stats.averageTicket} /></strong>
-            <small>{Number.isFinite(metrics.changes.averageTicket) ? `${metrics.changes.averageTicket >= 0 ? '+' : ''}${formatNumber(metrics.changes.averageTicket, 1)}% vs. anterior` : 'sin comparación'}</small>
+            <PeriodComparison context="promedio por compra" change={metrics.changes.averageTicket} comparisonLabel={comparisonLabel} />
           </div>
         </section>
 

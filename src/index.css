@@ -396,6 +396,43 @@ textarea,
 .metrics-reading-band small { margin-top: 5px; font-size: 10px; font-weight: 600; }
 .metrics-reading-band .metrics-reading-primary strong { color: var(--rebu-info); font-size: 23px; }
 
+.metrics-period-comparison {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.metrics-reading-band .metrics-period-comparison > span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--rebu-text-muted);
+  font-size: inherit;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.metrics-period-comparison > b {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metrics-period-comparison > b.is-good { color: var(--rebu-success); }
+.metrics-period-comparison > b.is-bad { color: var(--rebu-danger); }
+.metrics-period-comparison > b.is-neutral { color: var(--rebu-text-muted); }
+
 .metrics-cash-equation {
   display: grid;
   grid-template-columns: minmax(130px, .8fr) minmax(120px, 1fr) auto minmax(120px, 1fr) auto minmax(120px, 1fr) minmax(220px, 1.4fr);
