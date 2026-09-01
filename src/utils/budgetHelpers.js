@@ -1,4 +1,5 @@
 import { formatDateAR, formatTimeAR, formatWeight } from './helpers.js';
+import { normalizeFinalSalePrice } from './finalSalePrice.js';
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
@@ -119,26 +120,32 @@ export const buildBudgetSnapshot = (items = []) =>
   asArray(items)
     .map(normalizeBudgetBuilderItem)
     .filter((item) => item.title.trim() !== '')
-    .map((item) => ({
-      id: item.id,
-      product_id: item.productId,
-      title: item.title.trim(),
-      category: item.category || 'Otros',
-      quantity: toFiniteNumber(item.qty, 0),
-      unit_price: toFiniteNumber(item.newPrice, 0),
-      purchase_price: toFiniteNumber(item.purchasePrice, 0),
-      unit_cost: toFiniteNumber(item.purchasePrice, 0),
-      cost: toFiniteNumber(item.purchasePrice, 0),
-      subtotal: calculateBudgetLineSubtotal(item),
-      product_type: item.product_type || 'quantity',
-      is_combo: Boolean(item.isCombo),
-      is_discount: Boolean(item.isDiscount),
-      is_custom: Boolean((item.isTemporary || !item.productId) && !item.isCombo && !item.isDiscount),
-      original_offer_id: item.originalOfferId || null,
-      products_included: Array.isArray(item.productsIncluded)
-        ? item.productsIncluded.map(normalizeBudgetIncludedProduct)
-        : [],
-    }));
+    .map((item) => {
+      const finalUnitPrice = item.isDiscount
+        ? toFiniteNumber(item.newPrice, 0)
+        : normalizeFinalSalePrice(item.newPrice);
+      const normalizedItem = { ...item, newPrice: finalUnitPrice };
+      return {
+        id: item.id,
+        product_id: item.productId,
+        title: item.title.trim(),
+        category: item.category || 'Otros',
+        quantity: toFiniteNumber(item.qty, 0),
+        unit_price: finalUnitPrice,
+        purchase_price: toFiniteNumber(item.purchasePrice, 0),
+        unit_cost: toFiniteNumber(item.purchasePrice, 0),
+        cost: toFiniteNumber(item.purchasePrice, 0),
+        subtotal: calculateBudgetLineSubtotal(normalizedItem),
+        product_type: item.product_type || 'quantity',
+        is_combo: Boolean(item.isCombo),
+        is_discount: Boolean(item.isDiscount),
+        is_custom: Boolean((item.isTemporary || !item.productId) && !item.isCombo && !item.isDiscount),
+        original_offer_id: item.originalOfferId || null,
+        products_included: Array.isArray(item.productsIncluded)
+          ? item.productsIncluded.map(normalizeBudgetIncludedProduct)
+          : [],
+      };
+    });
 
 export const hydrateBudgetSnapshot = (itemsSnapshot = []) =>
   asArray(itemsSnapshot).map((value) => {

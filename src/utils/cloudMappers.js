@@ -10,6 +10,8 @@ import {
   POS_BAG_ITEM_KIND,
 } from './posSaleExtras';
 import { getProductActiveState } from './productLifecycle';
+import { normalizeFinalSalePrice, normalizeStoredProductSalePrice } from './finalSalePrice';
+import { normalizeStoredProductPurchaseCost } from './finalPurchaseCost';
 
 const MODIFIED_SALE_ACTIONS = new Set([
   'Venta Modificada',
@@ -75,7 +77,11 @@ export const mapInventoryRecords = (products = []) =>
     categories: product.category
       ? product.category.split(',').map((category) => category.trim()).filter(Boolean)
       : [],
-    purchasePrice: Number(product.purchasePrice ?? product.purchase_price ?? 0) || 0,
+    price: normalizeStoredProductSalePrice(product.price, product.product_type),
+    purchasePrice: normalizeStoredProductPurchaseCost(
+      product.purchasePrice ?? product.purchase_price ?? 0,
+      product.product_type,
+    ),
     expiration_date: product.expiration_date || null,
     activeOffers: Array.isArray(product.active_offers)
       ? product.active_offers
@@ -501,7 +507,7 @@ export const mapOfferRecords = (offers = []) =>
     productsIncluded: offer.products_included || [],
     itemsCount: Number(offer.items_count),
     discountValue: Number(offer.discount_value),
-    offerPrice: Number(offer.offer_price),
+    offerPrice: normalizeFinalSalePrice(offer.offer_price),
     profitMargin:
       typeof offer.profit_margin === 'string'
         ? offer.profit_margin

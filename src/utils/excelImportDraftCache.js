@@ -1,7 +1,12 @@
-export const EXCEL_IMPORT_DRAFT_STORAGE_KEY = 'rebu_excel_import_draft_v2';
-export const EXCEL_IMPORT_DRAFT_LEGACY_STORAGE_KEY = 'rebu_excel_import_draft_v1';
-export const EXCEL_IMPORT_DRAFT_VERSION = 2;
+export const EXCEL_IMPORT_DRAFT_STORAGE_KEY = 'rebu_excel_import_draft_v3';
+export const EXCEL_IMPORT_DRAFT_LEGACY_STORAGE_KEY = 'rebu_excel_import_draft_v2';
+export const EXCEL_IMPORT_DRAFT_VERSION = 3;
 export const EXCEL_IMPORT_DRAFT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+const EXCEL_IMPORT_DRAFT_LEGACY_STORAGE_KEYS = [
+  EXCEL_IMPORT_DRAFT_LEGACY_STORAGE_KEY,
+  'rebu_excel_import_draft_v1',
+];
 
 const MAX_CACHED_ROWS = 5000;
 const LOCAL_STORAGE_ROW_LIMIT = 250;
@@ -118,6 +123,16 @@ const removeStorageItem = (storage, key) => {
   }
 };
 
+const removeLegacyStorageItems = (storage, scope = '') => {
+  EXCEL_IMPORT_DRAFT_LEGACY_STORAGE_KEYS.forEach((key) => removeStorageItem(storage, key));
+  const normalizedScope = normalizeScope(scope);
+  if (normalizedScope) {
+    EXCEL_IMPORT_DRAFT_LEGACY_STORAGE_KEYS.forEach((key) => {
+      removeStorageItem(storage, `${key}:${encodeURIComponent(normalizedScope)}`);
+    });
+  }
+};
+
 const openDraftDatabase = (indexedDB) => new Promise((resolve, reject) => {
   if (!indexedDB?.open) {
     reject(new Error('IndexedDB no disponible.'));
@@ -192,7 +207,7 @@ const writeLocalDraftIfNewer = (storage, key, snapshot) => {
 export const clearExcelImportDraft = async ({ storage, indexedDB, scope } = {}) => {
   const key = getExcelImportDraftStorageKey(scope);
   if (key) memoryDrafts.delete(key);
-  removeStorageItem(storage, EXCEL_IMPORT_DRAFT_LEGACY_STORAGE_KEY);
+  removeLegacyStorageItems(storage, scope);
   removeStorageItem(storage, key);
   if (!key || !indexedDB) return;
   try {
@@ -204,7 +219,7 @@ export const clearExcelImportDraft = async ({ storage, indexedDB, scope } = {}) 
 
 export const saveExcelImportDraft = async ({ storage, indexedDB, scope } = {}, draft, now = Date.now()) => {
   const key = getExcelImportDraftStorageKey(scope);
-  removeStorageItem(storage, EXCEL_IMPORT_DRAFT_LEGACY_STORAGE_KEY);
+  removeLegacyStorageItems(storage, scope);
   if (!key) return { success: false, reason: 'missing-scope' };
   if (!Array.isArray(draft?.rows) || draft.rows.length === 0) {
     await clearExcelImportDraft({ storage, indexedDB, scope });
@@ -243,7 +258,7 @@ export const saveExcelImportDraft = async ({ storage, indexedDB, scope } = {}, d
 
 export const loadExcelImportDraft = async ({ storage, indexedDB, scope } = {}, now = Date.now()) => {
   const key = getExcelImportDraftStorageKey(scope);
-  removeStorageItem(storage, EXCEL_IMPORT_DRAFT_LEGACY_STORAGE_KEY);
+  removeLegacyStorageItems(storage, scope);
   if (!key) return null;
 
   let rawDraft = memoryDrafts.get(key) || null;

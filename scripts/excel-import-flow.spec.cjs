@@ -122,8 +122,8 @@ test('importar Excel consolida, crea y bloquea reaplicaciones', async ({ page },
   await expect(page.getByRole('heading', { name: 'Crear productos nuevos' })).toBeVisible();
   await expect(page.getByText(/Nombre similar/i)).toBeVisible();
   await expect(page.getByText(/Podes vincularlo o crear este producto como uno nuevo/i)).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'Costo $' })).toHaveValue('1800');
-  await expect(page.getByRole('textbox', { name: 'Venta $' })).toHaveValue('3500');
+  await expect(page.getByRole('textbox', { name: 'Costo $' })).toHaveValue('1989');
+  await expect(page.getByRole('textbox', { name: 'Venta $' })).toHaveValue('3980');
   await expect(page.getByRole('button', { name: /^Crear producto$/i })).toBeEnabled();
 
   await page.screenshot({ path: testInfo.outputPath('excel-import-flow.png'), fullPage: true });

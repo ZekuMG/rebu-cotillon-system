@@ -122,6 +122,7 @@ import {
 } from '../utils/whatsappTags';
 import './WhatsAppInboxView.css';
 import { formatRecordCode } from '../utils/recordCode';
+import { normalizeFinalSalePrice } from '../utils/finalSalePrice';
 
 const MODES = [
   ['shadow', 'Solo observar', 'Analiza los mensajes y muestra sugerencias, pero no envía respuestas por su cuenta.'],
@@ -2330,7 +2331,7 @@ function BudgetPanel({
             <div className="wa-budget-line" key={`${item.product_id || 'custom'}-${index}`}>
               <input className="title" value={item.title || ''} onChange={(event) => updateItem(index, { title: event.target.value })} aria-label="Producto" placeholder="Nombre del producto" />
               <input type="number" min="0.001" step="0.001" value={item.quantity} onChange={(event) => updateItem(index, { quantity: Number(event.target.value) })} aria-label="Cantidad" />
-              <input type="number" min="0" step="0.01" value={item.unit_price} onChange={(event) => updateItem(index, { unit_price: Number(event.target.value) })} aria-label="Precio unitario" />
+              <input type="number" min="0" step="1" value={item.unit_price} onChange={(event) => updateItem(index, { unit_price: Number(event.target.value) })} onBlur={(event) => updateItem(index, { unit_price: normalizeFinalSalePrice(event.target.value) })} aria-label="Precio unitario" />
               <button type="button" onClick={() => setValue((current) => ({ ...current, items: current.items.filter((_, itemIndex) => itemIndex !== index) }))} aria-label={`Quitar ${item.title || 'producto'}`} title="Quitar"><Trash2 /></button>
               <small className="wa-budget-subtotal">
                 {item.product_type === 'weight' ? `${item.quantity} g · ` : `${item.quantity} × `}
@@ -4233,22 +4234,26 @@ export default function WhatsAppInboxView({
     }
     await action('approve-budget', async () => {
       const operationKey = entry.operation_key || `whatsapp-budget:${entry.id}`;
-      const itemsSnapshot = value.items.map((item, index) => ({
-        id: `${entry.id}-${index}`,
-        product_id: item.product_id || null,
-        title: item.title,
-        category: 'WhatsApp',
-        quantity: Number(item.quantity || 0),
-        unit_price: Number(item.unit_price || 0),
-        subtotal: item.product_type === 'weight'
-          ? Number(item.unit_price || 0) * Number(item.quantity || 0) / 1000
-          : Number(item.unit_price || 0) * Number(item.quantity || 0),
-        product_type: item.product_type || 'quantity',
-        is_custom: !item.product_id,
-        is_combo: false,
-        is_discount: false,
-        products_included: [],
-      }));
+      const itemsSnapshot = value.items.map((item, index) => {
+        const finalUnitPrice = normalizeFinalSalePrice(item.unit_price);
+        const quantity = Number(item.quantity || 0);
+        return {
+          id: `${entry.id}-${index}`,
+          product_id: item.product_id || null,
+          title: item.title,
+          category: 'WhatsApp',
+          quantity,
+          unit_price: finalUnitPrice,
+          subtotal: item.product_type === 'weight'
+            ? finalUnitPrice * quantity / 1000
+            : finalUnitPrice * quantity,
+          product_type: item.product_type || 'quantity',
+          is_custom: !item.product_id,
+          is_combo: false,
+          is_discount: false,
+          products_included: [],
+        };
+      });
       await whatsappOperator.updateBudgetDraft(entry.id, {
         ...value,
         phone: entry.phone,

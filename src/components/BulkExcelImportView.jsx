@@ -20,6 +20,10 @@ import {
 } from 'lucide-react';
 import AsyncActionButton from './AsyncActionButton';
 import { FancyPrice } from './FancyPrice';
+import {
+  PricingFormulaControls,
+  PricingFormulaTrace,
+} from './pricing/PricingFormulaControls';
 import usePendingAction from '../hooks/usePendingAction';
 import { areDuplicatePricesEqual, mergeDuplicateEntries } from '../utils/excelImportDuplicates';
 import {
@@ -47,6 +51,17 @@ import {
   loadExcelImportDraft,
   saveExcelImportDraft,
 } from '../utils/excelImportDraftCache';
+import {
+  DEFAULT_GROSS_MARGIN_PERCENT,
+} from '../utils/grossMarginPricing';
+import {
+  calculateExcelImportUnitPricing,
+  repriceExcelImportEntryForMargin,
+  repriceExcelImportEntryForMultiplier,
+  repriceExcelImportEntryForRealCost,
+} from '../utils/excelImportPricing';
+import { normalizeFinalSalePrice } from '../utils/finalSalePrice';
+import { normalizeFinalPurchaseCost } from '../utils/finalPurchaseCost';
 
 const REQUIRED_COLUMNS = ['codigo', 'descripcion', 'cantidad', 'precio', 'descuento', 'costo', 'venta'];
 const FIELD_KEYS = ['stock', 'cost', 'price'];
@@ -145,14 +160,6 @@ const parseNumber = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
-const ceilMoney = (value) => Math.ceil(Number(value || 0));
-
-const divideLotValue = (value, multiplier) => {
-  const safeMultiplier = Number(multiplier || 0);
-  if (!safeMultiplier || safeMultiplier <= 0) return 0;
-  return ceilMoney(Number(value || 0) / safeMultiplier);
-};
-
 const formatDiffPercent = (oldValue, newValue) => {
   const oldNumber = Number(oldValue || 0);
   const newNumber = Number(newValue || 0);
@@ -169,7 +176,12 @@ const getFirstValue = (row, key) => {
   return foundKey ? row[foundKey] : '';
 };
 
-const buildImportEntry = (row, rowNumber, fileFingerprint = '') => {
+const buildImportEntry = (
+  row,
+  rowNumber,
+  fileFingerprint = '',
+  marginPercent = DEFAULT_GROSS_MARGIN_PERCENT,
+) => {
   const code = normalizeCode(getFirstValue(row, 'Codigo'));
   const description = String(getFirstValue(row, 'Descripcion') ?? '').trim();
   const category = String(getFirstValue(row, 'Categoria') ?? '').trim();
@@ -179,8 +191,16 @@ const buildImportEntry = (row, rowNumber, fileFingerprint = '') => {
   const lotCost = parseExcelMoney(getFirstValue(row, 'Costo'));
   const lotSalePrice = parseExcelMoney(getFirstValue(row, 'Venta'));
   const multiplier = 1;
-  const cost = divideLotValue(lotCost, multiplier);
-  const salePrice = divideLotValue(lotSalePrice, multiplier);
+  const pricing = calculateExcelImportUnitPricing({
+    lotCost,
+    lotSalePrice,
+    multiplier,
+    marginPercent,
+  });
+  const { baseCost } = pricing;
+  const cost = pricing.realCost;
+  const salePrice = pricing.salePrice;
+  const { excelSalePrice } = pricing;
 
   return {
     rowNumber,
@@ -197,6 +217,8 @@ const buildImportEntry = (row, rowNumber, fileFingerprint = '') => {
     discount,
     lotCost,
     lotSalePrice,
+    baseCost,
+    excelSalePrice,
     cost,
     costInput: cost ? String(cost) : '',
     originalCost: cost,
@@ -486,6 +508,8 @@ export default function BulkExcelImportView({
   inventory = [],
   categories = [],
   cacheScope = '',
+  marginPercent = DEFAULT_GROSS_MARGIN_PERCENT,
+  onMarginChange,
   canCreateInventory = false,
   canEditInventory = false,
   onApplyImport,
@@ -674,6 +698,36 @@ export default function BulkExcelImportView({
       return changed ? nextRows : currentRows;
     });
   }, [findProductForEntry, inventory, inventoryById, isDraftHydrated]);
+
+  useEffect(() => {
+    if (!isDraftHydrated) return;
+    setRows((currentRows) => currentRows.map((row, index) => {
+      if (row.entry.salePriceEdited || Number(row.entry.cost || 0) <= 0) return row;
+      const nextEntry = repriceExcelImportEntryForMargin(row.entry, marginPercent);
+      if (nextEntry === row.entry || nextEntry.salePrice === row.entry.salePrice) return row;
+      const rebuilt = buildReviewRow({
+        entry: nextEntry,
+        product: row.product,
+        duplicateOptions: row.duplicateOptions,
+        duplicateResolved: row.duplicateResolved,
+        linkedByExcelAlias: row.linkedByExcelAlias,
+      }, index);
+      const nextRow = {
+        ...rebuilt,
+        ...row,
+        entry: nextEntry,
+        errors: rebuilt.errors,
+        hasChanges: rebuilt.hasChanges,
+      };
+      return {
+        ...nextRow,
+        approvals: FIELD_KEYS.reduce((acc, approvalKey) => {
+          acc[approvalKey] = Boolean(row.approvals[approvalKey] && isFieldEligible(nextRow, approvalKey));
+          return acc;
+        }, {}),
+      };
+    }));
+  }, [isDraftHydrated, marginPercent]);
 
   draftStateRef.current = {
     fileName,
@@ -983,7 +1037,7 @@ export default function BulkExcelImportView({
     }
 
     const entries = sheetRows
-      .map((row, index) => buildImportEntry(row, index + 2, fileFingerprint))
+      .map((row, index) => buildImportEntry(row, index + 2, fileFingerprint, marginPercent))
       .filter((entry) => entry.code || entry.description || entry.quantity || entry.cost || entry.salePrice);
 
     const groupedByCode = entries.reduce((groups, entry) => {
@@ -1175,12 +1229,16 @@ export default function BulkExcelImportView({
     setRows((prev) => {
       const sourceIndex = prev.findIndex((row) => row.id === sourceRow.id);
       const safeMultiplier = Number(sourceRow.entry.multiplier || 0) > 0 ? Number(sourceRow.entry.multiplier) : 1;
-      const safeCost = Number(sourceRow.entry.cost || 0) > 0
-        ? Number(sourceRow.entry.cost)
-        : divideLotValue(sourceRow.entry.lotCost ?? sourceRow.entry.cost, safeMultiplier);
-      const safeSalePrice = Number(sourceRow.entry.salePrice || 0) > 0
-        ? Number(sourceRow.entry.salePrice)
-        : divideLotValue(sourceRow.entry.lotSalePrice ?? sourceRow.entry.salePrice, safeMultiplier);
+      const pricing = calculateExcelImportUnitPricing({
+        lotCost: sourceRow.entry.lotCost ?? sourceRow.entry.cost,
+        lotSalePrice: sourceRow.entry.lotSalePrice ?? sourceRow.entry.excelSalePrice,
+        multiplier: safeMultiplier,
+        marginPercent,
+      });
+      const { baseCost } = pricing;
+      const safeCost = pricing.realCost;
+      const safeSalePrice = pricing.salePrice;
+      const { excelSalePrice } = pricing;
       const nextRow = {
         ...buildReviewRow(
           {
@@ -1191,6 +1249,8 @@ export default function BulkExcelImportView({
               quantityInput: '0',
               multiplier: safeMultiplier,
               multiplierInput: String(safeMultiplier),
+              baseCost,
+              excelSalePrice,
               cost: safeCost,
               costInput: safeCost ? String(safeCost) : '',
               originalCost: sourceRow.entry.originalCost ?? safeCost,
@@ -1246,9 +1306,12 @@ export default function BulkExcelImportView({
   };
 
   const updateRowEntryValue = (rowId, field, value) => {
-    const numericValue = field === 'cost' || field === 'salePrice'
+    const parsedNumericValue = field === 'cost' || field === 'salePrice'
       ? parseExcelMoney(value)
       : parseNumber(value);
+    const numericValue = field === 'salePrice'
+      ? normalizeFinalSalePrice(parsedNumericValue)
+      : parsedNumericValue;
     const inputKey = getEntryInputKey(field);
     setRows((prev) =>
       prev.map((row, index) => {
@@ -1258,19 +1321,16 @@ export default function BulkExcelImportView({
           nextEntry.originalQuantity = Number(row.entry.quantity || 0);
         }
         if (field === 'cost') {
-          nextEntry.costEdited = true;
+          Object.assign(nextEntry, repriceExcelImportEntryForRealCost(row.entry, numericValue, marginPercent));
+          nextEntry.costInput = String(value ?? '').trim() === '' ? '' : String(nextEntry.cost);
         }
         if (field === 'salePrice') {
           nextEntry.salePriceEdited = true;
         }
         if (field === 'multiplier') {
           if (numericValue > 0) {
-            nextEntry.cost = divideLotValue(row.entry.lotCost ?? row.entry.cost, numericValue);
-            nextEntry.salePrice = divideLotValue(row.entry.lotSalePrice ?? row.entry.salePrice, numericValue);
-            nextEntry.costInput = nextEntry.cost ? String(nextEntry.cost) : '';
-            nextEntry.salePriceInput = nextEntry.salePrice ? String(nextEntry.salePrice) : '';
-            nextEntry.costEdited = true;
-            nextEntry.salePriceEdited = true;
+            Object.assign(nextEntry, repriceExcelImportEntryForMultiplier(row.entry, numericValue, marginPercent));
+            nextEntry.multiplierInput = value;
           }
         }
         const nextRow = {
@@ -1380,7 +1440,10 @@ export default function BulkExcelImportView({
     setCreateDrafts((prev) =>
       prev.map((draft) => {
         if (draft.rowId !== rowId) return draft;
-        const nextDraft = { ...draft, [field]: value, error: '' };
+        const nextValue = field === 'purchasePrice' && String(value ?? '').trim() !== ''
+          ? String(normalizeFinalPurchaseCost(parseExcelMoney(value)))
+          : value;
+        const nextDraft = { ...draft, [field]: nextValue, error: '' };
         if (field === 'title' || field === 'barcode') {
           nextDraft.duplicate = getDuplicateCandidate({
             code: nextDraft.barcode,
@@ -1750,6 +1813,17 @@ export default function BulkExcelImportView({
             <span className="excel-upload-title text-xs font-black">{fileName || 'Seleccionar archivo .xlsx o .xls'}</span>
             <span className="excel-upload-fields text-[10px] font-bold text-emerald-600">Codigo, Descripcion, Cantidad, Precio, Descuento, Costo, Venta</span>
           </button>
+
+          <div className="mt-3">
+            <PricingFormulaControls
+              marginPercent={marginPercent}
+              onMarginChange={onMarginChange}
+              compact
+            />
+            <p className="mt-1.5 text-[9px] font-bold leading-snug text-slate-500">
+              Costo se interpreta sin IVA. Venta del Excel queda como referencia; la sugerencia usa el margen elegido.
+            </p>
+          </div>
 
           <p className={`mt-2 text-[9px] font-black ${cacheStatus === 'error' ? 'text-red-600' : 'text-slate-400'}`} aria-live="polite">
             {cacheStatus === 'loading' && 'Recuperando borrador...'}
@@ -2169,6 +2243,7 @@ export default function BulkExcelImportView({
                           sourceRow={row}
                           productRows={productRows}
                           status={status}
+                          marginPercent={marginPercent}
                         />
                       ) : activeTargetId === 'article' ? (
                         <CompactReviewSummary
@@ -2176,6 +2251,7 @@ export default function BulkExcelImportView({
                           productRows={productRows}
                           status={status}
                           mode="article"
+                          marginPercent={marginPercent}
                         />
                       ) : activeShowAssignmentSearch ? (
                         <div className="excel-assignment-panel min-h-[112px] border-l border-slate-200 pl-4 pt-1">
@@ -2243,6 +2319,7 @@ export default function BulkExcelImportView({
                           productRows={productRows}
                           status={status}
                           activeRow={activeReviewRow}
+                          marginPercent={marginPercent}
                           onToggleApproval={toggleApproval}
                           onUpdateEntryValue={updateRowEntryValue}
                         />
@@ -2319,8 +2396,17 @@ export default function BulkExcelImportView({
                             after={<FancyPrice amount={activeReviewRow.entry.salePrice} />}
                             editableValue={activeReviewRow.entry.salePriceInput ?? activeReviewRow.entry.salePrice}
                             onAfterChange={(value) => updateRowEntryValue(activeReviewRow.id, 'salePrice', value)}
-                            delta={`${formatDiffPercent(activeReviewRow.product?.price, activeReviewRow.entry.salePrice)} vs actual / Lote $${Number(activeReviewRow.entry.lotSalePrice || activeReviewRow.entry.salePrice || 0).toLocaleString('es-AR')}`}
+                            delta={`${formatDiffPercent(activeReviewRow.product?.price, activeReviewRow.entry.salePrice)} vs actual / Excel $${Number(activeReviewRow.entry.excelSalePrice || 0).toLocaleString('es-AR')}`}
                           />
+                          </div>
+                          <div className="mt-2">
+                            <PricingFormulaTrace
+                              baseCost={activeReviewRow.entry.baseCost}
+                              realCost={activeReviewRow.entry.cost}
+                              salePrice={activeReviewRow.entry.salePrice}
+                              marginPercent={marginPercent}
+                              excelSalePrice={activeReviewRow.entry.excelSalePrice}
+                            />
                           </div>
                         </div>
                       )}
@@ -2348,7 +2434,7 @@ export default function BulkExcelImportView({
                               }
                             />
                             <ImportChip label="Costo Excel" tone="cost" value={<FancyPrice amount={row.entry.cost} />} />
-                            <ImportChip label="Venta Excel" tone="price" value={<FancyPrice amount={row.entry.salePrice} />} />
+                            <ImportChip label="Venta sugerida" tone="price" value={<FancyPrice amount={row.entry.salePrice} />} />
                           </div>
                           <QuantityMultiplierControl
                             quantity={row.entry.quantity}
@@ -2402,7 +2488,7 @@ export default function BulkExcelImportView({
                           after={<FancyPrice amount={row.entry.salePrice} />}
                           editableValue={row.entry.salePriceInput ?? row.entry.salePrice}
                           onAfterChange={(value) => updateRowEntryValue(row.id, 'salePrice', value)}
-                          delta={`${formatDiffPercent(row.product?.price, row.entry.salePrice)} vs actual / Lote $${Number(row.entry.lotSalePrice || row.entry.salePrice || 0).toLocaleString('es-AR')}`}
+                          delta={`${formatDiffPercent(row.product?.price, row.entry.salePrice)} vs actual / Excel $${Number(row.entry.excelSalePrice || 0).toLocaleString('es-AR')}`}
                         />
                       </div>
                       )}
@@ -3044,8 +3130,8 @@ function ArticleBreakdownPanel({ sourceRow, productRows, onQuantityChange, onSel
       <div className="excel-summary-strip mt-2 flex flex-wrap items-center gap-x-6 gap-y-1 border-y border-slate-200 py-1.5">
         <InlineMetric label="Cantidad" value={originalQuantity.toLocaleString('es-AR')} />
         <InlineMetric label="Asignado" value={assignedQuantity.toLocaleString('es-AR')} tone="blue" />
-        <InlineMetric label="Costo" value={<FancyPrice amount={sourceRow.entry.lotCost || sourceRow.entry.cost} />} tone="violet" />
-        <InlineMetric label="Venta" value={<FancyPrice amount={sourceRow.entry.lotSalePrice || sourceRow.entry.salePrice} />} tone="green" />
+        <InlineMetric label="Costo base Excel" value={<FancyPrice amount={sourceRow.entry.lotCost || sourceRow.entry.baseCost} />} tone="violet" />
+        <InlineMetric label="Venta Excel" value={<FancyPrice amount={sourceRow.entry.lotSalePrice || sourceRow.entry.excelSalePrice} />} tone="green" />
       </div>
 
       <div className="excel-product-split mt-1 divide-y divide-slate-200">
@@ -3098,6 +3184,7 @@ function CompactReviewSummary({
   status,
   mode = 'product',
   activeRow = null,
+  marginPercent = DEFAULT_GROSS_MARGIN_PERCENT,
   onToggleApproval,
   onUpdateEntryValue,
 }) {
@@ -3132,8 +3219,17 @@ function CompactReviewSummary({
         <div className="excel-article-quick-grid mt-2 grid grid-cols-2 gap-1.5 lg:grid-cols-4">
           <InlineMetric label="Cantidad" value={originalQuantity.toLocaleString('es-AR')} />
           <InlineMetric label="Asignado" value={assignedQuantity.toLocaleString('es-AR')} tone="blue" />
-          <InlineMetric label="Costo" value={<FancyPrice amount={sourceRow.entry.lotCost || sourceRow.entry.cost} />} tone="violet" />
-          <InlineMetric label="Venta" value={<FancyPrice amount={sourceRow.entry.lotSalePrice || sourceRow.entry.salePrice} />} tone="green" />
+          <InlineMetric label="Costo base Excel" value={<FancyPrice amount={sourceRow.entry.lotCost || sourceRow.entry.baseCost} />} tone="violet" />
+          <InlineMetric label="Venta Excel" value={<FancyPrice amount={sourceRow.entry.lotSalePrice || sourceRow.entry.excelSalePrice} />} tone="green" />
+        </div>
+        <div className="mt-2">
+          <PricingFormulaTrace
+            baseCost={sourceRow.entry.baseCost}
+            realCost={sourceRow.entry.cost}
+            salePrice={sourceRow.entry.salePrice}
+            marginPercent={marginPercent}
+            excelSalePrice={sourceRow.entry.excelSalePrice}
+          />
         </div>
       </div>
     );
@@ -3151,6 +3247,15 @@ function CompactReviewSummary({
           <span className={`shrink-0 rounded-md border px-2 py-1 text-[9px] font-black uppercase ${statusClass[status.tone]}`}>
             {status.label}
           </span>
+        </div>
+        <div className="mt-2">
+          <PricingFormulaTrace
+            baseCost={sourceRow.entry.baseCost}
+            realCost={sourceRow.entry.cost}
+            salePrice={sourceRow.entry.salePrice}
+            marginPercent={marginPercent}
+            excelSalePrice={sourceRow.entry.excelSalePrice}
+          />
         </div>
       </div>
     );
@@ -3190,6 +3295,18 @@ function CompactReviewSummary({
       ) : (
         <p className="mt-2 text-[10px] font-bold text-slate-500">Sin diferencias marcables para este producto.</p>
       )}
+
+      {activeRow ? (
+        <div className="mt-2">
+          <PricingFormulaTrace
+            baseCost={activeRow.entry.baseCost}
+            realCost={activeRow.entry.cost}
+            salePrice={activeRow.entry.salePrice}
+            marginPercent={marginPercent}
+            excelSalePrice={activeRow.entry.excelSalePrice}
+          />
+        </div>
+      ) : null}
 
       {activeRow?.errors?.length > 0 && (
         <CompactErrorHelp errors={activeRow.errors} />
@@ -3568,9 +3685,14 @@ function CompareField({ label, before, after, delta, checked, disabled, onToggle
               <span className="text-[10px] font-black text-slate-400">$</span>
               <input
                 type="text"
-                inputMode="decimal"
+                inputMode={label === 'Venta' ? 'numeric' : 'decimal'}
                 value={editableValue ?? ''}
                 onChange={(event) => onAfterChange(event.target.value)}
+                onBlur={(event) => {
+                  if (label === 'Venta') {
+                    onAfterChange(String(normalizeFinalSalePrice(parseExcelMoney(event.target.value))));
+                  }
+                }}
                 className="no-spinners min-w-0 flex-1 bg-transparent text-right text-[11px] font-black tabular-nums text-slate-900 outline-none"
                 title={`Editar ${label} final`}
               />

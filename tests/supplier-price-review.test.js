@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   buildCasaAlbertoEstimatedCost,
+  buildSuggestedSalePriceFromMargin,
   normalizeProductPurchasePrice,
 } from '../src/utils/productLifecycle.js';
 import {
@@ -32,11 +33,17 @@ test('los precios de proveedor se redondean hacia arriba a una decena entera', (
   assert.equal(normalizeSupplierPrice(1240), 1240);
 });
 
-test('el costo sugerido se redondea al entero que acepta el editor de productos', () => {
-  assert.equal(buildCasaAlbertoEstimatedCost(100.43), 115);
-  assert.equal(buildCasaAlbertoEstimatedCost(100.5), 116);
-  assert.equal(normalizeProductPurchasePrice(115.49), 115);
+test('el costo sugerido se redondea hacia arriba al entero que acepta el editor', () => {
+  assert.equal(buildCasaAlbertoEstimatedCost(100.43), 111);
+  assert.equal(buildCasaAlbertoEstimatedCost(100.5), 112);
+  assert.equal(normalizeProductPurchasePrice(115.49), 116);
   assert.equal(normalizeProductPurchasePrice(115.5), 116);
+});
+
+test('Casa Alberto usa IVA 10,5% y margen bruto real para sugerir venta', () => {
+  assert.equal(buildCasaAlbertoEstimatedCost(10000), 11050);
+  assert.equal(buildSuggestedSalePriceFromMargin({}, 10000, { grossMarginPercent: 50 }), 22100);
+  assert.equal(buildSuggestedSalePriceFromMargin({}, 10000, { grossMarginPercent: 70 }), 36840);
 });
 
 const buildProduct = ({

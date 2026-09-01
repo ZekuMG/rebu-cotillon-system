@@ -1,7 +1,7 @@
 // src/components/modals/ProductModals.jsx
 // ✅ v6: Duplicar producto desde modal de edición y Vencimiento
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   X,
   Upload,
@@ -15,7 +15,12 @@ import {
   Package,
   PackageX,
   Copy,
-  CalendarX // Icono para vencimiento
+  CalendarX,
+  Crop,
+  Maximize2,
+  Minus,
+  Move,
+  Plus as PlusIcon,
 } from 'lucide-react';
 import AsyncActionButton from '../AsyncActionButton';
 
@@ -23,8 +28,21 @@ import AsyncActionButton from '../AsyncActionButton';
 import { formatNumber } from '../../utils/helpers';
 import usePendingAction from '../../hooks/usePendingAction';
 import { hasPermission } from '../../utils/userPermissions';
-import { buildAdjustedProductImageFile, readImageFileAsDataUrl } from '../../utils/productImageEditor';
+import {
+  buildAdjustedProductImageFile,
+  calculateAdjustedImageLayout,
+  readImageFileAsDataUrl,
+} from '../../utils/productImageEditor';
 import { normalizeProductPurchasePrice } from '../../utils/productLifecycle';
+import {
+  getStoredProductSalePrice,
+  getVisibleProductSalePrice,
+  normalizeFinalSalePrice,
+} from '../../utils/finalSalePrice';
+import {
+  getStoredProductPurchaseCost,
+  getVisibleProductPurchaseCost,
+} from '../../utils/finalPurchaseCost';
 
 // ==========================================
 // COMPONENTE: Selector multi-categoría
@@ -162,9 +180,11 @@ const WeightStockInput = ({ stock, stockUnit, onStockChange, onUnitChange }) => 
 const ImageAdjusterModal = ({
   isOpen,
   source,
+  fitMode,
   zoom,
   offsetX,
   offsetY,
+  onFitModeChange,
   onZoomChange,
   onOffsetXChange,
   onOffsetYChange,
@@ -173,82 +193,203 @@ const ImageAdjusterModal = ({
   onApply,
   isApplying,
 }) => {
+  const previewRef = useRef(null);
+  const dragStateRef = useRef(null);
+  const [previewSize, setPreviewSize] = useState(360);
+  const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && !isApplying) onCancel();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isApplying, isOpen, onCancel]);
+
+  useEffect(() => {
+    if (!isOpen || !previewRef.current || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(([entry]) => {
+      setPreviewSize(Math.max(1, entry.contentRect.width));
+    });
+    observer.observe(previewRef.current);
+    return () => observer.disconnect();
+  }, [isOpen]);
+
+  useEffect(() => {
+    setImageSize({ width: 0, height: 0 });
+  }, [source]);
+
   if (!isOpen || !source) return null;
 
-  const previewSize = 320;
-  const previewOffsetX = (offsetX / 100) * (previewSize / 2);
-  const previewOffsetY = (offsetY / 100) * (previewSize / 2);
+  const previewLayout = imageSize.width && imageSize.height
+    ? calculateAdjustedImageLayout({
+        imageWidth: imageSize.width,
+        imageHeight: imageSize.height,
+        outputSize: previewSize,
+        zoom,
+        offsetX,
+        offsetY,
+        fitMode,
+      })
+    : null;
+
+  const clampOffset = (value, max) => Math.min(Math.max(value, -max), max);
+  const handlePointerDown = (event) => {
+    if (!previewLayout || isApplying) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    dragStateRef.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      offsetX: previewLayout.offsetX,
+      offsetY: previewLayout.offsetY,
+    };
+  };
+  const handlePointerMove = (event) => {
+    const dragState = dragStateRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId || !previewLayout) return;
+    const offsetScale = previewSize / 2;
+    onOffsetXChange(clampOffset(
+      dragState.offsetX + ((event.clientX - dragState.clientX) / offsetScale) * 100,
+      previewLayout.maxOffsetX,
+    ));
+    onOffsetYChange(clampOffset(
+      dragState.offsetY + ((event.clientY - dragState.clientY) / offsetScale) * 100,
+      previewLayout.maxOffsetY,
+    ));
+  };
+  const stopDragging = (event) => {
+    if (dragStateRef.current?.pointerId === event.pointerId) dragStateRef.current = null;
+  };
+  const selectFitMode = (nextMode) => {
+    onFitModeChange(nextMode);
+    onReset();
+  };
+  const updateZoom = (nextZoom) => onZoomChange(Math.min(3.4, Math.max(1, nextZoom)));
 
   return (
-    <div className="fixed inset-0 z-[70] bg-black/65 flex items-center justify-center p-4">
-      <div className="w-full max-w-4xl rounded-2xl bg-white shadow-2xl overflow-hidden">
-        <div className="px-5 py-4 border-b flex items-center justify-between bg-slate-50">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 p-4" role="dialog" aria-modal="true" aria-labelledby="image-adjuster-title">
+      <div className="w-full max-w-4xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-4">
           <div>
-            <h4 className="font-bold text-slate-800">Ajustar imagen</h4>
-            <p className="text-xs text-slate-500">Podés acercar, alejar y mover el encuadre antes de guardarla.</p>
+            <h4 id="image-adjuster-title" className="font-bold text-slate-800">Ajustar imagen del producto</h4>
+            <p className="text-xs text-slate-500">Elegí si querés conservar la foto completa o llenar la miniatura.</p>
           </div>
-          <button type="button" onClick={onCancel} className="text-slate-400 hover:text-slate-700 hover:bg-slate-200 p-1 rounded-full transition">
+          <button type="button" onClick={onCancel} disabled={isApplying} aria-label="Cerrar ajuste de imagen" className="rounded-md p-1.5 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700 disabled:cursor-wait disabled:opacity-50">
             <X size={18} />
           </button>
         </div>
 
-        <div className="grid md:grid-cols-[minmax(0,1fr)_260px] gap-0">
-          <div className="p-5 bg-slate-100/70">
-            <div className="mx-auto w-full max-w-[360px] aspect-square rounded-[28px] overflow-hidden border border-slate-200 shadow-inner bg-slate-200">
-              <img
-                src={source}
-                alt="Ajuste"
-                className="w-full h-full object-cover select-none pointer-events-none"
-                style={{
-                  transform: `translate(${previewOffsetX}px, ${previewOffsetY}px) scale(${zoom})`,
-                  transformOrigin: 'center center',
-                }}
-              />
+        <div className="grid gap-0 md:grid-cols-[minmax(0,1fr)_292px]">
+          <div className="border-b border-slate-200 bg-slate-100/70 p-5 md:border-b-0 md:border-r">
+            <div
+              ref={previewRef}
+              className={`relative mx-auto aspect-square w-full max-w-[360px] touch-none overflow-hidden rounded-xl border border-slate-300 bg-slate-50 select-none ${isApplying ? 'cursor-wait' : 'cursor-grab active:cursor-grabbing'}`}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={stopDragging}
+              onPointerCancel={stopDragging}
+            >
+              {previewLayout && (
+                <img
+                  src={source}
+                  alt="Vista previa del ajuste"
+                  draggable="false"
+                  onLoad={(event) => setImageSize({
+                    width: event.currentTarget.naturalWidth,
+                    height: event.currentTarget.naturalHeight,
+                  })}
+                  className="pointer-events-none absolute max-w-none select-none"
+                  style={{
+                    left: previewLayout.x,
+                    top: previewLayout.y,
+                    width: previewLayout.drawWidth,
+                    height: previewLayout.drawHeight,
+                  }}
+                />
+              )}
+              {!previewLayout && (
+                <img
+                  src={source}
+                  alt="Preparando vista previa"
+                  draggable="false"
+                  onLoad={(event) => setImageSize({
+                    width: event.currentTarget.naturalWidth,
+                    height: event.currentTarget.naturalHeight,
+                  })}
+                  className="h-full w-full object-contain opacity-0"
+                />
+              )}
+              <div className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-white/60" />
+              <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-1 rounded-md border border-white/60 bg-slate-950/70 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
+                <Move size={11} /> Arrastrá para mover
+              </div>
             </div>
-            <p className="mt-3 text-center text-[11px] text-slate-500">
-              Vista previa cuadrada. Así se verá en las tarjetas del sistema.
-            </p>
+            <div className="mx-auto mt-3 flex max-w-[360px] items-start justify-between gap-3 text-[11px] text-slate-500">
+              <p>El marco cuadrado replica la foto que se guardará en el catálogo.</p>
+              <span className="shrink-0 font-semibold text-slate-600">{Math.round(zoom * 100)}%</span>
+            </div>
           </div>
 
-          <div className="p-5 space-y-4">
+          <div className="space-y-5 p-5">
             <div>
-              <div className="flex items-center justify-between mb-2">
+              <label className="mb-2 block text-xs font-bold uppercase text-slate-500">Encuadre</label>
+              <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => selectFitMode('contain')}
+                  className={`flex min-h-16 flex-col items-center justify-center gap-1 rounded-md border px-2 text-xs font-bold transition ${fitMode === 'contain' ? 'border-fuchsia-200 bg-white text-fuchsia-700 shadow-sm' : 'border-transparent text-slate-500 hover:bg-white/70'}`}
+                >
+                  <Maximize2 size={16} />
+                  Foto completa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => selectFitMode('cover')}
+                  className={`flex min-h-16 flex-col items-center justify-center gap-1 rounded-md border px-2 text-xs font-bold transition ${fitMode === 'cover' ? 'border-fuchsia-200 bg-white text-fuchsia-700 shadow-sm' : 'border-transparent text-slate-500 hover:bg-white/70'}`}
+                >
+                  <Crop size={16} />
+                  Llenar marco
+                </button>
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                {fitMode === 'contain'
+                  ? 'Conserva todos los bordes de la foto y completa el espacio libre con un fondo claro.'
+                  : 'Ocupa todo el cuadrado; podés mover la foto para elegir qué parte queda visible.'}
+              </p>
+            </div>
+
+            <div>
+              <div className="mb-2 flex items-center justify-between">
                 <label className="text-xs font-bold text-slate-500 uppercase">Zoom</label>
                 <span className="text-xs font-semibold text-slate-600">{zoom.toFixed(2)}x</span>
               </div>
-              <input type="range" min="1" max="2.8" step="0.01" value={zoom} onChange={(e) => onZoomChange(Number(e.target.value))} className="w-full accent-fuchsia-600" />
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-xs font-bold text-slate-500 uppercase">Mover horizontal</label>
-                <span className="text-xs font-semibold text-slate-600">{offsetX}</span>
+              <div className="grid grid-cols-[34px_minmax(0,1fr)_34px] items-center gap-2">
+                <button type="button" onClick={() => updateZoom(zoom - 0.1)} disabled={zoom <= 1 || isApplying} aria-label="Alejar imagen" className="flex h-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:bg-slate-50 disabled:opacity-35">
+                  <Minus size={14} />
+                </button>
+                <input type="range" min="1" max="3.4" step="0.01" value={zoom} onChange={(e) => updateZoom(Number(e.target.value))} disabled={isApplying} aria-label="Zoom de imagen" className="w-full accent-fuchsia-600" />
+                <button type="button" onClick={() => updateZoom(zoom + 0.1)} disabled={zoom >= 3.4 || isApplying} aria-label="Acercar imagen" className="flex h-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:bg-slate-50 disabled:opacity-35">
+                  <PlusIcon size={14} />
+                </button>
               </div>
-              <input type="range" min="-100" max="100" step="1" value={offsetX} onChange={(e) => onOffsetXChange(Number(e.target.value))} className="w-full accent-fuchsia-600" />
             </div>
 
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-xs font-bold text-slate-500 uppercase">Mover vertical</label>
-                <span className="text-xs font-semibold text-slate-600">{offsetY}</span>
-              </div>
-              <input type="range" min="-100" max="100" step="1" value={offsetY} onChange={(e) => onOffsetYChange(Number(e.target.value))} className="w-full accent-fuchsia-600" />
-            </div>
-
-            <button type="button" onClick={onReset} className="w-full py-2.5 rounded-lg border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition">
-              Restaurar encuadre
+            <button type="button" onClick={onReset} disabled={isApplying} className="w-full rounded-lg border border-slate-200 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-wait disabled:opacity-50">
+              Centrar y restaurar zoom
             </button>
 
-            <div className="pt-2 space-y-2">
+            <div className="space-y-2 border-t border-slate-200 pt-4">
               <button
                 type="button"
                 onClick={onApply}
                 disabled={isApplying}
-                className={`w-full py-3 rounded-xl font-bold transition ${isApplying ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-fuchsia-600 text-white hover:bg-fuchsia-700'}`}
+                className={`w-full rounded-lg py-3 font-bold transition ${isApplying ? 'cursor-wait bg-slate-300 text-slate-500' : 'bg-fuchsia-600 text-white hover:bg-fuchsia-700'}`}
               >
                 {isApplying ? 'Guardando imagen...' : 'Usar esta imagen'}
               </button>
-              <button type="button" onClick={onCancel} disabled={isApplying} className="w-full py-2.5 rounded-xl font-semibold text-slate-500 hover:bg-slate-100 transition">
+              <button type="button" onClick={onCancel} disabled={isApplying} className="w-full rounded-lg py-2.5 font-semibold text-slate-500 transition hover:bg-slate-100 disabled:cursor-wait disabled:opacity-50">
                 Cancelar
               </button>
             </div>
@@ -265,6 +406,7 @@ const ImageAdjusterModal = ({
 const ImageSection = ({ image, onFileUpload, onUrlChange, onDelete, isUploading }) => {
   const [editorSource, setEditorSource] = useState('');
   const [editorFileName, setEditorFileName] = useState('product-image');
+  const [fitMode, setFitMode] = useState('contain');
   const [zoom, setZoom] = useState(1);
   const [offsetX, setOffsetX] = useState(0);
   const [offsetY, setOffsetY] = useState(0);
@@ -279,6 +421,7 @@ const ImageSection = ({ image, onFileUpload, onUrlChange, onDelete, isUploading 
   const closeEditor = () => {
     setEditorSource('');
     setEditorFileName('product-image');
+    setFitMode('contain');
     resetEditor();
     setIsAdjusting(false);
   };
@@ -292,6 +435,7 @@ const ImageSection = ({ image, onFileUpload, onUrlChange, onDelete, isUploading 
       const previewSource = await readImageFileAsDataUrl(file);
       setEditorSource(previewSource);
       setEditorFileName((file.name || 'product-image').replace(/\.[^.]+$/, '') || 'product-image');
+      setFitMode('contain');
       resetEditor();
     } catch (error) {
       console.error('Error preparando imagen:', error);
@@ -308,6 +452,7 @@ const ImageSection = ({ image, onFileUpload, onUrlChange, onDelete, isUploading 
         zoom,
         offsetX,
         offsetY,
+        fitMode,
         fileName: `${editorFileName}.webp`,
       });
       await onFileUpload(adjustedFile);
@@ -331,11 +476,27 @@ const ImageSection = ({ image, onFileUpload, onUrlChange, onDelete, isUploading 
       )}
       {!isUploading && image && (
         <div className="mb-3 flex flex-col items-center gap-2">
-          <div className="relative group">
-            <img src={image} alt="Preview" className="h-24 w-24 object-cover rounded-lg border shadow-sm" onError={(e) => { e.target.style.display = 'none'; }} />
-            <button type="button" onClick={onDelete} className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 shadow-md transition-colors" title="Eliminar imagen"><Trash2 size={12} /></button>
+          <div className="relative flex h-32 w-32 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+            <img src={image} alt="Vista completa del producto" className="h-full w-full object-contain" onError={(e) => { e.target.style.display = 'none'; }} />
           </div>
-          <p className="text-[10px] text-green-600 font-medium">✓ Imagen cargada</p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setEditorSource(image);
+                setEditorFileName('product-image');
+                setFitMode('contain');
+                resetEditor();
+              }}
+              className="flex h-8 items-center gap-1.5 rounded-md border border-fuchsia-200 bg-fuchsia-50 px-3 text-xs font-bold text-fuchsia-700 transition hover:bg-fuchsia-100"
+            >
+              <Crop size={13} /> Ajustar actual
+            </button>
+            <button type="button" onClick={onDelete} className="flex h-8 items-center gap-1.5 rounded-md border border-red-200 bg-white px-3 text-xs font-bold text-red-600 transition hover:bg-red-50" title="Eliminar imagen">
+              <Trash2 size={13} /> Quitar
+            </button>
+          </div>
+          <p className="text-[10px] font-medium text-green-600">Imagen cargada y lista para el catálogo</p>
         </div>
       )}
       {!isUploading && (
@@ -356,9 +517,11 @@ const ImageSection = ({ image, onFileUpload, onUrlChange, onDelete, isUploading 
       <ImageAdjusterModal
         isOpen={Boolean(editorSource)}
         source={editorSource}
+        fitMode={fitMode}
         zoom={zoom}
         offsetX={offsetX}
         offsetY={offsetY}
+        onFitModeChange={setFitMode}
         onZoomChange={setZoom}
         onOffsetXChange={setOffsetX}
         onOffsetYChange={setOffsetY}
@@ -405,8 +568,11 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
         finalData.stock = Math.round(Number(newItem.stock) * 1000);
       }
       // ✅ Convertir precio/costo de $/kg a $/g para almacenamiento interno
-      finalData.price = Number(newItem.price) / 1000;
-      finalData.purchasePrice = Number(newItem.purchasePrice) / 1000;
+      finalData.price = getStoredProductSalePrice(newItem.price, productType);
+      finalData.purchasePrice = getStoredProductPurchaseCost(newItem.purchasePrice, productType);
+    } else {
+      finalData.price = getStoredProductSalePrice(newItem.price, productType);
+      finalData.purchasePrice = getStoredProductPurchaseCost(newItem.purchasePrice, productType);
     }
 
     await runAction('add-product-submit', async () => {
@@ -459,7 +625,7 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
               <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
                 {productType === 'weight' ? 'Precio ($/kg)' : 'Precio ($)'}
               </label>
-              <input required type="number" step="1" min="0" className="w-full px-3 py-2 border rounded-lg font-bold text-slate-800" value={newItem.price} onChange={(e) => setNewItem({ ...newItem, price: e.target.value })} />
+              <input required type="number" step="1" min="0" className="w-full px-3 py-2 border rounded-lg font-bold text-slate-800" value={newItem.price} onChange={(e) => setNewItem({ ...newItem, price: e.target.value })} onBlur={(e) => setNewItem({ ...newItem, price: String(normalizeFinalSalePrice(e.target.value)) })} />
               {productType === 'weight' && newItem.price && (
                 <p className="text-[10px] text-slate-400 mt-1">= ${(Number(newItem.price) / 1000).toFixed(2)}/g</p>
               )}
@@ -534,25 +700,23 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
   const isProductActive = product.is_active !== false && product.isActive !== false;
 
   // ✅ Precio guardado en /g → lo mostramos en /kg
-  const displayPrice = productType === 'weight' ? Math.round(Number(product.price) * 1000) : product.price;
+  const displayPrice = getVisibleProductSalePrice(product.price, productType);
   const normalizedPurchasePrice = normalizeProductPurchasePrice(product.purchasePrice, productType);
-  const displayCost = productType === 'weight'
-    ? Math.round(normalizedPurchasePrice * 1000)
-    : normalizedPurchasePrice;
+  const displayCost = getVisibleProductPurchaseCost(normalizedPurchasePrice, productType);
 
   const handlePriceChange = (val) => {
     if (productType === 'weight') {
-      setEditingProduct({ ...product, price: Number(val) / 1000 });
+      setEditingProduct({ ...product, price: getStoredProductSalePrice(val, productType) });
     } else {
-      setEditingProduct({ ...product, price: val });
+      setEditingProduct({ ...product, price: getStoredProductSalePrice(val, productType) });
     }
   };
 
   const handleCostChange = (val) => {
     if (productType === 'weight') {
-      setEditingProduct({ ...product, purchasePrice: Number(val) / 1000 });
+      setEditingProduct({ ...product, purchasePrice: getStoredProductPurchaseCost(val, productType) });
     } else {
-      setEditingProduct({ ...product, purchasePrice: val });
+      setEditingProduct({ ...product, purchasePrice: getStoredProductPurchaseCost(val, productType) });
     }
   };
 

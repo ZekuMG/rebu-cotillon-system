@@ -20,6 +20,11 @@ export const FancyPrice = ({ amount, className = "" }) => {
   if (parts.length === 1) {
     return <span className={shellClassName}>{formatted}</span>;
   }
+
+  // Un precio entero se presenta sin una etiqueta de centavos artificial.
+  if (parts[1] === '00') {
+    return <span className={shellClassName}>{parts[0]}</span>;
+  }
   
   // parts[0] es la parte entera (ej: "$ 1.500")
   // parts[1] son los centavos (ej: "00")

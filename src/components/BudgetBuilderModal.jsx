@@ -41,6 +41,7 @@ import {
   getPaymentSummary,
 } from '../utils/paymentBreakdown';
 import { getClientSearchTerms, memberMatchesSearchTerms } from '../utils/clientSearch';
+import { normalizeFinalSalePrice } from '../utils/finalSalePrice';
 
 const ITEMS_STEP = 30;
 const BUDGET_PAYMENT_METHODS = [
@@ -1458,9 +1459,10 @@ export default function BudgetBuilderModal({
                             <input
                               type="number"
                               min="0"
-                              step="0.01"
+                              step="1"
                               value={item.newPrice}
                               onChange={(e) => updateDraftItem(item.id, 'newPrice', e.target.value)}
+                              onBlur={(e) => updateDraftItem(item.id, 'newPrice', String(normalizeFinalSalePrice(e.target.value)))}
                               className={fieldNumberClass}
                             />
                           </label>

@@ -1,16 +1,19 @@
+import {
+  calculateGrossMarginPricing,
+  DEFAULT_GROSS_MARGIN_PERCENT,
+  DEFAULT_VAT_PERCENT,
+  roundUpToCommercialTen,
+} from './grossMarginPricing.js';
+import { normalizeStoredProductPurchaseCost } from './finalPurchaseCost.js';
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const OUT_OF_STOCK_INACTIVE_DAYS = 90;
 export const CASA_ALBERTO_PROVIDER_NAME = 'Cotillon Casa Alberto';
-export const CASA_ALBERTO_COST_EXTRA_RATE = 0.15;
-export const CASA_ALBERTO_SALE_MARKUP_RATE = 0.5;
+export const CASA_ALBERTO_COST_EXTRA_RATE = DEFAULT_VAT_PERCENT / 100;
+export const CASA_ALBERTO_SALE_MARKUP_RATE = DEFAULT_GROSS_MARGIN_PERCENT / 100;
 
-export const normalizeProductPurchasePrice = (value = 0, productType = 'quantity') => {
-  const numberValue = Number(value || 0);
-  if (!Number.isFinite(numberValue)) return 0;
-  return productType === 'weight'
-    ? Math.round(numberValue * 1000) / 1000
-    : Math.round(numberValue);
-};
+export const normalizeProductPurchasePrice = (value = 0, productType = 'quantity') =>
+  normalizeStoredProductPurchaseCost(value, productType);
 
 export const normalizeProductLinkText = (value = '') =>
   String(value ?? '')
@@ -78,27 +81,48 @@ const pickLinkString = (link = {}, keys = [], fallback = '') => {
 };
 
 export const buildCasaAlbertoEstimatedCost = (supplierPrice = 0, options = {}) => {
-  const nextCost = Number(supplierPrice || 0);
-  if (!Number.isFinite(nextCost) || nextCost <= 0) return 0;
-  const costExtraRate = Number.isFinite(Number(options.costExtraRate))
-    ? Number(options.costExtraRate)
-    : CASA_ALBERTO_COST_EXTRA_RATE;
-  return normalizeProductPurchasePrice(nextCost * (1 + costExtraRate));
+  const vatPercent = Number.isFinite(Number(options.vatPercent))
+    ? Number(options.vatPercent)
+    : Number.isFinite(Number(options.vatRate))
+      ? Number(options.vatRate) * 100
+      : Number.isFinite(Number(options.costExtraRate))
+        ? Number(options.costExtraRate) * 100
+        : DEFAULT_VAT_PERCENT;
+  const pricing = calculateGrossMarginPricing({
+    cost: supplierPrice,
+    costIncludesVat: false,
+    marginPercent: DEFAULT_GROSS_MARGIN_PERCENT,
+    vatPercent,
+  });
+  return pricing.isValid ? normalizeProductPurchasePrice(pricing.realCost) : 0;
 };
 
 export const roundUpToNextTen = (value = 0) => {
-  const numberValue = Number(value || 0);
-  if (!Number.isFinite(numberValue) || numberValue <= 0) return 0;
-  return Math.ceil(numberValue / 10) * 10;
+  return roundUpToCommercialTen(value);
 };
 
 export const buildSuggestedSalePriceFromMargin = (product = {}, supplierPrice = 0, options = {}) => {
-  const estimatedCost = buildCasaAlbertoEstimatedCost(supplierPrice, options);
-  if (!estimatedCost) return Number(product.price || 0) || 0;
-  const saleMarkupRate = Number.isFinite(Number(options.saleMarkupRate))
-    ? Number(options.saleMarkupRate)
-    : CASA_ALBERTO_SALE_MARKUP_RATE;
-  return roundUpToNextTen(estimatedCost * (1 + saleMarkupRate));
+  const marginPercent = Number.isFinite(Number(options.grossMarginPercent))
+    ? Number(options.grossMarginPercent)
+    : Number.isFinite(Number(options.grossMarginRate))
+      ? Number(options.grossMarginRate) * 100
+      : Number.isFinite(Number(options.saleMarkupRate))
+        ? Number(options.saleMarkupRate) * 100
+        : DEFAULT_GROSS_MARGIN_PERCENT;
+  const vatPercent = Number.isFinite(Number(options.vatPercent))
+    ? Number(options.vatPercent)
+    : Number.isFinite(Number(options.vatRate))
+      ? Number(options.vatRate) * 100
+      : Number.isFinite(Number(options.costExtraRate))
+        ? Number(options.costExtraRate) * 100
+        : DEFAULT_VAT_PERCENT;
+  const pricing = calculateGrossMarginPricing({
+    cost: supplierPrice,
+    costIncludesVat: false,
+    marginPercent,
+    vatPercent,
+  });
+  return pricing.isValid ? pricing.salePrice : Number(product.price || 0) || 0;
 };
 
 export const upsertCasaAlbertoLink = (

@@ -111,6 +111,8 @@ export const getSupplierProductReviewState = (product = {}) => {
     (rawSupplierPrice > 0 ? rawSupplierPrice / unitDivisor : supplierPrice);
   const estimatedCost = Number(tracking.estimatedCost || tracking.approvedCost || 0) ||
     buildCasaAlbertoEstimatedCost(unitSupplierPrice, {
+      vatPercent: tracking.vatPercent,
+      vatRate: tracking.vatRate,
       costExtraRate: tracking.costExtraRate,
     });
   const currentCost = Number(product.purchasePrice ?? product.purchase_price ?? 0);

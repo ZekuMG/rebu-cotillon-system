@@ -18,6 +18,7 @@ import {
 import { FancyPrice } from './FancyPrice';
 import { getCanonicalOfferSubtypeLabel, getCanonicalOfferTypeLabel, getComboProductLineDisplay } from '../utils/offerHelpers';
 import { getProductImageUrl } from '../utils/productImages';
+import { normalizeFinalSalePrice } from '../utils/finalSalePrice';
 
 const compactInputClass =
   'h-8 w-full rounded-md border border-slate-300 bg-white px-2.5 text-[12px] font-bold text-slate-800 outline-none transition-all focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20';
@@ -497,6 +498,7 @@ export function OfferWizardModal({
                           className={`${compactInputClass} pl-7`}
                           value={offerForm.offerPrice}
                           onChange={(e) => setOfferForm({ ...offerForm, offerPrice: e.target.value })}
+                          onBlur={(e) => setOfferForm({ ...offerForm, offerPrice: String(normalizeFinalSalePrice(e.target.value)) })}
                         />
                       </label>
                       <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2">
@@ -569,6 +571,7 @@ export function OfferWizardModal({
                         className={compactInputClass}
                         value={offerForm.offerPrice}
                         onChange={(e) => setOfferForm({ ...offerForm, offerPrice: e.target.value })}
+                        onBlur={(e) => setOfferForm({ ...offerForm, offerPrice: String(normalizeFinalSalePrice(e.target.value)) })}
                       />
                     </div>
                   ) : null}

@@ -50,6 +50,11 @@ import {
   POS_BAG_PRICE,
 } from '../utils/posSaleExtras';
 import { getPosCartItemCount } from '../utils/posCartTabs';
+import { getStoredProductSalePrice, normalizeFinalSalePrice } from '../utils/finalSalePrice';
+import {
+  getStoredProductPurchaseCost,
+  getVisibleProductPurchaseCost,
+} from '../utils/finalPurchaseCost';
 import {
   couponRequiresInstagramConnection,
   formatInstagramHandle,
@@ -232,7 +237,7 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm, inventory = [] }) => {
 
   if (!isOpen) return null;
 
-  const p = Number(price) || 0;
+  const p = normalizeFinalSalePrice(price);
   const c = Number(cost);
   const a = Number(amount) || 0;
   const hasValidCost = cost.trim() !== '' && Number.isFinite(c) && c >= 0;
@@ -247,11 +252,11 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm, inventory = [] }) => {
 
     const customId = `custom_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     
-    const normalizedUnitCost = type === 'weight' ? c / 1000 : c;
+    const normalizedUnitCost = getStoredProductPurchaseCost(c, type);
     const customProduct = {
       id: customId,
       title: `* ${title.trim()}`, 
-      price: type === 'weight' ? p / 1000 : p,
+      price: getStoredProductSalePrice(p, type),
       cost: normalizedUnitCost,
       unitCost: normalizedUnitCost,
       purchasePrice: normalizedUnitCost,
@@ -352,6 +357,7 @@ No lo ve el cliente; sirve para calcular margen y costo estimado."
                 className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-bold text-slate-800" 
                 value={price} 
                 onChange={(e) => setPrice(e.target.value)} 
+                onBlur={(e) => setPrice(String(normalizeFinalSalePrice(e.target.value)))}
               />
             </div>
             <div>
@@ -406,12 +412,12 @@ No lo ve el cliente; sirve para calcular margen y costo estimado."
                 </div>
               ) : (
                 similarProducts.map(({ product, unitCost }) => {
-                  const displayCost = product.product_type === 'weight' ? unitCost * 1000 : unitCost;
+                  const displayCost = getVisibleProductPurchaseCost(unitCost, product.product_type);
                   return (
                     <button
                       key={product.id || product.title}
                       type="button"
-                      onClick={() => setCost(String(Math.round(displayCost)))}
+                      onClick={() => setCost(String(displayCost))}
                       className="w-full rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition-colors hover:border-fuchsia-200 hover:bg-fuchsia-50"
                       title={product.title}
                     >
