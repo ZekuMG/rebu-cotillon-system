@@ -308,6 +308,30 @@ export const HISTORY_LOG_ACTIONS = [
 
 export const isHistoryLogAction = (action) => HISTORY_LOG_ACTIONS.includes(action);
 
+/**
+ * Los logs del Historial partidos en dos, por peso.
+ *
+ * Medido en prod el 1-sep-2026:
+ *   - eventos (anular / restaurar / eliminar / modificar):  221 filas / 220 kB
+ *   - snapshots ("Venta Realizada"):                      3.964 filas / 5,8 MB
+ *
+ * Los snapshots son casi todos redundantes: la fila de `sales` ya trae sus
+ * `sale_items` y el vendedor. Solo hacen falta para 16 ventas viejas que
+ * quedaron sin items y para las 15 que ya no tienen fila. Por eso el feed baja
+ * los eventos enteros y los snapshots uno por uno, cuando hacen falta.
+ */
+export const HISTORY_EVENT_LOG_ACTIONS = [
+  'Venta Anulada',
+  'Venta Restaurada',
+  'Venta Eliminada',
+  'Borrado Permanente',
+  'Venta Modificada',
+  'Modificacion Pedido',
+  'Modificación Pedido',
+];
+
+export const HISTORY_SNAPSHOT_LOG_ACTIONS = ['Venta Realizada', 'Nueva Venta'];
+
 export const SESSION_LOG_ACTIONS = [
   'Sesion Iniciada',
   'Sesion Cerrada',

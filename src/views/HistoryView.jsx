@@ -39,9 +39,11 @@ import {
   normalizePaymentBreakdown,
 } from '../utils/paymentBreakdown';
 import {
+  buildFallbackFilterOptionFromKey,
   buildUnifiedUserFilterOptions,
   matchesUnifiedUserFilter,
 } from '../utils/userFilters';
+import { selectPageWindowExtras } from '../utils/historyServerQuery';
 import useHistoryTransactionsFeed from '../hooks/useHistoryTransactionsFeed';
 
 // --- HELPER LOCAL PARA FORMATO VISUAL ---
@@ -168,6 +170,9 @@ const getVoidedSaleOriginalSortDate = (voidLog, creationLog) => {
 };
 
 const HISTORY_PAGE_SIZE = 50;
+// 3890 -> "3.890". El encabezado ahora muestra el total de TODA la base, asi
+// que los numeros dejaron de ser de dos cifras.
+const formatHistoryCount = (value) => new Intl.NumberFormat('es-AR').format(Number(value) || 0);
 const HEADER_CONTROL_CLASS = 'h-8 shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-700 shadow-sm outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100';
 const HEADER_ICON_CONTROL_CLASS = `${HEADER_CONTROL_CLASS} pl-8 pr-3`;
 const HEADER_BUTTON_CLASS = `${HEADER_CONTROL_CLASS} inline-flex items-center justify-center gap-1.5 hover:bg-slate-50`;
@@ -484,7 +489,6 @@ const filterHistoryTransactions = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState('desc');
   const [currentPage, setCurrentPage] = useState(1);
-  const [historyFetchPage, setHistoryFetchPage] = useState(1);
   const [isUserFilterOpen, setIsUserFilterOpen] = useState(false);
   const userFilterRef = useRef(null);
   const canEditSale = hasPermission(currentUser, 'history.editSale');
@@ -510,23 +514,54 @@ const filterHistoryTransactions = ({
   const [selectedTx, setSelectedTx] = useState(null);
   const [isSoftReloading, setIsSoftReloading] = useState(false);
   const [historyReloadKey, setHistoryReloadKey] = useState(0);
+  const [historyPageReloadKey, setHistoryPageReloadKey] = useState(0);
+
+  // El filtro de vendedor que viaja a la base se arma SOLO con el catalogo de
+  // usuarios y la clave elegida, nunca con las ventas ya cargadas. Si dependiera
+  // de las filas visibles, el filtro necesitaria la lista y la lista necesitaria
+  // el filtro, y no habria forma de pedir la primera pagina.
+  const userFilterQueryOption = useMemo(() => {
+    if (!filterUser) return null;
+
+    const options = buildUnifiedUserFilterOptions({
+      catalogUsers: userCatalog?.all,
+      userCatalog,
+      includeBaseBuckets: true,
+    });
+
+    return (
+      options.find((option) => option.key === filterUser)
+      || buildFallbackFilterOptionFromKey(filterUser)
+      || null
+    );
+  }, [filterUser, userCatalog]);
+
+  // Con la nube prendida manda el servidor: filtra, ordena, cuenta y pagina el.
+  // Sin nube (modo local o solo lectura) sigue vivo el camino viejo, que filtra
+  // en el navegador sobre lo que haya en memoria.
+  const isServerBackedHistory = Boolean(isActive && enableCloudFeed);
 
   const {
     transactions: remoteTransactions,
     logs: remoteHistoryLogs,
+    orphanLogIds,
+    totals: remoteTotals,
     isLoading: isRemoteTransactionsLoading,
-    hasMore: remoteTransactionsHasMore,
   } = useHistoryTransactionsFeed({
-    enabled: isActive && enableCloudFeed,
-    page: historyFetchPage,
+    enabled: isServerBackedHistory,
+    page: currentPage,
     pageSize: HISTORY_PAGE_SIZE,
-    sortDirection: sortOrder,
-    filters: {
-      dateStart: filterDateStart,
-      dateEnd: filterDateEnd,
-      hasWideScan: Boolean(filterPayment || filterUser || filterCategory || searchQuery),
-    },
+    sortOrder,
+    viewMode,
+    filterDateStart,
+    filterDateEnd,
+    filterPayment,
+    filterCategory,
+    searchQuery,
+    selectedUserFilter: userFilterQueryOption,
+    inventory,
     reloadKey: historyReloadKey,
+    pageReloadKey: historyPageReloadKey,
   });
 
   const combinedHistoryLogs = useMemo(() => {
@@ -653,6 +688,13 @@ const filterHistoryTransactions = ({
 
     (combinedHistoryLogs || []).forEach((log) => {
       if (isVentaLog(log) && log.details) {
+        // Con el historial paginado por el servidor, un log de creacion ya NO
+        // alcanza para dibujar una venta: la fila puede existir en `sales` y
+        // estar simplemente en otra pagina, y se veria DUPLICADA. Solo se
+        // reconstruyen las ventas que de verdad no tienen fila (15 en toda la
+        // base, todas de marzo y abril de 2026).
+        if (isServerBackedHistory && !orphanLogIds.has(String(log.id))) return;
+
         const txId = String(log.details.transactionId || log.id);
         
         //  FIX: Si est? en la lista de borrados permanentes, NO la dibujamos en el historial
@@ -834,7 +876,7 @@ const filterHistoryTransactions = ({
     });
 
     return txList;
-  }, [combinedHistoryLogs, latestSaleModificationLogsById, remoteTransactions, transactions]);
+  }, [combinedHistoryLogs, isServerBackedHistory, latestSaleModificationLogsById, orphanLogIds, remoteTransactions, transactions]);
 
   // =====================================================
   // TRANSACCIONES ACTIVAS
@@ -923,25 +965,22 @@ const filterHistoryTransactions = ({
           sortDate: getTransactionSortDate(tx) || new Date(),
         }));
 
-    if (isActive) {
-      const byId = new Map();
+    if (isServerBackedHistory) {
+      // La pagina la decide el servidor. Lo que hay en memoria solo ENRIQUECE
+      // las filas que ya vinieron; no puede agregar ventas de otras paginas,
+      // porque entonces la pagina 7 seguiria mostrando las ventas de hoy.
+      const localById = new Map(
+        withVoidedStatus(fallbackActiveTransactions).map((tx) => [String(tx.id), tx]),
+      );
 
-      withVoidedStatus(fallbackActiveTransactions).forEach((tx) => {
-        byId.set(String(tx.id), tx);
-      });
-
-      withVoidedStatus(Array.isArray(remoteTransactions) ? remoteTransactions : []).forEach((tx) => {
-        byId.set(String(tx.id), {
-          ...(byId.get(String(tx.id)) || {}),
-          ...tx,
-        });
-      });
-
-      return Array.from(byId.values());
+      return withVoidedStatus(Array.isArray(remoteTransactions) ? remoteTransactions : []).map((tx) => ({
+        ...(localById.get(String(tx.id)) || {}),
+        ...tx,
+      }));
     }
 
     return withVoidedStatus(fallbackActiveTransactions);
-  }, [fallbackActiveTransactions, isActive, logDeletedTransactionIds, logVoidedTransactionIds, remoteTransactions]);
+  }, [fallbackActiveTransactions, isServerBackedHistory, logDeletedTransactionIds, logVoidedTransactionIds, remoteTransactions]);
 
   const activeTransactionIds = useMemo(
     () => new Set(activeTransactions.map((tx) => String(tx.id))),
@@ -973,7 +1012,61 @@ const filterHistoryTransactions = ({
   // =====================================================
   // COMBINAR Y FILTRAR
   // =====================================================
+  // Ventas que la base no conoce: las que ya no tienen fila en `sales` y se
+  // reconstruyen desde su log. Se filtran con las MISMAS reglas del cliente y
+  // despues se ubican en la pagina que les corresponde por fecha.
+  const reconstructedTransactions = useMemo(() => {
+    if (!isServerBackedHistory) return [];
+
+    return filterHistoryTransactions({
+      transactions: visibleHistoricTransactions,
+      viewMode,
+      filterDateStart,
+      filterDateEnd,
+      filterPayment,
+      filterCategory,
+      searchQuery,
+      sortOrder,
+      inventory,
+      selectedUserFilter,
+      userCatalog,
+    });
+  }, [
+    filterCategory,
+    filterDateEnd,
+    filterDateStart,
+    filterPayment,
+    inventory,
+    isServerBackedHistory,
+    searchQuery,
+    selectedUserFilter,
+    sortOrder,
+    userCatalog,
+    viewMode,
+    visibleHistoricTransactions,
+  ]);
+
   const filteredTransactions = useMemo(() => {
+    if (isServerBackedHistory) {
+      // El servidor ya filtro, ordeno y corto esta pagina: volver a filtrarla
+      // aca solo podria SACAR filas, que es justo el error que se arreglo.
+      const matchCount = Number(remoteTotals?.matchCount || 0);
+      const extras = selectPageWindowExtras({
+        extras: reconstructedTransactions,
+        pageRows: activeTransactions,
+        sortOrder,
+        isFirstPage: currentPage <= 1,
+        isLastPage: currentPage * HISTORY_PAGE_SIZE >= matchCount,
+      });
+
+      return [...activeTransactions, ...extras].sort((a, b) => {
+        const dateA = a.sortDate?.getTime() || 0;
+        const dateB = b.sortDate?.getTime() || 0;
+        if (dateA !== dateB) return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
+        return sortOrder === 'desc' ? b.id - a.id : a.id - b.id;
+      });
+    }
+
     let txList = [...activeTransactions, ...visibleHistoricTransactions];
     const isSearchingTest = searchQuery.toLowerCase().trim() === 'test';
 
@@ -1061,7 +1154,8 @@ const filterHistoryTransactions = ({
   }, [
     viewMode, activeTransactions, visibleHistoricTransactions, 
     filterDateStart, filterDateEnd, filterPayment, 
-    filterCategory, searchQuery, sortOrder, inventory, selectedUserFilter, userCatalog
+    filterCategory, searchQuery, sortOrder, inventory, selectedUserFilter, userCatalog,
+    currentPage, isServerBackedHistory, reconstructedTransactions, remoteTotals,
   ]);
 
   const statsActiveTransactions = useMemo(
@@ -1115,13 +1209,40 @@ const filterHistoryTransactions = ({
   );
 
 
+  // EL NUMERO DEL ENCABEZADO.
+  //
+  // Antes se sumaba aca, sobre las ventas que el navegador tenia descargadas:
+  // con 3.890 ventas en la base mostraba el total de ~100 ($965.454 en vez de
+  // $32,7 M) y cambiaba solo al pasar de pagina. Ahora el conteo y la suma los
+  // hace Postgres sobre TODAS las ventas que matchean el filtro; lo unico que
+  // se agrega aca son las ventas reconstruidas desde los logs, que la base no
+  // conoce, para que el cartel diga exactamente lo que muestra la lista.
   const stats = useMemo(() => {
+    if (isServerBackedHistory) {
+      const vivas = reconstructedTransactions.filter(
+        (tx) => tx.status !== 'voided' && tx.status !== 'deleted',
+      );
+
+      return {
+        count: Number(remoteTotals?.count || 0) + vivas.length,
+        total:
+          Number(remoteTotals?.amount || 0)
+          + vivas.reduce((sum, tx) => sum + (Number(tx.total) || 0), 0),
+      };
+    }
+
     const validTx = exactFilteredTransactions.filter((tx) => tx.status !== 'voided' && tx.status !== 'deleted');
     return {
       count: validTx.length,
       total: validTx.reduce((sum, tx) => sum + (Number(tx.total) || 0), 0),
     };
-  }, [exactFilteredTransactions]);
+  }, [exactFilteredTransactions, isServerBackedHistory, reconstructedTransactions, remoteTotals]);
+
+  // Cuantas filas tiene el resultado completo, anuladas incluidas: es lo que
+  // manda para armar el paginador.
+  const totalMatchingRows = isServerBackedHistory
+    ? Number(remoteTotals?.matchCount || 0) + reconstructedTransactions.length
+    : filteredTransactions.length;
 
   const categoriesList = useMemo(() => {
     const cats = new Set();
@@ -1161,13 +1282,20 @@ const filterHistoryTransactions = ({
     }
   };
 
-  const hasActiveFilters = filterDateStart || filterDateEnd || filterPayment || filterUser || filterCategory || searchQuery;
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filteredTransactions.length / HISTORY_PAGE_SIZE) + (remoteTransactionsHasMore ? 1 : 0),
+  const hasActiveFilters = Boolean(
+    filterDateStart || filterDateEnd || filterPayment || filterUser || filterCategory || searchQuery,
   );
-  const pageStart = filteredTransactions.length === 0 ? 0 : (currentPage - 1) * HISTORY_PAGE_SIZE + 1;
-  const pageEnd = Math.min(currentPage * HISTORY_PAGE_SIZE, filteredTransactions.length);
+
+  // Mientras la base cuenta, el encabezado no muestra un numero viejo: decir
+  // que esta contando es mas honesto que mostrar el total de la busqueda anterior.
+  const isCountingHistory = isServerBackedHistory && isRemoteTransactionsLoading && stats.count === 0;
+  // El paginador sale del total REAL del filtro. Antes se calculaba sobre lo
+  // descargado y por eso decia "Pagina 1+" en vez de "Pagina 1 de 78".
+  const totalPages = Math.max(1, Math.ceil(totalMatchingRows / HISTORY_PAGE_SIZE));
+  const pageStart = totalMatchingRows === 0 ? 0 : (currentPage - 1) * HISTORY_PAGE_SIZE + 1;
+  const pageEnd = isServerBackedHistory
+    ? Math.min((currentPage - 1) * HISTORY_PAGE_SIZE + filteredTransactions.length, totalMatchingRows)
+    : Math.min(currentPage * HISTORY_PAGE_SIZE, totalMatchingRows);
   const visiblePageNumbers = useMemo(() => {
     if (totalPages <= 3) return Array.from({ length: totalPages }, (_, index) => index + 1);
     if (currentPage <= 2) return [1, 2, 3];
@@ -1175,33 +1303,23 @@ const filterHistoryTransactions = ({
     return [currentPage - 1, currentPage, currentPage + 1];
   }, [currentPage, totalPages]);
   const paginatedTransactions = useMemo(() => {
+    // Con la nube prendida `filteredTransactions` YA es la pagina que devolvio
+    // el servidor: cortarla de nuevo aca la dejaria por la mitad.
+    if (isServerBackedHistory) return filteredTransactions;
+
     const startIndex = (currentPage - 1) * HISTORY_PAGE_SIZE;
     return filteredTransactions.slice(startIndex, startIndex + HISTORY_PAGE_SIZE);
-  }, [filteredTransactions, currentPage]);
-  const canGoNextPage = currentPage * HISTORY_PAGE_SIZE < filteredTransactions.length || remoteTransactionsHasMore;
+  }, [currentPage, filteredTransactions, isServerBackedHistory]);
+  const canGoNextPage = currentPage < totalPages;
 
+  // Al entrar a la solapa, o cuando la app registra una venta nueva, la pagina
+  // que estaba en cache queda vieja. Refrescarla cuesta una consulta chica
+  // (los totales + 50 filas), no la ventana entera como antes.
+  const localTransactionCount = (transactions || []).length;
   useEffect(() => {
-    setHistoryFetchPage((prev) => Math.max(prev, currentPage));
-  }, [currentPage]);
-
-  useEffect(() => {
-    setHistoryFetchPage(1);
-  }, [viewMode, filterDateStart, filterDateEnd, filterPayment, filterUser, filterCategory, searchQuery, sortOrder, historyReloadKey]);
-
-  useEffect(() => {
-    if (!isActive || isRemoteTransactionsLoading || !remoteTransactionsHasMore) return;
-
-    const requiredVisibleCount = currentPage * HISTORY_PAGE_SIZE;
-    if (filteredTransactions.length >= requiredVisibleCount) return;
-
-    setHistoryFetchPage((prev) => prev + 1);
-  }, [
-    currentPage,
-    filteredTransactions.length,
-    isActive,
-    isRemoteTransactionsLoading,
-    remoteTransactionsHasMore,
-  ]);
+    if (!isActive) return;
+    setHistoryPageReloadKey((prev) => prev + 1);
+  }, [isActive, localTransactionCount]);
   useEffect(() => {
     setCurrentPage(1);
   }, [viewMode, filterDateStart, filterDateEnd, filterPayment, filterUser, filterCategory, searchQuery, sortOrder]);
@@ -1546,10 +1664,31 @@ const filterHistoryTransactions = ({
                 <History size={16} />
               </div>
 
-              <span className={`${HEADER_CONTROL_CLASS} inline-flex items-center gap-1.5`}>
-                <span>{stats.count} ventas</span>
-                <span className="text-slate-300">{'\u2022'}</span>
-                <span className="text-blue-600"><FancyPrice amount={stats.total} /></span>
+              <span
+                className={`${HEADER_CONTROL_CLASS} inline-flex items-center gap-1.5`}
+                title={
+                  hasActiveFilters
+                    ? 'Total de las ventas que cumplen los filtros, en toda la base'
+                    : 'Total de todas las ventas de la base'
+                }
+              >
+                {isCountingHistory ? (
+                  <span className="inline-flex items-center gap-1.5 text-slate-400">
+                    <RefreshCw size={11} className="animate-spin" />
+                    Contando ventas...
+                  </span>
+                ) : (
+                  <>
+                    <span>{formatHistoryCount(stats.count)} {stats.count === 1 ? 'venta' : 'ventas'}</span>
+                    <span className="text-slate-300">{'\u2022'}</span>
+                    <span className="text-blue-600"><FancyPrice amount={stats.total} /></span>
+                    {hasActiveFilters && (
+                      <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-sky-700">
+                        filtrado
+                      </span>
+                    )}
+                  </>
+                )}
               </span>
 
               <div className="relative min-w-[260px] flex-1 shrink-0">
@@ -1916,7 +2055,7 @@ const filterHistoryTransactions = ({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="text-[10px] font-semibold text-slate-500">
-                    Mostrando <span className="font-black text-slate-700">{pageStart}</span> a <span className="font-black text-slate-700">{pageEnd}</span> de <span className="font-black text-slate-700">{filteredTransactions.length}</span> registros
+                    Mostrando <span className="font-black text-slate-700">{pageStart}</span> a <span className="font-black text-slate-700">{pageEnd}</span> de <span className="font-black text-slate-700">{formatHistoryCount(totalMatchingRows)}</span> registros
                   </p>
                   <span className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-black text-slate-700">
                     50 por p&aacute;gina
@@ -1960,7 +2099,7 @@ const filterHistoryTransactions = ({
                     ))}
                   </div>
                   <span className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-black text-slate-700">
-                    P&aacute;gina {currentPage}{remoteTransactionsHasMore ? '+' : ` de ${totalPages}`}
+                    P&aacute;gina {currentPage} de {totalPages}
                   </span>
                   <button
                     type="button"
