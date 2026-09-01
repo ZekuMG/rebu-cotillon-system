@@ -43,6 +43,7 @@ import {
   getStoredProductSalePrice,
   getVisibleProductSalePrice,
   normalizeFinalSalePrice,
+  applyPercentageToSalePrice,
 } from '../utils/finalSalePrice';
 import {
   getStoredProductPurchaseCost,
@@ -414,7 +415,7 @@ export default function BulkEditorView({
         ...currentEdit,
         [bulkAction.field]: bulkAction.field === 'purchasePrice'
           ? normalizeFinalPurchaseCost(currentVal * multiplier)
-          : Math.round(currentVal * multiplier),
+          : applyPercentageToSalePrice(currentVal, percentage),
       };
     });
 

@@ -45,3 +45,11 @@ test('database guard rounds current product costs without changing sale history'
   assert.doesNotMatch(migration, /update\s+public\.sale_items/i);
   assert.doesNotMatch(migration, /update\s+public\.sales/i);
 });
+
+test('el costo no se infla por coma flotante', () => {
+  // Reportado el 1-sep: al aplicar un porcentaje quedaba 3501 en vez de 3500.
+  assert.equal(normalizeFinalPurchaseCost(3500 * 1.0000000000000002), 3500);
+  assert.equal(getVisibleProductPurchaseCost(8.06, 'weight'), 8060);
+  // Un centavo de mas sigue redondeando hacia arriba.
+  assert.equal(normalizeFinalPurchaseCost(3500.01), 3501);
+});

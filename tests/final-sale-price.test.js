@@ -6,6 +6,7 @@ import {
   getVisibleProductSalePrice,
   normalizeFinalSalePrice,
   normalizeStoredProductSalePrice,
+  applyPercentageToSalePrice,
 } from '../src/utils/finalSalePrice.js';
 
 test('rounds only the final sale price upward to the next ten pesos', () => {
@@ -67,4 +68,31 @@ test('integer FancyPrice values omit the artificial cents label', async () => {
     'utf8',
   );
   assert.match(componentSource, /parts\[1\] === '00'/);
+});
+
+test('un aumento por porcentaje deja el mismo precio que se va a guardar', () => {
+  // El editor masivo mostraba el resultado con Math.round (pesos enteros) pero al
+  // guardar se aplica la regla comercial de $10: la grilla decia 1094 y quedaba 1100.
+  assert.equal(applyPercentageToSalePrice(1000, 9.4), 1100);
+  assert.equal(applyPercentageToSalePrice(1000, 9.4), getStoredProductSalePrice(applyPercentageToSalePrice(1000, 9.4), 'quantity'));
+  assert.equal(applyPercentageToSalePrice(2500, 0), 2500);
+  assert.equal(applyPercentageToSalePrice(1000, -12), 880);
+  assert.equal(applyPercentageToSalePrice(0, 20), 0);
+});
+
+test('el aumento por porcentaje respeta los productos por peso', () => {
+  // 8,06 por gramo = $8.060 el kilo; +10% = 8.866 -> el escalon comercial es 8.870
+  assert.equal(applyPercentageToSalePrice(getVisibleProductSalePrice(8.06, 'weight'), 10), 8870);
+});
+
+test('la coma flotante no empuja un valor justo al escalon siguiente', () => {
+  // Reportado el 1-sep: un porcentaje sobre $3.500 mostraba $3.510 (y el costo $3.501).
+  assert.equal(applyPercentageToSalePrice(3500, 0), 3500);
+  assert.equal(normalizeFinalSalePrice(3500 * 1.094 / 1.094), 3500);
+  assert.equal(normalizeFinalSalePrice(0.1 + 0.2 + 3499.7), 3500);
+  // Productos por peso: 8,06 por gramo son $8.060 el kilo exactos, no $8.070.
+  assert.equal(getVisibleProductSalePrice(8.06, 'weight'), 8060);
+  assert.equal(getVisibleProductSalePrice(4.03, 'weight'), 4030);
+  // Y un peso de mas sigue subiendo el escalon, como corresponde.
+  assert.equal(normalizeFinalSalePrice(3500.01), 3510);
 });
