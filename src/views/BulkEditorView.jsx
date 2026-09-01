@@ -5,7 +5,7 @@ import {
   FileText, X, User, Edit3, ChevronDown, Plus, Minus, Trash2, PackageX,
   Camera, Image as ImageIcon, LogIn, LogOut, CheckCircle, AlertTriangle, ExternalLink,
   Pause, Play, StopCircle, Crosshair, RefreshCw, Link2,
-  Eye, Undo2, Bell, Check, Wand2, Tags
+  Eye, Undo2, Bell, Check, Wand2, Tags, ArrowUp, ArrowDown
 } from 'lucide-react';
 import AsyncActionButton from '../components/AsyncActionButton';
 import { FancyPrice } from '../components/FancyPrice';
@@ -1384,11 +1384,44 @@ export default function BulkEditorView({
     });
   }, [edits, pricingPreferences.bulkCostIncludesVat, pricingPreferences.marginPercent, selectedIds]);
 
+  /** Variacion en %, como numero. `null` cuando no hay cambio real. */
   const calculateDiffPercent = (oldVal, newVal) => {
-    if (oldVal === 0) return newVal > 0 ? '+100%' : null;
-    const diff = ((newVal - oldVal) / oldVal) * 100;
-    if (diff === 0) return null;
-    return diff > 0 ? `+${diff.toFixed(1)}%` : `${diff.toFixed(1)}%`;
+    const desde = Number(oldVal);
+    const hasta = Number(newVal);
+    if (!Number.isFinite(desde) || !Number.isFinite(hasta)) return null;
+    if (desde === 0) return hasta > 0 ? 100 : null;
+    const diff = ((hasta - desde) / desde) * 100;
+    // Menos de media centesima no es un cambio: es ruido de coma flotante.
+    return Math.abs(diff) < 0.005 ? null : diff;
+  };
+
+  /**
+   * Muestra el porcentaje tal cual es: hasta 2 decimales y sin ceros de relleno,
+   * asi un 9,44% no se ve como 9,4% ni un 10% como 10,00%.
+   */
+  const formatDiffPercent = (diff) => `${diff > 0 ? '+' : '-'}${
+    Math.abs(diff).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+  }%`;
+
+  /** Pastilla de variacion. `favorable` decide el color: subir el precio es bueno, subir el costo no. */
+  const DiffChip = ({ diff, goodWhenUp = true }) => {
+    if (diff === null || diff === undefined) return null;
+    const sube = diff > 0;
+    const favorable = goodWhenUp ? sube : !sube;
+    const Flecha = sube ? ArrowUp : ArrowDown;
+    return (
+      <span
+        title={`${formatDiffPercent(diff)} respecto del valor anterior`}
+        className={`inline-flex items-center gap-[1px] rounded-full px-1.5 py-[1px] text-[10px] font-bold leading-none tabular-nums ring-1 ring-inset ${
+          favorable
+            ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+            : 'bg-rose-50 text-rose-700 ring-rose-200'
+        }`}
+      >
+        <Flecha size={9} strokeWidth={3} />
+        {formatDiffPercent(diff)}
+      </span>
+    );
   };
 
   const formatSupplierMoney = (value) => {
@@ -4465,11 +4498,9 @@ export default function BulkEditorView({
                     <td className="p-0 align-middle">
                       <div className="relative flex h-14 items-center px-2">
                         {costDiff ? (
-                          <div className="absolute inset-x-3 top-1 flex items-center justify-between text-[9px] font-medium text-slate-400">
-                            <span className="line-through"><FancyPrice amount={origCost} /></span>
-                            <span className={`font-black ${costDiff.includes('+') ? 'text-red-500' : 'text-emerald-500'}`}>
-                              ({costDiff})
-                            </span>
+                          <div className="absolute inset-x-2 top-0.5 flex items-center justify-between gap-1 text-[10px] font-medium text-slate-400">
+                            <span className="truncate line-through decoration-slate-300 tabular-nums"><FancyPrice amount={origCost} /></span>
+                            <DiffChip diff={costDiff} goodWhenUp={false} />
                           </div>
                         ) : null}
                         <div className={`bulk-editor-number-field flex h-8 w-full overflow-hidden rounded-md border bg-white transition-colors focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 ${
@@ -4491,11 +4522,9 @@ export default function BulkEditorView({
                     <td className="p-0 align-middle">
                       <div className="relative flex h-14 items-center px-2">
                         {priceDiff ? (
-                          <div className="absolute inset-x-3 top-1 flex items-center justify-between text-[9px] font-medium text-slate-400">
-                            <span className="line-through"><FancyPrice amount={origPrice} /></span>
-                            <span className={`font-black ${priceDiff.includes('+') ? 'text-emerald-500' : 'text-red-500'}`}>
-                              ({priceDiff})
-                            </span>
+                          <div className="absolute inset-x-2 top-0.5 flex items-center justify-between gap-1 text-[10px] font-medium text-slate-400">
+                            <span className="truncate line-through decoration-slate-300 tabular-nums"><FancyPrice amount={origPrice} /></span>
+                            <DiffChip diff={priceDiff} />
                           </div>
                         ) : null}
                         <div className={`bulk-editor-number-field flex h-8 w-full overflow-hidden rounded-md border bg-white transition-colors focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 ${
