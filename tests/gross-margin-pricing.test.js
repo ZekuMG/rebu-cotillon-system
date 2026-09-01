@@ -4,9 +4,18 @@ import test from 'node:test';
 import {
   calculateGrossMarginPricing,
   DEFAULT_GROSS_MARGIN_PREFERENCES,
+  getGrossMarginSaleMultiplier,
   loadGrossMarginPreferences,
   saveGrossMarginPreferences,
 } from '../src/utils/grossMarginPricing.js';
+
+test('expresa el margen real como multiplicador de venta sobre costo', () => {
+  assert.equal(getGrossMarginSaleMultiplier(40), 1.6666666666666667);
+  assert.equal(getGrossMarginSaleMultiplier(50), 2);
+  assert.equal(getGrossMarginSaleMultiplier(60), 2.5);
+  assert.ok(Math.abs(getGrossMarginSaleMultiplier(70) - 3.333333333333333) < 0.000001);
+  assert.equal(getGrossMarginSaleMultiplier(100), 0);
+});
 
 test('calcula costo real y los margenes del ejemplo de referencia', () => {
   const expectedSales = new Map([

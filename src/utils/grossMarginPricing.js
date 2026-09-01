@@ -24,6 +24,12 @@ export const normalizeGrossMarginPercent = (
   return numberValue;
 };
 
+export const getGrossMarginSaleMultiplier = (marginPercent) => {
+  const parsedMargin = parsePercent(marginPercent);
+  if (parsedMargin === null || parsedMargin < 0 || parsedMargin >= 100) return 0;
+  return 1 / (1 - (parsedMargin / 100));
+};
+
 export const roundUpToCommercialTen = (value = 0) => {
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue) || numberValue <= 0) return 0;

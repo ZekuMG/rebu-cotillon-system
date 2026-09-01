@@ -171,7 +171,7 @@ export default function BulkEditorView({
   const [selectedIds, setSelectedIds] = useState([]);
   
   // --- Herramienta de Ajuste Masivo ---
-  const [bulkAction, setBulkAction] = useState({ field: 'price', percentage: '' });
+  const [bulkAction, setBulkAction] = useState({ field: 'grossMarginPrice', percentage: '' });
   const [pricingPreferences, setPricingPreferences] = useState(getInitialPricingPreferences);
   const [isSaving, setIsSaving] = useState(false);
   const { isPending, runAction } = usePendingAction();
@@ -4223,19 +4223,27 @@ export default function BulkEditorView({
         <div className="h-1 shrink-0 bg-amber-400" />
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 custom-scrollbar">
         
-        <section className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
-          <span className="mb-2 block text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">Ajuste masivo</span>
+        <section className="rounded-lg border border-slate-200 bg-white p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">Ajuste masivo</span>
+            {bulkAction.field === 'grossMarginPrice' ? (
+              <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-emerald-700">Principal</span>
+            ) : null}
+          </div>
+          <label htmlFor="bulk-pricing-mode" className="mb-1 block text-[9px] font-black text-slate-600">¿Cómo querés calcular?</label>
           <select 
-            className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-800 outline-none transition-all focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
+            id="bulk-pricing-mode"
+            aria-label="Modo de ajuste masivo"
+            className="w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-2 text-xs font-bold text-slate-800 outline-none transition-all focus:border-amber-400 focus:bg-white focus:ring-2 focus:ring-amber-200"
             value={bulkAction.field}
             onChange={(e) => setBulkAction({...bulkAction, field: e.target.value})}
           >
-            <option value="price">Aumentar Precio</option>
-            <option value="purchasePrice">Aumentar Costo</option>
-            <option value="grossMarginPrice">Calcular venta por margen real</option>
+            <option value="grossMarginPrice">Venta por margen real</option>
+            <option value="price">Subir precio por porcentaje</option>
+            <option value="purchasePrice">Subir costo por porcentaje</option>
           </select>
           {bulkAction.field === 'grossMarginPrice' ? (
-            <div className="mt-2 space-y-2">
+            <div className="mt-3">
               <PricingFormulaControls
                 marginPercent={pricingPreferences.marginPercent}
                 onMarginChange={updatePricingMargin}
@@ -4243,6 +4251,8 @@ export default function BulkEditorView({
                 onCostIncludesVatChange={updateBulkCostIncludesVat}
                 showVatMode
                 compact
+                flat
+                explainMultiplier
               />
               {bulkPricingPreview?.isValid ? (
                 <PricingFormulaTrace
@@ -4250,23 +4260,28 @@ export default function BulkEditorView({
                   realCost={bulkPricingPreview.realCost}
                   salePrice={bulkPricingPreview.salePrice}
                   marginPercent={bulkPricingPreview.marginPercent}
+                  flat
                 />
               ) : (
-                <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[9px] font-bold text-amber-800">
-                  Selecciona un producto con costo mayor que cero para ver la traza.
+                <p className="mt-2 border-t border-slate-200 pt-2 text-[9px] font-bold leading-snug text-amber-700">
+                  Seleccioná un producto con costo mayor que cero para ver el cálculo completo.
                 </p>
               )}
             </div>
           ) : (
-            <div className="relative mt-2">
-              <input
-                type="number"
-                placeholder="Ej: 15"
-                className="no-spinners w-full rounded-md border border-slate-200 bg-white py-1.5 pl-2 pr-7 text-center text-xs font-black text-slate-900 outline-none transition-all focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
-                value={bulkAction.percentage}
-                onChange={(e) => setBulkAction({...bulkAction, percentage: e.target.value})}
-              />
-              <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-black text-slate-400">%</span>
+            <div className="mt-3">
+              <label htmlFor="bulk-percentage" className="mb-1 block text-[9px] font-black text-slate-600">Porcentaje de aumento</label>
+              <div className="relative">
+                <input
+                  id="bulk-percentage"
+                  type="number"
+                  placeholder="Ej: 15"
+                  className="no-spinners w-full rounded-md border border-slate-200 bg-slate-50 py-2 pl-2 pr-7 text-center text-xs font-black text-slate-900 outline-none transition-all focus:border-amber-400 focus:bg-white focus:ring-2 focus:ring-amber-200"
+                  value={bulkAction.percentage}
+                  onChange={(e) => setBulkAction({...bulkAction, percentage: e.target.value})}
+                />
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-black text-slate-400">%</span>
+              </div>
             </div>
           )}
           <button 
@@ -4274,7 +4289,7 @@ export default function BulkEditorView({
             disabled={selectedIds.length === 0 || (bulkAction.field !== 'grossMarginPrice' && !bulkAction.percentage)}
             className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md bg-slate-900 px-3 py-2 text-xs font-black text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"
           >
-            <ArrowRight size={14} /> Aplicar a {selectedIds.length}
+            <ArrowRight size={14} /> {bulkAction.field === 'grossMarginPrice' ? 'Calcular venta de' : 'Aplicar aumento a'} {selectedIds.length}
           </button>
         </section>
 

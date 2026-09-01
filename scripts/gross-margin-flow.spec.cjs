@@ -24,19 +24,21 @@ test('margen real se comparte entre Editor Masivo, Excel y Casa Alberto', async 
     hasText: 'Pack Globos Metalizados Dorados',
   });
   await productRow.locator('td').first().getByRole('button').click();
-  await page.locator('aside select').first().selectOption('grossMarginPrice');
-  await expect(page.getByText('Margen bruto real').first()).toBeVisible();
+  await expect(page.getByLabel('Modo de ajuste masivo')).toHaveValue('grossMarginPrice');
+  await expect(page.getByText('Margen real sobre la venta').first()).toBeVisible();
+  await expect(page.getByText('Venta ×2').first()).toBeVisible();
+  await page.locator('aside').first().screenshot({ path: 'test-results/gross-margin-redesign.png' });
 
-  await page.getByRole('button', { name: 'Costo sin IVA' }).click();
-  await page.getByRole('button', { name: /Aplicar a 1/i }).click();
+  await page.getByRole('button', { name: 'No incluye IVA' }).click();
+  await page.getByRole('button', { name: /Calcular venta de 1/i }).click();
   const rowNumberInputs = productRow.locator('input[type="number"]');
   await expect(rowNumberInputs.nth(0)).toHaveValue('1989');
   await expect(rowNumberInputs.nth(1)).toHaveValue('3980');
 
-  await page.getByRole('button', { name: 'IVA ya incluido' }).click();
+  await page.getByRole('button', { name: 'Ya incluye IVA' }).click();
   await rowNumberInputs.nth(0).fill('2000');
-  await page.getByRole('button', { name: '60%' }).click();
-  await page.getByRole('button', { name: /Aplicar a 1/i }).click();
+  await page.getByRole('button', { name: /^60% de margen real/i }).click();
+  await page.getByRole('button', { name: /Calcular venta de 1/i }).click();
   await expect(rowNumberInputs.nth(0)).toHaveValue('2000');
   await expect(rowNumberInputs.nth(1)).toHaveValue('5000');
 
