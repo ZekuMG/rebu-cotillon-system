@@ -9,8 +9,10 @@ import {
   applyPercentageToSalePrice,
 } from '../src/utils/finalSalePrice.js';
 
-test('rounds only the final sale price upward to the next ten pesos', () => {
-  assert.equal(normalizeFinalSalePrice(680.16), 690);
+test('lleva el precio de venta al escalon comercial de $10', () => {
+  // Desde el 1-sep la regla no es "siempre para arriba": hasta $2 por encima
+  // del escalon se baja, de ahi para arriba se sube.
+  assert.equal(normalizeFinalSalePrice(680.16), 680);
   assert.equal(normalizeFinalSalePrice('1497,3'.replace(',', '.')), 1500);
   assert.equal(normalizeFinalSalePrice(4023), 4030);
   assert.equal(normalizeFinalSalePrice(680), 680);
@@ -22,7 +24,7 @@ test('keeps weight storage precise while the commercial price per kilo is whole'
   assert.equal(getVisibleProductSalePrice(1.2543, 'weight'), 1260);
   assert.equal(getStoredProductSalePrice(1254.01, 'weight'), 1.26);
   assert.equal(normalizeStoredProductSalePrice(1.2543, 'weight'), 1.26);
-  assert.equal(normalizeStoredProductSalePrice(680.16, 'quantity'), 690);
+  assert.equal(normalizeStoredProductSalePrice(680.16, 'quantity'), 680);
 });
 
 test('inventory hydration normalizes sale price and current purchase cost independently', async () => {
@@ -93,6 +95,28 @@ test('la coma flotante no empuja un valor justo al escalon siguiente', () => {
   // Productos por peso: 8,06 por gramo son $8.060 el kilo exactos, no $8.070.
   assert.equal(getVisibleProductSalePrice(8.06, 'weight'), 8060);
   assert.equal(getVisibleProductSalePrice(4.03, 'weight'), 4030);
-  // Y un peso de mas sigue subiendo el escalon, como corresponde.
-  assert.equal(normalizeFinalSalePrice(3500.01), 3510);
+  // Pasados los $2 de tolerancia sigue subiendo el escalon, como corresponde.
+  assert.equal(normalizeFinalSalePrice(3502.01), 3510);
+});
+
+test('un resto de $1 o $2 baja al escalon; de $3 para arriba sube', () => {
+  // Pedido por Mikkel el 1-sep: 3501 y 3502 tienen que quedar en 3500.
+  assert.equal(normalizeFinalSalePrice(3501), 3500);
+  assert.equal(normalizeFinalSalePrice(3502), 3500);
+  assert.equal(normalizeFinalSalePrice(3502.99), 3510);
+  assert.equal(normalizeFinalSalePrice(3503), 3510);
+  assert.equal(normalizeFinalSalePrice(3509), 3510);
+  assert.equal(normalizeFinalSalePrice(3500), 3500);
+  assert.equal(normalizeFinalSalePrice(3510), 3510);
+  // Centavos apenas arriba del escalon tambien bajan.
+  assert.equal(normalizeFinalSalePrice(3500.4), 3500);
+  // Y lo de siempre: nada de negativos.
+  assert.equal(normalizeFinalSalePrice(-50), 0);
+});
+
+test('la regla nueva tambien vale para los productos por peso', () => {
+  // 3,501 por gramo son $3.501 el kilo -> tiene que quedar en $3.500.
+  assert.equal(getVisibleProductSalePrice(3.501, 'weight'), 3500);
+  assert.equal(getStoredProductSalePrice(3501, 'weight'), 3.5);
+  assert.equal(applyPercentageToSalePrice(3200, 9.4), 3500); // 3500,8 -> baja al escalon
 });

@@ -1,6 +1,8 @@
 const WEIGHT_PRICE_FACTOR = 1000;
 const COMMERCIAL_ROUNDING_STEP = 10;
 const FLOAT_NOISE = 1e-6;
+// Cuanto puede estar un precio por encima del escalon y aun asi bajar a el.
+const DOWNWARD_TOLERANCE = 2;
 
 const toFiniteNumber = (value) => {
   const numericValue = Number(value);
@@ -13,13 +15,19 @@ const toFiniteNumber = (value) => {
  * the next commercial multiple of ten pesos.
  */
 export const normalizeFinalSalePrice = (value) => {
-  // El `- FLOAT_NOISE` no es cosmetico: 8.06 * 1000 da 8060.000000000001 en
-  // coma flotante y 3500 * 1.094 da 3500.0000000000005, asi que un `ceil` seco
-  // empujaba al escalon siguiente ($8.070, $3.510) sobre valores que ya estaban
-  // justos. La base guarda `numeric` (exacto) y no hace eso: sin esto la app
-  // muestra un precio distinto del que queda guardado.
-  const steps = Math.ceil((toFiniteNumber(value) / COMMERCIAL_ROUNDING_STEP) - FLOAT_NOISE);
-  return Math.max(0, steps * COMMERCIAL_ROUNDING_STEP);
+  const monto = toFiniteNumber(value);
+  if (monto <= 0) return 0;
+
+  const escalon = Math.floor(monto / COMMERCIAL_ROUNDING_STEP) * COMMERCIAL_ROUNDING_STEP;
+  const resto = monto - escalon;
+
+  // Hasta $2 por encima del escalon se baja (3501 y 3502 quedan en 3500); de
+  // ahi para arriba se sube (3503 va a 3510). El FLOAT_NOISE cubre la coma
+  // flotante: 8.06 * 1000 da 8060.000000000001 y 3200 * 1.094 da
+  // 3500.0000000000005, valores que ya estaban justos y no deben moverse.
+  return resto <= DOWNWARD_TOLERANCE + FLOAT_NOISE
+    ? escalon
+    : escalon + COMMERCIAL_ROUNDING_STEP;
 };
 
 /**
