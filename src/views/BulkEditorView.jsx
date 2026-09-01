@@ -50,6 +50,7 @@ import {
   getVisibleProductPurchaseCost,
   normalizeFinalPurchaseCost,
 } from '../utils/finalPurchaseCost';
+import { mergePendingEdits } from '../utils/bulkEditorEdits';
 
 const BULK_EDITOR_TOOL_MODE_STORAGE_KEY = 'rebu_bulk_editor_tool_mode_v1';
 const ImageCleanupWorkspace = lazy(() => import('../components/ImageCleanupWorkspace'));
@@ -250,10 +251,20 @@ export default function BulkEditorView({
   const [mainLimit, setMainLimit] = useState(ITEMS_PER_CHUNK);
   const [previewLimit, setPreviewLimit] = useState(ITEMS_PER_CHUNK);
 
+  // Lo que el inventario traia en la ultima bajada. Sirve para distinguir una
+  // fila que la persona edito de una que sigue como vino.
+  const inventoryBaselineRef = useRef({});
+
   useEffect(() => {
     const clonedData = JSON.parse(JSON.stringify(realInventory || []));
+    const fresh = buildEditStateFromInventory(clonedData);
     setSandboxInventory(clonedData);
-    setEdits(buildEditStateFromInventory(clonedData));
+    setEdits((previous) => mergePendingEdits({
+      previous,
+      fresh,
+      baseline: inventoryBaselineRef.current,
+    }));
+    inventoryBaselineRef.current = fresh;
   }, [realInventory]);
 
   useEffect(() => {
