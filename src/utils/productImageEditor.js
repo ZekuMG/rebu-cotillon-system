@@ -9,10 +9,55 @@ export const readImageFileAsDataUrl = (file) =>
 const loadImageElement = (src) =>
   new Promise((resolve, reject) => {
     const image = new Image();
+    if (!String(src || '').startsWith('data:') && !String(src || '').startsWith('blob:')) {
+      image.crossOrigin = 'anonymous';
+    }
     image.onload = () => resolve(image);
     image.onerror = () => reject(new Error('No se pudo preparar la imagen.'));
     image.src = src;
   });
+
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+export const calculateAdjustedImageLayout = ({
+  imageWidth,
+  imageHeight,
+  outputSize,
+  zoom = 1,
+  offsetX = 0,
+  offsetY = 0,
+  fitMode = 'contain',
+}) => {
+  const safeWidth = Math.max(1, Number(imageWidth) || 1);
+  const safeHeight = Math.max(1, Number(imageHeight) || 1);
+  const safeOutputSize = Math.max(1, Number(outputSize) || 1);
+  const safeZoom = Math.max(1, Number(zoom) || 1);
+  const baseScale = fitMode === 'cover'
+    ? Math.max(safeOutputSize / safeWidth, safeOutputSize / safeHeight)
+    : Math.min(safeOutputSize / safeWidth, safeOutputSize / safeHeight);
+  const finalScale = baseScale * safeZoom;
+  const drawWidth = safeWidth * finalScale;
+  const drawHeight = safeHeight * finalScale;
+  const maxShiftX = Math.abs(drawWidth - safeOutputSize) / 2;
+  const maxShiftY = Math.abs(drawHeight - safeOutputSize) / 2;
+  const maxOffsetX = (maxShiftX / (safeOutputSize / 2)) * 100;
+  const maxOffsetY = (maxShiftY / (safeOutputSize / 2)) * 100;
+  const clampedOffsetX = clamp(Number(offsetX) || 0, -maxOffsetX, maxOffsetX);
+  const clampedOffsetY = clamp(Number(offsetY) || 0, -maxOffsetY, maxOffsetY);
+  const shiftX = (clampedOffsetX / 100) * (safeOutputSize / 2);
+  const shiftY = (clampedOffsetY / 100) * (safeOutputSize / 2);
+
+  return {
+    drawWidth,
+    drawHeight,
+    x: safeOutputSize / 2 - drawWidth / 2 + shiftX,
+    y: safeOutputSize / 2 - drawHeight / 2 + shiftY,
+    offsetX: clampedOffsetX,
+    offsetY: clampedOffsetY,
+    maxOffsetX,
+    maxOffsetY,
+  };
+};
 
 export const buildAdjustedProductImageFile = async (
   source,
@@ -20,9 +65,11 @@ export const buildAdjustedProductImageFile = async (
     zoom = 1,
     offsetX = 0,
     offsetY = 0,
+    fitMode = 'contain',
     outputSize = 1200,
     mimeType = 'image/webp',
     quality = 0.86,
+    backgroundColor = '#f8fafc',
     fileName = 'product-image.webp',
   } = {}
 ) => {
@@ -36,19 +83,19 @@ export const buildAdjustedProductImageFile = async (
     throw new Error('No se pudo preparar el editor de imagen.');
   }
 
-  const baseScale = Math.max(outputSize / image.width, outputSize / image.height);
-  const finalScale = baseScale * Number(zoom || 1);
-  const drawWidth = image.width * finalScale;
-  const drawHeight = image.height * finalScale;
+  const layout = calculateAdjustedImageLayout({
+    imageWidth: image.width,
+    imageHeight: image.height,
+    outputSize,
+    zoom,
+    offsetX,
+    offsetY,
+    fitMode,
+  });
 
-  const normalizedOffsetX = (Number(offsetX || 0) / 100) * (outputSize / 2);
-  const normalizedOffsetY = (Number(offsetY || 0) / 100) * (outputSize / 2);
-
-  const x = outputSize / 2 - drawWidth / 2 + normalizedOffsetX;
-  const y = outputSize / 2 - drawHeight / 2 + normalizedOffsetY;
-
-  ctx.clearRect(0, 0, outputSize, outputSize);
-  ctx.drawImage(image, x, y, drawWidth, drawHeight);
+  ctx.fillStyle = backgroundColor;
+  ctx.fillRect(0, 0, outputSize, outputSize);
+  ctx.drawImage(image, layout.x, layout.y, layout.drawWidth, layout.drawHeight);
 
   const blob = await new Promise((resolve, reject) => {
     canvas.toBlob(

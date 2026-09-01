@@ -20,12 +20,14 @@ import {
   PackageX,
   CalendarClock,
   CalendarX, // âœ¨ NUEVO ICONO
-  ArrowDownUp // âœ¨ AÃ‘ADIDO PARA ORDENAR
+  ArrowDownUp, // âœ¨ AÃ‘ADIDO PARA ORDENAR
+  Maximize2,
 } from 'lucide-react';
 // â™»ï¸ FIX: Importamos FancyPrice junto con helpers
 import { formatLocalDateOnlyAR, formatStock, formatNumber, parseLocalDateOnly } from '../utils/helpers';
 import { hasPermission } from '../utils/userPermissions';
 import { FancyPrice } from '../components/FancyPrice';
+import ProductImageViewer from '../components/ProductImageViewer';
 import { getProductImageUrl } from '../utils/productImages';
 import { getDeletedItemInfo, getProductActiveState, isDeletedProductRecord } from '../utils/productLifecycle';
 
@@ -91,6 +93,7 @@ export default function InventoryView({
   onSearchInactiveProducts,
 }) {
   const [selectedProduct, setSelectedProduct] = useState(null); 
+  const [imageViewerProduct, setImageViewerProduct] = useState(null);
   const lastNavigationTokenRef = useRef(null);
   const [showGridMenu, setShowGridMenu] = useState(false);
   const [showCategoryMenu, setShowCategoryMenu] = useState(false);
@@ -383,6 +386,11 @@ export default function InventoryView({
     }
   };
 
+  const openProductImage = (product) => {
+    if (!getProductImageUrl(product, { preferOriginal: true })) return;
+    setImageViewerProduct(product);
+  };
+
   const getStockColorClass = (product) => {
     const stock = Number(product.stock) || 0;
     const isWeight = product.product_type === 'weight';
@@ -620,7 +628,7 @@ export default function InventoryView({
               )}
             </div>
             {canCreateProducts && (
-              <button onClick={() => setIsModalOpen(true)} className="h-8 min-[1920px]:h-9 bg-slate-900 hover:bg-slate-800 text-white px-2.5 min-[1920px]:px-3 rounded-lg font-bold flex items-center gap-1.5 transition-colors shadow-lg shadow-slate-900/20"><Plus size={15} /> <span className="hidden min-[1920px]:inline">Nuevo</span></button>
+              <button onClick={() => setIsModalOpen(true)} aria-label="Nuevo producto" title="Nuevo producto" className="h-8 min-[1920px]:h-9 bg-slate-900 hover:bg-slate-800 text-white px-2.5 min-[1920px]:px-3 rounded-lg font-bold flex items-center gap-1.5 transition-colors shadow-lg shadow-slate-900/20"><Plus size={15} /> <span className="hidden min-[1920px]:inline">Nuevo</span></button>
             )}
           </div>
         </div>
@@ -678,7 +686,21 @@ export default function InventoryView({
                       <div key={product.id} onClick={() => handleCardClick(product)} className={`rounded-lg border overflow-hidden flex flex-col cursor-pointer transition-all hover:shadow-md group relative ${isSelected ? 'ring-2 ring-fuchsia-500 border-fuchsia-500 transform scale-[0.98]' : 'hover:border-fuchsia-200'} ${outOfStock ? 'border-slate-300 bg-slate-100 ring-1 ring-inset ring-slate-200' : 'bg-white'} ${hasExpirationAlert && !outOfStock ? (isExpired ? 'border-red-300 bg-red-50/30' : 'border-amber-200 bg-amber-50/30') : ''}`}>
                         <div className="aspect-[4/3] bg-slate-50 relative overflow-hidden">
                           {productImage ? (
-                            <img src={productImage} alt={product.title} loading="lazy" decoding="async" fetchpriority="low" className={`w-full h-full object-cover transition-transform group-hover:scale-110 duration-500 ${outOfStock ? 'opacity-75 saturate-50' : ''}`} />
+                            <>
+                              <img src={productImage} alt={product.title} loading="lazy" decoding="async" fetchpriority="low" className={`w-full h-full object-cover transition-transform group-hover:scale-105 duration-300 ${outOfStock ? 'opacity-75 saturate-50' : ''}`} />
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openProductImage(product);
+                                }}
+                                className="absolute bottom-1.5 right-1.5 z-20 flex h-7 w-7 items-center justify-center rounded-md border border-white/60 bg-slate-950/70 text-white opacity-0 transition hover:bg-slate-950 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-fuchsia-400 group-hover:opacity-100"
+                                title="Ver foto completa"
+                                aria-label={`Ver foto completa de ${product.title}`}
+                              >
+                                <Maximize2 size={13} />
+                              </button>
+                            </>
                           ) : (
                             <div className="w-full h-full flex flex-col items-center justify-center bg-slate-200/50 p-2 text-center group-hover:bg-slate-200 transition-colors">
                               <span className={`font-bold text-slate-500 uppercase leading-tight ${gridColumns > 6 ? 'text-[10px]' : 'text-xs'}`}>{product.title}</span>
@@ -790,16 +812,30 @@ export default function InventoryView({
                         onClick={() => handleCardClick(product)}
                         className={`grid grid-cols-[46px_120px_minmax(180px,1.65fr)_minmax(120px,1fr)_76px_88px] items-center gap-2 border-b border-l-4 border-b-slate-100 px-3 py-1.5 text-[13px] cursor-pointer transition-all last:border-b-0 hover:bg-fuchsia-50/40 min-[1920px]:grid-cols-[52px_132px_minmax(0,2.25fr)_126px_104px_118px] ${isSelected ? 'border-l-fuchsia-500 bg-fuchsia-50 ring-1 ring-inset ring-fuchsia-200' : isInactive ? 'border-l-slate-600 bg-slate-200 text-slate-500 shadow-[inset_0_0_0_1px_rgba(71,85,105,0.2)]' : outOfStock ? 'border-l-slate-500 bg-slate-100 text-slate-500 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.22)]' : 'border-l-transparent bg-white'} ${hasExpirationAlert && !outOfStock && !isInactive ? (isExpired ? 'border-l-red-500 bg-red-50/40' : 'border-l-amber-400 bg-amber-50/45') : ''}`}
                       >
-                        <span className="relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (productImage) openProductImage(product);
+                          }}
+                          className={`group/photo relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50 ${productImage ? 'cursor-zoom-in focus:outline-none focus:ring-2 focus:ring-fuchsia-400' : 'cursor-default'}`}
+                          title={productImage ? 'Ver foto completa' : 'Producto sin foto'}
+                          aria-label={productImage ? `Ver foto completa de ${product.title}` : `Sin foto para ${product.title}`}
+                        >
                           {productImage ? (
-                            <img
-                              src={productImage}
-                              alt=""
-                              loading="lazy"
-                              decoding="async"
-                              fetchpriority="low"
-                              className={`h-full w-full object-cover ${outOfStock ? 'opacity-75 saturate-50' : ''}`}
-                            />
+                            <>
+                              <img
+                                src={productImage}
+                                alt=""
+                                loading="lazy"
+                                decoding="async"
+                                fetchpriority="low"
+                                className={`h-full w-full object-cover ${outOfStock ? 'opacity-75 saturate-50' : ''}`}
+                              />
+                              <span className="absolute inset-0 flex items-center justify-center bg-slate-950/45 text-white opacity-0 transition group-hover/photo:opacity-100">
+                                <Maximize2 size={12} />
+                              </span>
+                            </>
                           ) : (
                             <Package size={14} className="text-slate-300" />
                           )}
@@ -811,7 +847,7 @@ export default function InventoryView({
                               {showInactiveBadge ? (isDeletedProduct ? 'DEL' : 'OFF') : '0'}
                             </span>
                           )}
-                        </span>
+                        </button>
                         <span className="min-w-0 truncate text-[11px] font-semibold leading-tight text-slate-400" title={product.barcode || 'Sin codigo'}>
                           <ScanBarcode size={11} className="mr-1 inline text-slate-300" />
                           {product.barcode || '-'}
@@ -888,16 +924,29 @@ export default function InventoryView({
             
             {/* Preview */}
             <div className="text-center">
-              <div className={`w-48 h-48 bg-slate-100 rounded-xl mx-auto overflow-hidden border shadow-sm relative group ${hasExpirationAlert ? (isExpired ? 'ring-2 ring-red-400' : 'ring-2 ring-amber-300') : ''}`}>
+              <div className={`group relative mx-auto flex aspect-square w-full max-w-[236px] items-center justify-center overflow-hidden rounded-xl border bg-slate-100 p-2 ${hasExpirationAlert ? (isExpired ? 'ring-2 ring-red-400' : 'ring-2 ring-amber-300') : ''}`}>
                 {selectedProductPreviewImage ? (
-                  <img src={selectedProductPreviewImage} alt="" decoding="async" className="w-full h-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => openProductImage(selectedProduct)}
+                    className="absolute inset-0 flex cursor-zoom-in items-center justify-center p-2 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-fuchsia-500"
+                    title="Ver foto completa"
+                    aria-label={`Ver foto completa de ${selectedProduct.title}`}
+                  >
+                    <img src={selectedProductPreviewImage} alt={selectedProduct.title} decoding="async" className="h-full w-full object-contain" />
+                    <span className="absolute right-2 top-2 flex h-8 items-center gap-1.5 rounded-md border border-white/60 bg-slate-950/70 px-2 text-[10px] font-bold uppercase tracking-wide text-white transition group-hover:bg-slate-950">
+                      <Maximize2 size={12} /> Ver completa
+                    </span>
+                  </button>
                 ) : (
                   <div className="w-full h-full flex items-center justify-center bg-slate-200 text-slate-500 font-bold p-2 text-sm">{selectedProduct.title}</div>
                 )}
-                {canEditProducts && (
-                  <button onClick={() => setEditingProduct(selectedProduct)} className="absolute inset-0 bg-black/40 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity font-bold text-xs"><Edit size={16} className="mr-1" /> Cambiar</button>
-                )}
               </div>
+              {canEditProducts && (
+                <button onClick={() => setEditingProduct(selectedProduct)} className="mx-auto mt-2 flex h-8 items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 transition hover:border-fuchsia-200 hover:bg-fuchsia-50 hover:text-fuchsia-700">
+                  <Edit size={13} /> Cambiar o ajustar foto
+                </button>
+              )}
               <div className="mt-2">
                 <h2 className="font-bold text-base text-slate-800 leading-tight mb-2 break-words">{selectedProduct.title}</h2>
               <div className="flex justify-center gap-1.5 flex-wrap mb-1">
@@ -1004,6 +1053,11 @@ export default function InventoryView({
         </div>
         );
       })()}
+      <ProductImageViewer
+        imageUrl={getProductImageUrl(imageViewerProduct, { preferOriginal: true })}
+        productTitle={imageViewerProduct?.title}
+        onClose={() => setImageViewerProduct(null)}
+      />
     </div>
   );
 }
