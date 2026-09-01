@@ -196,7 +196,7 @@ const ImageAdjusterModal = ({
   const previewRef = useRef(null);
   const dragStateRef = useRef(null);
   const [previewSize, setPreviewSize] = useState(360);
-  const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
+  const [measuredImage, setMeasuredImage] = useState({ source: '', width: 0, height: 0 });
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -216,11 +216,24 @@ const ImageAdjusterModal = ({
     return () => observer.disconnect();
   }, [isOpen]);
 
-  useEffect(() => {
-    setImageSize({ width: 0, height: 0 });
-  }, [source]);
-
   if (!isOpen || !source) return null;
+
+  // La medida vale solo si es de ESTA imagen. Antes se limpiaba con un efecto
+  // aparte que corria despues del onLoad y borraba la medida recien tomada: con
+  // una foto nueva (data: URL, carga instantanea) la vista previa quedaba vacia.
+  const imageSize = measuredImage.source === source
+    ? { width: measuredImage.width, height: measuredImage.height }
+    : { width: 0, height: 0 };
+  const measureImage = (node) => {
+    if (!node || !node.naturalWidth || !node.naturalHeight) return;
+    setMeasuredImage((previous) => (
+      previous.source === source
+        && previous.width === node.naturalWidth
+        && previous.height === node.naturalHeight
+        ? previous
+        : { source, width: node.naturalWidth, height: node.naturalHeight }
+    ));
+  };
 
   const previewLayout = imageSize.width && imageSize.height
     ? calculateAdjustedImageLayout({
@@ -296,10 +309,8 @@ const ImageAdjusterModal = ({
                   src={source}
                   alt="Vista previa del ajuste"
                   draggable="false"
-                  onLoad={(event) => setImageSize({
-                    width: event.currentTarget.naturalWidth,
-                    height: event.currentTarget.naturalHeight,
-                  })}
+                  ref={measureImage}
+                  onLoad={(event) => measureImage(event.currentTarget)}
                   className="pointer-events-none absolute max-w-none select-none"
                   style={{
                     left: previewLayout.x,
@@ -314,10 +325,8 @@ const ImageAdjusterModal = ({
                   src={source}
                   alt="Preparando vista previa"
                   draggable="false"
-                  onLoad={(event) => setImageSize({
-                    width: event.currentTarget.naturalWidth,
-                    height: event.currentTarget.naturalHeight,
-                  })}
+                  ref={measureImage}
+                  onLoad={(event) => measureImage(event.currentTarget)}
                   className="h-full w-full object-contain opacity-0"
                 />
               )}

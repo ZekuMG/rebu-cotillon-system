@@ -42,6 +42,13 @@ test('ajustar imagen y verla completa desde inventario', async ({ page }) => {
   await expect(adjuster.getByRole('button', { name: 'Foto completa' })).toBeVisible();
   await expect(adjuster.getByRole('button', { name: 'Llenar marco' })).toBeVisible();
   await expect(adjuster.getByText('Arrastrá para mover')).toBeVisible();
+
+  // La foto elegida tiene que VERSE en la vista previa, no solo el marco.
+  const previewImage = adjuster.getByAltText('Vista previa del ajuste');
+  await expect(previewImage).toBeVisible();
+  const previewBox = await previewImage.boundingBox();
+  expect(previewBox?.width).toBeGreaterThan(50);
+  expect(previewBox?.height).toBeGreaterThan(50);
   await adjuster.screenshot({ path: path.join(SCREENSHOTS, 'adjuster-full-photo.png') });
 
   await adjuster.getByRole('button', { name: 'Llenar marco' }).click();
