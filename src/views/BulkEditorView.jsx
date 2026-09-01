@@ -10,13 +10,15 @@ import {
 import AsyncActionButton from '../components/AsyncActionButton';
 import { FancyPrice } from '../components/FancyPrice';
 import BulkExcelImportView from '../components/BulkExcelImportView';
+import {
+  PricingFormulaControls,
+  PricingFormulaTrace,
+} from '../components/pricing/PricingFormulaControls';
 import { ImageModal } from '../components/modals/SaleModals';
 import Swal from 'sweetalert2';
 import usePendingAction from '../hooks/usePendingAction';
 import { getProductImageUrl, hasProductImage } from '../utils/productImages';
 import {
-  CASA_ALBERTO_COST_EXTRA_RATE,
-  CASA_ALBERTO_SALE_MARKUP_RATE,
   buildCasaAlbertoGroupKey,
   buildCasaAlbertoEstimatedCost,
   buildSuggestedSalePriceFromMargin,
@@ -25,7 +27,28 @@ import {
   getProductActiveState,
   productHasCasaAlbertoLink,
 } from '../utils/productLifecycle';
+import { evaluateSupplierReadResult } from '../utils/casaAlbertoMatch.js';
+import { resolveUnitDivisor } from '../utils/casaAlbertoUnits.js';
 import { SUPPLIER_PRICE_REPORT_PERIODS } from '../utils/supplierPriceReport';
+import {
+  calculateGrossMarginPricing,
+  DEFAULT_GROSS_MARGIN_PERCENT,
+  DEFAULT_VAT_PERCENT,
+  GROSS_MARGIN_FORMULA_VERSION,
+  loadGrossMarginPreferences,
+  normalizeGrossMarginPercent,
+  saveGrossMarginPreferences,
+} from '../utils/grossMarginPricing';
+import {
+  getStoredProductSalePrice,
+  getVisibleProductSalePrice,
+  normalizeFinalSalePrice,
+} from '../utils/finalSalePrice';
+import {
+  getStoredProductPurchaseCost,
+  getVisibleProductPurchaseCost,
+  normalizeFinalPurchaseCost,
+} from '../utils/finalPurchaseCost';
 
 const BULK_EDITOR_TOOL_MODE_STORAGE_KEY = 'rebu_bulk_editor_tool_mode_v1';
 const ImageCleanupWorkspace = lazy(() => import('../components/ImageCleanupWorkspace'));
@@ -51,10 +74,9 @@ const IMAGE_IMPORT_LIMIT_OPTIONS = [
 const normalizeToolMode = (mode) => (
   mode === 'excel' || mode === 'supplier' || mode === 'image-cleanup' || mode === 'whatsapp-catalog' ? mode : 'bulk'
 );
-const clampSupplierPercent = (value, fallback) => {
-  const numberValue = Number(value);
-  if (!Number.isFinite(numberValue)) return fallback;
-  return Math.max(0, Math.min(300, numberValue));
+const getInitialPricingPreferences = () => {
+  if (typeof window === 'undefined') return loadGrossMarginPreferences(null);
+  return loadGrossMarginPreferences(window.localStorage);
 };
 
 const parseSupplierNumber = (value) => {
@@ -80,19 +102,6 @@ const normalizeSupplierDivisor = (value, fallback = 1) => {
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue) || numberValue <= 0) return fallback;
   return Math.max(1, Math.round(numberValue));
-};
-
-const detectCasaAlbertoUnitDivisor = (...values) => {
-  const text = values
-    .filter(Boolean)
-    .map((value) => String(value).toLowerCase())
-    .join(' ');
-  if (!text) return 1;
-
-  const matches = [...text.matchAll(/(?:^|[\s._-])x\s*(\d{1,4})(?:\s*(?:u|un|uni|unid|unidad|unidades|items?|pzs?|pz))?(?=$|[\s._-])/gi)]
-    .map((match) => Number(match[1]))
-    .filter((value) => Number.isFinite(value) && value > 1 && value < 10000);
-  return matches.length ? matches[matches.length - 1] : 1;
 };
 
 const getInitialToolMode = () => {
@@ -137,10 +146,9 @@ export default function BulkEditorView({
   const buildEditStateFromInventory = (inventory) => {
     const nextEdits = {};
     (inventory || []).forEach((p) => {
-      const isWeight = p.product_type === 'weight';
       nextEdits[p.id] = {
-        price: isWeight ? Math.round((Number(p.price) || 0) * 1000) : (Number(p.price) || 0),
-        purchasePrice: isWeight ? Math.round((Number(p.purchasePrice) || 0) * 1000) : (Number(p.purchasePrice) || 0),
+        price: getVisibleProductSalePrice(p.price, p.product_type),
+        purchasePrice: getVisibleProductPurchaseCost(p.purchasePrice, p.product_type),
         stock: Number(p.stock) || 0,
       };
     });
@@ -162,6 +170,7 @@ export default function BulkEditorView({
   
   // --- Herramienta de Ajuste Masivo ---
   const [bulkAction, setBulkAction] = useState({ field: 'price', percentage: '' });
+  const [pricingPreferences, setPricingPreferences] = useState(getInitialPricingPreferences);
   const [isSaving, setIsSaving] = useState(false);
   const { isPending, runAction } = usePendingAction();
 
@@ -187,8 +196,6 @@ export default function BulkEditorView({
   const [supplierPriceSearchTerm, setSupplierPriceSearchTerm] = useState('');
   const [supplierPriceRows, setSupplierPriceRows] = useState({});
   const [supplierPriceOverrides, setSupplierPriceOverrides] = useState({});
-  const [supplierCostExtraPercent, setSupplierCostExtraPercent] = useState(Math.round(CASA_ALBERTO_COST_EXTRA_RATE * 100));
-  const [supplierSaleMarkupPercent, setSupplierSaleMarkupPercent] = useState(Math.round(CASA_ALBERTO_SALE_MARKUP_RATE * 100));
   const [isCheckingSupplierPrices, setIsCheckingSupplierPrices] = useState(false);
   const [checkingSupplierGroupKey, setCheckingSupplierGroupKey] = useState('');
   const [isSupplierPriceCheckPaused, setIsSupplierPriceCheckPaused] = useState(false);
@@ -220,6 +227,20 @@ export default function BulkEditorView({
   const supplierPriceCheckStopRef = useRef(false);
   const supplierPriceCheckPausedRef = useRef(false);
 
+  const updatePricingMargin = useCallback((value) => {
+    setPricingPreferences((current) => ({
+      ...current,
+      marginPercent: normalizeGrossMarginPercent(value, current.marginPercent),
+    }));
+  }, []);
+
+  const updateBulkCostIncludesVat = useCallback((value) => {
+    setPricingPreferences((current) => ({
+      ...current,
+      bulkCostIncludesVat: value !== false,
+    }));
+  }, []);
+
   // --- Estado para el autocompletado de productos extra ---
   const [focusedTempId, setFocusedTempId] = useState(null);
 
@@ -241,6 +262,11 @@ export default function BulkEditorView({
       // La preferencia es solo comodidad local; si falla, la vista sigue funcionando.
     }
   }, [activeToolMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    saveGrossMarginPreferences(window.localStorage, pricingPreferences);
+  }, [pricingPreferences]);
 
   useEffect(() => {
     if (!imageImportOpenRequest || imageImportRows.length === 0) return;
@@ -312,7 +338,10 @@ export default function BulkEditorView({
   };
 
   const handleEditChange = (id, field, value) => {
-    setEdits(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
+    const nextValue = field === 'purchasePrice' && String(value ?? '').trim() !== ''
+      ? normalizeFinalPurchaseCost(value)
+      : value;
+    setEdits(prev => ({ ...prev, [id]: { ...prev[id], [field]: nextValue } }));
   };
 
   const toggleSelectAll = () => {
@@ -333,6 +362,45 @@ export default function BulkEditorView({
   };
 
   const applyBulkPercentage = () => {
+    if (bulkAction.field === 'grossMarginPrice') {
+      if (selectedIds.length === 0) return;
+      const nextEdits = { ...edits };
+      let invalidCount = 0;
+
+      selectedIds.forEach((id) => {
+        const currentEdit = edits[id] || {};
+        const pricing = calculateGrossMarginPricing({
+          cost: Number(currentEdit.purchasePrice),
+          costIncludesVat: pricingPreferences.bulkCostIncludesVat,
+          marginPercent: pricingPreferences.marginPercent,
+        });
+
+        if (!pricing.isValid) {
+          invalidCount += 1;
+          return;
+        }
+
+        nextEdits[id] = {
+          ...currentEdit,
+          ...(!pricingPreferences.bulkCostIncludesVat
+            ? { purchasePrice: pricing.realCost }
+            : {}),
+          price: pricing.salePrice,
+        };
+      });
+
+      setEdits(nextEdits);
+      if (invalidCount > 0) {
+        void Swal.fire({
+          icon: 'warning',
+          title: 'Algunos productos no se calcularon',
+          text: `${invalidCount} producto(s) no tienen un costo mayor que cero.`,
+          confirmButtonText: 'Entendido',
+        });
+      }
+      return;
+    }
+
     const percentage = Number(bulkAction.percentage);
     if (isNaN(percentage) || percentage === 0 || selectedIds.length === 0) return;
 
@@ -340,20 +408,25 @@ export default function BulkEditorView({
     const newEdits = { ...edits };
 
     selectedIds.forEach(id => {
-      const currentVal = Number(newEdits[id][bulkAction.field]) || 0;
-      newEdits[id][bulkAction.field] = Math.round(currentVal * multiplier);
+      const currentEdit = edits[id] || {};
+      const currentVal = Number(currentEdit[bulkAction.field]) || 0;
+      newEdits[id] = {
+        ...currentEdit,
+        [bulkAction.field]: bulkAction.field === 'purchasePrice'
+          ? normalizeFinalPurchaseCost(currentVal * multiplier)
+          : Math.round(currentVal * multiplier),
+      };
     });
 
     setEdits(newEdits);
   };
 
   const handleResetRow = (p) => {
-    const isWeight = p.product_type === 'weight';
     setEdits(prev => ({
       ...prev,
       [p.id]: {
-        price: isWeight ? Math.round((Number(p.price) || 0) * 1000) : (Number(p.price) || 0),
-        purchasePrice: isWeight ? Math.round((Number(p.purchasePrice) || 0) * 1000) : (Number(p.purchasePrice) || 0),
+        price: getVisibleProductSalePrice(p.price, p.product_type),
+        purchasePrice: getVisibleProductPurchaseCost(p.purchasePrice, p.product_type),
         stock: Number(p.stock) || 0,
       }
     }));
@@ -399,9 +472,8 @@ export default function BulkEditorView({
           await onSaveSingle(product, editData);
         }
         
-        const isWeight = product.product_type === 'weight';
-        const finalPrice = isWeight ? Number(editData.price) / 1000 : Number(editData.price);
-        const finalCost = isWeight ? Number(editData.purchasePrice) / 1000 : Number(editData.purchasePrice);
+        const finalPrice = getStoredProductSalePrice(editData.price, product.product_type);
+        const finalCost = getStoredProductPurchaseCost(editData.purchasePrice, product.product_type);
         const finalStock = Number(editData.stock);
 
         setSandboxInventory(sandboxInventory.map(p => 
@@ -428,11 +500,10 @@ export default function BulkEditorView({
       setSandboxInventory(prev => prev.map(p => {
         if (selectedIds.includes(p.id)) {
           const editData = edits[p.id];
-          const isWeight = p.product_type === 'weight';
           return {
             ...p,
-            price: isWeight ? Number(editData.price) / 1000 : Number(editData.price),
-            purchasePrice: isWeight ? Number(editData.purchasePrice) / 1000 : Number(editData.purchasePrice),
+            price: getStoredProductSalePrice(editData.price, p.product_type),
+            purchasePrice: getStoredProductPurchaseCost(editData.purchasePrice, p.product_type),
             stock: Number(editData.stock)
           };
         }
@@ -1288,6 +1359,9 @@ export default function BulkEditorView({
   const getOriginalVal = (p, field) => {
     const isWeight = p.product_type === 'weight';
     if (field === 'stock') return Number(p[field]) || 0;
+    if (field === 'purchasePrice') {
+      return getVisibleProductPurchaseCost(p[field], p.product_type);
+    }
     return isWeight ? Math.round((Number(p[field]) || 0) * 1000) : (Number(p[field]) || 0);
   };
 
@@ -1299,6 +1373,15 @@ export default function BulkEditorView({
   };
 
   const hasPendingBulkChanges = sandboxInventory.some((p) => hasChanges(p));
+  const bulkPricingPreview = useMemo(() => {
+    const selectedId = selectedIds.find((id) => Number(edits[id]?.purchasePrice) > 0);
+    if (!selectedId) return null;
+    return calculateGrossMarginPricing({
+      cost: Number(edits[selectedId]?.purchasePrice),
+      costIncludesVat: pricingPreferences.bulkCostIncludesVat,
+      marginPercent: pricingPreferences.marginPercent,
+    });
+  }, [edits, pricingPreferences.bulkCostIncludesVat, pricingPreferences.marginPercent, selectedIds]);
 
   const calculateDiffPercent = (oldVal, newVal) => {
     if (oldVal === 0) return newVal > 0 ? '+100%' : null;
@@ -1337,14 +1420,17 @@ export default function BulkEditorView({
 
   const getSupplierSelectedCount = (group) => getSelectedProductsForGroup(group).length;
   const supplierPriceRules = useMemo(() => ({
-    costExtraRate: clampSupplierPercent(supplierCostExtraPercent, Math.round(CASA_ALBERTO_COST_EXTRA_RATE * 100)) / 100,
-    saleMarkupRate: clampSupplierPercent(supplierSaleMarkupPercent, Math.round(CASA_ALBERTO_SALE_MARKUP_RATE * 100)) / 100,
-  }), [supplierCostExtraPercent, supplierSaleMarkupPercent]);
+    vatPercent: DEFAULT_VAT_PERCENT,
+    vatRate: DEFAULT_VAT_PERCENT / 100,
+    grossMarginPercent: pricingPreferences.marginPercent,
+    grossMarginRate: pricingPreferences.marginPercent / 100,
+  }), [pricingPreferences.marginPercent]);
   const supplierPriceRulePayload = {
-    costExtraPercent: supplierCostExtraPercent,
-    saleMarkupPercent: supplierSaleMarkupPercent,
-    costExtraRate: supplierPriceRules.costExtraRate,
-    saleMarkupRate: supplierPriceRules.saleMarkupRate,
+    vatPercent: supplierPriceRules.vatPercent,
+    vatRate: supplierPriceRules.vatRate,
+    grossMarginPercent: supplierPriceRules.grossMarginPercent,
+    grossMarginRate: supplierPriceRules.grossMarginRate,
+    formulaVersion: GROSS_MARGIN_FORMULA_VERSION,
   };
   const getSupplierEstimatedCost = useCallback((supplierPrice) =>
     buildCasaAlbertoEstimatedCost(supplierPrice, supplierPriceRules), [supplierPriceRules]);
@@ -1359,12 +1445,14 @@ export default function BulkEditorView({
       : Object.prototype.hasOwnProperty.call(override, 'supplierPrice')
         ? override.supplierPrice
         : group.rawSupplierPrice ?? tracking.rawSupplierPrice ?? group.supplierPrice ?? tracking.lastSupplierPrice ?? 0;
-    const detectedDivisor = detectCasaAlbertoUnitDivisor(
-      group.supplierTitle,
-      group.supplierCode,
-      group.priceText,
-      ...(Array.isArray(group.products) ? group.products.map((product) => product.title) : []),
-    );
+    // El divisor es el cociente entre el pack de Casa Alberto y el de Rebu.
+    // Si las dos puntas traen pack, `divisor` viene en null: no se adivina.
+    const deteccionUnidades = resolveUnitDivisor({
+      supplierTitle: group.supplierTitle,
+      rebuTitle: Array.isArray(group.products) ? (group.products[0]?.title || '') : '',
+    });
+    const divisorAmbiguo = deteccionUnidades.divisor === null;
+    const detectedDivisor = deteccionUnidades.divisor ?? 1;
     const divisorSource = Object.prototype.hasOwnProperty.call(nextPatch, 'unitDivisor')
       ? nextPatch.unitDivisor
       : Object.prototype.hasOwnProperty.call(override, 'unitDivisor')
@@ -1379,6 +1467,8 @@ export default function BulkEditorView({
       supplierPrice: rawSupplierPrice,
       unitDivisor,
       detectedDivisor,
+      divisorAmbiguo,
+      divisorReason: deteccionUnidades.reason,
       unitSupplierPrice,
       hasSupplierPrice: Number.isFinite(rawSupplierPrice) && rawSupplierPrice > 0,
       hasManualSupplierPrice: Object.prototype.hasOwnProperty.call(override, 'supplierPrice'),
@@ -1514,6 +1604,8 @@ export default function BulkEditorView({
       unitSupplierPrice,
       unitDivisor: priceInfo.unitDivisor,
       detectedDivisor: priceInfo.detectedDivisor,
+      divisorAmbiguo: priceInfo.divisorAmbiguo,
+      divisorReason: priceInfo.divisorReason,
       hasManualSupplierPrice: priceInfo.hasManualSupplierPrice,
       hasManualDivisor: priceInfo.hasManualDivisor,
       hasManualOverride: priceInfo.hasManualSupplierPrice || priceInfo.hasManualDivisor,
@@ -1878,6 +1970,49 @@ export default function BulkEditorView({
         title: group.supplierTitle || group.products[0]?.title || '',
       });
       const checkedAt = new Date().toISOString();
+
+      // Piso de confianza: el lector puede devolver 'found' habiendo leido una
+      // pagina que no es la ficha de este producto (el carrito, otro articulo).
+      // Guardar ese precio es peor que no guardar nada.
+      const confianzaLectura = evaluateSupplierReadResult({
+        expected: { casaAlbertoId: group.casaAlbertoId, supplierCode: group.supplierCode },
+        result,
+      });
+
+      if (result?.status === 'found' && !confianzaLectura.accepted) {
+        const rowState = {
+          status: 'dubious_link',
+          foundTitle: result.foundTitle || '',
+          productUrl: result.productUrl || result.sourceUrl || group.productUrl || '',
+          sourceUrl: result.sourceUrl || result.productUrl || group.productUrl || '',
+          casaAlbertoId: group.casaAlbertoId,
+          supplierCode: group.supplierCode,
+          previousSupplierPrice: Number(group.tracking?.lastSupplierPrice || 0) || null,
+          lastCheckedAt: checkedAt,
+          brokenReason: confianzaLectura.reason,
+          message: confianzaLectura.reason === 'url_no_es_ficha'
+            ? 'La pagina leida no es la ficha del producto. Revisar el enlace.'
+            : 'La ficha leida es de otro producto. Revisar el enlace.',
+        };
+        setSupplierPriceRows((prev) => ({ ...prev, [group.key]: rowState }));
+        // Se guarda sin precio a proposito: sin precio, la app no calcula un
+        // costo estimado y el estado 'dubious_link' queda a la vista.
+        const saveResult = await onSaveSupplierPriceChecks?.(group.products.map((product) => ({
+          productId: product.id,
+          reviewStatus: 'dubious_link',
+          brokenReason: rowState.brokenReason,
+          previousSupplierPrice: rowState.previousSupplierPrice,
+          lastCheckedAt: checkedAt,
+          foundTitle: rowState.foundTitle,
+          productUrl: rowState.productUrl,
+          sourceUrl: rowState.sourceUrl,
+          casaAlbertoId: rowState.casaAlbertoId,
+          supplierCode: rowState.supplierCode,
+          message: rowState.message,
+        })));
+        updateSandboxProducts(saveResult?.products);
+        return { ...rowState, groupKey: group.key };
+      }
 
       if (result?.status === 'found' && Number(result.supplierPrice) > 0) {
         const supplierPrice = Number(result.supplierPrice);
@@ -2844,8 +2979,8 @@ export default function BulkEditorView({
       { value: 'notice', label: 'Avisos', count: supplierPriceNoticeCount },
       { value: 'error', label: 'Errores', count: supplierPriceErrorCount },
     ];
-    const supplierExtraPercent = supplierCostExtraPercent;
-    const supplierMarkupPercent = supplierSaleMarkupPercent;
+    const supplierExtraPercent = DEFAULT_VAT_PERCENT;
+    const supplierMarkupPercent = pricingPreferences.marginPercent;
     const hasSupplierSelection = selectedSupplierGroups.length > 0;
     const supplierCheckTargetCount = hasSupplierSelection ? selectedSupplierGroups.length : visibleCasaAlbertoGroups.length;
     const supplierCheckTargetLabel = hasSupplierSelection
@@ -3229,7 +3364,9 @@ export default function BulkEditorView({
               value: supplierPriceOverrides[group.key]?.unitDivisor ?? math.unitDivisor,
               onChange: (value) => updateSupplierPriceOverride(group.key, { unitDivisor: value }),
               onStep: (direction) => stepSupplierOverride('unitDivisor', math.unitDivisor || 1, direction, 1, 1),
-              helper: math.detectedDivisor > 1 ? `sugerido ${math.detectedDivisor}` : 'por producto',
+              helper: math.divisorAmbiguo
+                ? 'revisar unidades'
+                : math.detectedDivisor > 1 ? `sugerido ${math.detectedDivisor}` : 'por producto',
               manual: math.hasManualDivisor,
               inputMode: 'numeric',
               tone: 'sky',
@@ -3302,43 +3439,22 @@ export default function BulkEditorView({
                 </div>
                 <button
                   type="button"
-                  onClick={() => {
-                    setSupplierCostExtraPercent(Math.round(CASA_ALBERTO_COST_EXTRA_RATE * 100));
-                    setSupplierSaleMarkupPercent(Math.round(CASA_ALBERTO_SALE_MARKUP_RATE * 100));
-                  }}
+                  onClick={() => updatePricingMargin(DEFAULT_GROSS_MARGIN_PERCENT)}
                   className="h-7 rounded-md border border-slate-600 bg-slate-950/25 px-2 text-[10px] font-black text-slate-300 hover:bg-slate-800"
                 >
                   Reset
                 </button>
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <div className="rounded-md border border-sky-400/20 bg-slate-950/20 p-2">
-                  {renderSupplierStepperInput({
-                    label: 'Recargo costo',
-                    value: supplierCostExtraPercent,
-                    onChange: (value) => setSupplierCostExtraPercent(clampSupplierPercent(value, 0)),
-                    onStep: (direction) => setSupplierCostExtraPercent(clampSupplierPercent(supplierCostExtraPercent + direction, 0)),
-                    suffix: '%',
-                    helper: 'se suma al proveedor',
-                    inputMode: 'numeric',
-                    tone: 'sky',
-                  })}
-                </div>
-                <div className="rounded-md border border-emerald-400/20 bg-slate-950/20 p-2">
-                  {renderSupplierStepperInput({
-                    label: 'Margen venta',
-                    value: supplierSaleMarkupPercent,
-                    onChange: (value) => setSupplierSaleMarkupPercent(clampSupplierPercent(value, 0)),
-                    onStep: (direction) => setSupplierSaleMarkupPercent(clampSupplierPercent(supplierSaleMarkupPercent + direction, 0)),
-                    suffix: '%',
-                    helper: 'arma la sugerida',
-                    inputMode: 'numeric',
-                    tone: 'emerald',
-                  })}
-                </div>
+              <div className="mt-3">
+                <PricingFormulaControls
+                  marginPercent={pricingPreferences.marginPercent}
+                  onMarginChange={updatePricingMargin}
+                  dark
+                  compact
+                />
               </div>
               <p className="mt-2 rounded-md border border-slate-700/60 bg-slate-950/20 px-2 py-1.5 text-[10px] font-bold leading-snug text-slate-400">
-                Formula: proveedor / unidades = costo por unidad. Despues se suma {supplierCostExtraPercent}% al costo y {supplierSaleMarkupPercent}% para sugerir venta.
+                Proveedor / unidades = costo base. Se incorpora IVA {supplierExtraPercent}% y la venta se calcula dividiendo por (1 - {supplierMarkupPercent}% de margen).
               </p>
             </section>
 
@@ -3548,7 +3664,7 @@ export default function BulkEditorView({
             </section>
 
             <p className="rounded-lg border border-slate-700/80 bg-[#0f1e33] p-3 text-[11px] font-bold leading-relaxed text-slate-400">
-              Proveedor / unidades = costo por unidad. Costo Rebu suma {supplierExtraPercent}%. Venta sugerida suma {supplierMarkupPercent}% y se puede ajustar por producto.
+              Proveedor / unidades = costo base unitario. Costo Rebu incorpora IVA {supplierExtraPercent}%. La venta sugerida usa {supplierMarkupPercent}% de margen bruto real y se puede ajustar por producto.
             </p>
           </div>
         </aside>
@@ -3677,7 +3793,10 @@ export default function BulkEditorView({
                     const sourceUrl = suggestion.result.productUrl || suggestion.result.sourceUrl || '';
                     const suggestionDivisor = normalizeSupplierDivisor(
                       suggestion.result.unitDivisor,
-                      detectCasaAlbertoUnitDivisor(suggestion.result.foundTitle, suggestion.result.supplierCode, suggestion.product.title),
+                      resolveUnitDivisor({
+                        supplierTitle: suggestion.result.foundTitle,
+                        rebuTitle: suggestion.product.title,
+                      }).divisor ?? 1,
                     );
                     const suggestionUnitPrice = Number(suggestion.result.supplierPrice || 0) > 0
                       ? Number((Number(suggestion.result.supplierPrice || 0) / suggestionDivisor).toFixed(2))
@@ -4068,20 +4187,46 @@ export default function BulkEditorView({
           >
             <option value="price">Aumentar Precio</option>
             <option value="purchasePrice">Aumentar Costo</option>
+            <option value="grossMarginPrice">Calcular venta por margen real</option>
           </select>
-          <div className="relative mt-2">
-            <input 
-              type="number" 
-              placeholder="Ej: 15" 
-              className="no-spinners w-full rounded-md border border-slate-200 bg-white py-1.5 pl-2 pr-7 text-center text-xs font-black text-slate-900 outline-none transition-all focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
-              value={bulkAction.percentage}
-              onChange={(e) => setBulkAction({...bulkAction, percentage: e.target.value})}
-            />
-            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-black text-slate-400">%</span>
-          </div>
+          {bulkAction.field === 'grossMarginPrice' ? (
+            <div className="mt-2 space-y-2">
+              <PricingFormulaControls
+                marginPercent={pricingPreferences.marginPercent}
+                onMarginChange={updatePricingMargin}
+                costIncludesVat={pricingPreferences.bulkCostIncludesVat}
+                onCostIncludesVatChange={updateBulkCostIncludesVat}
+                showVatMode
+                compact
+              />
+              {bulkPricingPreview?.isValid ? (
+                <PricingFormulaTrace
+                  baseCost={bulkPricingPreview.baseCost}
+                  realCost={bulkPricingPreview.realCost}
+                  salePrice={bulkPricingPreview.salePrice}
+                  marginPercent={bulkPricingPreview.marginPercent}
+                />
+              ) : (
+                <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[9px] font-bold text-amber-800">
+                  Selecciona un producto con costo mayor que cero para ver la traza.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="relative mt-2">
+              <input
+                type="number"
+                placeholder="Ej: 15"
+                className="no-spinners w-full rounded-md border border-slate-200 bg-white py-1.5 pl-2 pr-7 text-center text-xs font-black text-slate-900 outline-none transition-all focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
+                value={bulkAction.percentage}
+                onChange={(e) => setBulkAction({...bulkAction, percentage: e.target.value})}
+              />
+              <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-black text-slate-400">%</span>
+            </div>
+          )}
           <button 
             onClick={applyBulkPercentage}
-            disabled={selectedIds.length === 0 || !bulkAction.percentage}
+            disabled={selectedIds.length === 0 || (bulkAction.field !== 'grossMarginPrice' && !bulkAction.percentage)}
             className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md bg-slate-900 px-3 py-2 text-xs font-black text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"
           >
             <ArrowRight size={14} /> Aplicar a {selectedIds.length}
@@ -4358,8 +4503,10 @@ export default function BulkEditorView({
                           <span className="flex w-6 shrink-0 items-center justify-center border-r border-slate-200 bg-slate-50 text-[11px] font-black text-slate-500">$</span>
                           <input 
                             type="number" 
+                            step="1"
                             value={editVals.price ?? ''} 
                             onChange={(e) => handleEditChange(p.id, 'price', e.target.value)}
+                            onBlur={(e) => handleEditChange(p.id, 'price', String(normalizeFinalSalePrice(e.target.value)))}
                             className={`no-spinners min-w-0 flex-1 bg-transparent px-2 text-right text-[13px] font-black tabular-nums outline-none ${
                               priceDiff ? 'text-blue-900' : 'text-slate-900'
                             }`}
@@ -5361,6 +5508,8 @@ export default function BulkEditorView({
             inventory={sandboxInventory}
             categories={categories}
             cacheScope={currentUser?.id ? `user:${currentUser.id}` : ''}
+            marginPercent={pricingPreferences.marginPercent}
+            onMarginChange={updatePricingMargin}
             canCreateInventory={canCreateInventory}
             canEditInventory={canEditInventory}
             onApplyImport={onApplyExcelImport}

@@ -240,6 +240,16 @@ import {
   getExcelImportUndoConflicts,
   runExcelImportBatch,
 } from './utils/excelImportOperations';
+import {
+  getStoredProductSalePrice,
+  normalizeFinalSalePrice,
+  normalizeStoredProductSalePrice,
+} from './utils/finalSalePrice';
+import {
+  getStoredProductPurchaseCost,
+  normalizeFinalPurchaseCost,
+  normalizeStoredProductPurchaseCost,
+} from './utils/finalPurchaseCost';
 
 import {
   INITIAL_CATEGORIES,
@@ -7201,7 +7211,7 @@ export default function PartySupplyApp() {
       const payload = {
         title: title,
         brand: '',
-        price: Number(price) || 0,
+        price: normalizeFinalSalePrice(price),
         purchasePrice: 0,
         stock: 0,
         category: 'Depósito', 
@@ -7218,10 +7228,7 @@ export default function PartySupplyApp() {
         .single();
       if (error) throw error;
       
-      const itemFormatted = { 
-          ...data, 
-          categories: ['Depósito'] 
-      };
+      const itemFormatted = mapInventoryRecords([{ ...data, categories: ['Depósito'] }])[0];
       setInventory(prev => [...prev, itemFormatted]);
       
       addLog('Alta de Producto', { id: data.id, title: data.title, price: data.price, category: data.category }, 'Fijado desde Presupuesto');
@@ -9665,7 +9672,7 @@ export default function PartySupplyApp() {
       productsIncluded: Array.isArray(offerLike.productsIncluded) ? offerLike.productsIncluded : [],
       itemsCount: Number(offerLike.itemsCount) || 0,
       discountValue: Number(offerLike.discountValue) || 0,
-      offerPrice: Number(offerLike.offerPrice) || 0,
+      offerPrice: normalizeFinalSalePrice(offerLike.offerPrice),
       profitMargin: normalizeOfferProfitMargin(offerLike.profitMargin),
       maxUsesPerClient: offerLike.maxUsesPerClient || '',
       receivedCodeExpiresAfter:
@@ -9688,7 +9695,7 @@ export default function PartySupplyApp() {
         products_included: offerData.productsIncluded || [],
         items_count: Number(offerData.itemsCount) || 0,
         discount_value: Number(offerData.discountValue) || 0,
-        offer_price: Number(offerData.offerPrice) || 0,
+        offer_price: normalizeFinalSalePrice(offerData.offerPrice),
         profit_margin: normalizeOfferProfitMargin(offerData.profitMargin),
         created_by: currentUser?.name || 'Sistema'
       };
@@ -9758,7 +9765,7 @@ export default function PartySupplyApp() {
         products_included: safeProductsIncluded,
         items_count: Number(normalizedUpdatedData.itemsCount) || 0,
         discount_value: Number(normalizedUpdatedData.discountValue) || 0,
-        offer_price: Number(normalizedUpdatedData.offerPrice) || 0,
+        offer_price: normalizeFinalSalePrice(normalizedUpdatedData.offerPrice),
         profit_margin: normalizeOfferProfitMargin(normalizedUpdatedData.profitMargin)
       };
 
@@ -12884,8 +12891,11 @@ export default function PartySupplyApp() {
       const payload = {
         title: itemData.title,
         brand: itemData.brand,
-        price: Number(itemData.price) || 0,
-        purchasePrice: Number(itemData.purchasePrice) || 0,
+        price: normalizeStoredProductSalePrice(itemData.price, itemData.product_type),
+        purchasePrice: normalizeStoredProductPurchaseCost(
+          itemData.purchasePrice,
+          itemData.product_type,
+        ),
         stock: Number(itemData.stock) || 0,
         category: itemData.categories.join(', '), 
         barcode: itemData.barcode || null,
@@ -12963,8 +12973,11 @@ export default function PartySupplyApp() {
 
       const payload = {
         title: productData.title,
-        price: Number(productData.price),
-        purchasePrice: Number(productData.purchasePrice) || 0,
+        price: normalizeStoredProductSalePrice(productData.price, productData.product_type),
+        purchasePrice: normalizeStoredProductPurchaseCost(
+          productData.purchasePrice,
+          productData.product_type,
+        ),
         category: Array.isArray(productData.categories) ? productData.categories.join(', ') : productData.category,
         barcode: productData.barcode || null,
         image: nextImage,
@@ -12990,6 +13003,8 @@ export default function PartySupplyApp() {
       }
       const effectiveProductData = {
         ...productData,
+        price: formattedProduct.price,
+        purchasePrice: formattedProduct.purchasePrice,
         stock: formattedProduct.stock,
         image: nextImage,
         image_thumb: nextImageThumb,
@@ -13231,8 +13246,8 @@ export default function PartySupplyApp() {
         const sourceCode = String(draft.sourceCode || barcode || '').trim();
         const sourceDescription = String(draft.sourceDescription || title || '').trim();
         const stockDelta = Number(draft.stock || 0);
-        const purchasePrice = Number(draft.purchasePrice || 0);
-        const price = Number(draft.price || 0);
+        const purchasePrice = normalizeFinalPurchaseCost(draft.purchasePrice);
+        const price = normalizeFinalSalePrice(draft.price);
 
         if (!title) throw new Error('Falta el nombre del producto.');
         if (!category) throw new Error('Falta seleccionar una categoria.');
@@ -13370,8 +13385,18 @@ export default function PartySupplyApp() {
           throw new Error('El codigo de barras cambio despues de revisar el Excel. Volve a confirmar la fila.');
         }
 
-        if (row.approvals?.cost) payload.purchasePrice = Number(row.after?.cost || currentCost);
-        if (row.approvals?.price) payload.price = Number(row.after?.price || currentPrice);
+        if (row.approvals?.cost) {
+          payload.purchasePrice = normalizeStoredProductPurchaseCost(
+            row.after?.cost || currentCost,
+            product.product_type,
+          );
+        }
+        if (row.approvals?.price) {
+          payload.price = normalizeStoredProductSalePrice(
+            row.after?.price || currentPrice,
+            product.product_type,
+          );
+        }
         if (row.shouldAssignBarcode && row.importedCode) payload.barcode = String(row.importedCode);
 
         if (row.shouldSaveExcelLink && row.excelLink) {
@@ -13692,7 +13717,10 @@ export default function PartySupplyApp() {
 
         const restorePayload = {
           stock: Number(before.stock || 0),
-          purchasePrice: Number(before.purchasePrice ?? before.cost ?? 0),
+          purchasePrice: normalizeStoredProductPurchaseCost(
+            before.purchasePrice ?? before.cost ?? 0,
+            product.product_type,
+          ),
           price: Number(before.price || 0),
           barcode: before.barcode || null,
         };
@@ -13717,7 +13745,10 @@ export default function PartySupplyApp() {
           } catch (ownerError) {
             const appliedPayload = {
               stock: Number(after.stock || 0),
-              purchasePrice: Number(after.purchasePrice ?? after.cost ?? 0),
+              purchasePrice: normalizeStoredProductPurchaseCost(
+                after.purchasePrice ?? after.cost ?? 0,
+                product.product_type,
+              ),
               price: Number(after.price || 0),
               barcode: after.barcode || null,
             };
@@ -14124,14 +14155,30 @@ export default function PartySupplyApp() {
   };
 
   const runSupplierProductUpdatesBatch = async (action, mutations = []) => {
-    const safeMutations = Array.isArray(mutations) ? mutations.filter(Boolean) : [];
+    const safeMutations = (Array.isArray(mutations) ? mutations.filter(Boolean) : []).map((mutation) => {
+      if (!mutation.apply_purchase_price) return mutation;
+      const currentProduct = inventory.find((product) => String(product.id) === String(mutation.product_id));
+      return {
+        ...mutation,
+        purchase_price: normalizeStoredProductPurchaseCost(
+          mutation.purchase_price,
+          currentProduct?.product_type,
+        ),
+      };
+    });
     if (safeMutations.length === 0) return [];
 
     if (isLocalDemoMode()) {
       return safeMutations.map((mutation) => {
+        const currentProduct = inventory.find((product) => String(product.id) === String(mutation.product_id));
         const payload = { supplier_links: mutation.supplier_links };
         if (mutation.apply_purchase_price) payload.purchasePrice = mutation.purchase_price;
-        if (mutation.apply_sale_price) payload.price = mutation.sale_price;
+        if (mutation.apply_sale_price) {
+          payload.price = normalizeStoredProductSalePrice(
+            mutation.sale_price,
+            currentProduct?.product_type,
+          );
+        }
         return mapInventoryRecords([
           localDemoUpdateRow('products', mutation.product_id, payload),
         ])[0];
@@ -14202,11 +14249,19 @@ export default function PartySupplyApp() {
       ) || null;
       const suggestedSalePrice = Number(check.suggestedSalePrice || 0) ||
         buildSuggestedSalePriceFromMargin(product, unitSupplierPrice, {
+          vatPercent: check.vatPercent,
+          vatRate: check.vatRate,
+          grossMarginPercent: check.grossMarginPercent,
+          grossMarginRate: check.grossMarginRate,
           costExtraRate: check.costExtraRate,
           saleMarkupRate: check.saleMarkupRate,
         });
       const estimatedCost = Number(check.estimatedCost || check.approvedCost || 0) ||
-        buildCasaAlbertoEstimatedCost(unitSupplierPrice, { costExtraRate: check.costExtraRate });
+        buildCasaAlbertoEstimatedCost(unitSupplierPrice, {
+          vatPercent: check.vatPercent,
+          vatRate: check.vatRate,
+          costExtraRate: check.costExtraRate,
+        });
       const nextSupplierLinks = upsertCasaAlbertoPriceTracking(
         getProductSupplierLinks(product),
         {
@@ -14227,14 +14282,16 @@ export default function PartySupplyApp() {
           unitDivisor,
           approvedCost: estimatedCost,
           estimatedCost,
-          costExtraPercent: check.costExtraPercent,
-          saleMarkupPercent: check.saleMarkupPercent,
-          costExtraRate: check.costExtraRate,
-          saleMarkupRate: check.saleMarkupRate,
+          vatPercent: check.vatPercent,
+          vatRate: check.vatRate,
+          grossMarginPercent: check.grossMarginPercent,
+          grossMarginRate: check.grossMarginRate,
+          formulaVersion: check.formulaVersion,
           lastSupplierPrice: supplierPrice,
           previousSupplierPrice,
           suggestedSalePrice,
           reviewStatus: check.reviewStatus || 'reviewed',
+          brokenReason: check.brokenReason || null,
           lastCheckedAt: check.lastCheckedAt || now,
           lastChangedAt: check.lastChangedAt || existingTracking.lastChangedAt || null,
           message: check.message || '',
@@ -14356,7 +14413,11 @@ export default function PartySupplyApp() {
         const unitDivisor = Number(update.unitDivisor || 1) > 0 ? Number(update.unitDivisor || 1) : 1;
         const unitSupplierPrice = Number(update.unitSupplierPrice || 0) || (rawSupplierPrice > 0 ? rawSupplierPrice / unitDivisor : supplierPrice);
         const approvedCost = Number(update.approvedCost || update.estimatedCost || 0) ||
-          buildCasaAlbertoEstimatedCost(unitSupplierPrice, { costExtraRate: update.costExtraRate });
+          buildCasaAlbertoEstimatedCost(unitSupplierPrice, {
+            vatPercent: update.vatPercent,
+            vatRate: update.vatRate,
+            costExtraRate: update.costExtraRate,
+          });
         if (!Number.isFinite(approvedCost) || approvedCost <= 0) continue;
 
         const before = {
@@ -14367,10 +14428,17 @@ export default function PartySupplyApp() {
         const existingTracking = getCasaAlbertoLink(product).price_tracking || {};
         const suggestedSalePrice = Number(update.suggestedSalePrice || 0) ||
           buildSuggestedSalePriceFromMargin(product, unitSupplierPrice, {
+            vatPercent: update.vatPercent,
+            vatRate: update.vatRate,
+            grossMarginPercent: update.grossMarginPercent,
+            grossMarginRate: update.grossMarginRate,
             costExtraRate: update.costExtraRate,
             saleMarkupRate: update.saleMarkupRate,
           });
-        const finalSalePrice = Number(update.finalSalePrice || 0);
+        const finalSalePrice = normalizeStoredProductSalePrice(
+          update.finalSalePrice,
+          product.product_type,
+        );
         const shouldUpdateSalePrice = Number.isFinite(finalSalePrice) && finalSalePrice > 0;
         const nextSupplierLinks = upsertCasaAlbertoPriceTracking(
           before.supplierLinks,
@@ -14388,10 +14456,11 @@ export default function PartySupplyApp() {
             unitDivisor,
             approvedCost,
             estimatedCost: approvedCost,
-            costExtraPercent: update.costExtraPercent,
-            saleMarkupPercent: update.saleMarkupPercent,
-            costExtraRate: update.costExtraRate,
-            saleMarkupRate: update.saleMarkupRate,
+            vatPercent: update.vatPercent,
+            vatRate: update.vatRate,
+            grossMarginPercent: update.grossMarginPercent,
+            grossMarginRate: update.grossMarginRate,
+            formulaVersion: update.formulaVersion,
             lastSupplierPrice: supplierPrice,
             previousSupplierPrice: existingTracking.previousSupplierPrice ?? null,
             previousPurchasePrice: before.purchasePrice,
@@ -14638,10 +14707,9 @@ export default function PartySupplyApp() {
   const handleBulkSaveSingle = async (product, editData) => {
     if (blockIfOfflineReadonly('guardar cambios de productos')) return;
     try {
-      const isWeight = product.product_type === 'weight';
-      const finalPrice = isWeight ? Number(editData.price) / 1000 : Number(editData.price);
-      const finalCost = isWeight ? Number(editData.purchasePrice) / 1000 : Number(editData.purchasePrice);
-      const requestedStock = isWeight ? Number(editData.stock) : Number(editData.stock);
+      const finalPrice = getStoredProductSalePrice(editData.price, product.product_type);
+      const finalCost = getStoredProductPurchaseCost(editData.purchasePrice, product.product_type);
+      const requestedStock = Number(editData.stock);
 
       const payload = { price: finalPrice, purchasePrice: finalCost };
       const before = {
@@ -14688,10 +14756,9 @@ export default function PartySupplyApp() {
       
       const promises = bulkData.map(async (item) => {
         const { product, edits } = item;
-        const isWeight = product.product_type === 'weight';
-        const finalPrice = isWeight ? Number(edits.price) / 1000 : Number(edits.price);
-        const finalCost = isWeight ? Number(edits.purchasePrice) / 1000 : Number(edits.purchasePrice);
-        const requestedStock = isWeight ? Number(edits.stock) : Number(edits.stock);
+        const finalPrice = getStoredProductSalePrice(edits.price, product.product_type);
+        const finalCost = getStoredProductPurchaseCost(edits.purchasePrice, product.product_type);
+        const requestedStock = Number(edits.stock);
         const before = {
           price: Number(product.price || 0),
           purchasePrice: Number(product.purchasePrice || 0),
@@ -14800,7 +14867,10 @@ export default function PartySupplyApp() {
         title: `${originalProduct.title} (copia)`,
         brand: originalProduct.brand || '',
         price: Number(originalProduct.price) || 0,
-        purchasePrice: Number(originalProduct.purchasePrice) || 0,
+        purchasePrice: normalizeStoredProductPurchaseCost(
+          originalProduct.purchasePrice,
+          originalProduct.product_type,
+        ),
         stock: Number(originalProduct.stock) || 0,
         category: Array.isArray(originalProduct.categories) 
           ? originalProduct.categories.join(', ') 
