@@ -144,15 +144,44 @@ Hoy la detección de unidades es una función privada dentro de un archivo de vi
 5.516 líneas: no se puede probar sin montar todo el editor. Sale a un módulo propio con
 una sola responsabilidad.
 
+**⚠️ Corrección al diseño, salida del informe en seco (1-sep).** La primera versión de
+esta pieza trataba el divisor como una propiedad del título de Casa Alberto. **Es un
+cociente entre dos packs**, y las dos puntas pueden traer pack:
+
+| Producto Rebu | Título Casa Alberto | Divisor guardado |
+|---|---|---|
+| `CUBANITO ... OBLITA x6` | `Cubanito ... oblita x48` | 6 |
+| `Chupetin bolita mister pops x5u` | `Chupetin bolita mister pops x50` | 5 |
+| `CUCHARA REFORZADA x10u` | `Cuchara sundae reforzada x100` | 10 |
+
+El detector de hoy recibe **todos los títulos concatenados** (el de Casa Alberto, el
+código, el texto del precio y además los títulos Rebu del grupo) y se queda con la
+última coincidencia — que casi siempre cae en el título Rebu. O sea que el "se queda con
+la última" **no es sólo un defecto: está haciendo trabajo real**, y reemplazarlo por una
+lectura del título de Casa Alberto a secas habría roto casos que hoy funcionan.
+
+Por lo tanto la pieza se separa en dos:
+`detectPackSize(title)` lee el pack de **un** título, y el divisor sale de combinar los dos.
+
 **Interfaz:**
 
 ```js
-detectCasaAlbertoUnitDivisor(supplierTitle) -> {
-  divisor: number | null,   // null = ambiguo, no adivinar
+detectPackSize(title) -> {
+  pack: number | null,      // null = ambiguo, no adivinar
   rule: 'bulto' | 'xNu' | 'xN' | 'sin-senal' | 'sin-titulo' | 'ambiguo',
   confidence: 'alta' | 'media' | 'baja'
 }
+
+resolveUnitDivisor({ supplierTitle, rebuTitle }) -> {
+  divisor: number | null,   // null = que lo decida un humano
+  reason: string
+}
 ```
+
+Cuando el título Rebu **no** trae pack, el divisor es el pack de Casa Alberto.
+Cuando **las dos puntas** traen pack, el cociente es ambiguo (¿Rebu vende la unidad o el
+pack de 6?) y `resolveUnitDivisor` devuelve `null` para que lo decida una persona,
+en vez de inventar. Son 9 de 499.
 
 **Reglas, en orden de fuerza.** El detector junta candidatos, se queda con los del peso
 más alto, y si dentro de ese peso hay dos números distintos **devuelve `null` en vez de
@@ -189,6 +218,10 @@ las pulgadas como medida y el `12` se colaba como cantidad.
 | Sobre los 499 enlaces reales | — | 476 igual, **23 corregidos**, 0 ambiguos |
 
 Los 23 cambios se revisaron uno por uno y los 23 son correcciones, no regresiones.
+
+Comparado contra el divisor **guardado en la base** (no contra lo que recalcularia el
+detector viejo) los candidatos son **37**, de los cuales **20 se corrigen solos** y 17
+quedan para que decida una persona. Ver Pieza 4.
 
 ### Pieza 2 — piso de confianza en el lector (`electron-main.cjs`)
 
@@ -239,12 +272,38 @@ así que las dos correcciones se pueden aplicar sobre los 499 **sin entrar a la 
 Un script en `scripts/` que:
 
 1. Marca `broken_link` todo lo que tenga `foundTitle = "Mi Carrito"` o una `productUrl`
-   que no sea ficha de producto → esperado: los 74.
-2. Recalcula el divisor con la Pieza 1 y, donde cambie, recalcula `estimatedCost` y
-   deja el producto en `unchecked` para que se vuelva a chequear con la cuenta correcta
-   → esperado: los 23.
-3. Deja intacto todo lo demás. Un `ignored` que sea una decisión real sigue siendo
-   `ignored`.
+   que no sea ficha de producto → **74, y los 74 salen de `ignored`** (medido).
+2. Recalcula el divisor con la Pieza 1, **sólo donde sea seguro hacerlo solo**, recalcula
+   `estimatedCost` y deja el producto en `unchecked` para que se vuelva a chequear con la
+   cuenta correcta.
+3. Deja intacto todo lo demás.
+
+**Qué es "seguro", medido sobre los 499 (informe en seco del 1-sep):**
+
+| | |
+|---|---|
+| Candidatos brutos (el divisor guardado ≠ el detectado) | 37 |
+| − **`approved`: NO se tocan** | −8 |
+| − El título Rebu también trae pack → cociente ambiguo | −9 |
+| **= se corrigen solos** | **20** |
+
+**Por qué no se tocan los aprobados:** de los 90 `approved`, **87 tienen el costo estimado
+igual al costo Rebu**. Eso no es casualidad: alguien apretó "Aprobar" y validó ese
+divisor a mano. Pisarlos con una regla automática rompería datos que hoy funcionan.
+Los 17 que quedan afuera (8 + 9) se muestran en la pantalla como "revisar unidades",
+para que una persona decida.
+
+**Validación independiente del recorte.** Los 20 que sí se corrigen **acercan los 20 el
+costo estimado al costo Rebu real** — y el detector nunca mira el costo Rebu. Ejemplos:
+
+```
+  divisor        estimado hoy -> corregido    costo Rebu
+   2 -> 1              $353   ->     $706        $679    Cortina metalizada (x6 colores)
+ 820 -> 1                $3   ->   $2.460      $2.641    Durazno en mitades lata cumana
+  10 -> 1               $100   ->   $1.000        $958    Cinta doble faz 24mm x 10 mts
+   1 -> 12          $29.832   ->   $2.486      $2.350    Dulce de leche vacalin x400g
+   1 -> 10          $12.420   ->   $1.242      $1.194    Caramelera calabaza violeta
+```
 
 **Corre primero en seco y emite un informe.** Escribe a producción sólo con OK explícito.
 
@@ -337,6 +396,8 @@ en un solo build.
 
 - El detector pasa los 18 casos de referencia.
 - Los 74 de "Mi Carrito" dejan de estar en `ignored` y aparecen como `broken_link`.
+- Los 90 productos `approved` siguen exactamente como estaban: ninguna regla automatica
+  pisa un divisor que una persona ya valido.
 - Después de un chequeo completo, el bucket `ignored` baja del 70% actual a algo
   parecido a lo que realmente se decidió ignorar.
 - Ningún producto queda con costo estimado sin que se pueda decir con qué regla y con
