@@ -536,6 +536,9 @@ export default function BulkExcelImportView({
   const [searchTerm, setSearchTerm] = useState('');
   const [visibleRowLimit, setVisibleRowLimit] = useState(EXCEL_IMPORT_VISIBLE_CHUNK);
   const [selectedCreateRowIds, setSelectedCreateRowIds] = useState([]);
+  // el panel de crear pendientes arranca abierto: antes venia plegado y el
+  // "0/4" parecia un error en vez de "ninguno tildado".
+  const [isCreateSectionOpen, setIsCreateSectionOpen] = useState(true);
   const [createDrafts, setCreateDrafts] = useState([]);
   const [isCreatePanelOpen, setIsCreatePanelOpen] = useState(false);
   const [isCreatingProducts, setIsCreatingProducts] = useState(false);
@@ -926,6 +929,12 @@ export default function BulkExcelImportView({
   );
 
   const validCreateDrafts = createDrafts.filter((draft) => getCreateDraftErrors(draft).length === 0);
+
+  // Sin nada tildado, "Crear" toma todos los pendientes en vez de quedarse
+  // deshabilitado sin explicar por que.
+  const rowIdsParaCrear = selectedCreateRowIds.length > 0
+    ? selectedCreateRowIds
+    : creatableRows.map((row) => row.id);
 
   const primaryRows = useMemo(
     () => rows.filter((row) => !row.isAssociated),
@@ -1883,7 +1892,11 @@ export default function BulkExcelImportView({
         </div>
 
         {creatableRows.length > 0 && (
-          <details className="excel-create-batch border-b border-slate-200 bg-white">
+          <details
+            className="excel-create-batch border-b border-slate-200 bg-white"
+            open={isCreateSectionOpen}
+            onToggle={(event) => setIsCreateSectionOpen(event.currentTarget.open)}
+          >
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5">
               <span className="flex items-center gap-2 text-[10px] font-black text-slate-600">
                 <PackagePlus size={13} className="text-amber-600" />
@@ -1912,12 +1925,12 @@ export default function BulkExcelImportView({
                 </button>
                 <button
                   type="button"
-                  disabled={selectedCreateRowIds.length === 0 || isOperationBusy || !canCreateInventory}
-                  onClick={() => openCreatePanel(selectedCreateRowIds)}
+                  disabled={rowIdsParaCrear.length === 0 || isOperationBusy || !canCreateInventory}
+                  onClick={() => openCreatePanel(rowIdsParaCrear)}
                   className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-[9px] font-black text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <PackagePlus size={12} />
-                  Crear
+                  Crear {rowIdsParaCrear.length}
                 </button>
               </div>
             </div>
@@ -2290,7 +2303,10 @@ export default function BulkExcelImportView({
                                   ))}
                                 </div>
                               )}
-                              {activeReviewRow.assignmentQuery.trim() && activeCandidates.length === 0 && (
+                              {/* Siempre visible: antes solo aparecia si la busqueda no traia
+                                  NINGUNA coincidencia, asi que con un parecido malo no se podia
+                                  ni asignar ni crear. */}
+                              {(
                                 <button
                                   type="button"
                                   onClick={() => openCreatePanel([activeReviewRow.id])}
@@ -2302,7 +2318,8 @@ export default function BulkExcelImportView({
                                       Crear producto nuevo
                                     </span>
                                     <span className="block truncate text-[11px] font-black text-emerald-950">
-                                      Crear “{activeReviewRow.assignmentQuery.trim()}”
+                                      Crear “{activeReviewRow.assignmentQuery.trim()
+                                        || String(activeReviewRow.entry?.description || '').trim()}”
                                     </span>
                                   </span>
                                   <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-emerald-600 text-white">
