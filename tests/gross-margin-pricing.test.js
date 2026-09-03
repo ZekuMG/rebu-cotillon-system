@@ -82,5 +82,15 @@ test('guarda y normaliza la preferencia compartida', () => {
   assert.deepEqual(loadGrossMarginPreferences(storage), {
     marginPercent: 60,
     bulkCostIncludesVat: false,
+    // El importador de Excel tiene su propia interpretacion del IVA, separada de
+    // la del editor masivo, y arranca en "el costo ya trae IVA".
+    excelCostIncludesVat: true,
   });
+
+  assert.equal(saveGrossMarginPreferences(storage, {
+    marginPercent: 60,
+    bulkCostIncludesVat: false,
+    excelCostIncludesVat: false,
+  }), true);
+  assert.equal(loadGrossMarginPreferences(storage).excelCostIncludesVat, false);
 });

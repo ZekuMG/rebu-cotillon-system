@@ -181,6 +181,7 @@ const buildImportEntry = (
   rowNumber,
   fileFingerprint = '',
   marginPercent = DEFAULT_GROSS_MARGIN_PERCENT,
+  costIncludesVat = true,
 ) => {
   const code = normalizeCode(getFirstValue(row, 'Codigo'));
   const description = String(getFirstValue(row, 'Descripcion') ?? '').trim();
@@ -195,6 +196,7 @@ const buildImportEntry = (
     lotCost,
     lotSalePrice,
     multiplier,
+    costIncludesVat,
     marginPercent,
   });
   const { baseCost } = pricing;
@@ -510,6 +512,8 @@ export default function BulkExcelImportView({
   cacheScope = '',
   marginPercent = DEFAULT_GROSS_MARGIN_PERCENT,
   onMarginChange,
+  costIncludesVat = true,
+  onCostIncludesVatChange,
   canCreateInventory = false,
   canEditInventory = false,
   onApplyImport,
@@ -731,6 +735,42 @@ export default function BulkExcelImportView({
       };
     }));
   }, [isDraftHydrated, marginPercent]);
+
+  // Cambiar la interpretacion del IVA cambia el COSTO en si, no solo la venta,
+  // asi que hay que recalcular desde los valores del Excel (el bulto), no desde
+  // el costo ya calculado.
+  const vatModeRef = useRef(costIncludesVat);
+  useEffect(() => {
+    if (!isDraftHydrated) return;
+    if (vatModeRef.current === costIncludesVat) return;
+    vatModeRef.current = costIncludesVat;
+    setRows((currentRows) => currentRows.map((row, index) => {
+      const nextEntry = repriceExcelImportEntryForMultiplier(
+        row.entry,
+        row.entry.multiplier || 1,
+        marginPercent,
+        costIncludesVat,
+      );
+      const rebuilt = buildReviewRow({
+        entry: nextEntry,
+        product: row.product,
+        duplicateOptions: row.duplicateOptions,
+        duplicateResolved: row.duplicateResolved,
+        linkedByExcelAlias: row.linkedByExcelAlias,
+      }, index);
+      return {
+        ...rebuilt,
+        ...row,
+        entry: nextEntry,
+        errors: rebuilt.errors,
+        hasChanges: rebuilt.hasChanges,
+        approvals: FIELD_KEYS.reduce((acc, approvalKey) => {
+          acc[approvalKey] = Boolean(row.approvals[approvalKey] && isFieldEligible({ ...rebuilt, entry: nextEntry }, approvalKey));
+          return acc;
+        }, {}),
+      };
+    }));
+  }, [costIncludesVat, isDraftHydrated, marginPercent]);
 
   draftStateRef.current = {
     fileName,
@@ -1046,7 +1086,7 @@ export default function BulkExcelImportView({
     }
 
     const entries = sheetRows
-      .map((row, index) => buildImportEntry(row, index + 2, fileFingerprint, marginPercent))
+      .map((row, index) => buildImportEntry(row, index + 2, fileFingerprint, marginPercent, costIncludesVat))
       .filter((entry) => entry.code || entry.description || entry.quantity || entry.cost || entry.salePrice);
 
     const groupedByCode = entries.reduce((groups, entry) => {
@@ -1338,7 +1378,7 @@ export default function BulkExcelImportView({
         }
         if (field === 'multiplier') {
           if (numericValue > 0) {
-            Object.assign(nextEntry, repriceExcelImportEntryForMultiplier(row.entry, numericValue, marginPercent));
+            Object.assign(nextEntry, repriceExcelImportEntryForMultiplier(row.entry, numericValue, marginPercent, costIncludesVat));
             nextEntry.multiplierInput = value;
           }
         }
@@ -1827,10 +1867,14 @@ export default function BulkExcelImportView({
             <PricingFormulaControls
               marginPercent={marginPercent}
               onMarginChange={onMarginChange}
+              costIncludesVat={costIncludesVat}
+              onCostIncludesVatChange={onCostIncludesVatChange}
+              showVatMode
+              explainMultiplier
               compact
             />
             <p className="mt-1.5 text-[9px] font-bold leading-snug text-slate-500">
-              Costo se interpreta sin IVA. Venta del Excel queda como referencia; la sugerencia usa el margen elegido.
+              La venta que trae el Excel queda solo como referencia: la sugerencia se calcula con el costo y el margen elegido.
             </p>
           </div>
 
@@ -2254,6 +2298,7 @@ export default function BulkExcelImportView({
                       {!isActiveSource ? (
                         <CompactReviewSummary
                           sourceRow={row}
+                          costIncludesVat={costIncludesVat}
                           productRows={productRows}
                           status={status}
                           marginPercent={marginPercent}
@@ -2261,6 +2306,7 @@ export default function BulkExcelImportView({
                       ) : activeTargetId === 'article' ? (
                         <CompactReviewSummary
                           sourceRow={row}
+                          costIncludesVat={costIncludesVat}
                           productRows={productRows}
                           status={status}
                           mode="article"
@@ -2333,6 +2379,7 @@ export default function BulkExcelImportView({
                       ) : activeReviewRow?.product ? (
                         <CompactReviewSummary
                           sourceRow={row}
+                          costIncludesVat={costIncludesVat}
                           productRows={productRows}
                           status={status}
                           activeRow={activeReviewRow}
@@ -2418,6 +2465,7 @@ export default function BulkExcelImportView({
                           </div>
                           <div className="mt-2">
                             <PricingFormulaTrace
+                              costIncludesVat={costIncludesVat}
                               baseCost={activeReviewRow.entry.baseCost}
                               realCost={activeReviewRow.entry.cost}
                               salePrice={activeReviewRow.entry.salePrice}
@@ -3202,6 +3250,7 @@ function CompactReviewSummary({
   mode = 'product',
   activeRow = null,
   marginPercent = DEFAULT_GROSS_MARGIN_PERCENT,
+  costIncludesVat = true,
   onToggleApproval,
   onUpdateEntryValue,
 }) {
@@ -3241,6 +3290,7 @@ function CompactReviewSummary({
         </div>
         <div className="mt-2">
           <PricingFormulaTrace
+            costIncludesVat={costIncludesVat}
             baseCost={sourceRow.entry.baseCost}
             realCost={sourceRow.entry.cost}
             salePrice={sourceRow.entry.salePrice}
@@ -3267,6 +3317,7 @@ function CompactReviewSummary({
         </div>
         <div className="mt-2">
           <PricingFormulaTrace
+            costIncludesVat={costIncludesVat}
             baseCost={sourceRow.entry.baseCost}
             realCost={sourceRow.entry.cost}
             salePrice={sourceRow.entry.salePrice}
@@ -3316,6 +3367,7 @@ function CompactReviewSummary({
       {activeRow ? (
         <div className="mt-2">
           <PricingFormulaTrace
+            costIncludesVat={costIncludesVat}
             baseCost={activeRow.entry.baseCost}
             realCost={activeRow.entry.cost}
             salePrice={activeRow.entry.salePrice}

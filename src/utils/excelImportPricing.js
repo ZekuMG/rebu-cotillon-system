@@ -15,6 +15,11 @@ export const calculateExcelImportUnitPricing = ({
   lotSalePrice,
   multiplier = 1,
   marginPercent = DEFAULT_GROSS_MARGIN_PERCENT,
+  // Los pedidos de nuestros proveedores traen el IVA YA sumado en la columna
+  // Costo (medido: Costo = Precio x 1,105 y su Venta = Costo x 2). Antes esto
+  // estaba fijo en `false`, asi que la app le sumaba el IVA de nuevo y sugeria
+  // un 10,5% mas caro que el propio proveedor.
+  costIncludesVat = true,
 } = {}) => {
   const safeMultiplier = Number(multiplier || 0);
   const baseCost = Number.isFinite(safeMultiplier) && safeMultiplier > 0
@@ -22,7 +27,7 @@ export const calculateExcelImportUnitPricing = ({
     : 0;
   const pricing = calculateGrossMarginPricing({
     cost: baseCost,
-    costIncludesVat: false,
+    costIncludesVat,
     marginPercent,
   });
 
@@ -80,12 +85,14 @@ export const repriceExcelImportEntryForMultiplier = (
   entry = {},
   multiplier = 1,
   marginPercent = DEFAULT_GROSS_MARGIN_PERCENT,
+  costIncludesVat = true,
 ) => {
   const pricing = calculateExcelImportUnitPricing({
     lotCost: entry.lotCost ?? entry.cost,
     lotSalePrice: entry.lotSalePrice ?? entry.excelSalePrice,
     multiplier,
     marginPercent,
+    costIncludesVat,
   });
   return {
     ...entry,

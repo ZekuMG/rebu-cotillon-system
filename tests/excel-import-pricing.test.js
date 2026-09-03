@@ -8,12 +8,13 @@ import {
   repriceExcelImportEntryForRealCost,
 } from '../src/utils/excelImportPricing.js';
 
-test('Excel interpreta Costo sin IVA y conserva Venta como referencia', () => {
+test('con el costo marcado SIN IVA, se lo suma y conserva Venta como referencia', () => {
   const pricing = calculateExcelImportUnitPricing({
     lotCost: 1800,
     lotSalePrice: 3500,
     multiplier: 1,
     marginPercent: 50,
+    costIncludesVat: false,
   });
 
   assert.equal(pricing.baseCost, 1800);
@@ -61,10 +62,48 @@ test('cambiar multiplicador reinicia costo y venta sugerida manual', () => {
     costEdited: true,
   }, 2, 50);
 
+  // Con la interpretacion nueva (el costo del Excel ya trae IVA) el costo por
+  // unidad es la mitad del bulto, sin sumarle nada.
   assert.equal(entry.baseCost, 900);
-  assert.equal(entry.cost, 995);
-  assert.equal(entry.salePrice, 1990);
+  assert.equal(entry.cost, 900);
+  assert.equal(entry.salePrice, 1800);
   assert.equal(entry.excelSalePrice, 1750);
   assert.equal(entry.costEdited, false);
   assert.equal(entry.salePriceEdited, false);
+});
+
+test('el costo del Excel se puede interpretar como que YA trae IVA', () => {
+  // Fila real del pedido 3567588: precio sin IVA 594,72; el proveedor ya le sumo
+  // el 10,5% en la columna Costo (657,1656) y su venta es ese costo x 2.
+  const yaConIva = calculateExcelImportUnitPricing({
+    lotCost: 657.1656,
+    lotSalePrice: 1314.3312,
+    multiplier: 1,
+    marginPercent: 50,
+  });
+  assert.equal(yaConIva.realCost, 658);
+  assert.equal(yaConIva.salePrice, 1320);
+  assert.equal(yaConIva.excelSalePrice, 1315);
+
+  // Y si el costo viniera sin IVA, se lo suma (es el comportamiento viejo).
+  const sinIva = calculateExcelImportUnitPricing({
+    lotCost: 657.1656,
+    lotSalePrice: 1314.3312,
+    multiplier: 1,
+    marginPercent: 50,
+    costIncludesVat: false,
+  });
+  assert.equal(sinIva.realCost, 727);
+  assert.equal(sinIva.salePrice, 1460);
+});
+
+test('la equivalencia por bulto respeta la interpretacion del IVA', () => {
+  const porBulto = repriceExcelImportEntryForMultiplier(
+    { lotCost: 1314.3312, lotSalePrice: 2628.6624 },
+    2,
+    50,
+    true,
+  );
+  assert.equal(porBulto.cost, 658);
+  assert.equal(porBulto.salePrice, 1320);
 });

@@ -7,6 +7,8 @@ export const GROSS_MARGIN_PRESETS = Object.freeze([40, 50, 60, 70]);
 export const DEFAULT_GROSS_MARGIN_PREFERENCES = Object.freeze({
   marginPercent: DEFAULT_GROSS_MARGIN_PERCENT,
   bulkCostIncludesVat: true,
+  // Los pedidos de nuestros proveedores traen el IVA sumado en la columna Costo.
+  excelCostIncludesVat: true,
 });
 
 const parsePercent = (value) => {
@@ -107,6 +109,7 @@ export const loadGrossMarginPreferences = (storage) => {
         DEFAULT_GROSS_MARGIN_PERCENT,
       ),
       bulkCostIncludesVat: storedValue?.bulkCostIncludesVat !== false,
+      excelCostIncludesVat: storedValue?.excelCostIncludesVat !== false,
     };
   } catch {
     return { ...DEFAULT_GROSS_MARGIN_PREFERENCES };
@@ -120,6 +123,7 @@ export const saveGrossMarginPreferences = (storage, preferences = {}) => {
       DEFAULT_GROSS_MARGIN_PERCENT,
     ),
     bulkCostIncludesVat: preferences.bulkCostIncludesVat !== false,
+    excelCostIncludesVat: preferences.excelCostIncludesVat !== false,
   };
 
   try {

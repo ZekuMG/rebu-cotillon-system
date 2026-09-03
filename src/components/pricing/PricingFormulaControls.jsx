@@ -135,8 +135,8 @@ export const PricingFormulaControls = ({
 
       <p className={`mt-2 text-[9px] font-bold leading-snug ${mutedClass}`}>
         {showVatMode && costIncludesVat
-          ? `${marginPercent}% de margen significa que el costo ocupa ${100 - Number(marginPercent || 0)}% del precio final.`
-          : `Primero suma IVA al costo; después reserva ${marginPercent}% del precio final como margen real.`}
+          ? `El costo ya trae el IVA: se multiplica por ${formatMultiplier(currentMultiplier)} para llegar a la venta (${marginPercent}% de margen).`
+          : `Primero se le suma el IVA al costo y después se multiplica por ${formatMultiplier(currentMultiplier)} (${marginPercent}% de margen).`}
       </p>
     </div>
   );
@@ -148,6 +148,7 @@ export const PricingFormulaTrace = ({
   salePrice,
   marginPercent,
   excelSalePrice = null,
+  costIncludesVat = false,
   dark = false,
   flat = false,
 }) => {
@@ -160,21 +161,30 @@ export const PricingFormulaTrace = ({
         ? `border-t pt-2 ${dark ? 'border-slate-700/70' : 'border-slate-200'}`
         : `rounded-md border px-2 py-1.5 ${dark ? 'border-slate-700/70 bg-slate-950/25' : 'border-slate-200 bg-slate-50/80'}`
     }`}>
-      <span className={labelClass}>Base</span>
-      <span className={dark ? 'text-violet-200' : 'text-violet-700'}><FancyPrice amount={baseCost} /></span>
-      <span className={separatorClass}>→</span>
-      <span className={dark ? 'text-amber-200' : 'text-amber-700'}>+ IVA {String(DEFAULT_VAT_PERCENT).replace('.', ',')}%</span>
-      <span className={separatorClass}>→</span>
-      <span className={labelClass}>Costo real</span>
-      <span className={dark ? 'text-sky-200' : 'text-sky-700'}><FancyPrice amount={realCost} /></span>
+      <span className={labelClass}>Costo</span>
+      <span className={dark ? 'text-violet-200' : 'text-violet-700'}>
+        <FancyPrice amount={costIncludesVat ? realCost : baseCost} />
+      </span>
+      {costIncludesVat ? (
+        <span className={labelClass}>(ya con IVA)</span>
+      ) : (
+        <>
+          <span className={separatorClass}>→</span>
+          <span className={dark ? 'text-amber-200' : 'text-amber-700'}>
+            + IVA {String(DEFAULT_VAT_PERCENT).replace('.', ',')}%
+          </span>
+          <span className={separatorClass}>=</span>
+          <span className={dark ? 'text-sky-200' : 'text-sky-700'}><FancyPrice amount={realCost} /></span>
+        </>
+      )}
       <span className={separatorClass}>→</span>
       <span className={dark ? 'text-emerald-200' : 'text-emerald-700'}>
-        {marginPercent}% margen · venta ×{formatMultiplier(getGrossMarginSaleMultiplier(marginPercent))}
+        × {formatMultiplier(getGrossMarginSaleMultiplier(marginPercent))} ({marginPercent}% de margen)
       </span>
       <span className={separatorClass}>→</span>
       <span className={dark ? 'text-emerald-100' : 'text-emerald-800'}>Venta <FancyPrice amount={salePrice} /></span>
       {Number(excelSalePrice) > 0 ? (
-        <span className={`ml-auto ${labelClass}`}>Excel <FancyPrice amount={excelSalePrice} /></span>
+        <span className={`ml-auto ${labelClass}`}>El Excel sugeria <FancyPrice amount={excelSalePrice} /></span>
       ) : null}
     </div>
   );

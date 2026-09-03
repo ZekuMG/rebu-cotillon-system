@@ -236,6 +236,13 @@ export default function BulkEditorView({
     }));
   }, []);
 
+  const updateExcelCostIncludesVat = useCallback((value) => {
+    setPricingPreferences((current) => ({
+      ...current,
+      excelCostIncludesVat: value !== false,
+    }));
+  }, []);
+
   const updateBulkCostIncludesVat = useCallback((value) => {
     setPricingPreferences((current) => ({
       ...current,
@@ -5566,6 +5573,8 @@ export default function BulkEditorView({
             cacheScope={currentUser?.id ? `user:${currentUser.id}` : ''}
             marginPercent={pricingPreferences.marginPercent}
             onMarginChange={updatePricingMargin}
+            costIncludesVat={pricingPreferences.excelCostIncludesVat}
+            onCostIncludesVatChange={updateExcelCostIncludesVat}
             canCreateInventory={canCreateInventory}
             canEditInventory={canEditInventory}
             onApplyImport={onApplyExcelImport}
