@@ -27,6 +27,10 @@ import {
 import usePendingAction from '../hooks/usePendingAction';
 import { areDuplicatePricesEqual, mergeDuplicateEntries } from '../utils/excelImportDuplicates';
 import {
+  getMissingExcelColumns,
+  resolveExcelRowValues,
+} from '../utils/excelImportColumns';
+import {
   calculateExcelImportStockDelta,
   isSafeExcelImportNumber,
   parseExcelMoney,
@@ -63,7 +67,6 @@ import {
 import { normalizeFinalSalePrice } from '../utils/finalSalePrice';
 import { normalizeFinalPurchaseCost } from '../utils/finalPurchaseCost';
 
-const REQUIRED_COLUMNS = ['codigo', 'descripcion', 'cantidad', 'precio', 'descuento', 'costo', 'venta'];
 const FIELD_KEYS = ['stock', 'cost', 'price'];
 const MAX_EXCEL_IMPORT_FILE_SIZE_BYTES = 5 * 1024 * 1024;
 const MAX_EXCEL_IMPORT_ROWS = 5000;
@@ -79,14 +82,6 @@ const EXCEL_IMPORT_RESULT_FILTERS = new Set([
   'unchanged',
   'applied',
 ]);
-
-const normalizeHeader = (value) =>
-  String(value ?? '')
-    .trim()
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]/g, '');
 
 const normalizeCode = (value) => String(value ?? '').trim();
 
@@ -170,12 +165,6 @@ const formatDiffPercent = (oldValue, newValue) => {
   return `${sign}${diff.toFixed(1).replace('.', ',')}%`;
 };
 
-const getFirstValue = (row, key) => {
-  const target = normalizeHeader(key);
-  const foundKey = Object.keys(row || {}).find((candidate) => normalizeHeader(candidate) === target);
-  return foundKey ? row[foundKey] : '';
-};
-
 const buildImportEntry = (
   row,
   rowNumber,
@@ -183,14 +172,19 @@ const buildImportEntry = (
   marginPercent = DEFAULT_GROSS_MARGIN_PERCENT,
   costIncludesVat = true,
 ) => {
-  const code = normalizeCode(getFirstValue(row, 'Codigo'));
-  const description = String(getFirstValue(row, 'Descripcion') ?? '').trim();
-  const category = String(getFirstValue(row, 'Categoria') ?? '').trim();
-  const quantity = parseNumber(getFirstValue(row, 'Cantidad'));
-  const providerPrice = parseExcelMoney(getFirstValue(row, 'Precio'));
-  const discount = parseExcelMoney(getFirstValue(row, 'Descuento'));
-  const lotCost = parseExcelMoney(getFirstValue(row, 'Costo'));
-  const lotSalePrice = parseExcelMoney(getFirstValue(row, 'Venta'));
+  const {
+    code: rawCode,
+    description,
+    category,
+    quantity,
+    providerPrice,
+    discount,
+    lotCost,
+    lotSalePrice,
+    costFromProviderPrice,
+    quantityMissing,
+  } = resolveExcelRowValues(row);
+  const code = normalizeCode(rawCode);
   const multiplier = 1;
   const pricing = calculateExcelImportUnitPricing({
     lotCost,
@@ -217,6 +211,8 @@ const buildImportEntry = (
     multiplierInput: String(multiplier),
     providerPrice,
     discount,
+    costFromProviderPrice,
+    quantityMissing,
     lotCost,
     lotSalePrice,
     baseCost,
@@ -241,7 +237,12 @@ const getEntryInputKey = (field) => {
 
 const getRowBaseErrors = (entry, _product) => {
   const errors = [];
-  if (!isSafeExcelImportNumber(entry.quantity, { min: Number.MIN_VALUE }) || Number(entry.quantity) <= 0) {
+  // Si el Excel no trae columna Cantidad, es una lista de precios: no se avisa
+  // nada, simplemente no se toca el stock.
+  if (
+    !entry.quantityMissing
+    && (!isSafeExcelImportNumber(entry.quantity, { min: Number.MIN_VALUE }) || Number(entry.quantity) <= 0)
+  ) {
     errors.push('Cantidad vacia o cero');
   }
   if (
@@ -1079,10 +1080,11 @@ export default function BulkExcelImportView({
   }, [resultFilter, searchTerm, rows.length]);
 
   const parseWorkbookRows = (sheetRows, fileFingerprint) => {
-    const headers = Object.keys(sheetRows[0] || {}).map(normalizeHeader);
-    const missing = REQUIRED_COLUMNS.filter((column) => !headers.includes(column));
+    const missing = getMissingExcelColumns(Object.keys(sheetRows[0] || {}));
     if (missing.length > 0) {
-      throw new Error(`Faltan columnas: ${missing.join(', ')}`);
+      throw new Error(
+        `Faltan columnas: ${missing.join(', ')}. Solo hacen falta Codigo y Precio; el resto es opcional.`,
+      );
     }
 
     const entries = sheetRows
