@@ -39,7 +39,7 @@ test('Casa Alberto ofrece archivo de aprobados e historial PDF sin romper el mod
   await page.getByRole('button', { name: /Productos \(Avanzado\)/i }).click();
   await page.getByRole('button', { name: /Casa Alberto/i }).click();
   await expect(page.getByRole('heading', { name: 'Casa Alberto', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Todos/i }).first()).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: /^Pendientes\s+\d+$/i })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: /Revisados/i }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: 'Lista', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Tarjetas', exact: true })).toHaveCount(0);

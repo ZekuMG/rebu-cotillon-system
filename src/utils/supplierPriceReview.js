@@ -6,8 +6,16 @@ import {
   getProductActiveState,
   productHasCasaAlbertoLink,
 } from './productLifecycle.js';
+import { getVisibleProductPurchaseCost } from './finalPurchaseCost.js';
+import {
+  calculateSupplierComparablePrice,
+  normalizeSupplierCalculationMode,
+  normalizeSupplierWeightGrams,
+  SUPPLIER_CALCULATION_MODE_WEIGHT,
+} from './supplierPriceUnits.js';
 
 const COST_EPSILON = 0.01;
+const SUPPLIER_PRICE_EPSILON = 0.01;
 const NOTICE_DISMISS_STORAGE_PREFIX = 'rebu_supplier_notice_dismissed_v1';
 const ERROR_STATUSES = new Set(['error', 'login_required']);
 const ATTENTION_STATUSES = new Set([
@@ -90,6 +98,30 @@ export const matchesSupplierPriceFilter = (status, filter) => {
   return normalizedStatus === normalizedFilter;
 };
 
+export const getAcknowledgedSupplierPrice = (tracking = {}) => {
+  if (Object.prototype.hasOwnProperty.call(tracking, 'acknowledgedSupplierPrice')) {
+    const explicitPrice = Number(tracking.acknowledgedSupplierPrice || 0);
+    return Number.isFinite(explicitPrice) && explicitPrice > 0 ? explicitPrice : 0;
+  }
+
+  const storedStatus = normalizeSupplierReviewStatus(tracking.reviewStatus);
+  if (!ARCHIVED_STATUSES.has(storedStatus) && !tracking.approvedAt) return 0;
+
+  const legacyPrice = Number(tracking.rawSupplierPrice ?? tracking.lastSupplierPrice ?? 0);
+  return Number.isFinite(legacyPrice) && legacyPrice > 0 ? legacyPrice : 0;
+};
+
+export const getSupplierPriceChangeStatus = (supplierPrice, acknowledgedSupplierPrice) => {
+  const currentPrice = Number(supplierPrice || 0);
+  const acknowledgedPrice = Number(acknowledgedSupplierPrice || 0);
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0 ||
+      !Number.isFinite(acknowledgedPrice) || acknowledgedPrice <= 0) return '';
+
+  if (currentPrice - acknowledgedPrice >= SUPPLIER_PRICE_EPSILON) return 'changed';
+  if (acknowledgedPrice - currentPrice >= SUPPLIER_PRICE_EPSILON) return 'price_down';
+  return 'reviewed';
+};
+
 export const getSupplierProductReviewState = (product = {}) => {
   if (!getProductActiveState(product) || !productHasCasaAlbertoLink(product)) return 'unlinked';
 
@@ -107,15 +139,40 @@ export const getSupplierProductReviewState = (product = {}) => {
   const unitDivisor = Number.isFinite(divisorCandidate) && divisorCandidate > 0
     ? Math.max(1, Math.round(divisorCandidate))
     : 1;
+  const calculationMode = normalizeSupplierCalculationMode(
+    tracking.calculationMode,
+    product.product_type === 'weight' ? SUPPLIER_CALCULATION_MODE_WEIGHT : 'units',
+  );
+  if (calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT && product.product_type !== 'weight') {
+    return 'review_required';
+  }
+  const supplierWeightGrams = normalizeSupplierWeightGrams(tracking.supplierWeightGrams, 1000);
+  const acknowledgedSupplierPrice = getAcknowledgedSupplierPrice(tracking);
+  const supplierPriceChangeStatus = getSupplierPriceChangeStatus(rawSupplierPrice, acknowledgedSupplierPrice);
+  if (supplierPriceChangeStatus === 'changed' || supplierPriceChangeStatus === 'price_down') {
+    return supplierPriceChangeStatus;
+  }
+  if (supplierPriceChangeStatus === 'reviewed') {
+    if (storedStatus === 'approved' || tracking.approvedAt) return 'approved';
+    return storedStatus === 'ignored' ? 'ignored' : 'reviewed';
+  }
   const unitSupplierPrice = Number(tracking.unitSupplierPrice || 0) ||
-    (rawSupplierPrice > 0 ? rawSupplierPrice / unitDivisor : supplierPrice);
+    calculateSupplierComparablePrice({
+      rawSupplierPrice,
+      calculationMode,
+      unitDivisor,
+      supplierWeightGrams,
+    });
   const estimatedCost = Number(tracking.estimatedCost || tracking.approvedCost || 0) ||
     buildCasaAlbertoEstimatedCost(unitSupplierPrice, {
       vatPercent: tracking.vatPercent,
       vatRate: tracking.vatRate,
       costExtraRate: tracking.costExtraRate,
     });
-  const currentCost = Number(product.purchasePrice ?? product.purchase_price ?? 0);
+  const storedCurrentCost = Number(product.purchasePrice ?? product.purchase_price ?? 0);
+  const currentCost = calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT && product.product_type === 'weight'
+    ? getVisibleProductPurchaseCost(storedCurrentCost, product.product_type)
+    : storedCurrentCost;
   const hasComparableCosts = Number.isFinite(estimatedCost) && estimatedCost > 0 && Number.isFinite(currentCost);
 
   // Una diferencia real siempre vuelve a abrir la revisión, salvo que haya sido

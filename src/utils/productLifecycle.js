@@ -5,6 +5,11 @@ import {
   roundUpToCommercialTen,
 } from './grossMarginPricing.js';
 import { normalizeStoredProductPurchaseCost } from './finalPurchaseCost.js';
+import {
+  calculateSupplierComparablePrice,
+  normalizeSupplierCalculationMode,
+  normalizeSupplierWeightGrams,
+} from './supplierPriceUnits.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const OUT_OF_STOCK_INACTIVE_DAYS = 90;
@@ -56,13 +61,49 @@ export const productHasCasaAlbertoLink = (product = {}) => {
   );
 };
 
+const normalizeCasaAlbertoId = (value = '') => {
+  const id = String(value ?? '').trim();
+  if (!id) return '';
+  return /^\d+$/.test(id) ? id.replace(/^0+(?=\d)/, '') : id.toLowerCase();
+};
+
+export const getCasaAlbertoProductId = (link = {}) => {
+  const storedId = normalizeCasaAlbertoId(link.casaAlbertoId);
+  if (storedId) return storedId;
+
+  try {
+    const productUrl = new URL(String(link.productUrl || '').trim());
+    return normalizeCasaAlbertoId(productUrl.searchParams.get('idp'));
+  } catch {
+    return '';
+  }
+};
+
+const normalizeCasaAlbertoProductUrl = (value = '') => {
+  try {
+    const productUrl = new URL(String(value || '').trim());
+    const host = productUrl.hostname.toLowerCase().replace(/^www\./, '');
+    const pathname = productUrl.pathname.replace(/\/+$/, '').toLowerCase();
+    const params = Array.from(productUrl.searchParams.entries())
+      .map(([key, entryValue]) => [key.toLowerCase(), String(entryValue).trim()])
+      .filter(([, entryValue]) => entryValue)
+      .sort(([leftKey, leftValue], [rightKey, rightValue]) => (
+        leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue)
+      ));
+    const query = new URLSearchParams(params).toString();
+    return `${host}${pathname}${query ? `?${query}` : ''}`;
+  } catch {
+    return String(value || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '');
+  }
+};
+
 export const buildCasaAlbertoGroupKey = (product = {}) => {
   const link = getCasaAlbertoLink(product);
-  const id = String(link.casaAlbertoId || '').trim();
+  const id = getCasaAlbertoProductId(link);
   if (id) return `id:${id}`;
-  const url = String(link.productUrl || '').trim();
+  const url = normalizeCasaAlbertoProductUrl(link.productUrl);
   if (url) return `url:${url}`;
-  const code = String(link.providerCode || '').trim();
+  const code = normalizeProductLinkCode(link.providerCode).toLowerCase();
   if (code) return `code:${code}`;
   return `product:${product?.id || Math.random()}`;
 };
@@ -216,10 +257,31 @@ export const upsertCasaAlbertoPriceTracking = (
   const unitDivisor = Number.isFinite(unitDivisorValue) && unitDivisorValue > 0
     ? Math.max(1, Math.round(unitDivisorValue))
     : 1;
+  const calculationMode = normalizeSupplierCalculationMode(
+    hasOwn(trackingPatch, 'calculationMode')
+      ? trackingPatch.calculationMode
+      : previousTracking.calculationMode,
+  );
+  const acknowledgedSupplierPrice = normalizeSupplierTrackingPrice(
+    hasOwn(trackingPatch, 'acknowledgedSupplierPrice')
+      ? trackingPatch.acknowledgedSupplierPrice
+      : previousTracking.acknowledgedSupplierPrice,
+  );
+  const supplierWeightGrams = normalizeSupplierWeightGrams(
+    hasOwn(trackingPatch, 'supplierWeightGrams')
+      ? trackingPatch.supplierWeightGrams
+      : previousTracking.supplierWeightGrams,
+    1000,
+  );
   const unitSupplierPrice = normalizeSupplierTrackingPrice(
     hasOwn(trackingPatch, 'unitSupplierPrice')
       ? trackingPatch.unitSupplierPrice
-      : previousTracking.unitSupplierPrice ?? (rawSupplierPrice ? rawSupplierPrice / unitDivisor : rawSupplierPrice),
+      : previousTracking.unitSupplierPrice ?? calculateSupplierComparablePrice({
+        rawSupplierPrice,
+        calculationMode,
+        unitDivisor,
+        supplierWeightGrams,
+      }),
   );
 
   return {
@@ -231,11 +293,14 @@ export const upsertCasaAlbertoPriceTracking = (
         ...trackingPatch,
         lastSupplierPrice,
         previousSupplierPrice,
+        acknowledgedSupplierPrice,
         previousPurchasePrice,
         suggestedSalePrice,
         rawSupplierPrice,
         unitSupplierPrice,
         unitDivisor,
+        calculationMode,
+        supplierWeightGrams,
         reviewStatus: trackingPatch.reviewStatus || previousTracking.reviewStatus || 'unchecked',
         lastCheckedAt: trackingPatch.lastCheckedAt || previousTracking.lastCheckedAt || now,
         lastChangedAt: trackingPatch.lastChangedAt || previousTracking.lastChangedAt || null,

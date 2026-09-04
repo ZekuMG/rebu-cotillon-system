@@ -233,6 +233,7 @@ import {
 } from './utils/productLifecycle';
 import {
   buildSupplierAttentionSummary,
+  getAcknowledgedSupplierPrice,
   loadSupplierNoticeDismissal,
   saveSupplierNoticeDismissal,
 } from './utils/supplierPriceReview';
@@ -250,6 +251,12 @@ import {
   normalizeFinalPurchaseCost,
   normalizeStoredProductPurchaseCost,
 } from './utils/finalPurchaseCost';
+import {
+  calculateSupplierComparablePrice,
+  normalizeSupplierCalculationMode,
+  normalizeSupplierWeightGrams,
+  SUPPLIER_CALCULATION_MODE_WEIGHT,
+} from './utils/supplierPriceUnits';
 
 import {
   INITIAL_CATEGORIES,
@@ -14240,7 +14247,17 @@ export default function PartySupplyApp() {
       const supplierPrice = Number(check.supplierPrice || 0);
       const rawSupplierPrice = Number(check.rawSupplierPrice ?? check.supplierPrice ?? 0) || supplierPrice;
       const unitDivisor = Number(check.unitDivisor || 1) > 0 ? Number(check.unitDivisor || 1) : 1;
-      const unitSupplierPrice = Number(check.unitSupplierPrice || 0) || (rawSupplierPrice > 0 ? rawSupplierPrice / unitDivisor : supplierPrice);
+      const calculationMode = normalizeSupplierCalculationMode(
+        check.calculationMode,
+        product.product_type === 'weight' ? SUPPLIER_CALCULATION_MODE_WEIGHT : 'units',
+      );
+      const supplierWeightGrams = normalizeSupplierWeightGrams(check.supplierWeightGrams, 1000);
+      const unitSupplierPrice = Number(check.unitSupplierPrice || 0) || calculateSupplierComparablePrice({
+        rawSupplierPrice,
+        calculationMode,
+        unitDivisor,
+        supplierWeightGrams,
+      });
       const previousSupplierPrice = Number(
         check.previousSupplierPrice ??
         existingTracking.lastSupplierPrice ??
@@ -14280,6 +14297,8 @@ export default function PartySupplyApp() {
           rawSupplierPrice,
           unitSupplierPrice,
           unitDivisor,
+          calculationMode,
+          supplierWeightGrams,
           approvedCost: estimatedCost,
           estimatedCost,
           vatPercent: check.vatPercent,
@@ -14289,6 +14308,9 @@ export default function PartySupplyApp() {
           formulaVersion: check.formulaVersion,
           lastSupplierPrice: supplierPrice,
           previousSupplierPrice,
+          acknowledgedSupplierPrice: Object.prototype.hasOwnProperty.call(check, 'acknowledgedSupplierPrice')
+            ? check.acknowledgedSupplierPrice
+            : getAcknowledgedSupplierPrice(existingTracking) || null,
           suggestedSalePrice,
           reviewStatus: check.reviewStatus || 'reviewed',
           brokenReason: check.brokenReason || null,
@@ -14411,13 +14433,29 @@ export default function PartySupplyApp() {
         if (!Number.isFinite(supplierPrice) || supplierPrice <= 0) continue;
         const rawSupplierPrice = Number(update.rawSupplierPrice ?? update.supplierPrice ?? 0) || supplierPrice;
         const unitDivisor = Number(update.unitDivisor || 1) > 0 ? Number(update.unitDivisor || 1) : 1;
-        const unitSupplierPrice = Number(update.unitSupplierPrice || 0) || (rawSupplierPrice > 0 ? rawSupplierPrice / unitDivisor : supplierPrice);
-        const approvedCost = Number(update.approvedCost || update.estimatedCost || 0) ||
+        const calculationMode = normalizeSupplierCalculationMode(
+          update.calculationMode,
+          product.product_type === 'weight' ? SUPPLIER_CALCULATION_MODE_WEIGHT : 'units',
+        );
+        if (calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT && product.product_type !== 'weight') {
+          throw new Error(`El producto ${product.title || product.id} no está configurado para venta por peso.`);
+        }
+        const supplierWeightGrams = normalizeSupplierWeightGrams(update.supplierWeightGrams, 1000);
+        const unitSupplierPrice = Number(update.unitSupplierPrice || 0) || calculateSupplierComparablePrice({
+          rawSupplierPrice,
+          calculationMode,
+          unitDivisor,
+          supplierWeightGrams,
+        });
+        const visibleApprovedCost = Number(update.approvedCost || update.estimatedCost || 0) ||
           buildCasaAlbertoEstimatedCost(unitSupplierPrice, {
             vatPercent: update.vatPercent,
             vatRate: update.vatRate,
             costExtraRate: update.costExtraRate,
           });
+        const approvedCost = calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT && product.product_type === 'weight'
+          ? getStoredProductPurchaseCost(visibleApprovedCost, product.product_type)
+          : visibleApprovedCost;
         if (!Number.isFinite(approvedCost) || approvedCost <= 0) continue;
 
         const before = {
@@ -14435,10 +14473,9 @@ export default function PartySupplyApp() {
             costExtraRate: update.costExtraRate,
             saleMarkupRate: update.saleMarkupRate,
           });
-        const finalSalePrice = normalizeStoredProductSalePrice(
-          update.finalSalePrice,
-          product.product_type,
-        );
+        const finalSalePrice = calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT && product.product_type === 'weight'
+          ? getStoredProductSalePrice(update.finalSalePrice, product.product_type)
+          : normalizeStoredProductSalePrice(update.finalSalePrice, product.product_type);
         const shouldUpdateSalePrice = Number.isFinite(finalSalePrice) && finalSalePrice > 0;
         const nextSupplierLinks = upsertCasaAlbertoPriceTracking(
           before.supplierLinks,
@@ -14454,8 +14491,10 @@ export default function PartySupplyApp() {
             rawSupplierPrice,
             unitSupplierPrice,
             unitDivisor,
-            approvedCost,
-            estimatedCost: approvedCost,
+            calculationMode,
+            supplierWeightGrams,
+            approvedCost: visibleApprovedCost,
+            estimatedCost: visibleApprovedCost,
             vatPercent: update.vatPercent,
             vatRate: update.vatRate,
             grossMarginPercent: update.grossMarginPercent,
@@ -14463,6 +14502,7 @@ export default function PartySupplyApp() {
             formulaVersion: update.formulaVersion,
             lastSupplierPrice: supplierPrice,
             previousSupplierPrice: existingTracking.previousSupplierPrice ?? null,
+            acknowledgedSupplierPrice: rawSupplierPrice,
             previousPurchasePrice: before.purchasePrice,
             suggestedSalePrice,
             finalSalePrice: shouldUpdateSalePrice ? finalSalePrice : before.price,
@@ -14566,7 +14606,20 @@ export default function PartySupplyApp() {
         const supplierPrice = Number(update.supplierPrice || tracking.lastSupplierPrice || 0);
         const rawSupplierPrice = Number(update.rawSupplierPrice ?? tracking.rawSupplierPrice ?? supplierPrice ?? 0) || supplierPrice;
         const unitDivisor = Number(update.unitDivisor || tracking.unitDivisor || 1) > 0 ? Number(update.unitDivisor || tracking.unitDivisor || 1) : 1;
-        const unitSupplierPrice = Number(update.unitSupplierPrice || tracking.unitSupplierPrice || 0) || (rawSupplierPrice > 0 ? rawSupplierPrice / unitDivisor : supplierPrice);
+        const calculationMode = normalizeSupplierCalculationMode(
+          update.calculationMode || tracking.calculationMode,
+          product.product_type === 'weight' ? SUPPLIER_CALCULATION_MODE_WEIGHT : 'units',
+        );
+        const supplierWeightGrams = normalizeSupplierWeightGrams(
+          update.supplierWeightGrams ?? tracking.supplierWeightGrams,
+          1000,
+        );
+        const unitSupplierPrice = Number(update.unitSupplierPrice || tracking.unitSupplierPrice || 0) || calculateSupplierComparablePrice({
+          rawSupplierPrice,
+          calculationMode,
+          unitDivisor,
+          supplierWeightGrams,
+        });
         const nextSupplierLinks = upsertCasaAlbertoPriceTracking(
           before.supplierLinks,
           {
@@ -14579,6 +14632,8 @@ export default function PartySupplyApp() {
             rawSupplierPrice,
             unitSupplierPrice,
             unitDivisor,
+            calculationMode,
+            supplierWeightGrams,
             lastSupplierPrice: supplierPrice,
             previousSupplierPrice: tracking.previousSupplierPrice ?? null,
             previousPurchasePrice: null,
@@ -14586,6 +14641,7 @@ export default function PartySupplyApp() {
             estimatedCost: buildCasaAlbertoEstimatedCost(unitSupplierPrice),
             suggestedSalePrice: Number(tracking.suggestedSalePrice || 0),
             reviewStatus: 'reviewed',
+            acknowledgedSupplierPrice: null,
             lastCheckedAt: now,
             lastChangedAt: now,
             approvedAt: null,

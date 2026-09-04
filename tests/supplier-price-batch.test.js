@@ -100,6 +100,8 @@ test('supplier price actions only change local state after the database confirms
   assert.match(viewSource, /No se pudo confirmar la restauración de todos los productos/);
   assert.match(viewSource, /No se pudo confirmar la vinculación de todos los productos/);
   assert.match(appSource, /return \{ products: \[\], error: message \};/);
+  assert.match(appSource, /getStoredProductPurchaseCost\(visibleApprovedCost, product\.product_type\)/);
+  assert.match(appSource, /getStoredProductSalePrice\(update\.finalSalePrice, product\.product_type\)/);
 });
 
 test('supplier price control keeps one operative card presentation', async () => {
@@ -109,4 +111,21 @@ test('supplier price control keeps one operative card presentation', async () =>
   assert.doesNotMatch(viewSource, /supplierPriceViewMode|setSupplierPriceViewMode/);
   assert.doesNotMatch(viewSource, /label: 'Tarjetas'|label: 'Lista'/);
   assert.match(viewSource, /className="space-y-3"[\s\S]+visibleCasaAlbertoGroups\.map/);
+  assert.match(viewSource, /const SUPPLIER_GROUPS_VISIBLE_CHUNK = 50/);
+  assert.match(viewSource, /filteredCasaAlbertoGroups\.slice\(0, supplierVisibleGroupLimit\)/);
+  assert.match(viewSource, /aria-label="Modo de cálculo"/);
+  assert.match(viewSource, />\s*Peso\s*<\/button>/);
+  assert.match(viewSource, /getSupplierPriceChangeStatus\(/);
+  assert.match(viewSource, />\s*Chequear vinculados\s*</);
+});
+
+test('supplier approval acknowledges the provider price until a later scan changes it', async () => {
+  const [appSource, lifecycleSource] = await Promise.all([
+    readSource('../src/App.jsx'),
+    readSource('../src/utils/productLifecycle.js'),
+  ]);
+
+  assert.match(appSource, /acknowledgedSupplierPrice: rawSupplierPrice/);
+  assert.match(appSource, /getAcknowledgedSupplierPrice\(existingTracking\)/);
+  assert.match(lifecycleSource, /acknowledgedSupplierPrice/);
 });
