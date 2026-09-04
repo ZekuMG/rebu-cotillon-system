@@ -42,6 +42,7 @@ import {
 import {
   getStoredProductPurchaseCost,
   getVisibleProductPurchaseCost,
+  normalizeFinalPurchaseCost,
 } from '../../utils/finalPurchaseCost';
 
 // ==========================================
@@ -702,31 +703,44 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
   const [stockUnit, setStockUnit] = useState('g');
   const [deletedReason, setDeletedReason] = useState('');
   const { isPending, runAction } = usePendingAction();
+
+  const productType = product?.product_type || 'quantity';
+  // ✅ Precio guardado en /g → lo mostramos en /kg
+  const displayPrice = product ? getVisibleProductSalePrice(product.price, productType) : 0;
+  const normalizedPurchasePrice = product
+    ? normalizeProductPurchasePrice(product.purchasePrice, productType)
+    : 0;
+  const displayCost = product ? getVisibleProductPurchaseCost(normalizedPurchasePrice, productType) : 0;
+
+  // Mientras escribis, el campo guarda el TEXTO tal cual. Antes cada tecla pasaba
+  // por el redondeo comercial y volvia al input ya convertido: escribir "2000"
+  // terminaba en "000" y "1000" en "10100010", porque el numero se reescribia y
+  // el cursor saltaba al principio. El redondeo va al salir del campo.
+  const [priceText, setPriceText] = useState('');
+  const [costText, setCostText] = useState('');
+
+  useEffect(() => {
+    setPriceText(displayPrice ? String(displayPrice) : '');
+    setCostText(displayCost ? String(displayCost) : '');
+  }, [product?.id, displayPrice, displayCost]);
+
   if (!product) return null;
-  const productType = product.product_type || 'quantity';
   const canDuplicateProduct = hasPermission(currentUser, 'inventory.create');
   const canDeleteProduct = hasPermission(currentUser, 'inventory.delete');
   const isProductActive = product.is_active !== false && product.isActive !== false;
 
-  // ✅ Precio guardado en /g → lo mostramos en /kg
-  const displayPrice = getVisibleProductSalePrice(product.price, productType);
-  const normalizedPurchasePrice = normalizeProductPurchasePrice(product.purchasePrice, productType);
-  const displayCost = getVisibleProductPurchaseCost(normalizedPurchasePrice, productType);
-
-  const handlePriceChange = (val) => {
-    if (productType === 'weight') {
-      setEditingProduct({ ...product, price: getStoredProductSalePrice(val, productType) });
-    } else {
-      setEditingProduct({ ...product, price: getStoredProductSalePrice(val, productType) });
-    }
+  const commitPrice = (val) => {
+    const visible = normalizeFinalSalePrice(val);
+    setPriceText(visible ? String(visible) : '');
+    setEditingProduct({ ...product, price: getStoredProductSalePrice(visible, productType) });
+    return visible;
   };
 
-  const handleCostChange = (val) => {
-    if (productType === 'weight') {
-      setEditingProduct({ ...product, purchasePrice: getStoredProductPurchaseCost(val, productType) });
-    } else {
-      setEditingProduct({ ...product, purchasePrice: getStoredProductPurchaseCost(val, productType) });
-    }
+  const commitCost = (val) => {
+    const visible = normalizeFinalPurchaseCost(val);
+    setCostText(visible ? String(visible) : '');
+    setEditingProduct({ ...product, purchasePrice: getStoredProductPurchaseCost(visible, productType) });
+    return visible;
   };
 
   const handleBarcodeChange = (value) => {
@@ -740,9 +754,14 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
   const handleSubmit = async (e) => {
     e.preventDefault();
     await runAction(`edit-product-submit:${product.id}`, async () => {
+      // Si apretaste Enter sin salir del campo, el texto todavia no se confirmo.
       const normalizedProduct = {
         ...product,
-        purchasePrice: normalizeProductPurchasePrice(product.purchasePrice, productType),
+        price: getStoredProductSalePrice(normalizeFinalSalePrice(priceText), productType),
+        purchasePrice: normalizeProductPurchasePrice(
+          getStoredProductPurchaseCost(normalizeFinalPurchaseCost(costText), productType),
+          productType,
+        ),
       };
       if (productType === 'weight' && stockUnit === 'kg') {
         await onSave(e, { ...normalizedProduct, stock: Math.round(Number(product.stock) * 1000) });
@@ -819,7 +838,7 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
               <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
                 {productType === 'weight' ? 'Costo ($/kg)' : 'Costo ($)'}
               </label>
-              <input required type="number" step="1" min="0" className="w-full px-3 py-2 border rounded-lg" value={displayCost} onChange={(e) => handleCostChange(e.target.value)} />
+              <input required type="number" step="1" min="0" className="w-full px-3 py-2 border rounded-lg" value={costText} onChange={(e) => setCostText(e.target.value)} onBlur={(e) => commitCost(e.target.value)} />
               {productType === 'weight' && displayCost > 0 && (
                 <p className="text-[10px] text-slate-400 mt-1">= ${(Number(displayCost) / 1000).toFixed(2)}/g</p>
               )}
@@ -828,7 +847,7 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
               <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
                 {productType === 'weight' ? 'Precio ($/kg)' : 'Precio ($)'}
               </label>
-              <input required type="number" step="1" min="0" className="w-full px-3 py-2 border rounded-lg font-bold" value={displayPrice} onChange={(e) => handlePriceChange(e.target.value)} />
+              <input required type="number" step="1" min="0" className="w-full px-3 py-2 border rounded-lg font-bold" value={priceText} onChange={(e) => setPriceText(e.target.value)} onBlur={(e) => commitPrice(e.target.value)} />
               {productType === 'weight' && displayPrice > 0 && (
                 <p className="text-[10px] text-slate-400 mt-1">= ${(Number(displayPrice) / 1000).toFixed(2)}/g</p>
               )}
