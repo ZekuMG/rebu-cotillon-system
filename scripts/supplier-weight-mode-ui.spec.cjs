@@ -53,7 +53,9 @@ test('Casa Alberto cambia entre unidades y peso dentro del cálculo', async ({ p
   await expect(weightButton).toHaveClass(/bg-sky-400/);
   await expect(unitsButton).not.toHaveClass(/bg-sky-400/);
   await expect(page.getByText('Costo por kg', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText('peso del envase', { exact: true }).first()).toBeVisible();
+  // La ayuda ahora aclara que son los gramos TOTALES: con un pack de 6 x 500 g,
+  // poner 500 daba un costo por kilo 6 veces mas alto.
+  await expect(page.getByText('gramos totales del envase', { exact: true }).first()).toBeVisible();
   await expect(page.getByText(/deben estar configurados como venta por peso/i)).toBeVisible();
   await expect(page.locator('button').filter({ hasText: 'Aprobar costo y venta' }).first()).toBeDisabled();
 

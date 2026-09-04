@@ -55,6 +55,7 @@ import {
   normalizeFinalPurchaseCost,
 } from '../utils/finalPurchaseCost';
 import { mergePendingEdits } from '../utils/bulkEditorEdits';
+import { describeSupplierCostDrift } from '../utils/supplierCostDrift';
 import {
   getPendingSupplierEditKeys,
   hasPendingSupplierEdit,
@@ -1907,6 +1908,21 @@ export default function BulkEditorView({
         ...group,
         hasPendingEdit: hasPendingSupplierEdit(supplierPriceOverrides, group.key),
         editedAt: supplierEditedAt[String(group.key)] || 0,
+        // El estado ya no reabre por un costo de Rebu distinto (solo lo hace un
+        // precio nuevo de Casa Alberto), asi que la diferencia se avisa aparte.
+        costDrift: group.products.reduce((peor, product) => {
+          const comparableCost = group.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT
+            && product.product_type === 'weight'
+            ? getVisibleProductPurchaseCost(product.purchasePrice, product.product_type)
+            : Number(product.purchasePrice || 0);
+          const drift = describeSupplierCostDrift({
+            estimatedCost: group.estimatedCost,
+            currentCost: comparableCost,
+            status: group.status,
+          });
+          if (!drift) return peor;
+          return !peor || Math.abs(drift.delta) > Math.abs(peor.delta) ? drift : peor;
+        }, null),
       }));
 
     return sortSupplierGroupsForReview(mapped, {
@@ -1920,6 +1936,7 @@ export default function BulkEditorView({
     [supplierPriceOverrides, supplierEditedAt],
   );
   const supplierPendingEditCount = supplierPendingEditKeys.length;
+  const supplierCostDriftCount = casaAlbertoGroups.filter((group) => group.costDrift).length;
   const supplierPricePendingCount = casaAlbertoGroups.filter((group) => group.status === 'changed').length;
   const supplierPriceErrorCount = casaAlbertoGroups.filter((group) => group.status === 'error' || group.status === 'login_required').length;
   const supplierPriceNoticeCount = casaAlbertoGroups.filter((group) => group.status === 'price_down' || group.status === 'dubious_link' || group.status === 'review_required').length;
@@ -1939,6 +1956,7 @@ export default function BulkEditorView({
       const isEdited = hasPendingSupplierEdit(supplierPriceOverrides, group.key);
       let matchesFilter = supplierPriceFilter === 'all';
       if (supplierPriceFilter === 'edited') matchesFilter = isEdited;
+      else if (supplierPriceFilter === 'drift') matchesFilter = Boolean(group.costDrift);
       else if (supplierPriceFilter === 'pending') matchesFilter = !['reviewed', 'approved', 'ignored'].includes(group.status);
       else if (supplierPriceFilter === 'selected') matchesFilter = selectedSupplierGroupKeySet.has(String(group.key));
       else if (supplierPriceFilter === 'error') matchesFilter = group.status === 'error' || group.status === 'login_required';
@@ -3208,6 +3226,7 @@ export default function BulkEditorView({
     const filterOptions = [
       { value: 'pending', label: 'Pendientes', count: supplierPriceOpenCount },
       { value: 'edited', label: 'Editados sin aplicar', count: supplierPendingEditCount },
+      { value: 'drift', label: 'Costo desalineado', count: supplierCostDriftCount },
       { value: 'all', label: 'Todos vinculados', count: casaAlbertoGroups.length },
       { value: 'selected', label: 'Seleccionados', count: selectedSupplierGroups.length },
       { value: 'changed', label: 'Con cambio', count: supplierPricePendingCount },
@@ -3253,6 +3272,7 @@ export default function BulkEditorView({
       onStep,
       suffix = '',
       helper = '',
+      helperTone = 'muted',
       manual = false,
       inputMode = 'decimal',
       tone = 'slate',
@@ -3312,7 +3332,13 @@ export default function BulkEditorView({
               <Plus size={12} />
             </button>
           </span>
-          {helper ? <span className="mt-1 block text-[10px] font-bold leading-tight text-slate-500">{helper}</span> : null}
+          {helper ? (
+            <span className={`mt-1 block text-[10px] font-bold leading-tight ${
+              helperTone === 'warn' ? 'text-amber-300' : 'text-slate-500'
+            }`}>
+              {helper}
+            </span>
+          ) : null}
         </div>
       );
     };
@@ -3642,10 +3668,15 @@ export default function BulkEditorView({
                 : stepSupplierOverride('unitDivisor', math.unitDivisor || 1, direction, 1, 1),
               suffix: isWeightMode ? 'g' : '',
               helper: isWeightMode
-                ? 'peso del envase'
+                ? (Number(math.supplierWeightGrams) < 10
+                  ? '¿son gramos? parece muy poco'
+                  : 'gramos totales del envase')
                 : math.divisorAmbiguo
                   ? 'revisar unidades'
                   : math.detectedDivisor > 1 ? `sugerido ${math.detectedDivisor}` : 'por producto',
+              helperTone: (isWeightMode && Number(math.supplierWeightGrams) < 10) || math.divisorAmbiguo
+                ? 'warn'
+                : 'muted',
               manual: isWeightMode ? math.hasManualWeight : math.hasManualDivisor,
               inputMode: 'numeric',
               tone: 'sky',
@@ -4302,6 +4333,14 @@ export default function BulkEditorView({
                                   Editado sin aplicar
                                 </span>
                               ) : null}
+                              {group.costDrift ? (
+                                <span
+                                  className="rounded-md border border-amber-400/40 bg-amber-400/12 px-1.5 py-0.5 text-amber-200"
+                                  title={`El costo cargado en Rebu (${formatSupplierMoney(group.costDrift.currentCost)}) no coincide con el que sale del proveedor (${formatSupplierMoney(group.costDrift.estimatedCost)})`}
+                                >
+                                  Costo Rebu {group.costDrift.direction === 'up' ? 'mas alto' : 'mas bajo'}
+                                </span>
+                              ) : null}
                               <span className="inline-flex items-center gap-1.5">
                                 <span className={`h-2 w-2 rounded-full ${meta.railClassName}`} />
                                 {meta.label}
@@ -4422,6 +4461,11 @@ export default function BulkEditorView({
                         {group.hasPendingEdit ? (
                           <span className="rounded-md border border-sky-400/40 bg-sky-400/12 px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-sky-200">
                             Editado sin aplicar
+                          </span>
+                        ) : null}
+                        {group.costDrift ? (
+                          <span className="rounded-md border border-amber-400/40 bg-amber-400/12 px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-amber-200">
+                            Costo Rebu {group.costDrift.direction === 'up' ? 'mas alto' : 'mas bajo'} ({formatSupplierMoney(group.costDrift.currentCost)} vs {formatSupplierMoney(group.costDrift.estimatedCost)})
                           </span>
                         ) : null}
                         {group.casaAlbertoId ? (
