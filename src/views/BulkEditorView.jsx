@@ -31,6 +31,10 @@ import { evaluateSupplierReadResult } from '../utils/casaAlbertoMatch.js';
 import { resolveUnitDivisor } from '../utils/casaAlbertoUnits.js';
 import { SUPPLIER_PRICE_REPORT_PERIODS } from '../utils/supplierPriceReport';
 import {
+  getAcknowledgedSupplierPrice,
+  getSupplierPriceChangeStatus,
+} from '../utils/supplierPriceReview';
+import {
   calculateGrossMarginPricing,
   DEFAULT_GROSS_MARGIN_PERCENT,
   DEFAULT_VAT_PERCENT,
@@ -51,8 +55,21 @@ import {
   normalizeFinalPurchaseCost,
 } from '../utils/finalPurchaseCost';
 import { mergePendingEdits } from '../utils/bulkEditorEdits';
+import {
+  getPendingSupplierEditKeys,
+  hasPendingSupplierEdit,
+  sortSupplierGroupsForReview,
+} from '../utils/supplierPendingEdits';
+import {
+  calculateSupplierComparablePrice,
+  normalizeSupplierCalculationMode,
+  normalizeSupplierWeightGrams,
+  SUPPLIER_CALCULATION_MODE_UNITS,
+  SUPPLIER_CALCULATION_MODE_WEIGHT,
+} from '../utils/supplierPriceUnits';
 
 const BULK_EDITOR_TOOL_MODE_STORAGE_KEY = 'rebu_bulk_editor_tool_mode_v1';
+const SUPPLIER_GROUPS_VISIBLE_CHUNK = 50;
 const ImageCleanupWorkspace = lazy(() => import('../components/ImageCleanupWorkspace'));
 const WhatsAppCatalogExportView = lazy(() => import('../components/WhatsAppCatalogExportView'));
 
@@ -194,10 +211,13 @@ export default function BulkEditorView({
   const [productImagePreview, setProductImagePreview] = useState('');
   const imageImportPausedRef = useRef(false);
   const imageImportStopRef = useRef(false);
-  const [supplierPriceFilter, setSupplierPriceFilter] = useState('all');
+  const [supplierPriceFilter, setSupplierPriceFilter] = useState('pending');
   const [supplierPriceSearchTerm, setSupplierPriceSearchTerm] = useState('');
+  const [supplierVisibleGroupLimit, setSupplierVisibleGroupLimit] = useState(SUPPLIER_GROUPS_VISIBLE_CHUNK);
   const [supplierPriceRows, setSupplierPriceRows] = useState({});
   const [supplierPriceOverrides, setSupplierPriceOverrides] = useState({});
+  // Cuando se toco por ultima vez cada fila (para "Editados sin aplicar").
+  const [supplierEditedAt, setSupplierEditedAt] = useState({});
   const [isCheckingSupplierPrices, setIsCheckingSupplierPrices] = useState(false);
   const [checkingSupplierGroupKey, setCheckingSupplierGroupKey] = useState('');
   const [isSupplierPriceCheckPaused, setIsSupplierPriceCheckPaused] = useState(false);
@@ -1510,14 +1530,41 @@ export default function BulkEditorView({
       : Object.prototype.hasOwnProperty.call(override, 'unitDivisor')
         ? override.unitDivisor
         : group.unitDivisor ?? tracking.unitDivisor ?? detectedDivisor;
+    const defaultCalculationMode = Array.isArray(group.products) && group.products.length > 0
+      && group.products.every((product) => product.product_type === 'weight')
+      ? SUPPLIER_CALCULATION_MODE_WEIGHT
+      : SUPPLIER_CALCULATION_MODE_UNITS;
+    const calculationMode = normalizeSupplierCalculationMode(
+      Object.prototype.hasOwnProperty.call(nextPatch, 'calculationMode')
+        ? nextPatch.calculationMode
+        : Object.prototype.hasOwnProperty.call(override, 'calculationMode')
+          ? override.calculationMode
+          : group.calculationMode ?? tracking.calculationMode,
+      defaultCalculationMode,
+    );
+    const supplierWeightGrams = normalizeSupplierWeightGrams(
+      Object.prototype.hasOwnProperty.call(nextPatch, 'supplierWeightGrams')
+        ? nextPatch.supplierWeightGrams
+        : Object.prototype.hasOwnProperty.call(override, 'supplierWeightGrams')
+          ? override.supplierWeightGrams
+          : group.supplierWeightGrams ?? tracking.supplierWeightGrams,
+      1000,
+    );
     const rawSupplierPrice = parseSupplierNumber(rawSource);
     const unitDivisor = normalizeSupplierDivisor(divisorSource, detectedDivisor || 1);
-    const unitSupplierPrice = rawSupplierPrice > 0 ? Number((rawSupplierPrice / unitDivisor).toFixed(2)) : 0;
+    const unitSupplierPrice = calculateSupplierComparablePrice({
+      rawSupplierPrice,
+      calculationMode,
+      unitDivisor,
+      supplierWeightGrams,
+    });
 
     return {
       rawSupplierPrice,
       supplierPrice: rawSupplierPrice,
       unitDivisor,
+      calculationMode,
+      supplierWeightGrams,
       detectedDivisor,
       divisorAmbiguo,
       divisorReason: deteccionUnidades.reason,
@@ -1525,10 +1572,17 @@ export default function BulkEditorView({
       hasSupplierPrice: Number.isFinite(rawSupplierPrice) && rawSupplierPrice > 0,
       hasManualSupplierPrice: Object.prototype.hasOwnProperty.call(override, 'supplierPrice'),
       hasManualDivisor: Object.prototype.hasOwnProperty.call(override, 'unitDivisor'),
+      hasManualCalculationMode: Object.prototype.hasOwnProperty.call(override, 'calculationMode'),
+      hasManualWeight: Object.prototype.hasOwnProperty.call(override, 'supplierWeightGrams'),
     };
   }, [supplierPriceOverrides]);
 
+  const markSupplierGroupEdited = (groupKey) => {
+    setSupplierEditedAt((prev) => ({ ...prev, [String(groupKey)]: Date.now() }));
+  };
+
   const updateSupplierPriceOverride = (groupKey, patch = {}) => {
+    markSupplierGroupEdited(groupKey);
     setSupplierPriceOverrides((prev) => ({
       ...prev,
       [groupKey]: {
@@ -1585,6 +1639,7 @@ export default function BulkEditorView({
   };
 
   const updateSupplierFinalSaleOverride = (groupKey, productId, value) => {
+    markSupplierGroupEdited(groupKey);
     const productKey = String(productId);
     setSupplierPriceOverrides((prev) => {
       const groupOverrides = prev[groupKey] || {};
@@ -1604,7 +1659,10 @@ export default function BulkEditorView({
   const getSupplierFinalSaleInputValue = (group, product, suggestedSale = 0) => {
     const storedValue = getSupplierStoredFinalSaleValue(group.key, product.id);
     if (storedValue !== undefined) return storedValue;
-    const currentSale = Number(product.price || 0);
+    const calculationMode = getSupplierPriceInfo(group).calculationMode;
+    const currentSale = calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT && product.product_type === 'weight'
+      ? getVisibleProductSalePrice(product.price, product.product_type)
+      : Number(product.price || 0);
     if (Number.isFinite(currentSale) && currentSale > 0) return currentSale;
     return suggestedSale || '';
   };
@@ -1629,6 +1687,8 @@ export default function BulkEditorView({
 
   const getSupplierCardMath = (group) => {
     const priceInfo = getSupplierPriceInfo(group);
+    const hasWeightTypeMismatch = priceInfo.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT
+      && group?.products?.some((product) => product.product_type !== 'weight');
     const supplierPrice = priceInfo.rawSupplierPrice;
     const unitSupplierPrice = priceInfo.unitSupplierPrice;
     const hasSupplierPrice = priceInfo.hasSupplierPrice;
@@ -1640,10 +1700,22 @@ export default function BulkEditorView({
       ? getSupplierSuggestedSale(firstProduct, unitSupplierPrice)
       : 0;
     const costValues = group?.products?.length
-      ? group.products.map((product) => Number(product.purchasePrice || 0)).filter((value) => Number.isFinite(value))
+      ? group.products.map((product) => (
+        priceInfo.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT
+          ? product.product_type === 'weight'
+            ? getVisibleProductPurchaseCost(product.purchasePrice, product.product_type)
+            : Number.NaN
+          : Number(product.purchasePrice || 0)
+      )).filter((value) => Number.isFinite(value))
       : [];
     const saleValues = group?.products?.length
-      ? group.products.map((product) => Number(product.price || 0)).filter((value) => Number.isFinite(value))
+      ? group.products.map((product) => (
+        priceInfo.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT
+          ? product.product_type === 'weight'
+            ? getVisibleProductSalePrice(product.price, product.product_type)
+            : Number.NaN
+          : Number(product.price || 0)
+      )).filter((value) => Number.isFinite(value))
       : [];
     const currentCost = costValues.length ? Math.min(...costValues) : 0;
     const currentSale = saleValues.length ? Math.min(...saleValues) : 0;
@@ -1655,12 +1727,17 @@ export default function BulkEditorView({
       rawSupplierPrice: priceInfo.rawSupplierPrice,
       unitSupplierPrice,
       unitDivisor: priceInfo.unitDivisor,
+      calculationMode: priceInfo.calculationMode,
+      supplierWeightGrams: priceInfo.supplierWeightGrams,
+      hasWeightTypeMismatch,
       detectedDivisor: priceInfo.detectedDivisor,
       divisorAmbiguo: priceInfo.divisorAmbiguo,
       divisorReason: priceInfo.divisorReason,
       hasManualSupplierPrice: priceInfo.hasManualSupplierPrice,
       hasManualDivisor: priceInfo.hasManualDivisor,
-      hasManualOverride: priceInfo.hasManualSupplierPrice || priceInfo.hasManualDivisor,
+      hasManualCalculationMode: priceInfo.hasManualCalculationMode,
+      hasManualWeight: priceInfo.hasManualWeight,
+      hasManualOverride: priceInfo.hasManualSupplierPrice || priceInfo.hasManualDivisor || priceInfo.hasManualCalculationMode || priceInfo.hasManualWeight,
       hasSupplierPrice,
       estimatedCost,
       suggestedSale,
@@ -1732,13 +1809,32 @@ export default function BulkEditorView({
     const reviewedStatus = localStatus || group.tracking.reviewStatus;
 
     if (reviewedStatus === 'ignored') return 'ignored';
+    if (priceInfo.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT
+      && group.products.some((product) => product.product_type !== 'weight')) return 'review_required';
+
+    const acknowledgedSupplierPrice = Number(
+      group.acknowledgedSupplierPrice || getAcknowledgedSupplierPrice(group.tracking),
+    ) || 0;
+    const supplierPriceChangeStatus = getSupplierPriceChangeStatus(
+      priceInfo.rawSupplierPrice,
+      acknowledgedSupplierPrice,
+    );
+    if (supplierPriceChangeStatus === 'changed' || supplierPriceChangeStatus === 'price_down') {
+      return supplierPriceChangeStatus;
+    }
+    if (supplierPriceChangeStatus === 'reviewed') return 'reviewed';
     if (reviewedStatus === 'approved') return 'reviewed';
 
+    const comparableProductCost = (product) => (
+      priceInfo.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT && product.product_type === 'weight'
+        ? getVisibleProductPurchaseCost(product.purchasePrice, product.product_type)
+        : Number(product.purchasePrice || 0)
+    );
     const hasCostIncrease = hasSupplierPrice && group.products.some((product) =>
-      estimatedCost - Number(product.purchasePrice || 0) >= 0.01
+      estimatedCost - comparableProductCost(product) >= 0.01
     );
     const hasCostDecrease = hasSupplierPrice && !hasCostIncrease && group.products.some((product) =>
-      Number(product.purchasePrice || 0) - estimatedCost >= 0.01
+      comparableProductCost(product) - estimatedCost >= 0.01
     );
 
     if (hasCostIncrease) return 'changed';
@@ -1772,7 +1868,10 @@ export default function BulkEditorView({
           rawSupplierPrice: localRow.rawSupplierPrice ?? tracking.rawSupplierPrice ?? localRow.supplierPrice ?? tracking.lastSupplierPrice ?? null,
           unitSupplierPrice: localRow.unitSupplierPrice ?? tracking.unitSupplierPrice ?? null,
           unitDivisor: localRow.unitDivisor ?? tracking.unitDivisor ?? null,
+          calculationMode: localRow.calculationMode || tracking.calculationMode || '',
+          supplierWeightGrams: localRow.supplierWeightGrams ?? tracking.supplierWeightGrams ?? null,
           previousSupplierPrice: localRow.previousSupplierPrice ?? tracking.previousSupplierPrice ?? null,
+          acknowledgedSupplierPrice: localRow.acknowledgedSupplierPrice ?? tracking.acknowledgedSupplierPrice ?? null,
           lastCheckedAt: localRow.lastCheckedAt || tracking.lastCheckedAt || '',
           message: localRow.message || tracking.message || '',
           sourceUrl: localRow.sourceUrl || tracking.sourceUrl || link.productUrl || '',
@@ -1784,7 +1883,7 @@ export default function BulkEditorView({
         groups.set(key, base);
       });
 
-    return Array.from(groups.values())
+    const mapped = Array.from(groups.values())
       .map((group) => {
         const status = getSupplierGroupComputedStatus(group);
         const priceInfo = getSupplierPriceInfo(group);
@@ -1800,50 +1899,82 @@ export default function BulkEditorView({
           rawSupplierPrice: priceInfo.rawSupplierPrice,
           unitSupplierPrice: priceInfo.unitSupplierPrice,
           unitDivisor: priceInfo.unitDivisor,
+          calculationMode: priceInfo.calculationMode,
+          supplierWeightGrams: priceInfo.supplierWeightGrams,
         };
       })
-      .sort((a, b) => {
-        const statusWeight = { changed: 0, login_required: 1, error: 2, review_required: 3, dubious_link: 4, price_down: 5, unchecked: 6, reviewed: 7, approved: 8, ignored: 9 };
-        return (statusWeight[a.status] ?? 9) - (statusWeight[b.status] ?? 9) ||
-          String(a.supplierTitle || '').localeCompare(String(b.supplierTitle || ''));
-      });
-  }, [sandboxInventory, supplierPriceRows, getSupplierGroupComputedStatus, getSupplierEstimatedCost, getSupplierPriceInfo, getSupplierSuggestedSale]);
+      .map((group) => ({
+        ...group,
+        hasPendingEdit: hasPendingSupplierEdit(supplierPriceOverrides, group.key),
+        editedAt: supplierEditedAt[String(group.key)] || 0,
+      }));
 
+    return sortSupplierGroupsForReview(mapped, {
+      overrides: supplierPriceOverrides,
+      editedAt: supplierEditedAt,
+    });
+  }, [sandboxInventory, supplierPriceRows, supplierPriceOverrides, supplierEditedAt, getSupplierGroupComputedStatus, getSupplierEstimatedCost, getSupplierPriceInfo, getSupplierSuggestedSale]);
+
+  const supplierPendingEditKeys = useMemo(
+    () => getPendingSupplierEditKeys(supplierPriceOverrides, supplierEditedAt),
+    [supplierPriceOverrides, supplierEditedAt],
+  );
+  const supplierPendingEditCount = supplierPendingEditKeys.length;
   const supplierPricePendingCount = casaAlbertoGroups.filter((group) => group.status === 'changed').length;
   const supplierPriceErrorCount = casaAlbertoGroups.filter((group) => group.status === 'error' || group.status === 'login_required').length;
   const supplierPriceNoticeCount = casaAlbertoGroups.filter((group) => group.status === 'price_down' || group.status === 'dubious_link' || group.status === 'review_required').length;
+  const supplierPriceOpenCount = casaAlbertoGroups.filter((group) => !['reviewed', 'approved', 'ignored'].includes(group.status)).length;
   const supplierPriceBadgeCount =
     supplierPricePendingCount + supplierPriceErrorCount + supplierPriceNoticeCount + supplierLinkSuggestions.length;
-  const supplierPriceSearchWords = normalizeSupplierSearchValue(supplierPriceSearchTerm)
-    .split(/\s+/)
-    .filter(Boolean);
-  const selectedSupplierGroupKeySet = new Set(selectedSupplierGroupKeys.map(String));
-  const visibleCasaAlbertoGroups = casaAlbertoGroups.filter((group) => {
-    let matchesFilter = supplierPriceFilter === 'all';
-    if (supplierPriceFilter === 'selected') matchesFilter = selectedSupplierGroupKeySet.has(String(group.key));
-    else if (supplierPriceFilter === 'error') matchesFilter = group.status === 'error' || group.status === 'login_required';
-    else if (supplierPriceFilter === 'reviewed') matchesFilter = group.status === 'reviewed' || group.status === 'approved' || group.status === 'ignored';
-    else if (supplierPriceFilter === 'notice') matchesFilter = group.status === 'price_down' || group.status === 'dubious_link' || group.status === 'review_required';
-    else if (!matchesFilter) matchesFilter = group.status === supplierPriceFilter;
-    if (!matchesFilter) return false;
-    if (supplierPriceSearchWords.length === 0) return true;
+  const selectedSupplierGroupKeySet = useMemo(
+    () => new Set(selectedSupplierGroupKeys.map(String)),
+    [selectedSupplierGroupKeys],
+  );
+  const filteredCasaAlbertoGroups = useMemo(() => {
+    const searchWords = normalizeSupplierSearchValue(supplierPriceSearchTerm)
+      .split(/\s+/)
+      .filter(Boolean);
 
-    const searchableText = normalizeSupplierSearchValue([
-      group.supplierTitle,
-      group.supplierCode,
-      group.casaAlbertoId,
-      group.productUrl,
-      group.sourceUrl,
-      group.products.map((product) => [
-        product.id,
-        product.title,
-        product.barcode,
-        product.category,
-      ].filter(Boolean).join(' ')).join(' '),
-    ].filter(Boolean).join(' '));
+    return casaAlbertoGroups.filter((group) => {
+      const isEdited = hasPendingSupplierEdit(supplierPriceOverrides, group.key);
+      let matchesFilter = supplierPriceFilter === 'all';
+      if (supplierPriceFilter === 'edited') matchesFilter = isEdited;
+      else if (supplierPriceFilter === 'pending') matchesFilter = !['reviewed', 'approved', 'ignored'].includes(group.status);
+      else if (supplierPriceFilter === 'selected') matchesFilter = selectedSupplierGroupKeySet.has(String(group.key));
+      else if (supplierPriceFilter === 'error') matchesFilter = group.status === 'error' || group.status === 'login_required';
+      else if (supplierPriceFilter === 'reviewed') matchesFilter = group.status === 'reviewed' || group.status === 'approved' || group.status === 'ignored';
+      else if (supplierPriceFilter === 'notice') matchesFilter = group.status === 'price_down' || group.status === 'dubious_link' || group.status === 'review_required';
+      else if (!matchesFilter) matchesFilter = group.status === supplierPriceFilter;
+      // Lo editado y sin aplicar NUNCA se esconde: antes cambiaba de estado al
+      // editarlo y se caia del filtro, y parecia que se habia perdido.
+      if (!matchesFilter && !isEdited) return false;
+      if (searchWords.length === 0) return true;
 
-    return supplierPriceSearchWords.every((word) => searchableText.includes(word));
-  });
+      const searchableText = normalizeSupplierSearchValue([
+        group.supplierTitle,
+        group.supplierCode,
+        group.casaAlbertoId,
+        group.productUrl,
+        group.sourceUrl,
+        group.products.map((product) => [
+          product.id,
+          product.title,
+          product.barcode,
+          product.category,
+        ].filter(Boolean).join(' ')).join(' '),
+      ].filter(Boolean).join(' '));
+
+      return searchWords.every((word) => searchableText.includes(word));
+    });
+  }, [casaAlbertoGroups, selectedSupplierGroupKeySet, supplierPriceFilter, supplierPriceSearchTerm, supplierPriceOverrides]);
+  const visibleCasaAlbertoGroups = useMemo(
+    () => filteredCasaAlbertoGroups.slice(0, supplierVisibleGroupLimit),
+    [filteredCasaAlbertoGroups, supplierVisibleGroupLimit],
+  );
+
+  useEffect(() => {
+    setSupplierVisibleGroupLimit(SUPPLIER_GROUPS_VISIBLE_CHUNK);
+  }, [supplierPriceFilter, supplierPriceSearchTerm]);
   const casaAlbertoLinkCandidates = useMemo(() => (
     sandboxInventory
       .filter((product) => !productHasCasaAlbertoLink(product) && String(product.title || '').trim())
@@ -1901,12 +2032,19 @@ export default function BulkEditorView({
     setSandboxInventory((prev) => prev.map((product) => updatedById.get(String(product.id)) || product));
   };
 
-  const getSupplierStatusForPrice = (products = [], supplierPrice = 0, fallback = 'reviewed') => {
+  const getSupplierStatusForPrice = (products = [], supplierPrice = 0, fallback = 'reviewed', calculationMode = SUPPLIER_CALCULATION_MODE_UNITS) => {
     const estimatedCost = getSupplierEstimatedCost(supplierPrice);
     if (!estimatedCost) return fallback;
-    const hasIncrease = products.some((product) => estimatedCost - Number(product.purchasePrice || 0) >= 0.01);
+    if (calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT
+      && products.some((product) => product.product_type !== 'weight')) return 'review_required';
+    const comparableProductCost = (product) => (
+      calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT && product.product_type === 'weight'
+        ? getVisibleProductPurchaseCost(product.purchasePrice, product.product_type)
+        : Number(product.purchasePrice || 0)
+    );
+    const hasIncrease = products.some((product) => estimatedCost - comparableProductCost(product) >= 0.01);
     if (hasIncrease) return 'changed';
-    const hasDecrease = products.some((product) => Number(product.purchasePrice || 0) - estimatedCost >= 0.01);
+    const hasDecrease = products.some((product) => comparableProductCost(product) - estimatedCost >= 0.01);
     if (hasDecrease) return 'price_down';
     return 'reviewed';
   };
@@ -1923,6 +2061,8 @@ export default function BulkEditorView({
       rawSupplierPrice: priceInfo.rawSupplierPrice,
       unitSupplierPrice: priceInfo.unitSupplierPrice,
       unitDivisor: priceInfo.unitDivisor,
+      calculationMode: priceInfo.calculationMode,
+      supplierWeightGrams: priceInfo.supplierWeightGrams,
       approvedCost: estimatedCost,
       estimatedCost,
       suggestedSalePrice,
@@ -2068,7 +2208,11 @@ export default function BulkEditorView({
 
       if (result?.status === 'found' && Number(result.supplierPrice) > 0) {
         const supplierPrice = Number(result.supplierPrice);
-        const previousSupplierPrice = Number(group.supplierPrice || group.previousSupplierPrice || 0) || null;
+        const acknowledgedSupplierPrice = Number(
+          group.acknowledgedSupplierPrice || getAcknowledgedSupplierPrice(group.tracking),
+        ) || 0;
+        const previousSupplierPrice = acknowledgedSupplierPrice ||
+          Number(group.supplierPrice || group.previousSupplierPrice || 0) || null;
         const nextGroup = {
           ...group,
           supplierPrice,
@@ -2079,16 +2223,36 @@ export default function BulkEditorView({
         };
         const pricePayload = buildSupplierPricePayload(nextGroup, group.products[0] || {}, { supplierPrice });
         const estimatedCost = pricePayload.estimatedCost;
-        const status = getSupplierStatusForPrice(group.products, pricePayload.unitSupplierPrice);
-        const hasCostDelta = status === 'changed' || status === 'price_down';
+        const productStatus = getSupplierStatusForPrice(
+          group.products,
+          pricePayload.unitSupplierPrice,
+          'reviewed',
+          pricePayload.calculationMode,
+        );
+        const supplierPriceChangeStatus = getSupplierPriceChangeStatus(
+          supplierPrice,
+          acknowledgedSupplierPrice,
+        );
+        const status = productStatus === 'review_required'
+          ? productStatus
+          : supplierPriceChangeStatus || productStatus;
+        const hasPriceChange = status === 'changed' || status === 'price_down';
+        const nextAcknowledgedSupplierPrice = supplierPriceChangeStatus === 'reviewed'
+          ? acknowledgedSupplierPrice
+          : !acknowledgedSupplierPrice && status === 'reviewed'
+            ? supplierPrice
+            : acknowledgedSupplierPrice || null;
         const rowState = {
           status,
           supplierPrice,
           rawSupplierPrice: pricePayload.rawSupplierPrice,
           unitSupplierPrice: pricePayload.unitSupplierPrice,
           unitDivisor: pricePayload.unitDivisor,
+          calculationMode: pricePayload.calculationMode,
+          supplierWeightGrams: pricePayload.supplierWeightGrams,
           estimatedCost,
           previousSupplierPrice,
+          acknowledgedSupplierPrice: nextAcknowledgedSupplierPrice,
           foundTitle: result.foundTitle || group.supplierTitle,
           supplierCode: result.supplierCode || group.supplierCode,
           casaAlbertoId: result.casaAlbertoId || group.casaAlbertoId,
@@ -2097,12 +2261,16 @@ export default function BulkEditorView({
           imageUrl: result.imageUrl || group.supplierImageUrl || '',
           priceText: result.priceText || '',
           lastCheckedAt: checkedAt,
-          lastChangedAt: hasCostDelta ? checkedAt : group.tracking.lastChangedAt || null,
+          lastChangedAt: hasPriceChange ? checkedAt : group.tracking.lastChangedAt || null,
           message: status === 'changed'
-            ? 'Costo estimado distinto al costo Rebu.'
+            ? acknowledgedSupplierPrice
+              ? 'Casa Alberto informó un precio mayor al último aprobado.'
+              : 'Costo estimado distinto al costo Rebu.'
             : status === 'price_down'
-              ? 'Casa Alberto bajo el costo estimado. Revisar sin urgencia.'
-              : 'Costo Rebu alineado con Casa Alberto.',
+              ? acknowledgedSupplierPrice
+                ? 'Casa Alberto informó un precio menor al último aprobado.'
+                : 'Casa Alberto bajo el costo estimado. Revisar sin urgencia.'
+              : 'El precio de Casa Alberto no cambió desde la última revisión.',
         };
 
         setSupplierPriceRows((prev) => ({ ...prev, [group.key]: rowState }));
@@ -2110,9 +2278,10 @@ export default function BulkEditorView({
           productId: product.id,
           ...buildSupplierPricePayload(nextGroup, product, { supplierPrice, unitDivisor: pricePayload.unitDivisor }),
           previousSupplierPrice,
+          acknowledgedSupplierPrice: nextAcknowledgedSupplierPrice,
           reviewStatus: status,
           lastCheckedAt: checkedAt,
-          lastChangedAt: hasCostDelta ? checkedAt : group.tracking.lastChangedAt || null,
+          lastChangedAt: hasPriceChange ? checkedAt : group.tracking.lastChangedAt || null,
           supplierCode: rowState.supplierCode,
           casaAlbertoId: rowState.casaAlbertoId,
           productUrl: rowState.productUrl,
@@ -2276,6 +2445,7 @@ export default function BulkEditorView({
           rawSupplierPrice: priceInfo.rawSupplierPrice,
           unitSupplierPrice: priceInfo.unitSupplierPrice,
           unitDivisor: priceInfo.unitDivisor,
+          acknowledgedSupplierPrice: priceInfo.rawSupplierPrice,
           estimatedCost: approvedCost,
           lastCheckedAt: new Date().toISOString(),
         },
@@ -2307,6 +2477,7 @@ export default function BulkEditorView({
         productId: product.id,
         ...buildSupplierPricePayload(group, product),
         previousSupplierPrice: Number(product.purchasePrice || 0),
+        acknowledgedSupplierPrice: priceInfo.rawSupplierPrice,
         supplierCode: group.supplierCode,
         casaAlbertoId: group.casaAlbertoId,
         productUrl: group.productUrl,
@@ -2334,6 +2505,7 @@ export default function BulkEditorView({
           rawSupplierPrice: priceInfo.rawSupplierPrice,
           unitSupplierPrice: priceInfo.unitSupplierPrice,
           unitDivisor: priceInfo.unitDivisor,
+          acknowledgedSupplierPrice: priceInfo.rawSupplierPrice,
           estimatedCost,
           lastCheckedAt: new Date().toISOString(),
           message: 'Cambio revisado e ignorado manualmente.',
@@ -2371,6 +2543,8 @@ export default function BulkEditorView({
           rawSupplierPrice: priceInfo.rawSupplierPrice || Number(tracking.rawSupplierPrice || tracking.lastSupplierPrice || 0),
           unitSupplierPrice: priceInfo.unitSupplierPrice || Number(tracking.unitSupplierPrice || tracking.lastSupplierPrice || 0),
           unitDivisor: priceInfo.unitDivisor || Number(tracking.unitDivisor || 1),
+          calculationMode: priceInfo.calculationMode,
+          supplierWeightGrams: priceInfo.supplierWeightGrams,
           supplierCode: group.supplierCode,
           casaAlbertoId: group.casaAlbertoId,
           productUrl: group.productUrl,
@@ -2502,7 +2676,12 @@ export default function BulkEditorView({
           };
           const pricePayload = buildSupplierPricePayload(nextGroup, product, { supplierPrice });
           const estimatedCost = pricePayload.estimatedCost;
-          const detectedStatus = getSupplierStatusForPrice([product], pricePayload.unitSupplierPrice);
+          const detectedStatus = getSupplierStatusForPrice(
+            [product],
+            pricePayload.unitSupplierPrice,
+            'reviewed',
+            pricePayload.calculationMode,
+          );
           const hasCostDelta = detectedStatus === 'changed' || detectedStatus === 'price_down';
           const matchedBy = getDetectedSupplierMatchMode(product, result);
           const suggestion = {
@@ -2729,7 +2908,12 @@ export default function BulkEditorView({
         supplierPrice,
         unitDivisor: result.unitDivisor,
       });
-      const status = getSupplierStatusForPrice([product], pricePayload.unitSupplierPrice);
+      const status = getSupplierStatusForPrice(
+        [product],
+        pricePayload.unitSupplierPrice,
+        'reviewed',
+        pricePayload.calculationMode,
+      );
       const saveResult = await onSaveSupplierPriceChecks?.([{
         productId: product.id,
         ...pricePayload,
@@ -3022,7 +3206,9 @@ export default function BulkEditorView({
 
   const renderCasaAlbertoPanel = () => {
     const filterOptions = [
-      { value: 'all', label: 'Todos', count: casaAlbertoGroups.length },
+      { value: 'pending', label: 'Pendientes', count: supplierPriceOpenCount },
+      { value: 'edited', label: 'Editados sin aplicar', count: supplierPendingEditCount },
+      { value: 'all', label: 'Todos vinculados', count: casaAlbertoGroups.length },
       { value: 'selected', label: 'Seleccionados', count: selectedSupplierGroups.length },
       { value: 'changed', label: 'Con cambio', count: supplierPricePendingCount },
       { value: 'price_down', label: 'Bajo precio', count: casaAlbertoGroups.filter((group) => group.status === 'price_down').length },
@@ -3071,6 +3257,8 @@ export default function BulkEditorView({
       inputMode = 'decimal',
       tone = 'slate',
       className = '',
+      labelAction = null,
+      ariaLabel = label,
     }) => {
       const accentClass = tone === 'emerald'
         ? 'focus-within:border-emerald-400/70'
@@ -3079,10 +3267,13 @@ export default function BulkEditorView({
           : 'focus-within:border-slate-400/70';
       return (
         <div className={`min-w-0 ${className}`}>
-          <span className="mb-1 flex items-center justify-between gap-2 text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
+          <div className="mb-1 flex items-center justify-between gap-2 text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
             <span>{label}</span>
-            {manual ? <span className="text-sky-200">Manual</span> : null}
-          </span>
+            <span className="flex items-center gap-1">
+              {manual ? <span className="text-sky-200">Manual</span> : null}
+              {labelAction}
+            </span>
+          </div>
           <span className={`flex h-8 overflow-hidden rounded-md border border-slate-700 bg-[#07111f] transition-colors ${accentClass}`}>
             <button
               type="button"
@@ -3091,7 +3282,7 @@ export default function BulkEditorView({
                 onStep?.(-1);
               }}
               className="flex h-full w-7 shrink-0 items-center justify-center border-r border-slate-700 text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
-              aria-label={`Bajar ${label}`}
+              aria-label={`Bajar ${ariaLabel}`}
             >
               <Minus size={12} />
             </button>
@@ -3116,7 +3307,7 @@ export default function BulkEditorView({
                 onStep?.(1);
               }}
               className="flex h-full w-7 shrink-0 items-center justify-center border-l border-slate-700 text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
-              aria-label={`Subir ${label}`}
+              aria-label={`Subir ${ariaLabel}`}
             >
               <Plus size={12} />
             </button>
@@ -3127,7 +3318,7 @@ export default function BulkEditorView({
     };
 
     const renderSupplierActions = (group, { compact = false } = {}) => {
-      const { hasSupplierPrice, hasManualOverride } = getSupplierCardMath(group);
+      const { hasSupplierPrice, hasManualOverride, hasWeightTypeMismatch } = getSupplierCardMath(group);
       const hasManualChange = hasManualOverride || hasSupplierFinalSaleOverrides(group);
       const isReviewedWithoutManualChange =
         (group.status === 'reviewed' || group.status === 'approved') && !hasManualChange;
@@ -3159,7 +3350,8 @@ export default function BulkEditorView({
               event.stopPropagation();
               handleApproveSupplierGroup(group);
             }}
-            disabled={isOfflineReadOnly || !hasSupplierPrice || isReviewedWithoutManualChange}
+            disabled={isOfflineReadOnly || !hasSupplierPrice || isReviewedWithoutManualChange || hasWeightTypeMismatch}
+            title={hasWeightTypeMismatch ? 'Los productos asociados deben estar configurados como venta por peso.' : ''}
             className={`flex items-center justify-center gap-2 rounded-md border border-emerald-400/35 bg-emerald-400/14 font-black text-emerald-100 transition-colors hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-45 ${buttonClass}`}
           >
             <CheckCircle size={14} />
@@ -3245,6 +3437,12 @@ export default function BulkEditorView({
               : 0;
             const finalSaleValue = getSupplierFinalSaleInputValue(group, product, suggestedSale);
             const hasFinalSaleOverride = getSupplierStoredFinalSaleValue(group.key, product.id) !== undefined;
+            const currentSale = math.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT && product.product_type === 'weight'
+              ? getVisibleProductSalePrice(product.price, product.product_type)
+              : product.price;
+            const currentCost = math.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT && product.product_type === 'weight'
+              ? getVisibleProductPurchaseCost(product.purchasePrice, product.product_type)
+              : product.purchasePrice;
             return (
               <div
                 key={product.id}
@@ -3283,12 +3481,12 @@ export default function BulkEditorView({
                 <span className="min-w-0">
                   <span className="block truncate text-xs font-black text-white" title={product.title}>{product.title}</span>
                   <span className="mt-0.5 block truncate text-[10px] font-bold text-slate-500">
-                    {product.barcode || 'Sin codigo'} - Venta actual {formatSupplierMoney(product.price)}
+                    {product.barcode || 'Sin codigo'} - Venta actual {formatSupplierMoney(currentSale)}{math.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT && product.product_type === 'weight' ? '/kg' : ''}
                   </span>
                 </span>
                 <span className="text-[11px] font-black text-slate-200">
                   <span className="block text-[8px] uppercase tracking-[0.12em] text-slate-500">Costo</span>
-                  {formatSupplierMoney(product.purchasePrice)}
+                  {formatSupplierMoney(currentCost)}{math.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT && product.product_type === 'weight' ? '/kg' : ''}
                 </span>
                 {!compact ? (
                   <>
@@ -3331,10 +3529,12 @@ export default function BulkEditorView({
         {
           label: 'Proveedor',
           value: math.hasSupplierPrice ? formatSupplierMoney(math.supplierPrice) : '-',
-          helper: math.unitDivisor > 1 ? `pack dividido en ${math.unitDivisor}` : 'precio unitario',
+          helper: math.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT
+            ? `envase de ${math.supplierWeightGrams} g`
+            : math.unitDivisor > 1 ? `pack dividido en ${math.unitDivisor}` : 'precio unitario',
         },
         {
-          label: 'Costo por unidad',
+          label: math.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT ? 'Costo por kg' : 'Costo por unidad',
           value: math.hasSupplierPrice ? formatSupplierMoney(math.unitSupplierPrice) : '-',
           helper: 'base antes del recargo',
         },
@@ -3370,6 +3570,15 @@ export default function BulkEditorView({
     const renderSupplierPriceControls = (group, { compact = false } = {}) => {
       const math = getSupplierCardMath(group);
       const hasManualOverride = math.hasManualOverride;
+      const isWeightMode = math.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT;
+      const setSupplierCalculationMode = (calculationMode) => {
+        updateSupplierPriceOverride(group.key, {
+          calculationMode,
+          ...(calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT && !math.supplierWeightGrams
+            ? { supplierWeightGrams: 1000 }
+            : {}),
+        });
+      };
       const stepSupplierOverride = (field, fallbackValue, direction, step, minValue = 0) => {
         const storedValue = supplierPriceOverrides[group.key]?.[field];
         const currentValue = field === 'unitDivisor'
@@ -3387,7 +3596,9 @@ export default function BulkEditorView({
             <div>
               <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Calculo del costo</p>
               <p className="mt-0.5 text-[10px] font-bold leading-snug text-slate-400">
-                Precio proveedor / unidades = costo por unidad. Al aprobar se suma el recargo de costo.
+                {isWeightMode
+                  ? 'Precio proveedor / peso del envase = costo por kg. Al aprobar se suma el recargo de costo.'
+                  : 'Precio proveedor / unidades = costo por unidad. Al aprobar se suma el recargo de costo.'}
               </p>
             </div>
             {hasManualOverride ? (
@@ -3401,30 +3612,82 @@ export default function BulkEditorView({
               </button>
             ) : null}
           </div>
-          <div className={`grid gap-2 ${compact ? 'grid-cols-2' : 'grid-cols-[minmax(132px,1fr)_104px_minmax(120px,0.9fr)]'}`}>
+          {math.hasWeightTypeMismatch ? (
+            <p className="mb-2 rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1.5 text-[10px] font-bold text-amber-100">
+              Para aprobar por kilo, los productos Rebu asociados deben estar configurados como venta por peso.
+            </p>
+          ) : null}
+          <div className={`grid gap-2 ${compact ? 'grid-cols-2' : 'grid-cols-[minmax(132px,1fr)_148px_minmax(120px,0.9fr)]'}`}>
             {renderSupplierStepperInput({
               label: 'Precio proveedor',
               value: supplierPriceOverrides[group.key]?.supplierPrice ?? (math.rawSupplierPrice || ''),
               onChange: (value) => updateSupplierPriceOverride(group.key, { supplierPrice: value }),
               onStep: (direction) => stepSupplierOverride('supplierPrice', math.rawSupplierPrice || 0, direction, 50, 0),
-              helper: math.unitDivisor > 1 ? 'total del pack' : 'detectado',
+              helper: isWeightMode || math.unitDivisor > 1 ? 'total del envase' : 'detectado',
               manual: math.hasManualSupplierPrice,
               tone: 'sky',
             })}
             {renderSupplierStepperInput({
-              label: 'Unidades',
-              value: supplierPriceOverrides[group.key]?.unitDivisor ?? math.unitDivisor,
-              onChange: (value) => updateSupplierPriceOverride(group.key, { unitDivisor: value }),
-              onStep: (direction) => stepSupplierOverride('unitDivisor', math.unitDivisor || 1, direction, 1, 1),
-              helper: math.divisorAmbiguo
-                ? 'revisar unidades'
-                : math.detectedDivisor > 1 ? `sugerido ${math.detectedDivisor}` : 'por producto',
-              manual: math.hasManualDivisor,
+              label: isWeightMode ? 'Peso' : 'Unidades',
+              ariaLabel: isWeightMode ? 'peso del envase' : 'unidades por producto',
+              value: isWeightMode
+                ? (supplierPriceOverrides[group.key]?.supplierWeightGrams ?? math.supplierWeightGrams)
+                : (supplierPriceOverrides[group.key]?.unitDivisor ?? math.unitDivisor),
+              onChange: (value) => updateSupplierPriceOverride(
+                group.key,
+                isWeightMode ? { supplierWeightGrams: value } : { unitDivisor: value },
+              ),
+              onStep: (direction) => isWeightMode
+                ? stepSupplierOverride('supplierWeightGrams', math.supplierWeightGrams || 1000, direction, 100, 1)
+                : stepSupplierOverride('unitDivisor', math.unitDivisor || 1, direction, 1, 1),
+              suffix: isWeightMode ? 'g' : '',
+              helper: isWeightMode
+                ? 'peso del envase'
+                : math.divisorAmbiguo
+                  ? 'revisar unidades'
+                  : math.detectedDivisor > 1 ? `sugerido ${math.detectedDivisor}` : 'por producto',
+              manual: isWeightMode ? math.hasManualWeight : math.hasManualDivisor,
               inputMode: 'numeric',
               tone: 'sky',
+              labelAction: (
+                <span
+                  role="group"
+                  aria-label="Modo de cálculo"
+                  className="flex overflow-hidden rounded border border-slate-700 bg-[#07111f] p-0.5 normal-case tracking-normal"
+                >
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSupplierCalculationMode(SUPPLIER_CALCULATION_MODE_UNITS);
+                    }}
+                    aria-pressed={!isWeightMode}
+                    className={`rounded-sm px-1.5 py-0.5 text-[8px] font-black transition-colors ${
+                      !isWeightMode ? 'bg-sky-400 text-slate-950' : 'text-slate-500 hover:text-slate-200'
+                    }`}
+                  >
+                    Unid.
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSupplierCalculationMode(SUPPLIER_CALCULATION_MODE_WEIGHT);
+                    }}
+                    aria-pressed={isWeightMode}
+                    className={`rounded-sm px-1.5 py-0.5 text-[8px] font-black transition-colors ${
+                      isWeightMode ? 'bg-sky-400 text-slate-950' : 'text-slate-500 hover:text-slate-200'
+                    }`}
+                  >
+                    Peso
+                  </button>
+                </span>
+              ),
             })}
             <div className={compact ? 'col-span-2' : ''}>
-              <span className="mb-1 block text-[9px] font-black uppercase tracking-[0.12em] text-sky-200/80">Costo por unidad</span>
+              <span className="mb-1 block text-[9px] font-black uppercase tracking-[0.12em] text-sky-200/80">
+                {isWeightMode ? 'Costo por kg' : 'Costo por unidad'}
+              </span>
               <div className="flex h-8 items-center justify-end rounded-md border border-sky-400/25 bg-sky-400/10 px-2 text-xs font-black text-sky-100">
                 {math.hasSupplierPrice ? formatSupplierMoney(math.unitSupplierPrice) : '-'}
               </div>
@@ -3518,7 +3781,7 @@ export default function BulkEditorView({
                 </span>
               </div>
               <p className="mt-1.5 text-[10px] font-bold leading-snug text-emerald-100/70">
-                Exactos se guardan. Codigo corregido o nombre queda para revisar.
+                Busca en Casa Alberto los productos Rebu activos que todavía no tienen enlace.
               </p>
 
               <div className="mt-3 grid grid-cols-3 gap-1.5 rounded-md border border-emerald-400/20 bg-slate-950/20 p-1">
@@ -3657,7 +3920,7 @@ export default function BulkEditorView({
                   disabled={isOfflineReadOnly || isCheckingSupplierPrices || casaAlbertoGroups.length === 0}
                   className="h-8 rounded-md border border-sky-400/30 bg-sky-400/12 text-[10px] font-black text-sky-100 disabled:opacity-45"
                 >
-                  Chequear todos
+                  Chequear vinculados
                 </button>
                 <button
                   type="button"
@@ -3726,7 +3989,7 @@ export default function BulkEditorView({
             <div className="min-w-[220px]">
               <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Seguimiento de precios</p>
               <p className="mt-1 text-xs font-bold text-slate-300">
-                {visibleCasaAlbertoGroups.length} grupo(s) visibles. Chequeo manual, sin cambios automáticos.
+                {visibleCasaAlbertoGroups.length} de {filteredCasaAlbertoGroups.length} grupo(s) en pantalla. Chequeo manual, sin cambios automáticos.
               </p>
             </div>
             <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
@@ -3968,7 +4231,7 @@ export default function BulkEditorView({
                   </span>
                   <h3 className="mt-3 text-base font-black">Todavia no hay enlaces Casa Alberto</h3>
                   <p className="mt-1 text-sm font-bold text-slate-400">
-                    Usa Detectar enlaces para buscar por codigo o nombre y guardar la referencia del proveedor.
+                    Usa Detectar enlaces para buscar cada producto Rebu activo dentro de Casa Alberto y guardar su referencia.
                   </p>
                 </div>
               </div>
@@ -4030,9 +4293,19 @@ export default function BulkEditorView({
                               </div>
                               </div>
                             </div>
-                            <span className="inline-flex shrink-0 items-center gap-1.5 pt-1 text-[10px] font-black uppercase tracking-[0.08em] text-slate-300">
-                              <span className={`h-2 w-2 rounded-full ${meta.railClassName}`} />
-                              {meta.label}
+                            <span className="inline-flex shrink-0 flex-wrap items-center justify-end gap-1.5 pt-1 text-[10px] font-black uppercase tracking-[0.08em] text-slate-300">
+                              {group.hasPendingEdit ? (
+                                <span
+                                  className="rounded-md border border-sky-400/40 bg-sky-400/12 px-1.5 py-0.5 text-sky-200"
+                                  title="Lo editaste y todavia no lo aplicaste: se queda a la vista aunque cambie de estado"
+                                >
+                                  Editado sin aplicar
+                                </span>
+                              ) : null}
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className={`h-2 w-2 rounded-full ${meta.railClassName}`} />
+                                {meta.label}
+                              </span>
                             </span>
                           </div>
 
@@ -4113,6 +4386,17 @@ export default function BulkEditorView({
                     </article>
                   );
                 })}
+                {visibleCasaAlbertoGroups.length < filteredCasaAlbertoGroups.length ? (
+                  <div className="flex justify-center rounded-xl border border-slate-700/70 bg-[#0f1e33]/70 px-4 py-4">
+                    <button
+                      type="button"
+                      onClick={() => setSupplierVisibleGroupLimit((limit) => limit + SUPPLIER_GROUPS_VISIBLE_CHUNK)}
+                      className="h-9 rounded-md border border-sky-400/35 bg-sky-400/12 px-4 text-[10px] font-black uppercase tracking-[0.08em] text-sky-100 transition-colors hover:bg-sky-400/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60"
+                    >
+                      Ver {Math.min(SUPPLIER_GROUPS_VISIBLE_CHUNK, filteredCasaAlbertoGroups.length - visibleCasaAlbertoGroups.length)} más
+                    </button>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
@@ -4135,6 +4419,11 @@ export default function BulkEditorView({
                         <span className={`rounded-md border px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] ${meta.className}`}>
                           {meta.label}
                         </span>
+                        {group.hasPendingEdit ? (
+                          <span className="rounded-md border border-sky-400/40 bg-sky-400/12 px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-sky-200">
+                            Editado sin aplicar
+                          </span>
+                        ) : null}
                         {group.casaAlbertoId ? (
                           <span className="rounded-md border border-slate-700 bg-slate-950/30 px-2 py-1 text-[10px] font-black text-slate-300">
                             ID Casa Alberto {group.casaAlbertoId}
