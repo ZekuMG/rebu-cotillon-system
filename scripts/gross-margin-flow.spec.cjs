@@ -45,7 +45,14 @@ test('margen real se comparte entre Editor Masivo, Excel y Casa Alberto', async 
   await rowNumberInputs.nth(0).fill('680.16');
   await rowNumberInputs.nth(0).blur();
   await expect(rowNumberInputs.nth(0)).toHaveValue('681');
+  // Venta al escalon de $10: hasta $2 por encima del escalon baja, de ahi para arriba sube.
   await rowNumberInputs.nth(1).fill('680.16');
+  await rowNumberInputs.nth(1).blur();
+  await expect(rowNumberInputs.nth(1)).toHaveValue('680');
+  await rowNumberInputs.nth(1).fill('682');
+  await rowNumberInputs.nth(1).blur();
+  await expect(rowNumberInputs.nth(1)).toHaveValue('680');
+  await rowNumberInputs.nth(1).fill('683');
   await rowNumberInputs.nth(1).blur();
   await expect(rowNumberInputs.nth(1)).toHaveValue('690');
 
@@ -55,14 +62,21 @@ test('margen real se comparte entre Editor Masivo, Excel y Casa Alberto', async 
 
   await page.getByRole('button', { name: /Importar Excel/i }).click();
   await expect(page.getByRole('button', { name: '60%' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByText(/Costo se interpreta sin IVA/)).toBeVisible();
+  // El costo del proveedor ya viene con IVA: ese es el modo por defecto.
+  await expect(page.getByRole('button', { name: 'Ya incluye IVA' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText(/El costo ya trae el IVA/)).toBeVisible();
+  await page.getByRole('button', { name: 'No incluye IVA' }).click();
+  await expect(page.getByText(/Primero se le suma el IVA al costo/)).toBeVisible();
+  await page.getByRole('button', { name: 'Ya incluye IVA' }).click();
 
   const storedPreference = await page.evaluate(() => (
     JSON.parse(window.localStorage.getItem('rebu_gross_margin_pricing_v1'))
   ));
+  // Editor Masivo y Excel recuerdan por separado si el costo cargado ya trae IVA.
   expect(storedPreference).toEqual({
     marginPercent: 60,
     bulkCostIncludesVat: true,
+    excelCostIncludesVat: true,
   });
   expect(pageErrors).toEqual([]);
 });

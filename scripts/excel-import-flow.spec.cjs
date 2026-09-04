@@ -89,7 +89,7 @@ test('importar Excel consolida, crea y bloquea reaplicaciones', async ({ page },
   await duplicateRow.click();
   await duplicateRow.locator('.excel-target-list button').first().click();
   await page.getByPlaceholder('Buscar producto principal...').fill('Pack Globos Metalizados Dorados');
-  await duplicateRow.locator('.excel-assignment-panel button').filter({ hasText: 'Pack Globos Metalizados Dorados' }).click();
+  await duplicateRow.locator('.excel-assignment-panel button:not(.excel-create-inline)').filter({ hasText: 'Pack Globos Metalizados Dorados' }).click();
   await expect(duplicateRow.locator('.excel-target-list')).toContainText('5 compra x 1');
   await expect(duplicateRow).toContainText('1.800');
   await expect(duplicateRow).toContainText('3.500');
@@ -122,8 +122,10 @@ test('importar Excel consolida, crea y bloquea reaplicaciones', async ({ page },
   await expect(page.getByRole('heading', { name: 'Crear productos nuevos' })).toBeVisible();
   await expect(page.getByText(/Nombre similar/i)).toBeVisible();
   await expect(page.getByText(/Podes vincularlo o crear este producto como uno nuevo/i)).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'Costo $' })).toHaveValue('1989');
-  await expect(page.getByRole('textbox', { name: 'Venta $' })).toHaveValue('3980');
+  // El Costo del Excel ya viene con IVA: se toma tal cual (1.800) y la venta sale x2.
+  // Antes se le sumaba el IVA de nuevo y daba 1.989 / 3.980, un 10,5% de mas.
+  await expect(page.getByRole('textbox', { name: 'Costo $' })).toHaveValue('1800');
+  await expect(page.getByRole('textbox', { name: 'Venta $' })).toHaveValue('3600');
   await expect(page.getByRole('button', { name: /^Crear producto$/i })).toBeEnabled();
 
   await page.screenshot({ path: testInfo.outputPath('excel-import-flow.png'), fullPage: true });
