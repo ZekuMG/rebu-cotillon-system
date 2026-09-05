@@ -14,6 +14,16 @@
 -- pisaria lo que alguien tenga editando en el Editor Masivo. Esta tabla queda
 -- FUERA de realtime a proposito: la deteccion escribe en silencio.
 
+-- 🪤 SEGURIDAD AL APLICAR CON LA APP EN USO: el `references products(id)` toma
+-- un ShareRowExclusiveLock sobre `products`, que BLOQUEA ESCRITURAS mientras
+-- dura. Como la tabla nueva nace vacia el FK no valida ninguna fila y el lock es
+-- instantaneo, pero si justo hubiera una transaccion larga abierta sobre
+-- `products` este ALTER se pondria a esperar y todo lo que llegue detras haria
+-- cola con el. Con `lock_timeout` la migracion se rinde a los 3 segundos en vez
+-- de frenar a nadie: si falla, se reintenta mas tarde y no quedo nada a medias
+-- (todo esto corre en una sola transaccion).
+set local lock_timeout = '3s';
+
 create table if not exists public.supplier_link_suggestions (
   product_id        bigint      not null references public.products(id) on delete cascade,
   casa_alberto_id   text        not null,

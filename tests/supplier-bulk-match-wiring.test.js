@@ -34,3 +34,22 @@ test('al chequear un grupo ya enlazado se pasa el id, que manda sobre el nombre'
   assert.ok(start > 0, 'tiene que existir la llamada del chequeo por grupo');
   assert.match(source.slice(start, start + 300), /expectedId: group\.casaAlbertoId/);
 });
+
+test('no se marca como cargado si el inventario todavia no llego', async () => {
+  const source = await readSource('../src/views/BulkEditorView.jsx');
+  const start = source.indexOf('const supplierSuggestionsLoadedRef');
+  const block = source.slice(start, start + 900);
+  const guard = block.indexOf('if (sandboxInventory.length === 0) return;');
+  const marca = block.indexOf('supplierSuggestionsLoadedRef.current = true;');
+  assert.ok(guard > 0, 'tiene que cortar cuando no hay inventario');
+  assert.ok(
+    guard < marca,
+    'el corte va ANTES de marcar como cargado, si no nunca reintenta y la lista queda vacia',
+  );
+});
+
+test('las sugerencias que esperan OK no se cuentan como errores', async () => {
+  const source = await readSource('../src/views/BulkEditorView.jsx');
+  assert.match(source, /summary\.pendingReview \+= 1;/);
+  assert.match(source, /esperando tu OK/);
+});

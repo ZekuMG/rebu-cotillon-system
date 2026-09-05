@@ -3208,6 +3208,10 @@ export default function BulkEditorView({
     if (activeToolMode !== 'supplier') return;
     if (supplierSuggestionsLoadedRef.current) return;
     if (!onLoadSupplierLinkSuggestions) return;
+    // Sin inventario todavia no se puede reconstruir nada: cada fila necesita su
+    // producto. Si se marcara como cargado aca, al llegar el inventario ya no se
+    // reintentaria y la lista quedaria vacia -- justo el sintoma que esto arregla.
+    if (sandboxInventory.length === 0) return;
     supplierSuggestionsLoadedRef.current = true;
 
     let cancelled = false;
