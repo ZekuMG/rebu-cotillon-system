@@ -70,6 +70,11 @@ import {
 } from '../utils/supplierPriceUnits';
 import { pickBestSupplierCandidate } from '../utils/supplierBulkMatch';
 import {
+  buildManualCasaAlbertoLink,
+  findLinkableProducts,
+  parseCasaAlbertoProductInput,
+} from '../utils/supplierManualLink';
+import {
   buildSupplierLinkSuggestionRow,
   buildSupplierLinkSuggestionsFromRows,
   getSupplierLinkSuggestionProductIds,
@@ -240,6 +245,10 @@ export default function BulkEditorView({
   const [supplierDetailGroupKey, setSupplierDetailGroupKey] = useState('');
   const [supplierLinkEditKey, setSupplierLinkEditKey] = useState('');
   const [supplierLinkDrafts, setSupplierLinkDrafts] = useState({});
+  // Panel para sumar otro producto de Rebu al mismo enlace de Casa Alberto.
+  const [supplierAddProductKey, setSupplierAddProductKey] = useState('');
+  const [supplierAddProductQuery, setSupplierAddProductQuery] = useState('');
+  const [supplierAddProductBusyId, setSupplierAddProductBusyId] = useState('');
   const [supplierLinkSuggestions, setSupplierLinkSuggestions] = useState([]);
   // Productos que ya tienen una sugerencia guardada (pendiente o descartada):
   // no hay que volver a consultarlos al proveedor.
@@ -3008,13 +3017,22 @@ export default function BulkEditorView({
   };
 
   const updateSupplierLinkDraft = (groupKey, field, value) => {
-    setSupplierLinkDrafts((prev) => ({
-      ...prev,
-      [groupKey]: {
-        ...(prev[groupKey] || {}),
-        [field]: value,
-      },
-    }));
+    setSupplierLinkDrafts((prev) => {
+      const next = { ...(prev[groupKey] || {}), [field]: value };
+      // Al pegar el link de la ficha se completa el ID solo. Antes habia que
+      // cargarlo a mano y, si te lo olvidabas, el ID viejo se quedaba: el grupo
+      // se arma por ID, asi que el enlace parecia cambiado pero seguia igual.
+      if (field === 'productUrl') {
+        const parsed = parseCasaAlbertoProductInput(value);
+        next.linkError = value.trim() && !parsed.valid ? parsed.reason : '';
+        if (parsed.valid) {
+          next.casaAlbertoId = parsed.casaAlbertoId;
+          next.productUrl = parsed.productUrl;
+        }
+      }
+      if (field === 'casaAlbertoId') next.linkError = '';
+      return { ...prev, [groupKey]: next };
+    });
   };
 
   const handleSaveSupplierLink = async (group) => {
@@ -3050,6 +3068,65 @@ export default function BulkEditorView({
     } catch (error) {
       console.error('Error guardando enlace de proveedor:', error);
       showSupplierActionFailure(error?.message || 'No se pudo guardar la vinculación.');
+    }
+  };
+
+  const toggleSupplierAddProduct = (group) => {
+    setSupplierAddProductKey((current) => (current === group.key ? '' : group.key));
+    setSupplierAddProductQuery('');
+  };
+
+  /** Suma un producto de Rebu al enlace de Casa Alberto que ya tiene el grupo. */
+  const handleAddProductToSupplierGroup = async (group, entry) => {
+    if (isOfflineReadOnly) {
+      showSupplierOfflineNotice();
+      return;
+    }
+    const product = entry?.product;
+    if (!product?.id) return;
+
+    const link = buildManualCasaAlbertoLink({
+      casaAlbertoId: group.casaAlbertoId,
+      productUrl: group.productUrl || group.sourceUrl,
+      foundTitle: group.supplierTitle,
+    });
+    if (!link) {
+      Swal.fire('Sin enlace', 'Este grupo todavia no tiene un ID de Casa Alberto para compartir.', 'info');
+      return;
+    }
+
+    // Si el producto ya apuntaba a otro articulo del proveedor, eso se pisa: hay
+    // que decirlo antes, no despues.
+    if (entry.hasOtherLink) {
+      const confirmacion = await Swal.fire({
+        title: 'Ese producto ya esta enlazado',
+        html: `<b>${product.title}</b> hoy apunta a <b>${entry.currentLinkTitle || 'otro articulo'}</b>.`
+          + '<br/>Si lo sumas aca, pierde ese enlace.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: 'Sumarlo igual',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        confirmButtonColor: '#0f172a',
+      });
+      if (!confirmacion.isConfirmed) return;
+    }
+
+    setSupplierAddProductBusyId(String(product.id));
+    try {
+      const result = await onUpdateCasaAlbertoLinks?.({ productIds: [product.id], link });
+      const updatedProducts = requireSupplierMutationProducts(
+        result,
+        1,
+        'No se pudo sumar el producto al enlace.',
+      );
+      updateSandboxProducts(updatedProducts);
+      setSupplierAddProductQuery('');
+    } catch (error) {
+      console.error('Error sumando producto al enlace de Casa Alberto:', error);
+      showSupplierActionFailure(error?.message || 'No se pudo sumar el producto al enlace.');
+    } finally {
+      setSupplierAddProductBusyId('');
     }
   };
 
@@ -4643,10 +4720,93 @@ export default function BulkEditorView({
                             <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">
                               Productos Rebu asociados
                             </p>
-                            <span className="rounded-md border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-black text-slate-300">
-                              {group.products.length}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="rounded-md border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-black text-slate-300">
+                                {group.products.length}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  toggleSupplierAddProduct(group);
+                                }}
+                                disabled={isOfflineReadOnly || !group.casaAlbertoId}
+                                title={group.casaAlbertoId
+                                  ? 'Sumar otro producto de Rebu a este enlace'
+                                  : 'Primero hay que enlazar el grupo con Casa Alberto'}
+                                className={`flex h-6 w-6 items-center justify-center rounded-md border font-black transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                                  supplierAddProductKey === group.key
+                                    ? 'border-sky-400/50 bg-sky-400/20 text-sky-100'
+                                    : 'border-slate-600 bg-slate-900 text-slate-300 hover:border-sky-400/50 hover:text-sky-200'
+                                }`}
+                              >
+                                <Plus size={13} />
+                              </button>
+                            </div>
                           </div>
+                          {supplierAddProductKey === group.key ? (
+                            <div
+                              className="mb-2 rounded-lg border border-sky-400/25 bg-sky-400/5 p-2"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <input
+                                value={supplierAddProductQuery}
+                                onChange={(event) => setSupplierAddProductQuery(event.target.value)}
+                                placeholder="Buscar producto de Rebu por nombre o codigo..."
+                                autoFocus
+                                className="h-8 w-full rounded-md border border-slate-700 bg-[#07111f] px-2 text-[11px] font-bold text-slate-100 outline-none focus:border-sky-400"
+                              />
+                              {(() => {
+                                const encontrados = findLinkableProducts({
+                                  inventory: sandboxInventory,
+                                  query: supplierAddProductQuery,
+                                  group,
+                                  limit: 6,
+                                });
+                                if (!supplierAddProductQuery.trim()) {
+                                  return (
+                                    <p className="mt-1.5 text-[10px] font-bold text-slate-500">
+                                      Escribi para buscar el producto que compartís con este enlace.
+                                    </p>
+                                  );
+                                }
+                                if (encontrados.length === 0) {
+                                  return (
+                                    <p className="mt-1.5 text-[10px] font-bold text-slate-500">
+                                      Ningun producto suelto coincide con eso.
+                                    </p>
+                                  );
+                                }
+                                return (
+                                  <div className="mt-1.5 space-y-1">
+                                    {encontrados.map((entry) => (
+                                      <button
+                                        key={entry.product.id}
+                                        type="button"
+                                        onClick={() => handleAddProductToSupplierGroup(group, entry)}
+                                        disabled={supplierAddProductBusyId === String(entry.product.id)}
+                                        className="flex w-full items-center justify-between gap-2 rounded-md border border-slate-700 bg-slate-950/40 px-2 py-1.5 text-left transition-colors hover:border-sky-400/50 hover:bg-sky-400/10 disabled:opacity-50"
+                                      >
+                                        <span className="min-w-0 flex-1">
+                                          <span className="block truncate text-[11px] font-black text-slate-100">
+                                            {entry.product.title}
+                                          </span>
+                                          {entry.hasOtherLink ? (
+                                            <span className="block truncate text-[9px] font-bold text-amber-300/90">
+                                              Ya enlazado a {entry.currentLinkTitle || 'otro articulo'} - se reemplaza
+                                            </span>
+                                          ) : null}
+                                        </span>
+                                        {supplierAddProductBusyId === String(entry.product.id)
+                                          ? <Loader2 size={13} className="shrink-0 animate-spin text-sky-300" />
+                                          : <Plus size={13} className="shrink-0 text-sky-300" />}
+                                      </button>
+                                    ))}
+                                  </div>
+                                );
+                              })()}
+                            </div>
+                          ) : null}
                           {renderSupplierProducts(group)}
                         </div>
 
@@ -4662,18 +4822,17 @@ export default function BulkEditorView({
 
                       {isEditingLink ? (
                         <div className="border-t border-slate-700/70 bg-slate-950/20 p-3">
-                          <div className="grid gap-2 min-[1500px]:grid-cols-[minmax(180px,1fr)_140px_140px_minmax(260px,1.3fr)_auto]">
+                          <p className="mb-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                            Pegá el link de la ficha de Casa Alberto
+                          </p>
+                          <div className="grid gap-2 min-[1500px]:grid-cols-[minmax(300px,1.6fr)_140px_auto]">
                             <input
-                              value={draft.foundTitle || ''}
-                              onChange={(event) => updateSupplierLinkDraft(group.key, 'foundTitle', event.target.value)}
-                              placeholder="Nombre Casa Alberto"
-                              className="h-9 rounded-md border border-slate-700 bg-[#07111f] px-3 text-xs font-bold text-slate-100 outline-none focus:border-sky-400"
-                            />
-                            <input
-                              value={draft.supplierCode || ''}
-                              onChange={(event) => updateSupplierLinkDraft(group.key, 'supplierCode', event.target.value)}
-                              placeholder="Codigo proveedor"
-                              className="h-9 rounded-md border border-slate-700 bg-[#07111f] px-3 text-xs font-bold text-slate-100 outline-none focus:border-sky-400"
+                              value={draft.productUrl || ''}
+                              onChange={(event) => updateSupplierLinkDraft(group.key, 'productUrl', event.target.value)}
+                              placeholder="https://cotilloncasaalberto.com.ar/pedido/detalle.php?idp=... (o solo el numero)"
+                              className={`h-9 rounded-md border bg-[#07111f] px-3 text-xs font-bold text-slate-100 outline-none ${
+                                draft.linkError ? 'border-rose-400/60 focus:border-rose-400' : 'border-slate-700 focus:border-sky-400'
+                              }`}
                             />
                             <input
                               value={draft.casaAlbertoId || ''}
@@ -4681,19 +4840,35 @@ export default function BulkEditorView({
                               placeholder="ID Casa Alberto"
                               className="h-9 rounded-md border border-slate-700 bg-[#07111f] px-3 text-xs font-bold text-slate-100 outline-none focus:border-sky-400"
                             />
-                            <input
-                              value={draft.productUrl || ''}
-                              onChange={(event) => updateSupplierLinkDraft(group.key, 'productUrl', event.target.value)}
-                              placeholder="URL del producto"
-                              className="h-9 rounded-md border border-slate-700 bg-[#07111f] px-3 text-xs font-bold text-slate-100 outline-none focus:border-sky-400"
-                            />
                             <button
                               type="button"
                               onClick={() => handleSaveSupplierLink(group)}
-                              className="h-9 rounded-md border border-emerald-400/35 bg-emerald-400/14 px-4 text-xs font-black text-emerald-100 transition-colors hover:bg-emerald-400/20"
+                              disabled={Boolean(draft.linkError)}
+                              className="h-9 rounded-md border border-emerald-400/35 bg-emerald-400/14 px-4 text-xs font-black text-emerald-100 transition-colors hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-45"
                             >
-                              Guardar
+                              Guardar enlace
                             </button>
+                          </div>
+                          {draft.linkError ? (
+                            <p className="mt-1.5 text-[10px] font-black text-rose-300">{draft.linkError}</p>
+                          ) : (
+                            <p className="mt-1.5 text-[10px] font-bold text-slate-500">
+                              El ID se completa solo al pegar el link. Se aplica a los {group.products.length} producto(s) del grupo.
+                            </p>
+                          )}
+                          <div className="mt-2 grid gap-2 min-[1500px]:grid-cols-[minmax(200px,1fr)_160px]">
+                            <input
+                              value={draft.foundTitle || ''}
+                              onChange={(event) => updateSupplierLinkDraft(group.key, 'foundTitle', event.target.value)}
+                              placeholder="Nombre en Casa Alberto (opcional)"
+                              className="h-8 rounded-md border border-slate-700 bg-[#07111f] px-3 text-[11px] font-bold text-slate-300 outline-none focus:border-sky-400"
+                            />
+                            <input
+                              value={draft.supplierCode || ''}
+                              onChange={(event) => updateSupplierLinkDraft(group.key, 'supplierCode', event.target.value)}
+                              placeholder="Codigo proveedor (opcional)"
+                              className="h-8 rounded-md border border-slate-700 bg-[#07111f] px-3 text-[11px] font-bold text-slate-300 outline-none focus:border-sky-400"
+                            />
                           </div>
                         </div>
                       ) : null}
