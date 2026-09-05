@@ -85,6 +85,8 @@ test('guarda y normaliza la preferencia compartida', () => {
     // El importador de Excel tiene su propia interpretacion del IVA, separada de
     // la del editor masivo, y arranca en "el costo ya trae IVA".
     excelCostIncludesVat: true,
+    // El escalon de redondeo de Casa Alberto arranca en el de siempre ($10).
+    supplierSaleRoundingMode: 'decena',
   });
 
   assert.equal(saveGrossMarginPreferences(storage, {

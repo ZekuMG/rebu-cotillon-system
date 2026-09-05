@@ -162,6 +162,7 @@ export const buildSuggestedSalePriceFromMargin = (product = {}, supplierPrice = 
     costIncludesVat: false,
     marginPercent,
     vatPercent,
+    roundingMode: options.roundingMode,
   });
   return pricing.isValid ? pricing.salePrice : Number(product.price || 0) || 0;
 };

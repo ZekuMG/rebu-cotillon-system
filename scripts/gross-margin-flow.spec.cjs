@@ -77,6 +77,19 @@ test('margen real se comparte entre Editor Masivo, Excel y Casa Alberto', async 
     marginPercent: 60,
     bulkCostIncludesVat: true,
     excelCostIncludesVat: true,
+    supplierSaleRoundingMode: 'decena',
   });
+
+  // El escalon de redondeo de Casa Alberto: arranca en Decena y se recuerda.
+  await page.getByRole('button', { name: 'Casa Alberto' }).click();
+  await expect(page.getByText('Redondeo de la venta')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Decena', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Centena ↑' }).click();
+  await expect(page.getByRole('button', { name: 'Centena ↑' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText(/SIEMPRE para arriba/)).toBeVisible();
+  const roundingPreference = await page.evaluate(() => (
+    JSON.parse(window.localStorage.getItem('rebu_gross_margin_pricing_v1')).supplierSaleRoundingMode
+  ));
+  expect(roundingPreference).toBe('centenaArriba');
   expect(pageErrors).toEqual([]);
 });

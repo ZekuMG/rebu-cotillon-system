@@ -47,7 +47,9 @@ import {
   getStoredProductSalePrice,
   getVisibleProductSalePrice,
   normalizeFinalSalePrice,
+  normalizeSaleRoundingMode,
   applyPercentageToSalePrice,
+  SALE_ROUNDING_MODES,
 } from '../utils/finalSalePrice';
 import {
   getStoredProductPurchaseCost,
@@ -297,6 +299,13 @@ export default function BulkEditorView({
     setPricingPreferences((current) => ({
       ...current,
       bulkCostIncludesVat: value !== false,
+    }));
+  }, []);
+
+  const updateSupplierSaleRoundingMode = useCallback((value) => {
+    setPricingPreferences((current) => ({
+      ...current,
+      supplierSaleRoundingMode: normalizeSaleRoundingMode(value),
     }));
   }, []);
 
@@ -1528,7 +1537,8 @@ export default function BulkEditorView({
     vatRate: DEFAULT_VAT_PERCENT / 100,
     grossMarginPercent: pricingPreferences.marginPercent,
     grossMarginRate: pricingPreferences.marginPercent / 100,
-  }), [pricingPreferences.marginPercent]);
+    roundingMode: pricingPreferences.supplierSaleRoundingMode,
+  }), [pricingPreferences.marginPercent, pricingPreferences.supplierSaleRoundingMode]);
   const supplierPriceRulePayload = {
     vatPercent: supplierPriceRules.vatPercent,
     vatRate: supplierPriceRules.vatRate,
@@ -4123,6 +4133,39 @@ export default function BulkEditorView({
                   dark
                   compact
                 />
+              </div>
+              <div className="mt-3">
+                <p className="mb-1.5 text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
+                  Redondeo de la venta
+                </p>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {Object.entries(SALE_ROUNDING_MODES).map(([modeKey, modeInfo]) => {
+                    const isActive = normalizeSaleRoundingMode(
+                      pricingPreferences.supplierSaleRoundingMode,
+                    ) === modeKey;
+                    return (
+                      <button
+                        key={modeKey}
+                        type="button"
+                        onClick={() => updateSupplierSaleRoundingMode(modeKey)}
+                        aria-pressed={isActive}
+                        title={modeInfo.hint}
+                        className={`h-8 rounded-md border text-[9px] font-black transition-colors ${
+                          isActive
+                            ? 'border-sky-400/35 bg-sky-400/15 text-sky-100'
+                            : 'border-slate-700 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        {modeInfo.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1.5 text-[9px] font-bold leading-snug text-slate-500">
+                  {SALE_ROUNDING_MODES[
+                    normalizeSaleRoundingMode(pricingPreferences.supplierSaleRoundingMode)
+                  ].hint}
+                </p>
               </div>
               <p className="mt-2 rounded-md border border-slate-700/60 bg-slate-950/20 px-2 py-1.5 text-[10px] font-bold leading-snug text-slate-400">
                 Proveedor / unidades = costo base. Se incorpora IVA {supplierExtraPercent}% y la venta se calcula dividiendo por (1 - {supplierMarkupPercent}% de margen).

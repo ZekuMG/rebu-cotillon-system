@@ -1,3 +1,9 @@
+import {
+  DEFAULT_SALE_ROUNDING_MODE,
+  normalizeFinalSalePrice,
+  normalizeSaleRoundingMode,
+} from './finalSalePrice.js';
+
 export const GROSS_MARGIN_FORMULA_VERSION = 'gross-margin-v1';
 export const GROSS_MARGIN_PREFERENCE_STORAGE_KEY = 'rebu_gross_margin_pricing_v1';
 export const DEFAULT_VAT_PERCENT = 10.5;
@@ -9,6 +15,9 @@ export const DEFAULT_GROSS_MARGIN_PREFERENCES = Object.freeze({
   bulkCostIncludesVat: true,
   // Los pedidos de nuestros proveedores traen el IVA sumado en la columna Costo.
   excelCostIncludesVat: true,
+  // A que escalon se redondea la venta en Casa Alberto. Por defecto el de
+  // siempre ($10 con tolerancia hacia abajo).
+  supplierSaleRoundingMode: DEFAULT_SALE_ROUNDING_MODE,
 });
 
 const parsePercent = (value) => {
@@ -38,6 +47,17 @@ export const roundUpToCommercialTen = (value = 0) => {
   return Math.ceil(numberValue / 10) * 10;
 };
 
+/**
+ * Redondeo de la venta SUGERIDA segun el escalon elegido.
+ * El modo por defecto conserva exactamente el comportamiento historico (subir al
+ * proximo $10); los otros escalones pasan por la regla comercial comun.
+ */
+export const roundSaleForMode = (value = 0, mode = DEFAULT_SALE_ROUNDING_MODE) => {
+  const normalized = normalizeSaleRoundingMode(mode);
+  if (normalized === DEFAULT_SALE_ROUNDING_MODE) return roundUpToCommercialTen(value);
+  return normalizeFinalSalePrice(value, normalized);
+};
+
 const buildInvalidPricing = ({ marginPercent, vatPercent }) => ({
   isValid: false,
   baseCost: 0,
@@ -56,6 +76,7 @@ export const calculateGrossMarginPricing = ({
   marginPercent = DEFAULT_GROSS_MARGIN_PERCENT,
   vatPercent,
   vatRate: providedVatRate,
+  roundingMode = DEFAULT_SALE_ROUNDING_MODE,
 } = {}) => {
   const costValue = Number(cost);
   const parsedMargin = parsePercent(marginPercent);
@@ -92,7 +113,7 @@ export const calculateGrossMarginPricing = ({
     realCost: Math.ceil(rawRealCost),
     rawRealCost,
     rawSalePrice,
-    salePrice: roundUpToCommercialTen(rawSalePrice),
+    salePrice: roundSaleForMode(rawSalePrice, roundingMode),
     marginPercent: parsedMargin,
     vatPercent: parsedVat,
   };
@@ -110,6 +131,7 @@ export const loadGrossMarginPreferences = (storage) => {
       ),
       bulkCostIncludesVat: storedValue?.bulkCostIncludesVat !== false,
       excelCostIncludesVat: storedValue?.excelCostIncludesVat !== false,
+      supplierSaleRoundingMode: normalizeSaleRoundingMode(storedValue?.supplierSaleRoundingMode),
     };
   } catch {
     return { ...DEFAULT_GROSS_MARGIN_PREFERENCES };
@@ -124,6 +146,7 @@ export const saveGrossMarginPreferences = (storage, preferences = {}) => {
     ),
     bulkCostIncludesVat: preferences.bulkCostIncludesVat !== false,
     excelCostIncludesVat: preferences.excelCostIncludesVat !== false,
+    supplierSaleRoundingMode: normalizeSaleRoundingMode(preferences.supplierSaleRoundingMode),
   };
 
   try {
