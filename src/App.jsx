@@ -14230,6 +14230,87 @@ export default function PartySupplyApp() {
     return Array.from(updatedById.values());
   };
 
+  // === Sugerencias de enlace de Casa Alberto =================================
+  // Viven en su propia tabla, FUERA de realtime: la deteccion puede escribir
+  // cientos de filas de madrugada sin mandarle un mensaje a cada PC ni pisar lo
+  // que alguien tenga editando. Ver 20260905190000_sugerencias_de_enlace_casa_alberto.
+  const SUPPLIER_LINK_SUGGESTIONS_TABLE = 'supplier_link_suggestions';
+
+  // Si la migracion todavia no se aplico, la app sigue andando como antes (todo
+  // en memoria) en vez de romperse.
+  const isMissingSuggestionsTable = (error) => /42P01|PGRST205|schema cache|does not exist/i.test(
+    `${error?.code || ''} ${error?.message || ''}`,
+  );
+
+  const handleLoadSupplierLinkSuggestions = async () => {
+    try {
+      const { data, error } = await supabase
+        .from(SUPPLIER_LINK_SUGGESTIONS_TABLE)
+        .select('product_id, casa_alberto_id, matched_by, status, payload, created_at');
+      if (error) throw error;
+      return { rows: Array.isArray(data) ? data : [] };
+    } catch (error) {
+      if (isMissingSuggestionsTable(error)) return { rows: [], unavailable: true };
+      console.error('Error cargando sugerencias de enlace de Casa Alberto:', error);
+      return { rows: [], failed: true };
+    }
+  };
+
+  const handleSaveSupplierLinkSuggestions = async (rowsToSave = []) => {
+    const safeRows = (Array.isArray(rowsToSave) ? rowsToSave : []).filter(Boolean);
+    if (safeRows.length === 0) return { saved: 0 };
+    try {
+      const { error } = await supabase
+        .from(SUPPLIER_LINK_SUGGESTIONS_TABLE)
+        .upsert(safeRows, { onConflict: 'product_id,casa_alberto_id' });
+      if (error) throw error;
+      return { saved: safeRows.length };
+    } catch (error) {
+      if (isMissingSuggestionsTable(error)) return { saved: 0, unavailable: true };
+      console.error('Error guardando sugerencias de enlace de Casa Alberto:', error);
+      return { saved: 0, failed: true };
+    }
+  };
+
+  // Al aprobar el enlace la sugerencia ya no sirve: se borra.
+  const handleDeleteSupplierLinkSuggestion = async (productId, casaAlbertoId) => {
+    if (!productId || !casaAlbertoId) return { deleted: 0 };
+    try {
+      const { error } = await supabase
+        .from(SUPPLIER_LINK_SUGGESTIONS_TABLE)
+        .delete()
+        .eq('product_id', productId)
+        .eq('casa_alberto_id', String(casaAlbertoId));
+      if (error) throw error;
+      return { deleted: 1 };
+    } catch (error) {
+      if (isMissingSuggestionsTable(error)) return { deleted: 0, unavailable: true };
+      console.error('Error borrando la sugerencia de enlace de Casa Alberto:', error);
+      return { deleted: 0, failed: true };
+    }
+  };
+
+  // Al descartarla se marca, no se borra: asi la proxima corrida no la vuelve a
+  // proponer ni gasta una consulta al proveedor.
+  const handleDismissSupplierLinkSuggestion = async (productId, casaAlbertoId) => {
+    if (!productId || !casaAlbertoId) return { dismissed: 0 };
+    try {
+      const { error } = await supabase
+        .from(SUPPLIER_LINK_SUGGESTIONS_TABLE)
+        .upsert([{
+          product_id: Number(productId),
+          casa_alberto_id: String(casaAlbertoId),
+          status: 'dismissed',
+        }], { onConflict: 'product_id,casa_alberto_id' });
+      if (error) throw error;
+      return { dismissed: 1 };
+    } catch (error) {
+      if (isMissingSuggestionsTable(error)) return { dismissed: 0, unavailable: true };
+      console.error('Error descartando la sugerencia de enlace de Casa Alberto:', error);
+      return { dismissed: 0, failed: true };
+    }
+  };
+
   const handleSaveSupplierPriceChecks = async (checksToSave = []) => {
     if (blockIfOfflineReadonly('guardar chequeo de Casa Alberto')) return { products: [] };
     const safeChecks = Array.isArray(checksToSave) ? checksToSave : [];
@@ -17328,6 +17409,10 @@ export default function PartySupplyApp() {
                 onImageImportTaskChange={setImageImportTask}
                 imageImportOpenRequest={imageImportOpenRequest}
                 onSaveSupplierPriceChecks={handleSaveSupplierPriceChecks}
+                onLoadSupplierLinkSuggestions={handleLoadSupplierLinkSuggestions}
+                onSaveSupplierLinkSuggestions={handleSaveSupplierLinkSuggestions}
+                onDeleteSupplierLinkSuggestion={handleDeleteSupplierLinkSuggestion}
+                onDismissSupplierLinkSuggestion={handleDismissSupplierLinkSuggestion}
                 onExportSupplierPriceReport={handleExportSupplierPriceReport}
                 onApplySupplierPriceUpdates={handleApplySupplierPriceUpdates}
                 onUndoSupplierPriceUpdates={handleUndoSupplierPriceUpdates}

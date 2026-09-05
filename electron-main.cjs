@@ -14,6 +14,8 @@ const { buildExportPdfHtml } = require('./electron-export-pdf.cjs');
 
 let mainWindow;
 let supplierImageLoginWindow;
+let supplierPriceWorkerWindow;
+let supplierPriceSearchQueue = Promise.resolve();
 let supplierSessionVerified = false;
 
 const updateManager = createUpdateManager({
@@ -842,6 +844,29 @@ const createSupplierBrowserWindow = ({ show = false, width = 1100, height = 760 
   return supplierWindow;
 };
 
+const destroySupplierPriceWorker = () => {
+  const workerWindow = supplierPriceWorkerWindow;
+  supplierPriceWorkerWindow = null;
+  if (workerWindow && !workerWindow.isDestroyed()) workerWindow.destroy();
+};
+
+const getSupplierPriceWorker = () => {
+  if (supplierPriceWorkerWindow && !supplierPriceWorkerWindow.isDestroyed()) {
+    return supplierPriceWorkerWindow;
+  }
+
+  const workerWindow = createSupplierBrowserWindow({ show: false, width: 1000, height: 760 });
+  supplierPriceWorkerWindow = workerWindow;
+  workerWindow.on('closed', () => {
+    if (supplierPriceWorkerWindow === workerWindow) supplierPriceWorkerWindow = null;
+  });
+  workerWindow.webContents.on('render-process-gone', () => {
+    if (supplierPriceWorkerWindow === workerWindow) supplierPriceWorkerWindow = null;
+    if (!workerWindow.isDestroyed()) workerWindow.destroy();
+  });
+  return workerWindow;
+};
+
 const getSupplierRestrictedUrl = () => {
   try {
     const currentUrl = supplierImageLoginWindow && !supplierImageLoginWindow.isDestroyed()
@@ -1137,6 +1162,7 @@ const restoreSupplierSession = async () => {
 
 const clearSupplierSession = async () => {
   supplierSessionVerified = false;
+  destroySupplierPriceWorker();
   if (supplierImageLoginWindow && !supplierImageLoginWindow.isDestroyed()) {
     supplierImageLoginWindow.destroy();
     supplierImageLoginWindow = null;
@@ -2179,7 +2205,7 @@ const searchSupplierPrice = async ({ productUrl = '', casaAlbertoId = '', suppli
 
   let workerWindow;
   try {
-    workerWindow = createSupplierBrowserWindow({ show: false, width: 1000, height: 760 });
+    workerWindow = getSupplierPriceWorker();
 
     const extractCurrentPage = async () => {
       try {
@@ -2264,12 +2290,18 @@ const searchSupplierPrice = async ({ productUrl = '', casaAlbertoId = '', suppli
       message: error?.message || '',
       stack: error?.stack || '',
     });
+    destroySupplierPriceWorker();
     return { status: 'error', message: error?.message || 'Fallo el chequeo de precio en el proveedor.' };
-  } finally {
-    if (workerWindow && !workerWindow.isDestroyed()) {
-      workerWindow.close();
-    }
   }
+};
+
+const enqueueSupplierPriceSearch = (request = {}) => {
+  const queuedSearch = supplierPriceSearchQueue.then(
+    () => searchSupplierPrice(request),
+    () => searchSupplierPrice(request),
+  );
+  supplierPriceSearchQueue = queuedSearch.catch(() => undefined);
+  return queuedSearch;
 };
 
 app.setName(APP_NAME);
@@ -2316,6 +2348,10 @@ function createWindow() {
     if (app.isPackaged) {
       void updateManager.checkForUpdates();
     }
+  });
+  mainWindow.on('closed', () => {
+    destroySupplierPriceWorker();
+    mainWindow = null;
   });
 }
 
@@ -2665,7 +2701,7 @@ app.on('ready', () => {
       return { status: 'error', message: 'Origen IPC no autorizado' };
     }
 
-    const result = await searchSupplierPrice({
+    const result = await enqueueSupplierPriceSearch({
       productUrl: request?.productUrl,
       casaAlbertoId: request?.casaAlbertoId,
       supplierCode: request?.supplierCode || request?.providerCode,

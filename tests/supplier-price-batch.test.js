@@ -68,6 +68,10 @@ test('supplier price UI batches local state and defers offscreen rendering', asy
   assert.match(viewSource, /className="supplier-price-virtual-item/);
   assert.match(cssSource, /\.supplier-price-virtual-item\s*\{[\s\S]*content-visibility:\s*auto/);
   assert.match(cssSource, /contain-intrinsic-size:\s*0 112px/);
+  assert.match(viewSource, /const SUPPLIER_SAVE_BATCH_SIZE = 10/);
+  assert.match(viewSource, /safeEntries\.flatMap\(\(entry\) => entry\.checks\)/);
+  assert.match(viewSource, /pendingSaveEntries\.length >= SUPPLIER_SAVE_BATCH_SIZE/);
+  assert.match(viewSource, /batch\.map\(\(entry\) => entry\.check\)/);
 });
 
 test('supplier price checks handle persistence failures without unhandled rejections', async () => {
@@ -81,9 +85,27 @@ test('supplier price checks handle persistence failures without unhandled reject
   assert.match(singleCheckSource, /catch \(error\)/);
   assert.match(singleCheckSource, /if \(rethrowErrors\) throw error/);
   assert.match(singleCheckSource, /showSupplierActionFailure\(message\)/);
-  assert.match(allChecksSource, /handleCheckSupplierPriceGroup\(group, \{ rethrowErrors: true \}\)/);
+  assert.match(allChecksSource, /handleCheckSupplierPriceGroup\(group, \{[\s\S]*deferPersistence: true,[\s\S]*manageBusyState: false/);
+  assert.match(allChecksSource, /await persistSupplierCheckEntries\(pendingSaveEntries\)/);
   assert.match(allChecksSource, /catch \(error\)/);
   assert.match(allChecksSource, /showSupplierActionFailure\(/);
+});
+
+test('supplier price browser is reused and requests remain sequential', async () => {
+  const source = await readSource('../electron-main.cjs');
+  const searchStart = source.indexOf('const searchSupplierPrice = async');
+  const queueStart = source.indexOf('const enqueueSupplierPriceSearch');
+  const searchSource = source.slice(searchStart, queueStart);
+
+  assert.match(source, /let supplierPriceWorkerWindow/);
+  assert.match(source, /let supplierPriceSearchQueue = Promise\.resolve\(\)/);
+  assert.match(source, /const getSupplierPriceWorker = \(\) =>/);
+  assert.match(searchSource, /workerWindow = getSupplierPriceWorker\(\)/);
+  assert.doesNotMatch(searchSource, /createSupplierBrowserWindow/);
+  assert.doesNotMatch(searchSource, /workerWindow\.close\(\)/);
+  assert.match(source, /supplierPriceSearchQueue\.then\(/);
+  assert.match(source, /await enqueueSupplierPriceSearch\(\{/);
+  assert.match(source, /mainWindow\.on\('closed',[\s\S]*destroySupplierPriceWorker\(\)/);
 });
 
 test('supplier price actions only change local state after the database confirms every product', async () => {
@@ -117,6 +139,8 @@ test('supplier price control keeps one operative card presentation', async () =>
   assert.match(viewSource, />\s*Peso\s*<\/button>/);
   assert.match(viewSource, /getSupplierPriceChangeStatus\(/);
   assert.match(viewSource, />\s*Chequear vinculados\s*</);
+  assert.match(viewSource, /aria-label=\{canOpenGroupDetail \? `Abrir detalle de \$\{product\.title\}`/);
+  assert.doesNotMatch(viewSource, /<article[\s\S]{0,300}onClick=\{\(\) => setSupplierDetailGroupKey/);
 });
 
 test('supplier approval acknowledges the provider price until a later scan changes it', async () => {

@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useRef, useState, useEffect, useMemo, useCallback } from 'react';
+import React, { lazy, Suspense, startTransition, useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Search, Save, CheckSquare, Square, 
   Package, ArrowRight, Loader2, RotateCcw,
@@ -68,9 +68,18 @@ import {
   SUPPLIER_CALCULATION_MODE_UNITS,
   SUPPLIER_CALCULATION_MODE_WEIGHT,
 } from '../utils/supplierPriceUnits';
+import {
+  buildSupplierLinkSuggestionRow,
+  buildSupplierLinkSuggestionsFromRows,
+  getSupplierLinkSuggestionProductIds,
+  getVisibleSupplierLinkSuggestions,
+  upsertSupplierLinkSuggestion,
+} from '../utils/supplierLinkSuggestions';
 
 const BULK_EDITOR_TOOL_MODE_STORAGE_KEY = 'rebu_bulk_editor_tool_mode_v1';
 const SUPPLIER_GROUPS_VISIBLE_CHUNK = 50;
+const SUPPLIER_LINK_SUGGESTIONS_VISIBLE_CHUNK = 20;
+const SUPPLIER_SAVE_BATCH_SIZE = 10;
 const ImageCleanupWorkspace = lazy(() => import('../components/ImageCleanupWorkspace'));
 const WhatsAppCatalogExportView = lazy(() => import('../components/WhatsAppCatalogExportView'));
 
@@ -154,6 +163,10 @@ export default function BulkEditorView({
   onImageImportTaskChange,
   imageImportOpenRequest = 0,
   onSaveSupplierPriceChecks,
+  onLoadSupplierLinkSuggestions,
+  onSaveSupplierLinkSuggestions,
+  onDeleteSupplierLinkSuggestion,
+  onDismissSupplierLinkSuggestion,
   onExportSupplierPriceReport,
   onApplySupplierPriceUpdates,
   onUndoSupplierPriceUpdates,
@@ -227,6 +240,12 @@ export default function BulkEditorView({
   const [supplierLinkEditKey, setSupplierLinkEditKey] = useState('');
   const [supplierLinkDrafts, setSupplierLinkDrafts] = useState({});
   const [supplierLinkSuggestions, setSupplierLinkSuggestions] = useState([]);
+  // Productos que ya tienen una sugerencia guardada (pendiente o descartada):
+  // no hay que volver a consultarlos al proveedor.
+  const [supplierSuggestedProductIds, setSupplierSuggestedProductIds] = useState(() => new Set());
+  const [supplierLinkSuggestionVisibleLimit, setSupplierLinkSuggestionVisibleLimit] = useState(
+    SUPPLIER_LINK_SUGGESTIONS_VISIBLE_CHUNK,
+  );
   const [supplierProductSelectionByGroup, setSupplierProductSelectionByGroup] = useState({});
   const [isDetectingSupplierLinks, setIsDetectingSupplierLinks] = useState(false);
   const [supplierLinkDetectionLimit, setSupplierLinkDetectionLimit] = useState('10');
@@ -284,7 +303,9 @@ export default function BulkEditorView({
   const inventoryBaselineRef = useRef({});
 
   useEffect(() => {
-    const clonedData = JSON.parse(JSON.stringify(realInventory || []));
+    // Los productos se reemplazan de forma inmutable en esta vista. Copiar solo
+    // el array evita serializar todo el inventario y duplicar sus datos anidados.
+    const clonedData = Array.isArray(realInventory) ? realInventory.slice() : [];
     const fresh = buildEditStateFromInventory(clonedData);
     setSandboxInventory(clonedData);
     setEdits((previous) => mergePendingEdits({
@@ -1847,42 +1868,40 @@ export default function BulkEditorView({
   const casaAlbertoGroups = useMemo(() => {
     const groups = new Map();
 
-    sandboxInventory
-      .filter(productHasCasaAlbertoLink)
-      .filter(getProductActiveState)
-      .forEach((product) => {
-        const key = buildCasaAlbertoGroupKey(product);
-        const link = getCasaAlbertoLink(product);
-        const tracking = getCasaAlbertoPriceTracking(product);
-        const localRow = supplierPriceRows[key] || {};
-        const existing = groups.get(key);
-        const base = existing || {
-          key,
-          products: [],
-          link,
-          tracking,
-          supplierTitle: localRow.foundTitle || link.foundTitle || product.title || 'Producto Casa Alberto',
-          supplierCode: localRow.supplierCode || link.providerCode || '',
-          casaAlbertoId: localRow.casaAlbertoId || link.casaAlbertoId || '',
-          productUrl: localRow.productUrl || link.productUrl || '',
-          supplierPrice: localRow.supplierPrice ?? tracking.lastSupplierPrice ?? null,
-          rawSupplierPrice: localRow.rawSupplierPrice ?? tracking.rawSupplierPrice ?? localRow.supplierPrice ?? tracking.lastSupplierPrice ?? null,
-          unitSupplierPrice: localRow.unitSupplierPrice ?? tracking.unitSupplierPrice ?? null,
-          unitDivisor: localRow.unitDivisor ?? tracking.unitDivisor ?? null,
-          calculationMode: localRow.calculationMode || tracking.calculationMode || '',
-          supplierWeightGrams: localRow.supplierWeightGrams ?? tracking.supplierWeightGrams ?? null,
-          previousSupplierPrice: localRow.previousSupplierPrice ?? tracking.previousSupplierPrice ?? null,
-          acknowledgedSupplierPrice: localRow.acknowledgedSupplierPrice ?? tracking.acknowledgedSupplierPrice ?? null,
-          lastCheckedAt: localRow.lastCheckedAt || tracking.lastCheckedAt || '',
-          message: localRow.message || tracking.message || '',
-          sourceUrl: localRow.sourceUrl || tracking.sourceUrl || link.productUrl || '',
-          priceText: localRow.priceText || tracking.priceText || '',
-          supplierImageUrl: localRow.imageUrl || link.imageUrl || tracking.imageUrl || '',
-        };
+    for (const product of sandboxInventory) {
+      if (!productHasCasaAlbertoLink(product) || !getProductActiveState(product)) continue;
+      const key = buildCasaAlbertoGroupKey(product);
+      const link = getCasaAlbertoLink(product);
+      const tracking = getCasaAlbertoPriceTracking(product);
+      const localRow = supplierPriceRows[key] || {};
+      const existing = groups.get(key);
+      const base = existing || {
+        key,
+        products: [],
+        link,
+        tracking,
+        supplierTitle: localRow.foundTitle || link.foundTitle || product.title || 'Producto Casa Alberto',
+        supplierCode: localRow.supplierCode || link.providerCode || '',
+        casaAlbertoId: localRow.casaAlbertoId || link.casaAlbertoId || '',
+        productUrl: localRow.productUrl || link.productUrl || '',
+        supplierPrice: localRow.supplierPrice ?? tracking.lastSupplierPrice ?? null,
+        rawSupplierPrice: localRow.rawSupplierPrice ?? tracking.rawSupplierPrice ?? localRow.supplierPrice ?? tracking.lastSupplierPrice ?? null,
+        unitSupplierPrice: localRow.unitSupplierPrice ?? tracking.unitSupplierPrice ?? null,
+        unitDivisor: localRow.unitDivisor ?? tracking.unitDivisor ?? null,
+        calculationMode: localRow.calculationMode || tracking.calculationMode || '',
+        supplierWeightGrams: localRow.supplierWeightGrams ?? tracking.supplierWeightGrams ?? null,
+        previousSupplierPrice: localRow.previousSupplierPrice ?? tracking.previousSupplierPrice ?? null,
+        acknowledgedSupplierPrice: localRow.acknowledgedSupplierPrice ?? tracking.acknowledgedSupplierPrice ?? null,
+        lastCheckedAt: localRow.lastCheckedAt || tracking.lastCheckedAt || '',
+        message: localRow.message || tracking.message || '',
+        sourceUrl: localRow.sourceUrl || tracking.sourceUrl || link.productUrl || '',
+        priceText: localRow.priceText || tracking.priceText || '',
+        supplierImageUrl: localRow.imageUrl || link.imageUrl || tracking.imageUrl || '',
+      };
 
-        base.products.push(product);
-        groups.set(key, base);
-      });
+      base.products.push(product);
+      groups.set(key, base);
+    }
 
     const mapped = Array.from(groups.values())
       .map((group) => {
@@ -1890,7 +1909,7 @@ export default function BulkEditorView({
         const priceInfo = getSupplierPriceInfo(group);
         const supplierPrice = priceInfo.rawSupplierPrice;
         const estimatedCost = getSupplierEstimatedCost(priceInfo.unitSupplierPrice);
-        return {
+        const enrichedGroup = {
           ...group,
           status,
           estimatedCost,
@@ -1903,27 +1922,41 @@ export default function BulkEditorView({
           calculationMode: priceInfo.calculationMode,
           supplierWeightGrams: priceInfo.supplierWeightGrams,
         };
-      })
-      .map((group) => ({
-        ...group,
-        hasPendingEdit: hasPendingSupplierEdit(supplierPriceOverrides, group.key),
-        editedAt: supplierEditedAt[String(group.key)] || 0,
-        // El estado ya no reabre por un costo de Rebu distinto (solo lo hace un
-        // precio nuevo de Casa Alberto), asi que la diferencia se avisa aparte.
-        costDrift: group.products.reduce((peor, product) => {
-          const comparableCost = group.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT
-            && product.product_type === 'weight'
-            ? getVisibleProductPurchaseCost(product.purchasePrice, product.product_type)
-            : Number(product.purchasePrice || 0);
-          const drift = describeSupplierCostDrift({
-            estimatedCost: group.estimatedCost,
-            currentCost: comparableCost,
-            status: group.status,
-          });
-          if (!drift) return peor;
-          return !peor || Math.abs(drift.delta) > Math.abs(peor.delta) ? drift : peor;
-        }, null),
-      }));
+
+        return {
+          ...enrichedGroup,
+          hasPendingEdit: hasPendingSupplierEdit(supplierPriceOverrides, enrichedGroup.key),
+          editedAt: supplierEditedAt[String(enrichedGroup.key)] || 0,
+          // El estado ya no reabre por un costo de Rebu distinto (solo lo hace un
+          // precio nuevo de Casa Alberto), asi que la diferencia se avisa aparte.
+          costDrift: enrichedGroup.products.reduce((peor, product) => {
+            const comparableCost = enrichedGroup.calculationMode === SUPPLIER_CALCULATION_MODE_WEIGHT
+              && product.product_type === 'weight'
+              ? getVisibleProductPurchaseCost(product.purchasePrice, product.product_type)
+              : Number(product.purchasePrice || 0);
+            const drift = describeSupplierCostDrift({
+              estimatedCost: enrichedGroup.estimatedCost,
+              currentCost: comparableCost,
+              status: enrichedGroup.status,
+            });
+            if (!drift) return peor;
+            return !peor || Math.abs(drift.delta) > Math.abs(peor.delta) ? drift : peor;
+          }, null),
+          searchableText: normalizeSupplierSearchValue([
+            enrichedGroup.supplierTitle,
+            enrichedGroup.supplierCode,
+            enrichedGroup.casaAlbertoId,
+            enrichedGroup.productUrl,
+            enrichedGroup.sourceUrl,
+            enrichedGroup.products.map((product) => [
+              product.id,
+              product.title,
+              product.barcode,
+              product.category,
+            ].filter(Boolean).join(' ')).join(' '),
+          ].filter(Boolean).join(' ')),
+        };
+      });
 
     return sortSupplierGroupsForReview(mapped, {
       overrides: supplierPriceOverrides,
@@ -1936,11 +1969,34 @@ export default function BulkEditorView({
     [supplierPriceOverrides, supplierEditedAt],
   );
   const supplierPendingEditCount = supplierPendingEditKeys.length;
-  const supplierCostDriftCount = casaAlbertoGroups.filter((group) => group.costDrift).length;
-  const supplierPricePendingCount = casaAlbertoGroups.filter((group) => group.status === 'changed').length;
-  const supplierPriceErrorCount = casaAlbertoGroups.filter((group) => group.status === 'error' || group.status === 'login_required').length;
-  const supplierPriceNoticeCount = casaAlbertoGroups.filter((group) => group.status === 'price_down' || group.status === 'dubious_link' || group.status === 'review_required').length;
-  const supplierPriceOpenCount = casaAlbertoGroups.filter((group) => !['reviewed', 'approved', 'ignored'].includes(group.status)).length;
+  const supplierGroupCounts = useMemo(() => {
+    const counts = {
+      costDrift: 0,
+      changed: 0,
+      error: 0,
+      notice: 0,
+      open: 0,
+      priceDown: 0,
+      unchecked: 0,
+      reviewed: 0,
+    };
+    for (const group of casaAlbertoGroups) {
+      if (group.costDrift) counts.costDrift += 1;
+      if (group.status === 'changed') counts.changed += 1;
+      if (group.status === 'error' || group.status === 'login_required') counts.error += 1;
+      if (group.status === 'price_down' || group.status === 'dubious_link' || group.status === 'review_required') counts.notice += 1;
+      if (!['reviewed', 'approved', 'ignored'].includes(group.status)) counts.open += 1;
+      if (group.status === 'price_down') counts.priceDown += 1;
+      if (group.status === 'unchecked') counts.unchecked += 1;
+      if (group.status === 'reviewed' || group.status === 'approved' || group.status === 'ignored') counts.reviewed += 1;
+    }
+    return counts;
+  }, [casaAlbertoGroups]);
+  const supplierCostDriftCount = supplierGroupCounts.costDrift;
+  const supplierPricePendingCount = supplierGroupCounts.changed;
+  const supplierPriceErrorCount = supplierGroupCounts.error;
+  const supplierPriceNoticeCount = supplierGroupCounts.notice;
+  const supplierPriceOpenCount = supplierGroupCounts.open;
   const supplierPriceBadgeCount =
     supplierPricePendingCount + supplierPriceErrorCount + supplierPriceNoticeCount + supplierLinkSuggestions.length;
   const selectedSupplierGroupKeySet = useMemo(
@@ -1968,50 +2024,63 @@ export default function BulkEditorView({
       if (!matchesFilter && !isEdited) return false;
       if (searchWords.length === 0) return true;
 
-      const searchableText = normalizeSupplierSearchValue([
-        group.supplierTitle,
-        group.supplierCode,
-        group.casaAlbertoId,
-        group.productUrl,
-        group.sourceUrl,
-        group.products.map((product) => [
-          product.id,
-          product.title,
-          product.barcode,
-          product.category,
-        ].filter(Boolean).join(' ')).join(' '),
-      ].filter(Boolean).join(' '));
-
-      return searchWords.every((word) => searchableText.includes(word));
+      return searchWords.every((word) => group.searchableText.includes(word));
     });
   }, [casaAlbertoGroups, selectedSupplierGroupKeySet, supplierPriceFilter, supplierPriceSearchTerm, supplierPriceOverrides]);
   const visibleCasaAlbertoGroups = useMemo(
     () => filteredCasaAlbertoGroups.slice(0, supplierVisibleGroupLimit),
     [filteredCasaAlbertoGroups, supplierVisibleGroupLimit],
   );
+  const visibleSupplierLinkSuggestions = useMemo(
+    () => getVisibleSupplierLinkSuggestions(
+      supplierLinkSuggestions,
+      supplierLinkSuggestionVisibleLimit,
+    ),
+    [supplierLinkSuggestions, supplierLinkSuggestionVisibleLimit],
+  );
 
   useEffect(() => {
     setSupplierVisibleGroupLimit(SUPPLIER_GROUPS_VISIBLE_CHUNK);
   }, [supplierPriceFilter, supplierPriceSearchTerm]);
-  const casaAlbertoLinkCandidates = useMemo(() => (
-    sandboxInventory
-      .filter((product) => !productHasCasaAlbertoLink(product) && String(product.title || '').trim())
-      .filter(getProductActiveState)
-      .sort((a, b) => {
-        const aHasCode = String(a.barcode || '').trim() ? 0 : 1;
-        const bHasCode = String(b.barcode || '').trim() ? 0 : 1;
-        return aHasCode - bHasCode || String(a.title || '').localeCompare(String(b.title || ''));
-      })
-  ), [sandboxInventory]);
+  const casaAlbertoLinkCandidates = useMemo(() => {
+    const candidates = [];
+    for (const product of sandboxInventory) {
+      if (productHasCasaAlbertoLink(product) || !String(product.title || '').trim()) continue;
+      if (!getProductActiveState(product)) continue;
+      // Lo que ya se consulto y quedo esperando revision (o se descarto a
+      // proposito) no se vuelve a preguntar: antes cada corrida repetia de cero
+      // los mismos productos de la corrida anterior.
+      if (supplierSuggestedProductIds.has(String(product.id))) continue;
+      candidates.push(product);
+    }
+    return candidates.sort((a, b) => {
+      const aHasCode = String(a.barcode || '').trim() ? 0 : 1;
+      const bHasCode = String(b.barcode || '').trim() ? 0 : 1;
+      return aHasCode - bHasCode || String(a.title || '').localeCompare(String(b.title || ''));
+    });
+  }, [sandboxInventory, supplierSuggestedProductIds]);
 
   const selectedSupplierGroups = useMemo(() => {
-    const selected = new Set(selectedSupplierGroupKeys.map(String));
-    return casaAlbertoGroups.filter((group) => selected.has(String(group.key)));
-  }, [casaAlbertoGroups, selectedSupplierGroupKeys]);
-  const visibleSupplierGroupKeys = visibleCasaAlbertoGroups.map((group) => String(group.key));
-  const selectedVisibleSupplierGroupsCount = visibleSupplierGroupKeys.filter((key) => selectedSupplierGroupKeySet.has(key)).length;
-  const areAllVisibleSupplierGroupsSelected =
-    visibleSupplierGroupKeys.length > 0 && visibleSupplierGroupKeys.every((key) => selectedSupplierGroupKeySet.has(key));
+    return casaAlbertoGroups.filter((group) => selectedSupplierGroupKeySet.has(String(group.key)));
+  }, [casaAlbertoGroups, selectedSupplierGroupKeySet]);
+  const {
+    visibleSupplierGroupKeys,
+    selectedVisibleSupplierGroupsCount,
+    areAllVisibleSupplierGroupsSelected,
+  } = useMemo(() => {
+    const keys = [];
+    let selectedCount = 0;
+    for (const group of visibleCasaAlbertoGroups) {
+      const key = String(group.key);
+      keys.push(key);
+      if (selectedSupplierGroupKeySet.has(key)) selectedCount += 1;
+    }
+    return {
+      visibleSupplierGroupKeys: keys,
+      selectedVisibleSupplierGroupsCount: selectedCount,
+      areAllVisibleSupplierGroupsSelected: keys.length > 0 && selectedCount === keys.length,
+    };
+  }, [visibleCasaAlbertoGroups, selectedSupplierGroupKeySet]);
 
   const supplierDetailGroup = useMemo(
     () => casaAlbertoGroups.find((group) => group.key === supplierDetailGroupKey) || null,
@@ -2047,7 +2116,9 @@ export default function BulkEditorView({
     const safeProducts = Array.isArray(products) ? products.filter(Boolean) : [];
     if (safeProducts.length === 0) return;
     const updatedById = new Map(safeProducts.map((product) => [String(product.id), product]));
-    setSandboxInventory((prev) => prev.map((product) => updatedById.get(String(product.id)) || product));
+    startTransition(() => {
+      setSandboxInventory((prev) => prev.map((product) => updatedById.get(String(product.id)) || product));
+    });
   };
 
   const getSupplierStatusForPrice = (products = [], supplierPrice = 0, fallback = 'reviewed', calculationMode = SUPPLIER_CALCULATION_MODE_UNITS) => {
@@ -2161,7 +2232,32 @@ export default function BulkEditorView({
     return products;
   };
 
-  const handleCheckSupplierPriceGroup = async (group, { rethrowErrors = false } = {}) => {
+  const persistSupplierCheckEntries = async (entries = []) => {
+    const safeEntries = Array.isArray(entries) ? entries.filter((entry) => entry?.checks?.length) : [];
+    const checks = safeEntries.flatMap((entry) => entry.checks);
+    if (checks.length === 0) return [];
+
+    const saveResult = await onSaveSupplierPriceChecks?.(checks);
+    const updatedProducts = requireSupplierMutationProducts(
+      saveResult,
+      checks.length,
+      'No se pudieron confirmar todos los resultados de Casa Alberto.',
+    );
+    updateSandboxProducts(updatedProducts);
+    startTransition(() => {
+      setSupplierPriceRows((prev) => {
+        const next = { ...prev };
+        for (const entry of safeEntries) next[entry.groupKey] = entry.rowState;
+        return next;
+      });
+    });
+    return updatedProducts;
+  };
+
+  const handleCheckSupplierPriceGroup = async (
+    group,
+    { rethrowErrors = false, deferPersistence = false, manageBusyState = true } = {},
+  ) => {
     if (isOfflineReadOnly) {
       showSupplierOfflineNotice();
       return null;
@@ -2171,7 +2267,7 @@ export default function BulkEditorView({
       return null;
     }
 
-    setCheckingSupplierGroupKey(group.key);
+    if (manageBusyState) setCheckingSupplierGroupKey(group.key);
     try {
       const result = await window.electronAPI.supplierPriceSearch({
         productUrl: group.productUrl,
@@ -2204,10 +2300,9 @@ export default function BulkEditorView({
             ? 'La pagina leida no es la ficha del producto. Revisar el enlace.'
             : 'La ficha leida es de otro producto. Revisar el enlace.',
         };
-        setSupplierPriceRows((prev) => ({ ...prev, [group.key]: rowState }));
         // Se guarda sin precio a proposito: sin precio, la app no calcula un
         // costo estimado y el estado 'dubious_link' queda a la vista.
-        const saveResult = await onSaveSupplierPriceChecks?.(group.products.map((product) => ({
+        const checks = group.products.map((product) => ({
           productId: product.id,
           reviewStatus: 'dubious_link',
           brokenReason: rowState.brokenReason,
@@ -2219,9 +2314,10 @@ export default function BulkEditorView({
           casaAlbertoId: rowState.casaAlbertoId,
           supplierCode: rowState.supplierCode,
           message: rowState.message,
-        })));
-        updateSandboxProducts(saveResult?.products);
-        return { ...rowState, groupKey: group.key };
+        }));
+        const pendingEntry = { groupKey: group.key, rowState, checks };
+        if (!deferPersistence) await persistSupplierCheckEntries([pendingEntry]);
+        return { ...rowState, groupKey: group.key, pendingEntry };
       }
 
       if (result?.status === 'found' && Number(result.supplierPrice) > 0) {
@@ -2291,8 +2387,7 @@ export default function BulkEditorView({
               : 'El precio de Casa Alberto no cambió desde la última revisión.',
         };
 
-        setSupplierPriceRows((prev) => ({ ...prev, [group.key]: rowState }));
-        const saveResult = await onSaveSupplierPriceChecks?.(group.products.map((product) => ({
+        const checks = group.products.map((product) => ({
           productId: product.id,
           ...buildSupplierPricePayload(nextGroup, product, { supplierPrice, unitDivisor: pricePayload.unitDivisor }),
           previousSupplierPrice,
@@ -2308,9 +2403,10 @@ export default function BulkEditorView({
           imageUrl: rowState.imageUrl,
           priceText: rowState.priceText,
           message: rowState.message,
-        })));
-        updateSandboxProducts(saveResult?.products);
-        return { ...rowState, groupKey: group.key };
+        }));
+        const pendingEntry = { groupKey: group.key, rowState, checks };
+        if (!deferPersistence) await persistSupplierCheckEntries([pendingEntry]);
+        return { ...rowState, groupKey: group.key, pendingEntry };
       }
 
       const status = result?.status === 'login_required' ? 'login_required' : 'error';
@@ -2337,7 +2433,7 @@ export default function BulkEditorView({
       showSupplierActionFailure(message);
       return { status: 'error', message, groupKey: group.key };
     } finally {
-      setCheckingSupplierGroupKey('');
+      if (manageBusyState) setCheckingSupplierGroupKey('');
     }
   };
 
@@ -2359,8 +2455,14 @@ export default function BulkEditorView({
     setIsSupplierPriceCheckPaused(false);
     setIsCheckingSupplierPrices(true);
     const summary = { changed: 0, reviewed: 0, price_down: 0, error: 0, login_required: 0, stopped: false };
+    let pendingSaveEntries = [];
+    const flushPendingChecks = async () => {
+      if (pendingSaveEntries.length === 0) return;
+      await persistSupplierCheckEntries(pendingSaveEntries);
+      pendingSaveEntries = [];
+    };
     try {
-      for (const group of groupsToCheck) {
+      for (const [index, group] of groupsToCheck.entries()) {
         if (supplierPriceCheckStopRef.current) {
           summary.stopped = true;
           break;
@@ -2370,7 +2472,13 @@ export default function BulkEditorView({
           summary.stopped = true;
           break;
         }
-        const result = await handleCheckSupplierPriceGroup(group, { rethrowErrors: true });
+        if (index % SUPPLIER_SAVE_BATCH_SIZE === 0) setCheckingSupplierGroupKey(group.key);
+        const result = await handleCheckSupplierPriceGroup(group, {
+          rethrowErrors: true,
+          deferPersistence: true,
+          manageBusyState: false,
+        });
+        if (result?.pendingEntry) pendingSaveEntries.push(result.pendingEntry);
         if (result?.status === 'changed') summary.changed += 1;
         else if (result?.status === 'price_down') summary.price_down += 1;
         else if (result?.status === 'reviewed') summary.reviewed += 1;
@@ -2381,8 +2489,10 @@ export default function BulkEditorView({
         } else if (result?.status) {
           summary.error += 1;
         }
+        if (pendingSaveEntries.length >= SUPPLIER_SAVE_BATCH_SIZE) await flushPendingChecks();
         await new Promise((resolve) => setTimeout(resolve, 300));
       }
+      await flushPendingChecks();
       Swal.fire({
         title: summary.stopped ? 'Chequeo detenido' : 'Chequeo terminado',
         text: `${summary.changed} subas, ${summary.price_down} bajas, ${summary.reviewed} sin cambio, ${summary.error + summary.login_required} avisos.`,
@@ -2391,9 +2501,24 @@ export default function BulkEditorView({
       });
     } catch (error) {
       console.error('Error en el chequeo masivo de costos:', error);
+      if (pendingSaveEntries.length > 0) {
+        const failedAt = new Date().toISOString();
+        setSupplierPriceRows((prev) => {
+          const next = { ...prev };
+          for (const entry of pendingSaveEntries) {
+            next[entry.groupKey] = {
+              status: 'error',
+              message: error?.message || 'No se pudo guardar este lote.',
+              lastCheckedAt: failedAt,
+            };
+          }
+          return next;
+        });
+      }
       showSupplierActionFailure(error?.message || 'El chequeo se detuvo antes de guardar todos los resultados.');
     } finally {
       setIsCheckingSupplierPrices(false);
+      setCheckingSupplierGroupKey('');
       supplierPriceCheckStopRef.current = false;
     }
   };
@@ -2640,6 +2765,9 @@ export default function BulkEditorView({
     }
 
     supplierLinkDetectionStopRef.current = false;
+    if (supplierLinkSuggestions.length === 0) {
+      setSupplierLinkSuggestionVisibleLimit(SUPPLIER_LINK_SUGGESTIONS_VISIBLE_CHUNK);
+    }
     setIsDetectingSupplierLinks(true);
     setSupplierLinkDetectionProgress({
       total: productsToDetect.length,
@@ -2653,8 +2781,45 @@ export default function BulkEditorView({
       reviewed: 0,
       changed: 0,
       errors: 0,
+      // Las coincidencias que esperan tu OK NO son errores: se contaban ahi y la
+      // barra de progreso mostraba cientos de "errores" que en realidad eran
+      // enlaces encontrados esperando revision.
+      pendingReview: 0,
       login_required: 0,
       not_found: 0,
+    };
+    let processedCount = 0;
+    let pendingDetectedEntries = [];
+    const publishDetectionProgress = (force = false) => {
+      if (!force && processedCount % SUPPLIER_SAVE_BATCH_SIZE !== 0) return;
+      setSupplierLinkDetectionProgress({
+        total: productsToDetect.length,
+        processed: processedCount,
+        found: summary.found + summary.pendingReview,
+        errors: summary.errors + summary.login_required,
+      });
+    };
+    const flushDetectedLinks = async () => {
+      if (pendingDetectedEntries.length === 0) return;
+      const batch = pendingDetectedEntries;
+      pendingDetectedEntries = [];
+      try {
+        const saveResult = await onSaveSupplierPriceChecks?.(batch.map((entry) => entry.check));
+        const updatedProducts = requireSupplierMutationProducts(
+          saveResult,
+          batch.length,
+          'No se pudieron confirmar todos los enlaces detectados.',
+        );
+        updateSandboxProducts(updatedProducts);
+        summary.found += batch.length;
+        for (const entry of batch) {
+          if (entry.detectedStatus === 'changed') summary.changed += 1;
+          else summary.reviewed += 1;
+        }
+      } catch (saveError) {
+        console.error('Error guardando lote de enlaces de Casa Alberto detectados:', saveError);
+        summary.errors += batch.length;
+      }
     };
 
     try {
@@ -2669,11 +2834,9 @@ export default function BulkEditorView({
         if (result?.status === 'login_required') {
           markSupplierSessionRequired();
           summary.login_required += 1;
-          setSupplierLinkDetectionProgress((current) => ({
-            ...current,
-            processed: index + 1,
-            errors: current.errors + 1,
-          }));
+          processedCount = index + 1;
+          await flushDetectedLinks();
+          publishDetectionProgress(true);
           break;
         }
 
@@ -2719,24 +2882,24 @@ export default function BulkEditorView({
           };
 
           if (matchedBy !== 'barcode_exact') {
-            setSupplierLinkSuggestions((prev) => {
-              const key = `${product.id}-${detectedCasaAlbertoId}`;
-              const withoutDuplicate = prev.filter((entry) => `${entry.product.id}-${entry.result.casaAlbertoId}` !== key);
-              return [suggestion, ...withoutDuplicate].slice(0, 20);
-            });
-            summary.errors += 1;
-            setSupplierLinkDetectionProgress((current) => ({
-              ...current,
-              processed: index + 1,
-              found: summary.found,
-              errors: summary.errors + summary.login_required,
-            }));
+            setSupplierLinkSuggestions((prev) => upsertSupplierLinkSuggestion(prev, suggestion));
+            // Se guarda apenas se encuentra: si la PC se duerme o la app se
+            // cierra a mitad de una corrida larga, lo hallado no se pierde.
+            const suggestionRow = buildSupplierLinkSuggestionRow(suggestion);
+            if (suggestionRow) {
+              setSupplierSuggestedProductIds((prev) => new Set(prev).add(String(product.id)));
+              onSaveSupplierLinkSuggestions?.([suggestionRow]);
+            }
+            summary.pendingReview += 1;
+            processedCount = index + 1;
+            publishDetectionProgress(index === productsToDetect.length - 1);
             await new Promise((resolve) => setTimeout(resolve, 320));
             continue;
           }
 
-          try {
-            const saveResult = await onSaveSupplierPriceChecks?.([{
+          pendingDetectedEntries.push({
+            detectedStatus,
+            check: {
               productId: product.id,
               ...pricePayload,
               previousSupplierPrice: Number(product.purchasePrice || 0),
@@ -2758,40 +2921,28 @@ export default function BulkEditorView({
                 : matchedBy === 'trimmed_barcode'
                   ? 'Enlace detectado con codigo corregido.'
                   : 'Enlace detectado por codigo.',
-            }]);
-            const updatedProducts = requireSupplierMutationProducts(
-              saveResult,
-              1,
-              'No se pudo confirmar el enlace detectado.',
-            );
-            updateSandboxProducts(updatedProducts);
-            summary.found += 1;
-            if (detectedStatus === 'changed') summary.changed += 1;
-            else summary.reviewed += 1;
-          } catch (saveError) {
-            console.error('Error guardando enlace de Casa Alberto detectado:', saveError);
-            summary.errors += 1;
-          }
+            },
+          });
+          if (pendingDetectedEntries.length >= SUPPLIER_SAVE_BATCH_SIZE) await flushDetectedLinks();
         } else if (result?.status === 'not_found') {
           summary.not_found += 1;
         } else {
           summary.errors += 1;
         }
 
-        setSupplierLinkDetectionProgress((current) => ({
-          ...current,
-          processed: index + 1,
-          found: summary.found,
-          errors: summary.errors + summary.login_required,
-        }));
+        processedCount = index + 1;
+        publishDetectionProgress(index === productsToDetect.length - 1);
 
         await new Promise((resolve) => setTimeout(resolve, 320));
       }
 
+      await flushDetectedLinks();
+      publishDetectionProgress(true);
+
       Swal.fire({
         title: supplierLinkDetectionStopRef.current ? 'Deteccion detenida' : 'Deteccion terminada',
-        text: `${summary.found} enlazados, ${summary.changed} con cambio de costo, ${summary.not_found} sin resultado, ${summary.errors + summary.login_required} con aviso.`,
-        icon: summary.found > 0 ? 'success' : 'info',
+        text: `${summary.found} enlazados solos, ${summary.pendingReview} esperando tu OK, ${summary.changed} con cambio de costo, ${summary.not_found} sin resultado, ${summary.errors + summary.login_required} con aviso.`,
+        icon: summary.found + summary.pendingReview > 0 ? 'success' : 'info',
         confirmButtonColor: '#0f172a',
       });
     } catch (detectError) {
@@ -2960,6 +3111,10 @@ export default function BulkEditorView({
       );
       updateSandboxProducts(updatedProducts);
       setSupplierLinkSuggestions((prev) => prev.filter((entry) => entry !== suggestion));
+      // Ya quedo enlazado: la sugerencia no sirve mas y se borra de la tabla.
+      if (result.casaAlbertoId) {
+        onDeleteSupplierLinkSuggestion?.(product.id, result.casaAlbertoId);
+      }
     } catch (error) {
       console.error('Error aprobando sugerencia de enlace:', error);
       showSupplierActionFailure(error?.message || 'No se pudo guardar el enlace sugerido.');
@@ -2968,6 +3123,14 @@ export default function BulkEditorView({
 
   const dismissSupplierLinkSuggestion = (suggestion) => {
     setSupplierLinkSuggestions((prev) => prev.filter((entry) => entry !== suggestion));
+    // Se marca como descartada en vez de borrarla, asi la proxima corrida no la
+    // vuelve a proponer ni gasta una consulta al proveedor.
+    const productId = suggestion?.product?.id;
+    const casaAlbertoId = suggestion?.result?.casaAlbertoId;
+    if (productId && casaAlbertoId) {
+      setSupplierSuggestedProductIds((prev) => new Set(prev).add(String(productId)));
+      onDismissSupplierLinkSuggestion?.(productId, casaAlbertoId);
+    }
   };
 
   const openSupplierExternalUrl = async (url) => {
@@ -3000,6 +3163,33 @@ export default function BulkEditorView({
     if (!supplierOpenRequest) return;
     openSupplierPriceMode();
   }, [openSupplierPriceMode, supplierOpenRequest]);
+
+  // Al entrar a Casa Alberto se recupera lo que quedo esperando revision de
+  // corridas anteriores. Antes esto vivia solo en memoria y una busqueda larga
+  // se perdia entera al cerrar la app.
+  const supplierSuggestionsLoadedRef = useRef(false);
+  useEffect(() => {
+    if (activeToolMode !== 'supplier') return;
+    if (supplierSuggestionsLoadedRef.current) return;
+    if (!onLoadSupplierLinkSuggestions) return;
+    supplierSuggestionsLoadedRef.current = true;
+
+    let cancelled = false;
+    (async () => {
+      const { rows } = await onLoadSupplierLinkSuggestions();
+      if (cancelled || !Array.isArray(rows) || rows.length === 0) return;
+      const productsById = new Map(sandboxInventory.map((product) => [String(product.id), product]));
+      const restored = buildSupplierLinkSuggestionsFromRows(rows, productsById);
+      setSupplierSuggestedProductIds(getSupplierLinkSuggestionProductIds(rows));
+      if (restored.length === 0) return;
+      setSupplierLinkSuggestions((prev) => {
+        let next = prev;
+        for (const suggestion of restored) next = upsertSupplierLinkSuggestion(next, suggestion);
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [activeToolMode, onLoadSupplierLinkSuggestions, sandboxInventory]);
 
   const imageImportStats = imageImportRows.reduce((acc, row) => {
     acc[row.status] = (acc[row.status] || 0) + 1;
@@ -3230,9 +3420,9 @@ export default function BulkEditorView({
       { value: 'all', label: 'Todos vinculados', count: casaAlbertoGroups.length },
       { value: 'selected', label: 'Seleccionados', count: selectedSupplierGroups.length },
       { value: 'changed', label: 'Con cambio', count: supplierPricePendingCount },
-      { value: 'price_down', label: 'Bajo precio', count: casaAlbertoGroups.filter((group) => group.status === 'price_down').length },
-      { value: 'unchecked', label: 'Sin revisar', count: casaAlbertoGroups.filter((group) => group.status === 'unchecked').length },
-      { value: 'reviewed', label: 'Revisados', count: casaAlbertoGroups.filter((group) => group.status === 'reviewed' || group.status === 'approved' || group.status === 'ignored').length },
+      { value: 'price_down', label: 'Bajo precio', count: supplierGroupCounts.priceDown },
+      { value: 'unchecked', label: 'Sin revisar', count: supplierGroupCounts.unchecked },
+      { value: 'reviewed', label: 'Revisados', count: supplierGroupCounts.reviewed },
       { value: 'notice', label: 'Avisos', count: supplierPriceNoticeCount },
       { value: 'error', label: 'Errores', count: supplierPriceErrorCount },
     ];
@@ -3257,7 +3447,13 @@ export default function BulkEditorView({
           title={imageUrl ? 'Ver imagen grande' : 'Sin imagen'}
         >
           {imageUrl ? (
-            <img src={imageUrl} alt={group.supplierTitle} className="h-full w-full object-cover" />
+            <img
+              src={imageUrl}
+              alt={group.supplierTitle}
+              loading="lazy"
+              decoding="async"
+              className="h-full w-full object-cover"
+            />
           ) : (
             <ImageIcon size={18} className="mx-auto" />
           )}
@@ -3452,6 +3648,7 @@ export default function BulkEditorView({
     const renderSupplierProducts = (group, { compact = false } = {}) => {
       const math = getSupplierCardMath(group);
       const selectedProductIds = new Set(getSelectedProductsForGroup(group).map((entry) => String(entry.id)));
+      const canOpenGroupDetail = !compact;
       return (
         <div className={compact ? 'space-y-1' : 'space-y-1.5'}>
           {group.products.map((product) => {
@@ -3472,6 +3669,17 @@ export default function BulkEditorView({
             return (
               <div
                 key={product.id}
+                role={canOpenGroupDetail ? 'button' : undefined}
+                tabIndex={canOpenGroupDetail ? 0 : undefined}
+                aria-label={canOpenGroupDetail ? `Abrir detalle de ${product.title}` : undefined}
+                onClick={canOpenGroupDetail ? () => setSupplierDetailGroupKey(group.key) : undefined}
+                onKeyDown={canOpenGroupDetail ? (event) => {
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    setSupplierDetailGroupKey(group.key);
+                  }
+                } : undefined}
                 className={`grid w-full min-w-0 items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors ${
                   compact
                     ? 'grid-cols-[20px_34px_minmax(0,1fr)_82px]'
@@ -3479,8 +3687,8 @@ export default function BulkEditorView({
                 } ${
                   isSelected
                     ? 'border-emerald-400/45 bg-emerald-400/10'
-                    : 'border-slate-700/60 bg-[#0b1728] hover:border-slate-500'
-                }`}
+                    : 'border-slate-700/60 bg-[#0b1728]'
+                } ${canOpenGroupDetail ? 'cursor-pointer hover:border-sky-400/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60' : ''}`}
               >
                 <button
                   type="button"
@@ -3876,7 +4084,7 @@ export default function BulkEditorView({
                     </p>
                   ) : null}
                   <div className="max-h-64 space-y-2 overflow-y-auto pr-1 custom-scrollbar">
-                  {supplierLinkSuggestions.map((suggestion) => (
+                  {visibleSupplierLinkSuggestions.map((suggestion) => (
                     <div key={`${suggestion.product.id}-${suggestion.result.casaAlbertoId}`} className="rounded-md border border-amber-400/20 bg-slate-950/20 p-2">
                       <p className="truncate text-[11px] font-black text-white">{suggestion.product.title}</p>
                       <p className="mt-0.5 truncate text-[10px] font-bold text-amber-100/75">
@@ -3901,6 +4109,20 @@ export default function BulkEditorView({
                     </div>
                   ))}
                   </div>
+                  {visibleSupplierLinkSuggestions.length < supplierLinkSuggestions.length ? (
+                    <button
+                      type="button"
+                      onClick={() => setSupplierLinkSuggestionVisibleLimit((limit) => (
+                        limit + SUPPLIER_LINK_SUGGESTIONS_VISIBLE_CHUNK
+                      ))}
+                      className="h-8 w-full rounded-md border border-amber-400/25 bg-slate-950/20 text-[10px] font-black text-amber-100 transition-colors hover:bg-amber-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60"
+                    >
+                      Ver {Math.min(
+                        SUPPLIER_LINK_SUGGESTIONS_VISIBLE_CHUNK,
+                        supplierLinkSuggestions.length - visibleSupplierLinkSuggestions.length,
+                      )} más
+                    </button>
+                  ) : null}
                 </div>
               </section>
             ) : null}
@@ -4134,7 +4356,7 @@ export default function BulkEditorView({
                   </span>
                 </div>
                 <div className="max-h-[340px] divide-y divide-slate-700/55 overflow-y-auto custom-scrollbar">
-                  {supplierLinkSuggestions.map((suggestion) => {
+                  {visibleSupplierLinkSuggestions.map((suggestion) => {
                     const productImage = getProductImageUrl(suggestion.product);
                     const sourceUrl = suggestion.result.productUrl || suggestion.result.sourceUrl || '';
                     const suggestionDivisor = normalizeSupplierDivisor(
@@ -4251,6 +4473,25 @@ export default function BulkEditorView({
                     );
                   })}
                 </div>
+                {visibleSupplierLinkSuggestions.length < supplierLinkSuggestions.length ? (
+                  <div className="flex items-center justify-between gap-3 border-t border-slate-700/60 bg-[#0d1b2e] px-4 py-3">
+                    <p className="text-[10px] font-black tabular-nums text-slate-400">
+                      Mostrando {visibleSupplierLinkSuggestions.length} de {supplierLinkSuggestions.length}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setSupplierLinkSuggestionVisibleLimit((limit) => (
+                        limit + SUPPLIER_LINK_SUGGESTIONS_VISIBLE_CHUNK
+                      ))}
+                      className="h-8 rounded-md border border-amber-400/30 bg-amber-400/10 px-3 text-[10px] font-black text-amber-100 transition-colors hover:bg-amber-400/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60"
+                    >
+                      Ver {Math.min(
+                        SUPPLIER_LINK_SUGGESTIONS_VISIBLE_CHUNK,
+                        supplierLinkSuggestions.length - visibleSupplierLinkSuggestions.length,
+                      )} más
+                    </button>
+                  </div>
+                ) : null}
               </section>
             ) : null}
 
@@ -4287,13 +4528,7 @@ export default function BulkEditorView({
                   return (
                     <article
                       key={group.key}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setSupplierDetailGroupKey(group.key)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') setSupplierDetailGroupKey(group.key);
-                      }}
-                      className="supplier-price-virtual-item overflow-hidden rounded-xl border border-slate-700/80 bg-[#0f1e33] transition-colors hover:border-sky-400/35 hover:bg-[#12243c]"
+                      className="supplier-price-virtual-item overflow-hidden rounded-xl border border-slate-700/80 bg-[#0f1e33]"
                     >
                       <div className={`h-1 ${meta.railClassName}`} />
                       <div className="grid gap-2.5 p-2.5 min-[1500px]:grid-cols-[minmax(280px,0.95fr)_minmax(460px,1.35fr)_220px]">

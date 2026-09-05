@@ -61,4 +61,9 @@ test('un precio aprobado solo vuelve a pendientes cuando Casa Alberto lo cambia'
   await page.getByRole('button', { name: /OK|Aceptar|Entendido/i }).click();
   await expect(supplierCards).toHaveCount(1);
   await expect(page.getByText(/precio mayor al último aprobado/i)).toBeVisible();
+
+  await page.getByText('Calculo del costo', { exact: true }).first().click();
+  await expect(page.getByText('Datos del proveedor', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: /Abrir detalle de/i }).first().click();
+  await expect(page.getByText('Datos del proveedor', { exact: true })).toBeVisible();
 });
