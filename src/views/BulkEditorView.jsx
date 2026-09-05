@@ -4857,7 +4857,7 @@ export default function BulkEditorView({
                           {renderSupplierActions(group)}
                           {priceDeltaLabel ? (
                             <span className="rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1.5 text-center text-[10px] font-black text-amber-100">
-                              Proveedor {priceDeltaLabel}
+                              Proveedor {formatDiffPercent(priceDeltaLabel)}
                             </span>
                           ) : null}
                         </div>

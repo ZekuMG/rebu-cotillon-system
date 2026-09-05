@@ -53,3 +53,11 @@ test('las sugerencias que esperan OK no se cuentan como errores', async () => {
   assert.match(source, /summary\.pendingReview \+= 1;/);
   assert.match(source, /esperando tu OK/);
 });
+
+test('el aviso de variacion del proveedor sale formateado, no crudo', async () => {
+  // Se veia "Proveedor 6.470588235294119" en pantalla: el numero iba directo al
+  // JSX sin pasar por formatDiffPercent, que es el que deja "+6,47%".
+  const source = await readSource('../src/views/BulkEditorView.jsx');
+  assert.match(source, /Proveedor \{formatDiffPercent\(priceDeltaLabel\)\}/);
+  assert.doesNotMatch(source, /Proveedor \{priceDeltaLabel\}/);
+});
