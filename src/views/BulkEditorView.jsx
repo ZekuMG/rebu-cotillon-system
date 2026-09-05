@@ -68,6 +68,7 @@ import {
   SUPPLIER_CALCULATION_MODE_UNITS,
   SUPPLIER_CALCULATION_MODE_WEIGHT,
 } from '../utils/supplierPriceUnits';
+import { pickBestSupplierCandidate } from '../utils/supplierBulkMatch';
 import {
   buildSupplierLinkSuggestionRow,
   buildSupplierLinkSuggestionsFromRows,
@@ -2042,6 +2043,32 @@ export default function BulkEditorView({
   useEffect(() => {
     setSupplierVisibleGroupLimit(SUPPLIER_GROUPS_VISIBLE_CHUNK);
   }, [supplierPriceFilter, supplierPriceSearchTerm]);
+  /**
+   * El lector devuelve varios resultados y elige el primero de la pagina. Casa
+   * Alberto publica el mismo articulo suelto y por bulto, y el bulto sale
+   * destacado arriba: asi se enlazaba el bulto de $64.260 como si fuera la
+   * unidad de $6.681. Aca se vuelve a elegir prefiriendo la unidad, salvo que
+   * nuestro producto sea un bulto o que el codigo/id digan otra cosa.
+   */
+  const preferUnitOverBulk = (result, { expectedTitle = '', expectedCode = '', expectedId = '' } = {}) => {
+    const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
+    if (candidates.length < 2) return result;
+
+    const best = pickBestSupplierCandidate({ expectedTitle, expectedCode, expectedId, candidates });
+    if (!best?.candidate) return result;
+    if (String(best.candidate.casaAlbertoId || '') === String(result?.casaAlbertoId || '')
+      && String(best.candidate.foundTitle || '') === String(result?.foundTitle || '')) {
+      return result;
+    }
+
+    return {
+      ...result,
+      ...best.candidate,
+      matchedByBulkPreference: true,
+      replacedFoundTitle: result?.foundTitle || '',
+    };
+  };
+
   const casaAlbertoLinkCandidates = useMemo(() => {
     const candidates = [];
     for (const product of sandboxInventory) {
@@ -2269,11 +2296,16 @@ export default function BulkEditorView({
 
     if (manageBusyState) setCheckingSupplierGroupKey(group.key);
     try {
-      const result = await window.electronAPI.supplierPriceSearch({
+      const rawResult = await window.electronAPI.supplierPriceSearch({
         productUrl: group.productUrl,
         casaAlbertoId: group.casaAlbertoId,
         supplierCode: group.supplierCode,
         title: group.supplierTitle || group.products[0]?.title || '',
+      });
+      const result = preferUnitOverBulk(rawResult, {
+        expectedTitle: group.products[0]?.title || group.supplierTitle || '',
+        expectedCode: group.supplierCode || '',
+        expectedId: group.casaAlbertoId || '',
       });
       const checkedAt = new Date().toISOString();
 
@@ -2826,9 +2858,13 @@ export default function BulkEditorView({
       for (const [index, product] of productsToDetect.entries()) {
         if (supplierLinkDetectionStopRef.current) break;
 
-        const result = await window.electronAPI.supplierPriceSearch({
+        const rawResult = await window.electronAPI.supplierPriceSearch({
           supplierCode: product.barcode || '',
           title: product.title || '',
+        });
+        const result = preferUnitOverBulk(rawResult, {
+          expectedTitle: product.title || '',
+          expectedCode: product.barcode || '',
         });
 
         if (result?.status === 'login_required') {

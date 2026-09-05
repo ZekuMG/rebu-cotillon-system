@@ -2157,6 +2157,23 @@ const buildSupplierPriceExtractScript = (request = {}) => `
       };
     }
 
+    // Se devuelven TODOS los resultados leidos, no solo el que gano aca: el
+    // proveedor publica el mismo articulo suelto y por bulto, y la eleccion
+    // final la hace la app con pickBestSupplierCandidate, que sabe preferir la
+    // unidad. Va sin el campo de texto (es la pagina entera) y con tope de 8.
+    var offeredCandidates = candidates.slice(0, 8).map(function (entry) {
+      return {
+        foundTitle: entry.candidate.foundTitle,
+        supplierCode: entry.candidate.supplierCode,
+        supplierPrice: entry.candidate.supplierPrice,
+        priceText: entry.candidate.priceText,
+        productUrl: entry.candidate.productUrl,
+        casaAlbertoId: entry.candidate.casaAlbertoId,
+        imageUrl: entry.candidate.imageUrl,
+        sourceUrl: entry.candidate.sourceUrl,
+      };
+    });
+
     return {
       status: 'found',
       supplierPrice: best.supplierPrice,
@@ -2167,6 +2184,7 @@ const buildSupplierPriceExtractScript = (request = {}) => `
       sourceUrl: best.sourceUrl,
       imageUrl: best.imageUrl,
       priceText: best.priceText,
+      candidates: offeredCandidates,
       url: location.href,
     };
   } catch (error) {
