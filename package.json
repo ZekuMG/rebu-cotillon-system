@@ -18,7 +18,8 @@
     "electron:build": "vite build && dotenv -e .env -- electron-builder -w --publish always",
     "publish": "dotenv electron-builder -- --publish always",
     "dev:fresh": "npm run build && npm run electron:dev",
-    "audit:pcs": "node scripts/audit-pcs-con-sesion.mjs"
+    "audit:pcs": "node scripts/audit-pcs-con-sesion.mjs",
+    "audit:vinculos": "node scripts/audit-vinculos-auth.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",
