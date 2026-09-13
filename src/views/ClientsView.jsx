@@ -1130,7 +1130,7 @@ export default function ClientsView({
                       onChange={e => setDrawerFormData({...drawerFormData, instagramNotes: e.target.value})}
                     />
                     <p className="mt-2 text-[11px] font-semibold text-fuchsia-700">
-                      Instagram queda guardado en la ficha del socio. La confirmaciÃ³n permite validar promociones que lo requieran, como REBUINSTA.
+                      Instagram queda guardado en la ficha del socio. La confirmación permite validar promociones que lo requieran, como REBUINSTA.
                     </p>
                   </div>
                   <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Notas</label><textarea rows="3" className="w-full rounded-lg border p-2.5 outline-none focus:ring-2 focus:ring-blue-100 resize-none" value={drawerFormData.extraInfo} onChange={e => setDrawerFormData({...drawerFormData, extraInfo: e.target.value})} /></div>
@@ -1480,7 +1480,7 @@ export default function ClientsView({
                   onChange={(e) => setFormData({...formData, instagramNotes: e.target.value})}
                 />
                 <p className="mt-2 text-[11px] font-semibold text-fuchsia-700">
-                  Instagram queda guardado en la ficha del socio. La confirmaciÃ³n permite validar promociones que lo requieran, como REBUINSTA.
+                  Instagram queda guardado en la ficha del socio. La confirmación permite validar promociones que lo requieran, como REBUINSTA.
                 </p>
               </div>
               <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Notas / Extra</label><textarea rows="2" className="w-full rounded-lg border border-gray-300 p-2.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-sm resize-none" placeholder="Información adicional..." value={formData.extraInfo} onChange={(e) => setFormData({...formData, extraInfo: e.target.value})}></textarea></div>

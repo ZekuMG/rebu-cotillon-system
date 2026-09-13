@@ -1,7 +1,7 @@
 // ¿Ya entran todas las PCs con sesion, o alguna sigue trabajando como anonima?
 //
 // Cada inicio de sesion deja en la bitacora un campo `supabaseAuth.signedIn`.
-// Con eso se sabe, sin ir al local, que maquinas ya tienen la version 1.2.47 y
+// Con eso se sabe, sin ir al local, que maquinas ya tienen la version actual y
 // cuales todavia no. Es la condicion para poder cerrar los permisos de `anon`
 // sobre las tablas del punto de venta: mientras una sola PC entre sin sesion,
 // cerrarlas la deja sin poder cobrar.
@@ -13,6 +13,12 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import process from "node:process";
+
+// La version sale del package.json: escrita a mano quedaba vieja apenas se subia
+// de version, y el mensaje pasaba a mentir sin que nadie lo notara.
+const VERSION = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).version;
 
 const require = createRequire(import.meta.url);
 const { Client } = require("pg");
@@ -83,7 +89,7 @@ if (!pendientes.length) {
   console.log("    dejando abierto solo: la vista app_users_public, la funcion");
   console.log("    verify_app_user_login_auth_bridge y la tabla products.");
 } else {
-  console.log(`>>> FALTAN ${pendientes.length} maquina(s) por actualizar a 1.2.47:`);
+  console.log(`>>> FALTAN ${pendientes.length} maquina(s) por actualizar a ${VERSION}:`);
   for (const p of pendientes) console.log(`      ${p}`);
   console.log("    NO cerrar los permisos todavia: esas maquinas se quedarian sin cobrar.");
 }

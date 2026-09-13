@@ -26,7 +26,7 @@ const getManagedUserRoleLabel = (role) => {
     .toLowerCase();
 
   if (['system', 'sistema', 'admin'].includes(normalized)) return 'Sistema';
-  if (['owner', 'dueno', 'duenio'].includes(normalized)) return 'DueÃ±o';
+  if (['owner', 'dueno', 'duenio'].includes(normalized)) return 'Dueño';
   if (['seller', 'vendedor', 'caja'].includes(normalized)) return 'Caja';
   return role || 'Usuario';
 };
@@ -43,10 +43,13 @@ const getActionLogUserPresentation = (log, userCatalog) => {
     .trim()
     .toLowerCase();
 
+  // OJO: los acentos rotos de esta lista son A PROPOSITO. En la bitacora hay
+// filas viejas guardadas con la codificacion mal, y esto las sigue encontrando.
+// "Arreglarlos" deja esos registros sin aparecer en la busqueda.
   if (!log?.userId && ['dueno', 'duenio', 'dueÃƒÂ±o', 'owner'].includes(normalizedName)) {
     return {
-      badgeUser: { role: 'owner', name: log?.user || 'DueÃ±o' },
-      displayName: log?.user || 'DueÃ±o',
+      badgeUser: { role: 'owner', name: log?.user || 'Dueño' },
+      displayName: log?.user || 'Dueño',
     };
   }
 

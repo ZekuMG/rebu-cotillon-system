@@ -19,11 +19,11 @@ import {
   Scale,
   PackageX,
   CalendarClock,
-  CalendarX, // âœ¨ NUEVO ICONO
-  ArrowDownUp, // âœ¨ AÃ‘ADIDO PARA ORDENAR
+  CalendarX, // ✨ NUEVO ICONO
+  ArrowDownUp, // ✨ AÑADIDO PARA ORDENAR
   Maximize2,
 } from 'lucide-react';
-// â™»ï¸ FIX: Importamos FancyPrice junto con helpers
+// ♻️ FIX: Importamos FancyPrice junto con helpers
 import { formatLocalDateOnlyAR, formatStock, formatNumber, parseLocalDateOnly } from '../utils/helpers';
 import { hasPermission } from '../utils/userPermissions';
 import { FancyPrice } from '../components/FancyPrice';
@@ -37,7 +37,7 @@ const REBU_WIDE_QUERY = '(min-width: 1920px)';
 const isWideResolution = () =>
   typeof window !== 'undefined' && window.matchMedia(REBU_WIDE_QUERY).matches;
 
-// âœ¨ HELPER: Verifica si la fecha es menor a 14 dÃ­as o ya pasÃ³
+// ✨ HELPER: Verifica si la fecha es menor a 14 dÃ­as o ya pasÃ³
 const getExpirationInfo = (dateString) => {
   if (!dateString) return null;
   const today = new Date();
@@ -112,11 +112,11 @@ export default function InventoryView({
   const canDeleteProducts = hasPermission(currentUser, 'inventory.delete');
   const hasInventoryWriteAccess = canEditProducts || canDeleteProducts;
   
-  // âœ¨ ESTADOS DE FILTROS RÃPIDOS
+  // ✨ ESTADOS DE FILTROS RÃPIDOS
   const [stockFilterMode, setStockFilterMode] = useState(FILTER_MODE.normal);
   const [expirationFilterMode, setExpirationFilterMode] = useState(FILTER_MODE.normal);
   
-  const [sortBy, setSortBy] = useState('title-asc'); // âœ¨ ESTADO PARA EL ORDEN
+  const [sortBy, setSortBy] = useState('title-asc'); // ✨ ESTADO PARA EL ORDEN
 
   const [visibleCount, setVisibleCount] = useState(INVENTORY_BATCH_SIZE);
 
@@ -124,7 +124,7 @@ export default function InventoryView({
     inactiveSearchHandlerRef.current = onSearchInactiveProducts;
   }, [onSearchInactiveProducts]);
 
-  // âœ¨ EFECTO "PUENTE": Atrapa la orden del Dashboard y activa los botones
+  // ✨ EFECTO "PUENTE": Atrapa la orden del Dashboard y activa los botones
   useEffect(() => {
     setVisibleCount(INVENTORY_BATCH_SIZE);
   }, [inventorySearch]);
@@ -242,7 +242,7 @@ export default function InventoryView({
         ? item.categories.includes(inventoryCategoryFilter)
         : item.category === inventoryCategoryFilter);
     
-    // âœ¨ APLICAMOS LOS FILTROS DE BOTONES
+    // ✨ APLICAMOS LOS FILTROS DE BOTONES
     const isStockEmpty = Number(item.stock) <= 0;
     const hasExpirationAlert = isExpiringSoon(item.expiration_date);
     const matchesStock = showInactiveOnly
@@ -265,7 +265,7 @@ export default function InventoryView({
     return matchesSearch && matchesCategory && matchesStock && matchesExpiration;
   });
 
-  // âœ¨ LÃ“GICA DE ORDENAMIENTO APLICADA SOBRE LOS FILTRADOS
+  // ✨ LÃ“GICA DE ORDENAMIENTO APLICADA SOBRE LOS FILTRADOS
   const sortedInventory = [...filteredInventory].sort((a, b) => {
     switch (sortBy) {
       case 'recent': {
@@ -494,7 +494,7 @@ export default function InventoryView({
               )}
             </div>
 
-            {/* âœ¨ DROPDOWN: ORDENAR POR */}
+            {/* ✨ DROPDOWN: ORDENAR POR */}
             <div className="relative min-w-0">
               <button
                 type="button"
@@ -564,7 +564,7 @@ export default function InventoryView({
               <span className="inline truncate">{stockModeMeta.label}</span>
             </button>
 
-            {/* âœ¨ BOTÃ“N: VENCIMIENTOS */}
+            {/* ✨ BOTÃ“N: VENCIMIENTOS */}
             <button
               onClick={() => setExpirationFilterMode((currentMode) => getNextFilterMode(currentMode))}
               title="Mostrar próximos a vencer y vencidos"

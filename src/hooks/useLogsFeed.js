@@ -77,6 +77,9 @@ const _expandLegacyUserSearchTerms = (term) => {
   const terms = new Set([term]);
 
   if (['dueno', 'duenio', 'dueño', 'owner'].includes(normalized)) {
+    // OJO: los acentos rotos de esta lista son A PROPOSITO. En la bitacora hay
+// filas viejas guardadas con la codificacion mal, y esto las sigue encontrando.
+// "Arreglarlos" deja esos registros sin aparecer en la busqueda.
     ['Dueño', 'Dueno', 'DueÃ±o', 'DueÃƒÂ±o', 'owner'].forEach((value) => terms.add(value));
   }
 
