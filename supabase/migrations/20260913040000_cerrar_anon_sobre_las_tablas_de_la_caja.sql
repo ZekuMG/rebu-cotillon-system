@@ -82,8 +82,14 @@ drop policy if exists supplier_link_suggestions_anon on public.supplier_link_sug
 --    La migracion 20260827020000 dejo permisos por defecto que le dan todo a
 --    `anon` sobre lo que se cree en el futuro. Sin esto, el problema se repite
 --    con la proxima tabla que alguien agregue.
-alter default privileges in schema public revoke all on tables from anon;
-alter default privileges in schema public revoke all on sequences from anon;
-alter default privileges in schema public revoke execute on functions from anon;
+-- Solo se cierra la regla de `postgres`, que es el dueño con el que corren las
+-- migraciones y por lo tanto el que crea las tablas nuevas del proyecto. Existe
+-- otra regla a nombre de `supabase_admin` para lo que crea la plataforma, pero no
+-- se puede tocar desde aca: da "permission denied to change default privileges",
+-- porque haria falta ser ese rol. Se probo. Queda anotado como limitacion; no
+-- afecta a las tablas que agregamos nosotros.
+alter default privileges for role postgres in schema public revoke all on tables from anon;
+alter default privileges for role postgres in schema public revoke all on sequences from anon;
+alter default privileges for role postgres in schema public revoke execute on functions from anon;
 
 commit;
