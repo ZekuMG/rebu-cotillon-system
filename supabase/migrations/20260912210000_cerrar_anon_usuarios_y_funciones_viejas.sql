@@ -28,7 +28,10 @@
 -- suscribe. Al perder la lectura, esa suscripcion deja de entregar cambios: si
 -- alguien edita un usuario desde otra PC, las demas no se enteran hasta recargar.
 --
--- Para volver atras: 20260912210000_cerrar_anon_usuarios_y_funciones_viejas_REVERTIR.sql
+-- Para volver atras:
+--   supabase/rollbacks/20260912210000_cerrar_anon_usuarios_y_funciones_viejas_REVERTIR.sql
+-- Vive fuera de migrations/ a proposito: ahi adentro dos archivos no pueden
+-- compartir version, y la vuelta atras es la misma version que lo que deshace.
 
 begin;
 
