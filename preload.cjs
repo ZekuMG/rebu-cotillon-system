@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   saveAsPdf: (defaultName) => ipcRenderer.invoke('save-as-pdf', defaultName),
   saveExportPdf: (payload) => ipcRenderer.invoke('save-export-pdf', payload),
+  saveProductImage: (payload) => ipcRenderer.invoke('save-product-image', payload),
+  copyImageToClipboard: (payload) => ipcRenderer.invoke('copy-image-to-clipboard', payload),
   getDeviceInfo: () => ipcRenderer.invoke('get-device-info'),
   clearHostResolverCache: () => ipcRenderer.invoke('clear-host-resolver-cache'),
   openExternalUrl: (targetUrl) => ipcRenderer.invoke('open-external-url', targetUrl),

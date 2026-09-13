@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, session, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session, safeStorage, clipboard, nativeImage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -313,6 +313,29 @@ const decodeImageInput = async (source) => {
   };
 };
 
+// 📋 El portapapeles necesita un mapa de bits y nativeImage solo decodifica PNG y
+// JPEG, nunca WebP (el formato de las miniaturas del bucket). El renderer manda la
+// foto ya convertida a PNG; si su canvas quedo "sucio" por una foto alojada afuera
+// sin CORS, probamos con la URL, que aca se baja sin restricciones de origen.
+const buildClipboardImage = async ({ dataUrl = '', imageUrl = '' } = {}) => {
+  const sources = [dataUrl, imageUrl].map((entry) => String(entry || '').trim()).filter(Boolean);
+  if (sources.length === 0) throw new Error('No se recibio una foto para copiar.');
+
+  let lastError = null;
+  for (const source of sources) {
+    try {
+      const { buffer } = await decodeImageInput(source);
+      const image = nativeImage.createFromBuffer(buffer);
+      if (!image.isEmpty()) return image;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastError) throw lastError;
+  return null;
+};
+
 const editImageWithOpenAI = async ({
   imageUrl,
   logoImageUrl = '',
@@ -430,6 +453,19 @@ const sanitizePdfFileName = (value) => {
     .trim()
     .slice(0, 120);
   return baseName.toLowerCase().endsWith('.pdf') ? baseName : `${baseName || 'rebu-documento'}.pdf`;
+};
+
+const PRODUCT_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif'];
+
+const sanitizeImageFileName = (value) => {
+  const fallback = 'rebu-foto.jpg';
+  const baseName = String(value || fallback)
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+    .trim()
+    .slice(0, 120);
+  if (!baseName) return fallback;
+  const extension = String(baseName.split('.').pop() || '').toLowerCase();
+  return PRODUCT_IMAGE_EXTENSIONS.includes(extension) ? baseName : `${baseName}.jpg`;
 };
 
 const isTrustedIpcSender = (event) => Boolean(mainWindow && event?.sender === mainWindow.webContents);
@@ -2507,6 +2543,42 @@ app.on('ready', () => {
       return { success: true, filePath };
     } catch (error) {
       console.error('Error generando PDF aislado:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('save-product-image', async (event, payload = {}) => {
+    try {
+      if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+      const fileName = sanitizeImageFileName(payload?.defaultName);
+      const { filePath } = await dialog.showSaveDialog(mainWindow, {
+        title: 'Guardar foto',
+        defaultPath: path.join(app.getPath('downloads'), fileName),
+        filters: [{ name: 'Imagenes', extensions: PRODUCT_IMAGE_EXTENSIONS }],
+      });
+
+      if (!filePath) return { success: false, canceled: true };
+
+      // Guardamos el archivo original tal cual esta en Storage: bajarlo aca evita
+      // el CORS que sufre el renderer y conserva el formato y la calidad.
+      const { buffer } = await decodeImageInput(payload?.imageUrl);
+      fs.writeFileSync(filePath, buffer);
+      return { success: true, filePath };
+    } catch (error) {
+      console.error('Error guardando la foto del producto:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('copy-image-to-clipboard', async (event, payload = {}) => {
+    try {
+      if (!isTrustedIpcSender(event)) return { success: false, error: 'Origen IPC no autorizado' };
+      const image = await buildClipboardImage(payload);
+      if (!image) return { success: false, error: 'El formato de la foto no se puede copiar.' };
+      clipboard.writeImage(image);
+      return { success: true };
+    } catch (error) {
+      console.error('Error copiando la foto al portapapeles:', error);
       return { success: false, error: error.message };
     }
   });
