@@ -17,7 +17,8 @@
     "electron:dev": "concurrently -k -s first \"cross-env BROWSER=none npm run dev -- --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on tcp:127.0.0.1:5173 && cross-env ELECTRON_START_URL=http://127.0.0.1:5173 electron .\"",
     "electron:build": "vite build && dotenv -e .env -- electron-builder -w --publish always",
     "publish": "dotenv electron-builder -- --publish always",
-    "dev:fresh": "npm run build && npm run electron:dev"
+    "dev:fresh": "npm run build && npm run electron:dev",
+    "audit:pcs": "node scripts/audit-pcs-con-sesion.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",
