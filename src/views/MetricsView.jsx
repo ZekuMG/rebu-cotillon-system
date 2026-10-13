@@ -579,6 +579,12 @@ const MetricCard = ({ label, value, sublabel, change, tone = 'slate', hidden = f
   );
 };
 
+// Nombre largo cortado con … y completo al pasar el mouse: si no, empuja la columna de
+// cantidad fuera de la tabla (pasaba en Sin stock / Bajo stock).
+const ProductNameCell = ({ name }) => (
+  <span className="block max-w-[240px] truncate" title={name}>{name}</span>
+);
+
 const signedTone = (value) => (Number(value || 0) >= 0 ? 'is-positive' : 'is-negative');
 
 // Margen de lo vendido − sueldos − fijos = ganancia del negocio − retiros = queda.
@@ -1923,6 +1929,23 @@ export default function MetricsView({
             ) : <EmptyState />}
           </Panel>
         </div>
+        {metrics.stockInsights.weightRanking.length > 0 && (
+          <Panel
+            title="Ranking por peso"
+            icon={PackageSearch}
+            hint="Productos a granel ordenados por kilos vendidos en el período. No se mezclan con los de unidad."
+          >
+            <Table
+              columns={[
+                { key: 'name', label: 'Producto', render: (row) => <ProductNameCell name={row.name} /> },
+                { key: 'kilos', label: 'Kilos', align: 'right', render: (row) => formatQuantityForType(row.qty, 'weight') },
+                { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
+                ...(canViewProfit ? [{ key: 'marginRate', label: 'Margen', align: 'right', render: (row) => (row.costStatus === 'missing' ? '-' : `${formatNumber(row.marginRate, 1)}%`) }] : []),
+              ]}
+              rows={metrics.stockInsights.weightRanking.slice(0, 25)}
+            />
+          </Panel>
+        )}
       </div>
     );
   };
@@ -2191,6 +2214,7 @@ export default function MetricsView({
   };
 
   const renderStock = () => {
+    const { stockInsights } = metrics;
     const selectedStockStatus = pieSelections.stock || null;
     const stockPieData = [
       { name: 'Sin stock', value: metrics.stockStats.outOfStock.length },
@@ -2240,6 +2264,44 @@ export default function MetricsView({
           </div>
         )}
       </section>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <Panel
+          title="Qué reponer primero"
+          icon={AlertTriangle}
+          hint={`Productos que se vendieron en el período, ordenados por cuántos días les dura el stock al ritmo de venta del período (${formatNumber(metrics.rangeDays)} días). Aparecen los que se agotan en menos de ${stockInsights.restockDays} días.`}
+        >
+          <Table
+            emptyText="Nada que se venda está por agotarse."
+            columns={[
+              { key: 'title', label: 'Producto', render: (row) => <ProductNameCell name={row.title} /> },
+              { key: 'stock', label: 'Stock', align: 'right', render: (row) => formatQuantityForType(row.stock, row.type) },
+              { key: 'dailyRate', label: 'Vende por día', align: 'right', render: (row) => formatQuantityForType(row.dailyRate, row.type) },
+              { key: 'daysOfStock', label: 'Dura', align: 'right', render: (row) => (row.stock <= 0 ? <strong className="text-rose-600">Agotado</strong> : `${formatNumber(Math.max(1, Math.floor(row.daysOfStock)))} días`) },
+            ]}
+            rows={stockInsights.restock.slice(0, 40)}
+          />
+        </Panel>
+        <Panel
+          title="Sin ventas en el período"
+          icon={WalletCards}
+          hint="Productos con stock que no se vendieron en el rango elegido, ordenados por la plata que tienen parada (stock × costo)."
+          action={stockInsights.unsoldCapital > 0 && canViewProfit ? (
+            <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-black text-slate-600">
+              {formatCurrency(stockInsights.unsoldCapital)} parados
+            </span>
+          ) : null}
+        >
+          <Table
+            emptyText="Todo lo que tiene stock se vendió en el período."
+            columns={[
+              { key: 'title', label: 'Producto', render: (row) => <ProductNameCell name={row.title} /> },
+              { key: 'stock', label: 'Stock', align: 'right', render: (row) => formatQuantityForType(row.stock, row.type) },
+              ...(canViewProfit ? [{ key: 'capital', label: 'Plata parada', align: 'right', render: (row) => <FancyPrice amount={row.capital} /> }] : []),
+            ]}
+            rows={stockInsights.unsold.slice(0, 40)}
+          />
+        </Panel>
+      </div>
       <Panel title="Estado del stock" icon={PackageSearch}>
         <PieMetricPanel
           data={stockPieData}
@@ -2253,7 +2315,7 @@ export default function MetricsView({
           <Table
             emptyText="Sin productos agotados."
             columns={[
-              { key: 'title', label: 'Producto' },
+              { key: 'title', label: 'Producto', render: (row) => <ProductNameCell name={row.title} /> },
               { key: 'stock', label: 'Stock', align: 'right', render: (row) => formatQuantityForType(row.stock, row.product_type) },
             ]}
             rows={metrics.stockStats.outOfStock.slice(0, 30)}
@@ -2263,7 +2325,7 @@ export default function MetricsView({
           <Table
             emptyText="Sin alertas de bajo stock."
             columns={[
-              { key: 'title', label: 'Producto' },
+              { key: 'title', label: 'Producto', render: (row) => <ProductNameCell name={row.title} /> },
               { key: 'stock', label: 'Stock', align: 'right', render: (row) => formatQuantityForType(row.stock, row.product_type) },
             ]}
             rows={metrics.stockStats.lowStock.slice(0, 30)}
@@ -2273,7 +2335,7 @@ export default function MetricsView({
           <Table
             emptyText="Sin vencimientos cercanos."
             columns={[
-              { key: 'title', label: 'Producto' },
+              { key: 'title', label: 'Producto', render: (row) => <ProductNameCell name={row.title} /> },
               { key: 'daysUntil', label: 'Días', align: 'right', render: (row) => row.daysUntil },
             ]}
             rows={metrics.stockStats.expiring.slice(0, 30)}

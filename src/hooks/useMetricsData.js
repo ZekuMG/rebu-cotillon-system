@@ -23,6 +23,7 @@ import {
   LOW_STOCK_UNITS,
 } from '../utils/metricQuantities';
 import { buildBusinessResult } from '../utils/expenseTypes';
+import { buildStockInsights, getRangeDays } from '../utils/stockInsights';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LOW_MARGIN_RATE = 20;
@@ -898,7 +899,7 @@ const buildClosureStats = (closures = [], range, filters) => {
   };
 };
 
-const buildRecommendations = ({ current, previous, stockStats, orderStats, members }) => {
+const buildRecommendations = ({ current, previous, stockStats, stockInsights, rangeDays, orderStats, members }) => {
   const recommendations = [];
   const revenueChange = calculateChange(current.stats.revenue, previous.stats.revenue);
   const profitChange = calculateChange(current.stats.business.businessProfit, previous.stats.business.businessProfit);
@@ -908,11 +909,30 @@ const buildRecommendations = ({ current, previous, stockStats, orderStats, membe
     .filter((product) => product.revenue > 0 && product.costStatus !== 'missing' && product.marginRate < LOW_MARGIN_RATE)
     .sort((a, b) => a.marginRate - b.marginRate);
 
-  if (stockStats.outOfStock.length || stockStats.lowStock.length) {
+  // Solo lo que se vende: "939 sin stock" incluía productos que nadie compra.
+  if (stockInsights.restock.length) {
+    const alreadyOut = stockInsights.restock.filter((row) => row.stock <= 0).length;
     recommendations.push({
       tone: 'danger',
-      title: 'Reponer stock crítico',
-      detail: `${stockStats.outOfStock.length} sin stock y ${stockStats.lowStock.length} bajo el mínimo (${LOW_STOCK_UNITS} u. o ${LOW_STOCK_GRAMS} g).`,
+      title: 'Reponer lo que se vende',
+      detail: `${stockInsights.restock.length} productos con ventas se agotan en menos de ${stockInsights.restockDays} días${alreadyOut ? ` (${alreadyOut} ya sin stock)` : ''}.`,
+      section: 'stock',
+    });
+  } else if (stockStats.lowStock.length) {
+    recommendations.push({
+      tone: 'warning',
+      title: 'Stock bajo',
+      detail: `${stockStats.lowStock.length} productos bajo el mínimo (${LOW_STOCK_UNITS} u. o ${LOW_STOCK_GRAMS} g).`,
+      section: 'stock',
+    });
+  }
+
+  // En rangos cortos casi todo figura "sin ventas": recién desde una semana dice algo.
+  if (rangeDays >= 7 && stockInsights.unsoldCapital > 0) {
+    recommendations.push({
+      tone: 'info',
+      title: 'Plata parada en stock',
+      detail: `${formatCurrency(stockInsights.unsoldCapital)} a costo en ${stockInsights.unsold.length} productos que no se vendieron en el período.`,
       section: 'stock',
     });
   }
@@ -1067,7 +1087,13 @@ export default function useMetricsData({
         });
     const orderStats = buildOrderStats(orders, budgets, range, filters, lookups);
     const closureStats = buildClosureStats(pastClosures, range, filters);
-    const recommendations = buildRecommendations({ current, previous, stockStats, orderStats, members });
+    const firstSaleDate = current.filteredTransactions.reduce(
+      (first, tx) => (tx.metricDate && (!first || tx.metricDate < first) ? tx.metricDate : first),
+      null,
+    );
+    const rangeDays = getRangeDays(range, firstSaleDate);
+    const stockInsights = buildStockInsights({ inventory, productStats: current.allProductStats, rangeDays });
+    const recommendations = buildRecommendations({ current, previous, stockStats, stockInsights, rangeDays, orderStats, members });
     const canComparePreviousRange = Boolean(previousRange.isComparable);
     const getComparableChange = (currentValue, previousValue) =>
       canComparePreviousRange ? calculateChange(currentValue, previousValue) : null;
@@ -1080,6 +1106,8 @@ export default function useMetricsData({
       current,
       previous,
       stockStats,
+      stockInsights,
+      rangeDays,
       orderStats,
       closureStats,
       recommendations,
@@ -1096,5 +1124,5 @@ export default function useMetricsData({
         expenses: getComparableChange(current.stats.expenses, previous.stats.expenses),
       },
     };
-  }, [metricTransactions, lookups, filterOptions, stockStats, expenses, pastClosures, members, budgets, orders, filters]);
+  }, [metricTransactions, lookups, filterOptions, stockStats, inventory, expenses, pastClosures, members, budgets, orders, filters]);
 }
