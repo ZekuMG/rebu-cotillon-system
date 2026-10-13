@@ -193,6 +193,23 @@ textarea,
 
 .metrics-header-action:hover { background: var(--rebu-surface-2) !important; }
 
+/* Cabecera compacta: título, período, "Filtrar" y acciones en una sola línea. */
+.metrics-header-bar { display: flex; min-height: 36px; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.metrics-header-title { display: flex; align-items: center; gap: 7px; padding-right: 4px; }
+.metrics-header-title h2 { margin: 0; color: var(--rebu-text-primary); font-size: 17px; font-weight: 900; }
+.metrics-period-select { min-width: 210px; border-color: var(--rebu-border) !important; background: var(--rebu-surface-2) !important; }
+.metrics-period-select select { font-size: 12px !important; }
+.metrics-date-input { height: 32px; padding: 0 8px; border: 1px solid var(--rebu-border); border-radius: 6px; color: var(--rebu-text-primary); background: var(--rebu-surface-2); font-size: 12px; font-weight: 700; color-scheme: dark light; }
+.metrics-header-dates { color: var(--rebu-text-tertiary); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.metrics-filter-toggle { display: inline-flex; height: 32px; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid var(--rebu-border); border-radius: 6px; color: var(--rebu-text-secondary); background: var(--rebu-surface-2); font-size: 12px; font-weight: 800; cursor: pointer; }
+.metrics-filter-toggle:hover { border-color: var(--rebu-brand-border); color: var(--rebu-text-primary); }
+.metrics-filter-toggle.is-active { border-color: var(--rebu-brand-border); color: var(--rebu-brand); background: var(--rebu-brand-soft); }
+.metrics-filter-chip { display: inline-flex; max-width: 260px; height: 26px; align-items: center; gap: 5px; padding: 0 8px 0 10px; border: 1px solid var(--rebu-brand-border); border-radius: 999px; color: var(--rebu-text-primary); background: color-mix(in srgb, var(--rebu-brand-soft) 60%, transparent); font-size: 11.5px; font-weight: 700; cursor: pointer; }
+.metrics-filter-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.metrics-filter-chip svg { flex: none; color: var(--rebu-text-tertiary); }
+.metrics-filter-chip:hover svg { color: var(--rebu-danger); }
+.metrics-header-actions { display: flex; align-items: center; margin-left: auto; }
+
 .metrics-filter-line {
   border-color: var(--rebu-border-soft) !important;
   border-radius: 0;

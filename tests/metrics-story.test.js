@@ -62,6 +62,13 @@ test('con pérdida no hay porción de ganancia y se informa cuánto faltó', () 
   assert.equal(buildMoneySplit({ collected: 0 }), null);
 });
 
+test('con filtro de categoría: solo costo y margen, sin gastos del negocio', () => {
+  const split = buildMoneySplit({ ...business, businessProfit: -5800000 }, { marginOnly: true });
+  assert.deepEqual(split.parts.map((part) => [part.key, part.per100]), [['cost', 50], ['profit', 50]]);
+  assert.equal(split.parts[1].label, 'Margen (antes de gastos)');
+  assert.equal(split.shortfallPer100, 0);
+});
+
 const stockInsights = {
   restockDays: 14,
   restock: [

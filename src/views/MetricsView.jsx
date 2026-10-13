@@ -19,6 +19,7 @@ import {
   TrendingUp,
   Users,
   WalletCards,
+  X,
 } from 'lucide-react';
 import {
   Area,
@@ -154,6 +155,8 @@ const getMetricTransactionItemCount = (record = {}) =>
 const renderActivePieShape = (props) => (
   <Sector {...props} outerRadius={Number(props.outerRadius || 0) + 5} />
 );
+
+const STATUS_FILTER_LABELS = { completed: 'Completadas', voided: 'Anuladas', deleted: 'Eliminadas', restored: 'Restauradas' };
 
 const DEFAULT_FILTERS = {
   preset: '30d',
@@ -1106,7 +1109,7 @@ export default function MetricsView({
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [activeSection, setActiveSection] = useState('summary');
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
   const [summaryEvolutionMetrics, setSummaryEvolutionMetrics] = useState(['revenue']);
   const [pieSelections, setPieSelections] = useState({});
   const [productLookupQuery, setProductLookupQuery] = useState('');
@@ -1242,8 +1245,19 @@ export default function MetricsView({
   const updatePieSelection = (chartKey, value) => {
     setPieSelections((current) => ({ ...current, [chartKey]: value || null }));
   };
-  const hasAdvancedFilters =
-    Boolean(filters.user || filters.client || filters.productType !== 'all' || filters.includeVoided || filters.includeTest);
+  // Los filtros viven plegados en "Filtrar": los activos se ven como etiquetas con su ✕.
+  const findOptionLabel = (options, value) => options.find((option) => option.value === value)?.label || value;
+  const activeFilterChips = [
+    filters.status !== 'all' && { key: 'status', label: `Estado: ${STATUS_FILTER_LABELS[filters.status] || filters.status}`, reset: { status: 'all' } },
+    filters.payment && { key: 'payment', label: `Pago: ${findOptionLabel(metrics.filterOptions.payments, filters.payment)}`, reset: { payment: '' } },
+    filters.category && { key: 'category', label: `Categoría: ${findOptionLabel(metrics.filterOptions.categories, filters.category)}`, reset: { category: '' } },
+    filters.product && { key: 'product', label: `Producto: ${findOptionLabel(visibleProductOptions, filters.product)}`, reset: { product: '' } },
+    filters.productType !== 'all' && { key: 'productType', label: filters.productType === 'weight' ? 'Solo por peso' : 'Solo por unidad', reset: { productType: 'all' } },
+    filters.user && { key: 'user', label: `Usuario: ${findOptionLabel(metrics.filterOptions.users, filters.user)}`, reset: { user: '' } },
+    filters.client && { key: 'client', label: `Cliente: ${findOptionLabel(metrics.filterOptions.clients, filters.client)}`, reset: { client: '' } },
+    filters.includeVoided && { key: 'includeVoided', label: 'Con anuladas', reset: { includeVoided: false } },
+    filters.includeTest && { key: 'includeTest', label: 'Con pruebas', reset: { includeTest: false } },
+  ].filter(Boolean);
 
   const handleRefresh = async () => {
     if (!onRefresh) return;
@@ -1341,6 +1355,7 @@ export default function MetricsView({
           sectionLabels={sectionLabels}
           onOpenSection={setActiveSection}
           businessResultNode={canViewProfit ? <BusinessResultLine business={metrics.current.stats.business} showTitle={false} /> : null}
+          isSalesSubset={Boolean(filters.category || filters.product || filters.payment || filters.user || filters.client || filters.productType !== 'all')}
         />
 
         <div className="metrics-analysis-grid">
@@ -2366,156 +2381,153 @@ export default function MetricsView({
 
   return (
     <div className="metrics-view flex h-full min-h-0 flex-col bg-slate-100">
-      <div className="metrics-header relative z-20 shrink-0 border-b border-slate-200 bg-white px-3 py-2">
-        <div className="flex flex-col gap-2">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <BarChart3 size={18} className="text-fuchsia-600" aria-hidden="true" />
-                <h2 className="text-lg font-black text-slate-900">Métricas</h2>
-                <span className="metrics-header-context text-[9px] font-black uppercase tracking-[0.1em] text-slate-500">
-                  {metrics.range.label}
-                </span>
-                <span className="metrics-header-context text-[9px] font-semibold text-slate-500">
-                  {getComparisonLabel(metrics)}
-                </span>
-              </div>
-              <p className="mt-0.5 text-[11px] font-semibold text-slate-400">Ventas, costos, caja, stock y diagnóstico operativo.</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={handleRefresh}
-                disabled={!onRefresh || isRefreshing}
-                className="metrics-header-action inline-flex h-8 items-center gap-1.5 px-2.5 text-[11px] font-black text-slate-600 transition disabled:cursor-wait disabled:opacity-60"
-              >
-                <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} aria-hidden="true" />
-                Actualizar
-              </button>
-              {canExport && (
-                <>
-                  <button type="button" onClick={handleCsvExport} className="metrics-header-action inline-flex h-8 items-center gap-1.5 px-2.5 text-[11px] font-black text-sky-700 transition">
-                    <Download size={14} aria-hidden="true" /> CSV
-                  </button>
-                  <button type="button" onClick={handlePdfExport} className="metrics-header-action inline-flex h-8 items-center gap-1.5 px-2.5 text-[11px] font-black text-fuchsia-700 transition">
-                    <Printer size={14} aria-hidden="true" /> PDF
-                  </button>
-                </>
-              )}
-            </div>
+      <div className="metrics-header relative z-20 shrink-0 border-b border-slate-200 bg-white px-3 pt-1.5">
+        <div className="metrics-header-bar">
+          <div className="metrics-header-title">
+            <BarChart3 size={17} className="text-fuchsia-600" aria-hidden="true" />
+            <h2>Métricas</h2>
           </div>
-
-          <div className="metrics-filter-line border-y border-slate-200 bg-slate-50 p-2">
-            <div className="grid grid-cols-2 items-end gap-2 md:grid-cols-4 xl:grid-cols-[0.9fr_0.85fr_0.9fr_1fr_1.7fr_auto_auto]">
-            <SelectField label="Rango" value={filters.preset} onChange={(value) => updateFilter('preset', value)}>
-              <option value="today">Hoy</option>
-              <option value="yesterday">Ayer</option>
-              <option value="3d">Últimos 3 días</option>
-              <option value="7d">Últimos 7 días</option>
-              <option value="14d">Últimas 2 semanas</option>
-              <option value="30d">Últimos 30 días</option>
-              <option value="90d">Últimos 90 días</option>
-              <option value="year">Año actual</option>
-              <option value="all">Todo</option>
-              <option value="custom">Personalizado</option>
-            </SelectField>
-            {filters.preset === 'custom' && (
-              <>
-                <InputField label="Desde" type="date" value={filters.startDate} onChange={(value) => updateFilter('startDate', value)} />
-                <InputField label="Hasta" type="date" value={filters.endDate} onChange={(value) => updateFilter('endDate', value)} />
-              </>
-            )}
-            <SelectField label="Estado" value={filters.status} onChange={(value) => updateFilter('status', value)}>
-              <option value="all">Todos</option>
-              <option value="completed">Completadas</option>
-              <option value="voided">Anuladas</option>
-              <option value="deleted">Eliminadas</option>
-              <option value="restored">Restauradas</option>
-            </SelectField>
-            <SelectField label="Pago" value={filters.payment} onChange={(value) => updateFilter('payment', value)}>
-              <option value="">Todos</option>
-              {metrics.filterOptions.payments.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </SelectField>
-            <SelectField label="Categoría" value={filters.category} onChange={(value) => updateFilter('category', value)}>
-              <option value="">Todas</option>
-              {metrics.filterOptions.categories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </SelectField>
-            <SelectField label="Producto" value={filters.product} onChange={(value) => updateFilter('product', value)} className="min-w-[220px]">
-              <option value="">Todos</option>
-              {visibleProductOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </SelectField>
+          <MetricLensSelect label="Período" value={filters.preset} onChange={(value) => updateFilter('preset', value)} className="metrics-period-select">
+            <option value="today">Hoy</option>
+            <option value="yesterday">Ayer</option>
+            <option value="3d">Últimos 3 días</option>
+            <option value="7d">Últimos 7 días</option>
+            <option value="14d">Últimas 2 semanas</option>
+            <option value="30d">Últimos 30 días</option>
+            <option value="90d">Últimos 90 días</option>
+            <option value="year">Año actual</option>
+            <option value="all">Todo</option>
+            <option value="custom">Personalizado</option>
+          </MetricLensSelect>
+          {filters.preset === 'custom' && (
+            <>
+              <input type="date" className="metrics-date-input" aria-label="Desde" value={filters.startDate} onChange={(event) => updateFilter('startDate', event.target.value)} />
+              <input type="date" className="metrics-date-input" aria-label="Hasta" value={filters.endDate} onChange={(event) => updateFilter('endDate', event.target.value)} />
+            </>
+          )}
+          <span className="metrics-header-dates" title={getComparisonLabel(metrics)}>{formatComparisonRange(metrics.range)}</span>
+          <button
+            type="button"
+            onClick={() => setShowFilters((prev) => !prev)}
+            className={`metrics-filter-toggle ${showFilters || activeFilterChips.length ? 'is-active' : ''}`}
+            aria-expanded={showFilters}
+            aria-controls="metrics-filter-panel"
+          >
+            <SlidersHorizontal size={14} aria-hidden="true" />
+            Filtrar{activeFilterChips.length ? ` (${activeFilterChips.length})` : ''}
+          </button>
+          {activeFilterChips.map((chip) => (
+            <button
+              key={chip.key}
+              type="button"
+              className="metrics-filter-chip"
+              onClick={() => setFilters((prev) => ({ ...prev, ...chip.reset }))}
+              title="Quitar este filtro"
+            >
+              <span>{chip.label}</span>
+              <X size={12} aria-hidden="true" />
+            </button>
+          ))}
+          <div className="metrics-header-actions">
             <button
               type="button"
-              onClick={() => setShowAdvancedFilters((prev) => !prev)}
-              className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-[11px] font-black transition ${
-                showAdvancedFilters || hasAdvancedFilters
-                  ? 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700'
-                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
-              }`}
+              onClick={handleRefresh}
+              disabled={!onRefresh || isRefreshing}
+              className="metrics-header-action inline-flex h-8 items-center gap-1.5 px-2.5 text-[11px] font-black text-slate-600 transition disabled:cursor-wait disabled:opacity-60"
+              title="Actualizar los datos"
             >
-              <SlidersHorizontal size={14} aria-hidden="true" />
-              Avanzados{hasAdvancedFilters ? ' *' : ''}
+              <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} aria-hidden="true" />
+              Actualizar
             </button>
-            <button type="button" onClick={resetFilters} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-black text-slate-600 transition hover:bg-slate-100">
-              Limpiar
-            </button>
-            </div>
-
-            {showAdvancedFilters && (
-              <div className="mt-2 grid grid-cols-2 items-end gap-2 border-t border-slate-200 pt-2 md:grid-cols-4 xl:grid-cols-[0.8fr_1fr_1.4fr_auto_auto]">
-                <SelectField label="Tipo" value={filters.productType} onChange={(value) => updateFilter('productType', value)}>
-                  <option value="all">Todos</option>
-                  <option value="quantity">Unidad</option>
-                  <option value="weight">Peso</option>
-                </SelectField>
-                {canViewUsers && (
-                  <SelectField label="Usuario" value={filters.user} onChange={(value) => updateFilter('user', value)}>
-                    <option value="">Todos</option>
-                    {metrics.filterOptions.users.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </SelectField>
-                )}
-                {canViewClients && (
-                  <SelectField label="Cliente" value={filters.client} onChange={(value) => updateFilter('client', value)}>
-                    <option value="">Todos</option>
-                    {metrics.filterOptions.clients.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </SelectField>
-                )}
-                <ToggleField checked={filters.includeVoided} onChange={(value) => updateFilter('includeVoided', value)} label="Anuladas" />
-                <ToggleField checked={filters.includeTest} onChange={(value) => updateFilter('includeTest', value)} label="Test" />
-              </div>
+            {canExport && (
+              <>
+                <button type="button" onClick={handleCsvExport} className="metrics-header-action inline-flex h-8 items-center gap-1.5 px-2.5 text-[11px] font-black text-sky-700 transition" title="Descargar en Excel (CSV)">
+                  <Download size={14} aria-hidden="true" /> CSV
+                </button>
+                <button type="button" onClick={handlePdfExport} className="metrics-header-action inline-flex h-8 items-center gap-1.5 px-2.5 text-[11px] font-black text-fuchsia-700 transition" title="Imprimir o guardar en PDF">
+                  <Printer size={14} aria-hidden="true" /> PDF
+                </button>
+              </>
             )}
           </div>
-
-          <nav className="metrics-section-nav custom-scrollbar flex overflow-x-auto" aria-label="Áreas de análisis">
-            {sectionGroups.map((group) => (
-              <div key={group.id} className="metrics-section-group">
-                <span className="metrics-section-group-label">{group.label}</span>
-                {group.sections.map((section) => {
-                  const Icon = section.icon;
-                  const isActive = activeSection === section.id;
-                  return (
-                    <button
-                      key={section.id}
-                      id={`metrics-section-tab-${section.id}`}
-                      type="button"
-                      onClick={() => setActiveSection(section.id)}
-                      className={`metrics-section-tab inline-flex h-8 shrink-0 items-center gap-1.5 px-2.5 text-[11px] font-black transition ${isActive ? 'is-active' : ''}`}
-                      aria-current={isActive ? 'page' : undefined}
-                      aria-controls="metrics-active-section"
-                    >
-                      <Icon size={14} aria-hidden="true" />
-                      {section.label}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
-          </nav>
-          <div className="metrics-section-guide" aria-live="polite">
-            <span>{activeSectionGroup.label}</span>
-            <strong>{activeSectionMeta.question}</strong>
-          </div>
         </div>
+
+        {showFilters && (
+          <div id="metrics-filter-panel" className="metrics-filter-line mt-1.5 border-y border-slate-200 bg-slate-50 p-2">
+            <div className="grid grid-cols-2 items-end gap-2 md:grid-cols-4 xl:grid-cols-[0.85fr_0.9fr_1fr_1.7fr_0.8fr_auto]">
+              <SelectField label="Estado" value={filters.status} onChange={(value) => updateFilter('status', value)}>
+                <option value="all">Todos</option>
+                <option value="completed">Completadas</option>
+                <option value="voided">Anuladas</option>
+                <option value="deleted">Eliminadas</option>
+                <option value="restored">Restauradas</option>
+              </SelectField>
+              <SelectField label="Pago" value={filters.payment} onChange={(value) => updateFilter('payment', value)}>
+                <option value="">Todos</option>
+                {metrics.filterOptions.payments.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </SelectField>
+              <SelectField label="Categoría" value={filters.category} onChange={(value) => updateFilter('category', value)}>
+                <option value="">Todas</option>
+                {metrics.filterOptions.categories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </SelectField>
+              <SelectField label="Producto" value={filters.product} onChange={(value) => updateFilter('product', value)} className="min-w-[220px]">
+                <option value="">Todos</option>
+                {visibleProductOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </SelectField>
+              <SelectField label="Tipo" value={filters.productType} onChange={(value) => updateFilter('productType', value)}>
+                <option value="all">Todos</option>
+                <option value="quantity">Unidad</option>
+                <option value="weight">Peso</option>
+              </SelectField>
+              <button type="button" onClick={resetFilters} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-black text-slate-600 transition hover:bg-slate-100">
+                Limpiar todo
+              </button>
+            </div>
+            <div className="mt-2 grid grid-cols-2 items-end gap-2 border-t border-slate-200 pt-2 md:grid-cols-4 xl:grid-cols-[1fr_1.4fr_auto_auto]">
+              {canViewUsers && (
+                <SelectField label="Usuario" value={filters.user} onChange={(value) => updateFilter('user', value)}>
+                  <option value="">Todos</option>
+                  {metrics.filterOptions.users.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </SelectField>
+              )}
+              {canViewClients && (
+                <SelectField label="Cliente" value={filters.client} onChange={(value) => updateFilter('client', value)}>
+                  <option value="">Todos</option>
+                  {metrics.filterOptions.clients.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </SelectField>
+              )}
+              <ToggleField checked={filters.includeVoided} onChange={(value) => updateFilter('includeVoided', value)} label="Anuladas" />
+              <ToggleField checked={filters.includeTest} onChange={(value) => updateFilter('includeTest', value)} label="Test" />
+            </div>
+          </div>
+        )}
+
+        <nav className="metrics-section-nav custom-scrollbar mt-1 flex overflow-x-auto" aria-label="Áreas de análisis">
+          {sectionGroups.map((group) => (
+            <div key={group.id} className="metrics-section-group">
+              <span className="metrics-section-group-label">{group.label}</span>
+              {group.sections.map((section) => {
+                const Icon = section.icon;
+                const isActive = activeSection === section.id;
+                return (
+                  <button
+                    key={section.id}
+                    id={`metrics-section-tab-${section.id}`}
+                    type="button"
+                    onClick={() => setActiveSection(section.id)}
+                    className={`metrics-section-tab inline-flex h-8 shrink-0 items-center gap-1.5 px-2.5 text-[11px] font-black transition ${isActive ? 'is-active' : ''}`}
+                    aria-current={isActive ? 'page' : undefined}
+                    aria-controls="metrics-active-section"
+                    title={section.question}
+                  >
+                    <Icon size={14} aria-hidden="true" />
+                    {section.label}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </nav>
       </div>
 
       <div ref={contentScrollRef} className="custom-scrollbar flex-1 overflow-y-auto p-3">
@@ -2525,6 +2537,12 @@ export default function MetricsView({
           role="region"
           aria-labelledby={`metrics-section-tab-${activeSectionMeta.id}`}
         >
+          {activeSection !== 'summary' && (
+            <div className="metrics-section-guide mb-3" aria-live="polite">
+              <span>{activeSectionGroup.label}</span>
+              <strong>{activeSectionMeta.question}</strong>
+            </div>
+          )}
           {metrics.current.filteredTransactions.length === 0 && metrics.current.filteredExpenses.length === 0 && activeSection !== 'stock' ? (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
               <div className="flex items-center gap-2">

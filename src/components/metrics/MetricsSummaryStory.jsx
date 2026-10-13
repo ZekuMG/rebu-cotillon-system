@@ -142,6 +142,7 @@ export default function MetricsSummaryStory({
   sectionLabels,
   onOpenSection,
   businessResultNode,
+  isSalesSubset = false,
 }) {
   const [openCard, setOpenCard] = useState('tasks');
   const stats = metrics.current.stats;
@@ -155,7 +156,7 @@ export default function MetricsSummaryStory({
     previousLabel,
     metrics.canComparePreviousRange,
   );
-  const split = useMemo(() => buildMoneySplit(business), [business]);
+  const split = useMemo(() => buildMoneySplit(business, { marginOnly: isSalesSubset }), [business, isSalesSubset]);
   const tasks = useMemo(() => (isHistoryLoading ? [] : buildActionTasks({
     stockInsights: metrics.stockInsights,
     inventory,
@@ -171,7 +172,10 @@ export default function MetricsSummaryStory({
     revenue,
   }), [metrics, hourlyPeak, revenue]);
   const starProduct = metrics.current.productStats[0] || null;
-  const isLoss = business.businessProfit < 0;
+  // Con un filtro de ventas (categoría, producto, pago…) los gastos son de todo el negocio y
+  // no se pueden repartir: se muestra el margen de lo filtrado en lugar de la ganancia.
+  const isLoss = !isSalesSubset && business.businessProfit < 0;
+  const subsetMarginPer100 = business.collected > 0 ? Math.round((business.grossMargin / business.collected) * 100) : 0;
   const profitPer100 = split ? Math.round(split.profitPer100) : 0;
   const untypedTask = tasks.find((task) => task.key === 'untypedExpenses');
   const firstAlert = tasks.find((task) => task.key !== 'untypedExpenses') || null;
@@ -187,7 +191,14 @@ export default function MetricsSummaryStory({
           sub: `${formatNumber(stats.salesCount)} ventas · ${formatMoneyShort(stats.averageTicket)} cada una en promedio`,
           change: salesChange,
         },
-        {
+        isSalesSubset ? {
+          id: 'profit',
+          question: '¿Cuánto dejó?',
+          icon: HandCoins,
+          value: formatMoneyShort(business.grossMargin),
+          tone: business.grossMargin >= 0 ? 'is-positive' : 'is-negative',
+          sub: `De cada $100 vendidos quedan $${formatNumber(subsetMarginPer100)} antes de gastos`,
+        } : {
           id: 'profit',
           question: '¿Cuánto gané?',
           icon: HandCoins,
@@ -287,8 +298,10 @@ export default function MetricsSummaryStory({
         <>
           <h3>Cómo se calcula la ganancia</h3>
           <p>De lo vendido se resta lo que costó esa mercadería, los sueldos y los gastos del local (alquiler, luz, contador…). Lo que queda es la ganancia del negocio.</p>
-          {businessResultNode}
-          {untypedTask && <p className="metrics-story-caution"><strong>Ojo:</strong> {untypedTask.detail}</p>}
+          {isSalesSubset
+            ? <p className="metrics-story-caution">Hay un filtro activo: acá solo se ve lo que dejó lo filtrado (<strong>{formatMoneyShort(business.grossMargin)}</strong>, ${formatNumber(subsetMarginPer100)} de cada $100). Los sueldos y gastos son de todo el negocio, así que la ganancia se ve sin filtros.</p>
+            : businessResultNode}
+          {!isSalesSubset && untypedTask && <p className="metrics-story-caution"><strong>Ojo:</strong> {untypedTask.detail}</p>}
           {sectionLabels.profit && (
             <button type="button" className="metrics-story-link" onClick={() => onOpenSection('profit')}>
               Ver el detalle de gastos <ArrowRight size={13} aria-hidden="true" />
@@ -312,13 +325,14 @@ export default function MetricsSummaryStory({
               </li>
             ))}
           </ul>
+          {isSalesSubset && <p className="metrics-story-muted">Con el filtro activo solo se separa lo que costó la mercadería y lo que dejó: los gastos son de todo el negocio.</p>}
           {split.shortfallPer100 > 0 && (
             <p className="metrics-story-caution">Los gastos superaron lo que dejó la venta: faltaron <strong>${formatNumber(Math.round(split.shortfallPer100))}</strong> por cada $100 ({formatMoneyShort(business.businessProfit)} en total).</p>
           )}
-          <p className="metrics-story-muted">
+          {!isSalesSubset && <p className="metrics-story-muted">
             {business.merchandisePurchased > 0 && <>Este período se compraron <strong>{formatMoneyShort(business.merchandisePurchased)}</strong> de mercadería: lo que no se vendió quedó en el stock, no es plata perdida. </>}
             {business.withdrawals > 0 && <>Aparte salieron <strong>{formatMoneyShort(business.withdrawals)}</strong> en retiros y préstamos, que no son gastos del negocio.</>}
-          </p>
+          </p>}
         </>
       );
     }
@@ -362,7 +376,6 @@ export default function MetricsSummaryStory({
   return (
     <div className="metrics-story">
       <section className="metrics-story-headline" aria-live="polite">
-        <p className="metrics-story-eyebrow">{metrics.range.label} · {periodLabel}</p>
         {isHistoryLoading ? (
           <h2><Loader2 size={20} className="animate-spin" aria-hidden="true" /> Cargando todas las ventas del período… los números todavía van a cambiar.</h2>
         ) : (
@@ -371,7 +384,12 @@ export default function MetricsSummaryStory({
               Vendiste <mark>{formatMoneyShort(revenue)}</mark> en {formatNumber(stats.salesCount)} ventas
               {salesChange && <>, <span className={`is-${salesChange.tone}`}>{salesChange.text}</span></>}.
             </h2>
-            {canViewProfit && (
+            {canViewProfit && isSalesSubset && (
+              <p>
+                Con este filtro, lo vendido dejó un margen de <mark className="is-positive">{formatMoneyShort(business.grossMargin)}</mark> antes de gastos. Los gastos son de todo el negocio: para ver la ganancia, quitá el filtro.
+              </p>
+            )}
+            {canViewProfit && !isSalesSubset && (
               <p>
                 {isLoss
                   ? <>Esta vez no alcanzó: después de mercadería, sueldos y gastos <mark className="is-negative">faltaron {formatMoneyShort(Math.abs(business.businessProfit))}</mark>.</>

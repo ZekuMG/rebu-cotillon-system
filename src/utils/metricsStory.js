@@ -47,17 +47,22 @@ export const describeProfitChange = (current, previous, previousLabel, canCompar
 };
 
 // De cada $100 cobrados: cuánto fue mercadería, sueldos, gastos y cuánto quedó.
-export const buildMoneySplit = (business) => {
+// marginOnly: con un filtro de categoría, producto, pago, usuario o cliente los gastos no se
+// pueden repartir (son de todo el negocio), así que solo se separa costo y margen.
+export const buildMoneySplit = (business, { marginOnly = false } = {}) => {
   const collected = toNumber(business?.collected);
   if (collected <= 0) return null;
   const soldCost = collected - toNumber(business.grossMargin);
-  const fixedAndOther = toNumber(business.byType?.fixed) + toNumber(business.byType?.other);
-  const profit = toNumber(business.businessProfit);
+  const fixedAndOther = marginOnly ? 0 : toNumber(business.byType?.fixed) + toNumber(business.byType?.other);
+  const salaries = marginOnly ? 0 : toNumber(business.byType?.salaries);
+  const profit = marginOnly ? toNumber(business.grossMargin) : toNumber(business.businessProfit);
   const parts = [
     { key: 'cost', short: 'Mercadería', label: 'Mercadería que se vendió', value: soldCost, color: '#0ea5e9' },
-    { key: 'salaries', short: 'Sueldos', label: 'Sueldos', value: toNumber(business.byType?.salaries), color: '#8b5cf6' },
+    { key: 'salaries', short: 'Sueldos', label: 'Sueldos', value: salaries, color: '#8b5cf6' },
     { key: 'fixed', short: 'Gastos', label: 'Alquiler, servicios y otros gastos', value: fixedAndOther, color: '#f59e0b' },
-    { key: 'profit', short: 'Ganancia', label: 'Ganancia', value: Math.max(0, profit), color: '#10b981' },
+    marginOnly
+      ? { key: 'profit', short: 'Margen', label: 'Margen (antes de gastos)', value: Math.max(0, profit), color: '#10b981' }
+      : { key: 'profit', short: 'Ganancia', label: 'Ganancia', value: Math.max(0, profit), color: '#10b981' },
   ].map((part) => ({ ...part, per100: (part.value / collected) * 100 }));
 
   return {
