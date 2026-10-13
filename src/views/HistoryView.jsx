@@ -44,6 +44,7 @@ import {
   matchesUnifiedUserFilter,
 } from '../utils/userFilters';
 import { selectPageWindowExtras } from '../utils/historyServerQuery';
+import { EXPENSE_CATEGORY_OPTIONS } from '../utils/expenseTypes';
 import useHistoryTransactionsFeed from '../hooks/useHistoryTransactionsFeed';
 
 // --- HELPER LOCAL PARA FORMATO VISUAL ---
@@ -1363,7 +1364,7 @@ const filterHistoryTransactions = ({
   }, [expenses]);
 
   const expenseCategoriesList = useMemo(() => {
-    const defaultCats = ['Proveedores', 'Servicios/Operativos', 'Retiros de Socios', 'Otros'];
+    const defaultCats = EXPENSE_CATEGORY_OPTIONS;
     const dynamicCats = cleanExpensesList.map((e) => e.category).filter(Boolean);
     return Array.from(new Set([...defaultCats, ...dynamicCats])).sort();
   }, [cleanExpensesList]);

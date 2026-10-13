@@ -4,7 +4,9 @@ import { getPaymentMethodLabel, normalizePaymentBreakdown } from '../utils/payme
 import {
   buildSalesDataset,
   getCostBasisStatus,
+  getItemCategories,
   getItemCostInfo,
+  getItemProductType,
   getMetricProductKey,
   getTransactionDate,
   parseMetricDate,
@@ -13,8 +15,17 @@ import {
   getPosBagItemsSummary,
   isPosBagItem,
 } from '../utils/posSaleExtras';
+import {
+  addQuantity,
+  emptyQuantity,
+  isLowStockProduct,
+  LOW_STOCK_GRAMS,
+  LOW_STOCK_UNITS,
+} from '../utils/metricQuantities';
+import { buildBusinessResult } from '../utils/expenseTypes';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const LOW_MARGIN_RATE = 20;
 
 const toNumber = (value) => Number(value) || 0;
 
@@ -224,24 +235,26 @@ const _getTransactionCost = (tx = {}, lookups) => {
   return (tx.items || []).reduce((sum, item) => sum + getItemCost(item, lookups), 0);
 };
 
-const getItemCategories = (item = {}, product = null) => {
-  const raw = Array.isArray(product?.categories) && product.categories.length
-    ? product.categories
-    : Array.isArray(item.categories) && item.categories.length
-      ? item.categories
-      : String(product?.category || item.category || 'Sin categoría').split(',');
-
-  return raw.map((category) => String(category || '').trim()).filter(Boolean).length
-    ? raw.map((category) => String(category || '').trim()).filter(Boolean)
-    : ['Sin categoría'];
-};
-
-const getItemProductType = (item = {}, product = null) =>
-  product?.product_type || item.product_type || (item.isWeight ? 'weight' : 'quantity');
-
 const addToMap = (map, key, seed, patch) => {
   const current = map.get(key) || { key, ...seed };
   map.set(key, { ...current, ...patch(current) });
+};
+
+// Para los recorridos por venta e item: muta en el lugar en vez de copiar el objeto cada vez.
+const getOrCreate = (map, key, createSeed) => {
+  let current = map.get(key);
+  if (!current) {
+    current = { key, ...createSeed() };
+    map.set(key, current);
+  }
+  return current;
+};
+
+const addCostBasisInPlace = (target, basis = {}) => {
+  target.snapshot += toNumber(basis.snapshot);
+  target.inventory += toNumber(basis.inventory);
+  target.missing += toNumber(basis.missing);
+  target.excluded += toNumber(basis.excluded);
 };
 
 const emptyCostBasis = () => ({ snapshot: 0, inventory: 0, missing: 0, excluded: 0 });
@@ -551,7 +564,7 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
 
   let revenue = 0;
   let cost = 0;
-  let itemsSold = 0;
+  let quantitySold = emptyQuantity();
   let posBagCount = 0;
   let posBagRevenue = 0;
   let posBagSalesCount = 0;
@@ -566,7 +579,14 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
     ), 0);
     const txPosBagSummary = getPosBagItemsSummary(txItemsForStats);
     const txItemDiscountImpact = toNumber(tx.itemDiscountImpact ?? tx.discountImpact);
-    const txItemCount = txItemsForStats.reduce((sum, item) => sum + getItemQty(item), 0);
+    const txItemDetails = txItemsForStats.map((item) => {
+      const product = getLiveProduct(item, lookups);
+      return { item, product, qty: getItemQty(item), productType: getItemProductType(item, product) };
+    });
+    const txItemQuantity = txItemDetails.reduce(
+      (total, detail) => addQuantity(total, detail.qty, detail.productType),
+      emptyQuantity(),
+    );
     revenue += txRevenue;
     cost += txCost;
     posBagCount += txPosBagSummary.count;
@@ -610,34 +630,31 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
     paymentLines.forEach((line, lineIndex) => {
       const method = getPaymentMethodLabel(line.method);
       const amount = toNumber(line.chargedAmount) * paymentScopeRatio;
-      addToMap(paymentMap, method, { name: method, value: 0, salesCount: 0, history: [] }, (current) => ({
-        value: current.value + amount,
-        salesCount: current.salesCount + 1,
-        history: [
-          ...(current.history || []),
-          {
-            key: `${tx.id || periodKey}-${line.id || lineIndex}-${current.salesCount || 0}`,
-            transactionId: tx.id,
-            method,
-            rawMethod: line.method,
-            amount,
-            saleTotal: txRevenue,
-            itemCount: txItemCount,
-            clientName: getClientName(tx),
-            user: getUserLabel(tx),
-            date: tx.metricDate,
-            time: tx.time || tx.timestamp || '',
-            sortTime: tx.metricDate?.getTime?.() || 0,
-          },
-        ],
-      }));
+      const paymentEntry = getOrCreate(paymentMap, method, () => ({ name: method, value: 0, salesCount: 0, history: [] }));
+      paymentEntry.history.push({
+        key: `${tx.id || periodKey}-${line.id || lineIndex}-${paymentEntry.salesCount}`,
+        transactionId: tx.id,
+        method,
+        rawMethod: line.method,
+        amount,
+        saleTotal: txRevenue,
+        itemQuantity: txItemQuantity,
+        clientName: getClientName(tx),
+        user: getUserLabel(tx),
+        date: tx.metricDate,
+        time: tx.time || tx.timestamp || '',
+        sortTime: tx.metricDate?.getTime?.() || 0,
+      });
+      paymentEntry.value += amount;
+      paymentEntry.salesCount += 1;
     });
 
-    addToMap(userMap, getUserKey(tx), { name: getUserLabel(tx), revenue: 0, profit: 0, salesCount: 0 }, (current) => ({
-      revenue: current.revenue + txRevenue,
-      profit: current.profit + txProfit,
-      salesCount: current.salesCount + 1,
-    }));
+    // "Margen" = ingreso - costo de lo vendido. El viejo "profit" de la venta es ingreso
+    // menos descuentos (no resta costo), por eso la columna repetía el ingreso.
+    const userEntry = getOrCreate(userMap, getUserKey(tx), () => ({ name: getUserLabel(tx), revenue: 0, cost: 0, salesCount: 0 }));
+    userEntry.revenue += txRevenue;
+    userEntry.cost += txCost;
+    userEntry.salesCount += 1;
 
     const clientName = getClientName(tx);
     if (isFinalConsumerName(clientName)) {
@@ -651,11 +668,8 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
       }));
     }
 
-    txItemsForStats.forEach((item) => {
-      if (item?.isDiscount || item?.is_discount) return;
-      const product = getLiveProduct(item, lookups);
+    txItemDetails.forEach(({ item, product, qty, productType }) => {
       const title = item.title || item.product_title || product?.title || 'Producto';
-      const qty = getItemQty(item);
       const itemGrossRevenue = getItemRevenue(item);
       const itemDiscountImpact = !isPosBagItem(item) && txDiscountEligibleGrossRevenue > 0
         ? txItemDiscountImpact * Math.min(1, Math.max(0, itemGrossRevenue / txDiscountEligibleGrossRevenue))
@@ -664,45 +678,36 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
       const itemCostInfo = getItemCostInfo(item, lookups);
       const itemCost = itemCostInfo.totalCost;
       const productKey = getMetricProductKey(item, product);
-      const productType = getItemProductType(item, product);
       const categories = getItemCategories(item, product);
-      itemsSold += qty;
+      const itemProfit = itemRevenue - itemCost;
+      quantitySold = addQuantity(quantitySold, qty, productType);
 
-      addToMap(productMap, productKey, { name: title, qty: 0, revenue: 0, cost: 0, profit: 0, type: productType, costBasis: emptyCostBasis() }, (current) => ({
-        qty: current.qty + qty,
-        revenue: current.revenue + itemRevenue,
-        cost: current.cost + itemCost,
-        profit: current.profit + itemRevenue - itemCost,
-        costBasis: mergeCostBasis(current.costBasis, itemCostInfo.basis),
-      }));
+      // Cada producto tiene un solo tipo, así que su qty está en una sola unidad (u. o g).
+      const productEntry = getOrCreate(productMap, productKey, () => ({ name: title, qty: 0, revenue: 0, cost: 0, profit: 0, type: productType, costBasis: emptyCostBasis() }));
+      productEntry.qty += qty;
+      productEntry.revenue += itemRevenue;
+      productEntry.cost += itemCost;
+      productEntry.profit += itemProfit;
+      addCostBasisInPlace(productEntry.costBasis, itemCostInfo.basis);
 
-      addToMap(typeMap, productType, { name: productType === 'weight' ? 'Por peso' : 'Por unidad', qty: 0, revenue: 0 }, (current) => ({
-        qty: current.qty + qty,
-        revenue: current.revenue + itemRevenue,
-      }));
+      const typeEntry = getOrCreate(typeMap, productType, () => ({ name: productType === 'weight' ? 'Por peso' : 'Por unidad', type: productType, qty: 0, revenue: 0 }));
+      typeEntry.qty += qty;
+      typeEntry.revenue += itemRevenue;
 
       categories.forEach((category) => {
-        addToMap(categoryMap, category, { name: category, qty: 0, revenue: 0, cost: 0, profit: 0, costBasis: emptyCostBasis(), products: new Map() }, (current) => {
-          const products = new Map(current.products || []);
-          const productEntry = products.get(productKey) || { key: productKey, name: title, qty: 0, revenue: 0, cost: 0, profit: 0, costBasis: emptyCostBasis() };
-          products.set(productKey, {
-            ...productEntry,
-            qty: productEntry.qty + qty,
-            revenue: productEntry.revenue + itemRevenue,
-            cost: productEntry.cost + itemCost,
-            profit: productEntry.profit + itemRevenue - itemCost,
-            costBasis: mergeCostBasis(productEntry.costBasis, itemCostInfo.basis),
-          });
+        const categoryEntry = getOrCreate(categoryMap, category, () => ({ name: category, quantity: emptyQuantity(), revenue: 0, cost: 0, profit: 0, costBasis: emptyCostBasis(), products: new Map() }));
+        categoryEntry.quantity = addQuantity(categoryEntry.quantity, qty, productType);
+        categoryEntry.revenue += itemRevenue;
+        categoryEntry.cost += itemCost;
+        categoryEntry.profit += itemProfit;
+        addCostBasisInPlace(categoryEntry.costBasis, itemCostInfo.basis);
 
-          return {
-            qty: current.qty + qty,
-            revenue: current.revenue + itemRevenue,
-            cost: current.cost + itemCost,
-            profit: current.profit + itemRevenue - itemCost,
-            costBasis: mergeCostBasis(current.costBasis, itemCostInfo.basis),
-            products,
-          };
-        });
+        const categoryProduct = getOrCreate(categoryEntry.products, productKey, () => ({ name: title, qty: 0, revenue: 0, cost: 0, profit: 0, type: productType, costBasis: emptyCostBasis() }));
+        categoryProduct.qty += qty;
+        categoryProduct.revenue += itemRevenue;
+        categoryProduct.cost += itemCost;
+        categoryProduct.profit += itemProfit;
+        addCostBasisInPlace(categoryProduct.costBasis, itemCostInfo.basis);
       });
     });
   });
@@ -723,20 +728,22 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
     emptyCostBasis(),
   );
 
+  const discountImpact = filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.discountImpact), 0);
   const stats = {
     revenue,
     cost,
+    business: buildBusinessResult({ revenue, cost, discountImpact, expenses: filteredExpenses }),
     costBasis: periodCostBasis,
     costStatus: getCostBasisStatus(periodCostBasis, cost),
     discounts: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.itemDiscountImpact ?? tx.discountImpact), 0),
-    discountImpact: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.discountImpact), 0),
+    discountImpact,
     theoreticalProfit: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.theoreticalProfit), 0),
     theoreticalNet: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.theoreticalProfit), 0) - totalExpenses,
     expenses: totalExpenses,
     profit: filteredTransactions.reduce((sum, tx) => sum + toNumber(tx.profit), 0) - totalExpenses,
     salesCount: filteredTransactions.length,
     averageTicket: filteredTransactions.length ? revenue / filteredTransactions.length : 0,
-    itemsSold,
+    quantitySold,
     posBagCount,
     posBagRevenue,
     posBagSalesCount,
@@ -788,7 +795,7 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
         total: item.revenue + item.profit,
         marginRate: item.revenue ? (item.profit / item.revenue) * 100 : 0,
       });
-    }), 'revenue', 16),
+    }), 'revenue', Number.MAX_SAFE_INTEGER),
     paymentStats: sortBy([...paymentMap.values()].map((item) => ({
       ...item,
       history: [...(item.history || [])]
@@ -797,7 +804,7 @@ const analyzePeriod = ({ transactions, expenses, budgets, orders, closures, memb
     })), 'value', 10),
     userStats: sortBy([...userMap.values()].map((item) => ({
       ...item,
-      total: item.revenue + item.profit,
+      margin: item.revenue - item.cost,
       averageTicket: item.salesCount ? item.revenue / item.salesCount : 0,
     })), 'revenue', 12),
     clientStats: [...clientMap.values()].map((item) => ({
@@ -820,7 +827,7 @@ const buildStockStats = (inventory = []) => {
   const activeProducts = inventory.filter((product) => product.is_active !== false && !product.isTest && !isTestRecord(product));
   const totalCost = activeProducts.reduce((sum, product) => sum + toNumber(product.purchasePrice) * toNumber(product.stock), 0);
   const totalRetail = activeProducts.reduce((sum, product) => sum + toNumber(product.price) * toNumber(product.stock), 0);
-  const lowStock = activeProducts.filter((product) => toNumber(product.stock) > 0 && toNumber(product.stock) < 10).sort((a, b) => toNumber(a.stock) - toNumber(b.stock));
+  const lowStock = activeProducts.filter(isLowStockProduct).sort((a, b) => toNumber(a.stock) - toNumber(b.stock));
   const outOfStock = activeProducts.filter((product) => toNumber(product.stock) <= 0);
   const today = startOfDay(new Date());
   const expiring = activeProducts
@@ -894,15 +901,18 @@ const buildClosureStats = (closures = [], range, filters) => {
 const buildRecommendations = ({ current, previous, stockStats, orderStats, members }) => {
   const recommendations = [];
   const revenueChange = calculateChange(current.stats.revenue, previous.stats.revenue);
-  const profitChange = calculateChange(current.stats.profit, previous.stats.profit);
+  const profitChange = calculateChange(current.stats.business.businessProfit, previous.stats.business.businessProfit);
   const peakHour = sortBy(current.hourStats, 'salesCount', 1)[0];
-  const lowMarginProduct = current.productStats.find((product) => product.revenue > 0 && product.marginRate < 20);
+  // Todos los productos vendidos, no solo el top 20. Sin costo cargado no se puede saber el margen.
+  const lowMarginProducts = (current.allProductStats || [])
+    .filter((product) => product.revenue > 0 && product.costStatus !== 'missing' && product.marginRate < LOW_MARGIN_RATE)
+    .sort((a, b) => a.marginRate - b.marginRate);
 
   if (stockStats.outOfStock.length || stockStats.lowStock.length) {
     recommendations.push({
       tone: 'danger',
       title: 'Reponer stock crítico',
-      detail: `${stockStats.outOfStock.length} sin stock y ${stockStats.lowStock.length} con menos de 10 unidades.`,
+      detail: `${stockStats.outOfStock.length} sin stock y ${stockStats.lowStock.length} bajo el mínimo (${LOW_STOCK_UNITS} u. o ${LOW_STOCK_GRAMS} g).`,
       section: 'stock',
     });
   }
@@ -935,17 +945,20 @@ const buildRecommendations = ({ current, previous, stockStats, orderStats, membe
   if (profitChange < -15) {
     recommendations.push({
       tone: 'danger',
-      title: 'Revisar resultado de caja',
-      detail: `El resultado bajó ${formatNumber(Math.abs(profitChange), 1)}%. Mirá gastos, cobros y descuentos.`,
+      title: 'Bajó la ganancia del negocio',
+      detail: `La ganancia del negocio bajó ${formatNumber(Math.abs(profitChange), 1)}%. Mirá sueldos, gastos fijos y descuentos.`,
       section: 'profit',
     });
   }
 
-  if (lowMarginProduct) {
+  if (lowMarginProducts.length) {
+    const worst = lowMarginProducts[0];
     recommendations.push({
       tone: 'warning',
       title: 'Margen bajo',
-      detail: `${lowMarginProduct.name} tiene margen estimado de ${formatNumber(lowMarginProduct.marginRate, 1)}%.`,
+      detail: lowMarginProducts.length === 1
+        ? `${worst.name} deja ${formatNumber(worst.marginRate, 1)}% de margen.`
+        : `${lowMarginProducts.length} productos dejan menos de ${LOW_MARGIN_RATE}% de margen. El peor: ${worst.name} (${formatNumber(worst.marginRate, 1)}%).`,
       section: 'products',
     });
   }
@@ -956,6 +969,16 @@ const buildRecommendations = ({ current, previous, stockStats, orderStats, membe
       title: 'Horario fuerte',
       detail: `${peakHour.label} concentra ${peakHour.salesCount} ventas por ${formatCurrency(peakHour.revenue)}.`,
       section: 'sales',
+    });
+  }
+
+  const otherExpenses = current.stats.business.byType.other;
+  if (otherExpenses > 0 && current.stats.expenses > 0 && otherExpenses / current.stats.expenses > 0.2) {
+    recommendations.push({
+      tone: 'warning',
+      title: 'Gastos sin tipo',
+      detail: `${formatCurrency(otherExpenses)} están cargados como "Otros". Pasalos a Sueldos, Proveedores, Fijos o Retiros para que la ganancia sea exacta.`,
+      section: 'profit',
     });
   }
 
@@ -991,12 +1014,21 @@ export default function useMetricsData({
   orders = [],
   filters = {},
 }) {
+  // Lo que no depende de los filtros se arma una sola vez por cambio de datos.
+  const metricTransactions = useMemo(
+    () => mergeTransactionsWithLogSales(transactions, dailyLogs),
+    [transactions, dailyLogs],
+  );
+  const lookups = useMemo(() => buildInventoryLookups(inventory), [inventory]);
+  const filterOptions = useMemo(
+    () => makeFilterOptions({ transactions: metricTransactions, inventory, members, orders, budgets }),
+    [metricTransactions, inventory, members, orders, budgets],
+  );
+  const stockStats = useMemo(() => buildStockStats(inventory), [inventory]);
+
   return useMemo(() => {
-    const metricTransactions = mergeTransactionsWithLogSales(transactions, dailyLogs);
-    const lookups = buildInventoryLookups(inventory);
     const range = makeRange(filters);
     const previousRange = makePreviousRange(range);
-    const filterOptions = makeFilterOptions({ transactions: metricTransactions, inventory, members, orders, budgets });
     const current = analyzePeriod({
       transactions: metricTransactions,
       expenses,
@@ -1008,18 +1040,31 @@ export default function useMetricsData({
       filters,
       lookups,
     });
-    const previous = analyzePeriod({
-      transactions: metricTransactions,
-      expenses,
-      budgets,
-      orders,
-      closures: pastClosures,
-      members,
-      range: previousRange,
-      filters,
-      lookups,
-    });
-    const stockStats = buildStockStats(inventory);
+    // Sin período comparable ("Todo el historial") el rango anterior es otra vez todo:
+    // se analiza vacío en lugar de recorrer el historial completo por segunda vez.
+    const previous = analyzePeriod(previousRange.isComparable
+      ? {
+          transactions: metricTransactions,
+          expenses,
+          budgets,
+          orders,
+          closures: pastClosures,
+          members,
+          range: previousRange,
+          filters,
+          lookups,
+        }
+      : {
+          transactions: [],
+          expenses: [],
+          budgets: [],
+          orders: [],
+          closures: [],
+          members: [],
+          range: previousRange,
+          filters,
+          lookups,
+        });
     const orderStats = buildOrderStats(orders, budgets, range, filters, lookups);
     const closureStats = buildClosureStats(pastClosures, range, filters);
     const recommendations = buildRecommendations({ current, previous, stockStats, orderStats, members });
@@ -1045,10 +1090,11 @@ export default function useMetricsData({
           previous.stats.revenue - previous.stats.cost,
         ),
         profit: getComparableChange(current.stats.profit, previous.stats.profit),
+        businessProfit: getComparableChange(current.stats.business.businessProfit, previous.stats.business.businessProfit),
         salesCount: getComparableChange(current.stats.salesCount, previous.stats.salesCount),
         averageTicket: getComparableChange(current.stats.averageTicket, previous.stats.averageTicket),
         expenses: getComparableChange(current.stats.expenses, previous.stats.expenses),
       },
     };
-  }, [transactions, dailyLogs, expenses, pastClosures, inventory, members, budgets, orders, filters]);
+  }, [metricTransactions, lookups, filterOptions, stockStats, expenses, pastClosures, members, budgets, orders, filters]);
 }

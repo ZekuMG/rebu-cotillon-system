@@ -43,6 +43,14 @@ import { FancyPrice } from '../components/FancyPrice';
 import HintIcon from '../components/HintIcon';
 import { formatCurrency, formatNumber } from '../utils/helpers';
 import { hasPermission } from '../utils/userPermissions';
+import {
+  formatMetricQuantity,
+  formatQuantityForType,
+  LOW_STOCK_GRAMS,
+  LOW_STOCK_UNITS,
+} from '../utils/metricQuantities';
+import { UNCATEGORIZED_LABEL } from '../utils/salesMetricsCore';
+import { EXPENSE_TYPE_META } from '../utils/expenseTypes';
 
 const COLORS = ['#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#f97316', '#64748b'];
 const WEEKDAY_SEQUENCE = [
@@ -378,7 +386,7 @@ const getInventoryProductCategories = (product = {}) => {
       ? product.category
       : String(product.category || '').split(',');
   const categories = categorySource.map((category) => String(category || '').trim()).filter(Boolean);
-  return categories.length ? categories : ['Sin categoria'];
+  return categories.length ? categories : [UNCATEGORIZED_LABEL];
 };
 
 const getInventoryProductType = (product = {}) => (
@@ -571,63 +579,52 @@ const MetricCard = ({ label, value, sublabel, change, tone = 'slate', hidden = f
   );
 };
 
-const FinanceBreakdown = ({ stats, profitStatusLabel = null, profitStatusToneClass = null }) => {
-  const collectedRevenue = Math.max(0, Number(stats.revenue || 0) - Number(stats.discountImpact || 0));
-  const marginRate = collectedRevenue ? (stats.profit / collectedRevenue) * 100 : 0;
-  const items = [
-    {
-      label: 'Ingreso cobrado',
-      value: collectedRevenue,
-      tone: 'text-sky-700 bg-sky-50 border-sky-100',
-      hint: 'Total efectivamente cobrado en ventas del rango, neto de descuentos aplicados.',
-    },
-    {
-      label: 'Costo vendido',
-      value: stats.cost,
-      tone: 'text-slate-700 bg-slate-50 border-slate-200',
-      hint: 'Costo de la mercaderia vendida: usa la foto guardada en la venta y, para ventas viejas, inventario actual como estimacion.',
-      costStatus: stats.costStatus,
-    },
-    {
-      label: 'Gastos',
-      value: stats.expenses,
-      tone: 'text-rose-700 bg-rose-50 border-rose-100',
-      hint: 'Gastos registrados dentro del rango filtrado.',
-    },
-    {
-      label: 'Resultado caja',
-      value: stats.profit,
-      displayValue: profitStatusLabel,
-      tone: profitStatusToneClass || (stats.profit >= 0 ? 'text-emerald-700 bg-emerald-50 border-emerald-100' : 'text-rose-700 bg-rose-50 border-rose-100'),
-      hint: 'Ingreso cobrado menos gastos reales registrados. No descuenta costo de mercaderia automaticamente.',
-    },
-  ];
+const signedTone = (value) => (Number(value || 0) >= 0 ? 'is-positive' : 'is-negative');
+
+// Margen de lo vendido − sueldos − fijos = ganancia del negocio − retiros = queda.
+// La compra de mercadería no entra en la cuenta (ya está el costo de lo vendido): se
+// explica aparte como stock que quedó, para que cierre con lo que bajó la caja.
+const BusinessResultLine = ({ business }) => {
+  const fixedAndOther = business.byType.fixed + business.byType.other;
+  const soldCost = business.merchandisePurchased - business.stockGap;
+  const hasWithdrawals = business.withdrawals > 0;
+  const cashVerb = business.cashResult >= 0 ? 'subió' : 'bajó';
 
   return (
-    <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
-      {items.map((item) => (
-        <div key={item.label} className={`rounded-lg border px-3 py-2 ${item.tone}`}>
-          <div className="flex items-center justify-between gap-2">
-            <p className="truncate text-[9px] font-black uppercase tracking-[0.12em] opacity-70">{item.label}</p>
-            <HintIcon hint={item.hint} size={12} />
-          </div>
-          <div className="mt-1 truncate text-lg font-black">
-            {item.displayValue || <FancyPrice amount={item.value} />}
-          </div>
-          {item.costStatus && (
-            <div className="mt-1">
-              <CostBasisBadge status={item.costStatus} />
-            </div>
-          )}
-        </div>
-      ))}
-      <div className="md:col-span-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] font-bold text-slate-500">
-        <span>Formula: ingreso cobrado - gastos registrados = resultado de caja</span>
-        <span className={`rounded-full px-2 py-0.5 font-black ${marginRate >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
-          Resultado / cobrado {formatNumber(marginRate, 1)}%
-        </span>
+    <section className="metrics-business-result" aria-label="Resultado del negocio">
+      <div className="metrics-equation-title">
+        <WalletCards size={15} />
+        <span>Resultado del negocio</span>
       </div>
-    </div>
+      <div><small>Margen de lo vendido</small><strong><FancyPrice amount={business.grossMargin} /></strong></div>
+      <b aria-hidden="true">−</b>
+      <div><small>Sueldos</small><strong><FancyPrice amount={business.byType.salaries} /></strong></div>
+      <b aria-hidden="true">−</b>
+      <div><small>Fijos y otros</small><strong><FancyPrice amount={fixedAndOther} /></strong></div>
+      <b aria-hidden="true">=</b>
+      <div className={`is-key ${signedTone(business.businessProfit)}`}><small>Ganancia del negocio</small><strong><FancyPrice amount={business.businessProfit} /></strong></div>
+      {hasWithdrawals && (
+        <>
+          <b aria-hidden="true">−</b>
+          <div><small>Retiros y préstamos</small><strong><FancyPrice amount={business.withdrawals} /></strong></div>
+          <b aria-hidden="true">=</b>
+          <div className={`is-key ${signedTone(business.afterWithdrawals)}`}><small>Queda</small><strong><FancyPrice amount={business.afterWithdrawals} /></strong></div>
+        </>
+      )}
+      <p>
+        {business.merchandisePurchased > 0 ? (
+          <>
+            Se compraron <strong>{formatCurrency(business.merchandisePurchased)}</strong> de mercadería y lo vendido costó <strong>{formatCurrency(soldCost)}</strong>:{' '}
+            {business.stockGap >= 0
+              ? <>quedaron <strong>{formatCurrency(business.stockGap)}</strong> más en stock</>
+              : <>se usaron <strong>{formatCurrency(Math.abs(business.stockGap))}</strong> del stock que ya había</>}
+            . Por eso la caja {cashVerb} <strong>{formatCurrency(Math.abs(business.cashResult))}</strong>.
+          </>
+        ) : (
+          <>La caja {cashVerb} <strong>{formatCurrency(Math.abs(business.cashResult))}</strong> (cobrado menos todos los gastos).</>
+        )}
+      </p>
+    </section>
   );
 };
 
@@ -1017,7 +1014,8 @@ const buildCsvRows = ({ metrics, canViewProfit, canViewUsers, canViewClients }) 
     ['Resumen', 'Ingreso bruto', metrics.current.stats.revenue],
     ['Resumen', 'Ventas', metrics.current.stats.salesCount],
     ['Resumen', 'Ticket promedio', metrics.current.stats.averageTicket],
-    ['Resumen', 'Productos vendidos', metrics.current.stats.itemsSold],
+    ['Resumen', 'Unidades vendidas', metrics.current.stats.quantitySold?.units || 0],
+    ['Resumen', 'Kilos vendidos (por peso)', (metrics.current.stats.quantitySold?.grams || 0) / 1000],
     ['Resumen', 'Bolsitas cobradas', metrics.current.posBagStats?.count || 0],
     ['Resumen', 'Ingreso por bolsitas', metrics.current.posBagStats?.revenue || 0],
     ['Resumen', 'Gastos', metrics.current.stats.expenses],
@@ -1029,14 +1027,28 @@ const buildCsvRows = ({ metrics, canViewProfit, canViewUsers, canViewClients }) 
   }
 
   rows.push([]);
-  rows.push(['Productos', 'Nombre', 'Cantidad', 'Ingreso', canViewProfit ? 'Costo vendido' : '', canViewProfit ? 'Base' : '']);
-  metrics.current.productStats.forEach((item) => rows.push(['Productos', item.name, item.qty, item.revenue, canViewProfit ? item.cost : '', canViewProfit ? (COST_BASIS_META[item.costStatus]?.label || 'Sin costo') : '']));
+  rows.push(['Productos', 'Nombre', 'Cantidad', 'Unidad', 'Ingreso', canViewProfit ? 'Costo vendido' : '', canViewProfit ? 'Base' : '']);
+  metrics.current.productStats.forEach((item) => rows.push([
+    'Productos',
+    item.name,
+    item.type === 'weight' ? item.qty / 1000 : item.qty,
+    item.type === 'weight' ? 'kg' : 'u.',
+    item.revenue,
+    canViewProfit ? item.cost : '',
+    canViewProfit ? (COST_BASIS_META[item.costStatus]?.label || 'Sin costo') : '',
+  ]));
 
   rows.push([]);
-
-  rows.push([]);
-  rows.push(['Categorías', 'Nombre', 'Cantidad', 'Ingreso', canViewProfit ? 'Costo vendido' : '', canViewProfit ? 'Base' : '']);
-  metrics.current.categoryStats.forEach((item) => rows.push(['Categorías', item.name, item.qty, item.revenue, canViewProfit ? item.cost : '', canViewProfit ? (COST_BASIS_META[item.costStatus]?.label || 'Sin costo') : '']));
+  rows.push(['Categorías', 'Nombre', 'Unidades', 'Kilos', 'Ingreso', canViewProfit ? 'Costo vendido' : '', canViewProfit ? 'Base' : '']);
+  metrics.current.categoryStats.forEach((item) => rows.push([
+    'Categorías',
+    item.name,
+    item.quantity?.units || 0,
+    (item.quantity?.grams || 0) / 1000,
+    item.revenue,
+    canViewProfit ? item.cost : '',
+    canViewProfit ? (COST_BASIS_META[item.costStatus]?.label || 'Sin costo') : '',
+  ]));
 
   rows.push([]);
   rows.push(['Pagos', 'Medio', 'Importe', 'Usos']);
@@ -1050,8 +1062,8 @@ const buildCsvRows = ({ metrics, canViewProfit, canViewUsers, canViewClients }) 
 
   if (canViewUsers) {
     rows.push([]);
-    rows.push(['Usuarios', 'Nombre', 'Ventas', 'Ingreso', canViewProfit ? 'Resultado' : '']);
-    metrics.current.userStats.forEach((item) => rows.push(['Usuarios', item.name, item.salesCount, item.revenue, canViewProfit ? item.profit : '']));
+    rows.push(['Usuarios', 'Nombre', 'Ventas', 'Ingreso', canViewProfit ? 'Margen mercadería' : '']);
+    metrics.current.userStats.forEach((item) => rows.push(['Usuarios', item.name, item.salesCount, item.revenue, canViewProfit ? item.margin : '']));
   }
 
   return rows;
@@ -1068,6 +1080,7 @@ export default function MetricsView({
   dailyLogs = [],
   currentUser,
   isLoading: _isLoading = false,
+  isHistoryLoading = false,
   isProfitSyncing: _isProfitSyncing = false,
   emptyStateMessage: _emptyStateMessage = '',
   onRefresh,
@@ -1300,15 +1313,21 @@ export default function MetricsView({
     const stats = metrics.current.stats;
     const revenue = Number(stats.revenue || 0);
     const cost = Number(stats.cost || 0);
-    const expensesTotal = Number(stats.expenses || 0);
-    const netProfit = Number(stats.profit || 0);
     const grossProfit = revenue - cost;
     const grossMarginRate = revenue ? (grossProfit / revenue) * 100 : 0;
-    const netMarginRate = revenue ? (netProfit / revenue) * 100 : 0;
-    const costRate = revenue ? (cost / revenue) * 100 : 0;
+    const business = stats.business;
+    const businessMarginRate = business.collected ? (business.businessProfit / business.collected) * 100 : 0;
     const comparisonLabel = getComparisonLabel(metrics);
 
-    const profitControlInsight = !canViewProfit
+    // Mientras llega el historial completo solo están las últimas ventas: cualquier alarma
+    // calculada con eso es falsa (gastos del mes entero contra un tercio de las ventas).
+    const profitControlInsight = isHistoryLoading
+      ? {
+          tone: 'warning',
+          title: 'Cargando el historial completo',
+          text: 'Todavía faltan ventas del período: los números van a cambiar en unos segundos. Esperá a que termine antes de sacar conclusiones.',
+        }
+      : !canViewProfit
       ? null
       : isProfitUnverified
         ? {
@@ -1316,28 +1335,30 @@ export default function MetricsView({
             title: 'Costos de inventario pendientes de verificación',
             text: 'Hay productos vendidos sin costo cargado en el inventario. El margen y rentabilidad son estimados.',
           }
-        : netProfit < 0 && expensesTotal > revenue
+        // La mercadería comprada no se resta acá (ya está el costo de lo vendido) y los
+        // retiros se leen aparte: así una compra grande de stock no parece una pérdida.
+        : business.businessProfit < 0
           ? {
               tone: 'danger',
-              title: 'Gastos por encima de los ingresos',
-              text: `Los egresos registrados (${formatCurrency(expensesTotal)}) superan las ventas cobradas (${formatCurrency(revenue)}) en este período.`,
+              title: 'El negocio dio pérdida',
+              text: `El margen de lo vendido (${formatCurrency(business.grossMargin)}) no alcanza para sueldos y gastos fijos (${formatCurrency(business.operatingExpenses)}): faltan ${formatCurrency(Math.abs(business.businessProfit))}.`,
             }
-          : netProfit < 0
+          : business.afterWithdrawals < 0
             ? {
-                tone: 'danger',
-                title: 'Resultado de caja negativo',
-                text: `Los gastos registrados dejan la caja ${formatCurrency(Math.abs(netProfit))} por debajo de lo cobrado. Conviene revisar los egresos del período.`,
+                tone: 'warning',
+                title: 'Los retiros superan la ganancia',
+                text: `El negocio ganó ${formatCurrency(business.businessProfit)}, pero salieron ${formatCurrency(business.withdrawals)} en retiros y préstamos.`,
               }
-            : netMarginRate < 8
+            : businessMarginRate < 8
               ? {
                   tone: 'warning',
-                  title: 'Margen operativo ajustado',
-                  text: `Queda un ${formatNumber(netMarginRate, 1)}% (${formatCurrency(netProfit)}) sobre lo cobrado. Margen estrecho frente a imprevistos.`,
+                  title: 'Ganancia ajustada',
+                  text: `Después de sueldos y gastos fijos queda un ${formatNumber(businessMarginRate, 1)}% de lo cobrado (${formatCurrency(business.businessProfit)}). Poco margen frente a imprevistos.`,
                 }
               : {
                   tone: 'success',
-                  title: 'Caja operativa positiva',
-                  text: `Después de los gastos registrados queda un ${formatNumber(netMarginRate, 1)}% de lo cobrado (${formatCurrency(netProfit)}). El margen de mercadería se muestra por separado.`,
+                  title: 'El negocio dio ganancia',
+                  text: `Después de sueldos y gastos fijos queda ${formatCurrency(business.businessProfit)}, un ${formatNumber(businessMarginRate, 1)}% de lo cobrado.`,
                 };
 
     const topProduct = metrics.current.productStats[0] || null;
@@ -1364,17 +1385,21 @@ export default function MetricsView({
       {
         label: 'Producto líder',
         value: topProduct?.name || '-',
-        detail: topProduct ? `${formatNumber(topProductShare, 1)}% del ingreso · ${formatNumber(topProduct.qty)} ${topProduct.type === 'weight' ? 'g' : 'un.'}` : 'Sin productos',
+        detail: topProduct ? `${formatNumber(topProductShare, 1)}% del ingreso · ${formatQuantityForType(topProduct.qty, topProduct.type)}` : 'Sin productos',
         section: 'products',
       },
     ];
     const allowedSectionIds = new Set(sections.map((section) => section.id));
-    const guidedRecommendations = metrics.recommendations
-      .filter((item) => !item.section || allowedSectionIds.has(item.section))
-      .slice(0, 3);
-    const recommendationRows = guidedRecommendations.length
-      ? guidedRecommendations
-      : [{ title: 'Sin alertas críticas', detail: 'Los indicadores del período no requieren atención inmediata.', tone: 'success', section: null }];
+    const guidedRecommendations = isHistoryLoading
+      ? []
+      : metrics.recommendations
+        .filter((item) => !item.section || allowedSectionIds.has(item.section))
+        .slice(0, 3);
+    const recommendationRows = isHistoryLoading
+      ? [{ title: 'Esperando el historial', detail: 'Las alertas aparecen cuando terminen de cargar todas las ventas.', tone: 'info', section: null }]
+      : guidedRecommendations.length
+        ? guidedRecommendations
+        : [{ title: 'Sin alertas críticas', detail: 'Los indicadores del período no requieren atención inmediata.', tone: 'success', section: null }];
 
     return (
       <div className="metrics-summary space-y-4">
@@ -1400,10 +1425,10 @@ export default function MetricsView({
             </div>
           )}
           <div>
-            <span>Resultado de caja</span>
-            <strong>{canViewProfit ? (profitStatusLabel || <FancyPrice amount={netProfit} />) : 'Restringido'}</strong>
+            <span>Ganancia del negocio</span>
+            <strong>{canViewProfit ? (profitStatusLabel || <FancyPrice amount={business.businessProfit} />) : 'Restringido'}</strong>
             {canViewProfit
-              ? <PeriodComparison context={`${formatNumber(netMarginRate, 1)}% sobre lo cobrado`} change={metrics.changes.profit} comparisonLabel={comparisonLabel} />
+              ? <PeriodComparison context="después de sueldos y fijos" change={metrics.changes.businessProfit} comparisonLabel={comparisonLabel} />
               : <small>Permiso requerido</small>}
           </div>
           <div>
@@ -1418,20 +1443,7 @@ export default function MetricsView({
           </div>
         </section>
 
-        {canViewProfit && (
-          <section className="metrics-cash-equation" aria-label="Composición de caja">
-            <div className="metrics-equation-title">
-              <WalletCards size={15} />
-              <span>Composición de caja</span>
-            </div>
-            <div><small>Cobrado</small><strong><FancyPrice amount={revenue} /></strong></div>
-            <b aria-hidden="true">−</b>
-            <div><small>Gastos registrados</small><strong><FancyPrice amount={expensesTotal} /></strong></div>
-            <b aria-hidden="true">=</b>
-            <div className={netProfit >= 0 ? 'is-positive' : 'is-negative'}><small>Resultado</small><strong><FancyPrice amount={netProfit} /></strong></div>
-            <p>Costo vendido: <strong>{formatCurrency(cost)}</strong> ({formatNumber(costRate, 1)}% del ingreso), usado para leer margen de mercadería.</p>
-          </section>
-        )}
+        {canViewProfit && <BusinessResultLine business={business} />}
 
         <section className="metrics-guided-reading" aria-labelledby="metrics-guided-reading-title">
           <header>
@@ -1637,11 +1649,11 @@ export default function MetricsView({
         )}
       </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-        <Panel title={isHourlyMode ? 'Detalle por horario' : 'Detalle por periodo'} icon={TrendingUp}>
+        <Panel title={isHourlyMode ? 'Detalle por horario' : 'Detalle por período'} icon={TrendingUp}>
           <Table
             emptyText="Sin ventas para estos filtros."
             columns={[
-              { key: 'label', label: isHourlyMode ? 'Horario' : 'Dia' },
+              { key: 'label', label: isHourlyMode ? 'Horario' : 'Día' },
               { key: 'salesCount', label: 'Ventas', align: 'right', render: (row) => formatNumber(row.salesCount) },
               { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
               ...(canViewProfit ? [{ key: 'profit', label: 'Resultado', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }] : []),
@@ -1665,58 +1677,72 @@ export default function MetricsView({
   );
 
   const renderProfit = () => {
-    const financialPieData = [
-      { name: 'Gastos', value: Math.max(Number(metrics.current.stats.expenses || 0), 0) },
-      { name: 'Resultado caja', value: Math.max(Number(metrics.current.stats.profit || 0), 0) },
-      { name: 'Costo vendido', value: Math.max(Number(metrics.current.stats.cost || 0), 0) },
-    ].filter((item) => item.value > 0);
-    const selectedFinancialName = pieSelections.profitBreakdown || null;
-    const financialColumns = selectedFinancialName === 'Costo vendido'
-      ? [{
-          key: 'cost',
-          label: 'Costo vendido',
-          align: 'right',
-          render: (row) => <FancyPrice amount={row.cost} />,
-        }]
-      : selectedFinancialName === 'Gastos'
-        ? [{ key: 'expenses', label: 'Gastos', align: 'right', render: (row) => <FancyPrice amount={row.expenses} /> }]
-        : selectedFinancialName === 'Resultado caja'
-          ? [{ key: 'profit', label: 'Resultado', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }]
-          : [
-              { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-              { key: 'profit', label: 'Resultado', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
-              { key: 'expenses', label: 'Gastos', align: 'right', render: (row) => <FancyPrice amount={row.expenses} /> },
-              { key: 'cost', label: 'Costo vendido', align: 'right', render: (row) => <FancyPrice amount={row.cost} /> },
-            ];
+    const business = metrics.current.stats.business;
+    const expenseTypeRows = Object.entries(EXPENSE_TYPE_META)
+      .map(([type, meta]) => ({
+        key: type,
+        name: meta.label,
+        hint: meta.hint,
+        value: business.byType[type] || 0,
+        count: business.countByType[type] || 0,
+        countsAs: type === 'merchandise'
+          ? 'Stock (se resta el costo de lo vendido)'
+          : type === 'withdrawals'
+            ? 'Sale del negocio, aparte'
+            : 'Gasto del negocio',
+      }))
+      .filter((row) => row.count > 0);
+    const financialColumns = [
+      { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
+      { key: 'expenses', label: 'Gastos', align: 'right', render: (row) => <FancyPrice amount={row.expenses} /> },
+      { key: 'profit', label: 'Caja', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> },
+      { key: 'cost', label: 'Costo vendido', align: 'right', render: (row) => <FancyPrice amount={row.cost} /> },
+    ];
 
     return (
     <div className="space-y-4">
       <StatStrip
         items={[
-          { label: 'Ingreso', value: <FancyPrice amount={metrics.current.stats.revenue} />, sub: 'Cobrado', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
-          { label: 'Resultado caja', value: profitStatusLabel || <FancyPrice amount={metrics.current.stats.profit} />, sub: profitStatusLabel ? profitStatusDetail : 'Cobrado - gastos', tone: isProfitUnverified ? 'border-amber-200 bg-amber-50 text-amber-700' : metrics.current.stats.profit >= 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700' },
-          { label: 'Gastos', value: <FancyPrice amount={metrics.current.stats.expenses} />, sub: `${metrics.current.filteredExpenses.length} movimientos`, tone: 'border-rose-200 bg-rose-50 text-rose-700' },
-          { label: 'Ratio caja', value: `${formatNumber(metrics.current.stats.revenue ? (metrics.current.stats.profit / metrics.current.stats.revenue) * 100 : 0, 1)}%`, sub: 'Resultado / ingreso', tone: 'border-slate-200 bg-slate-50 text-slate-700' },
+          { label: 'Ingreso', value: <FancyPrice amount={business.collected} />, sub: 'Cobrado', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
+          { label: 'Ganancia del negocio', value: profitStatusLabel || <FancyPrice amount={business.businessProfit} />, sub: profitStatusLabel ? profitStatusDetail : 'Margen − sueldos − fijos', tone: isProfitUnverified ? 'border-amber-200 bg-amber-50 text-amber-700' : business.businessProfit >= 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700' },
+          { label: 'Retiros y préstamos', value: <FancyPrice amount={business.withdrawals} />, sub: `${business.countByType.withdrawals} movimientos`, tone: 'border-violet-200 bg-violet-50 text-violet-700' },
+          { label: 'Caja', value: <FancyPrice amount={business.cashResult} />, sub: 'Cobrado − todos los gastos', tone: business.cashResult >= 0 ? 'border-slate-200 bg-slate-50 text-slate-700' : 'border-rose-200 bg-rose-50 text-rose-700' },
         ]}
       />
       <Panel
-        title="Resultado financiero"
+        title="Resultado del negocio"
         icon={WalletCards}
-        hint="El desglose muestra lo cobrado, gastos reales y costo vendido del rango actual."
+        hint="Ganancia del negocio = margen de lo vendido − sueldos − gastos fijos y otros. La compra de mercadería no se resta (ya está el costo de lo vendido) y los retiros se muestran aparte."
       >
-        <FinanceBreakdown
-          stats={metrics.current.stats}
-          profitStatusLabel={profitStatusLabel}
-          profitStatusToneClass={isProfitUnverified ? 'text-amber-700 bg-amber-50 border-amber-100' : null}
-        />
+        <BusinessResultLine business={business} />
+        <div className="mt-3 grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1fr]">
+          <PieMetricPanel
+            data={expenseTypeRows}
+            height={240}
+            valueType="currency"
+            selectedName={pieSelections.expenseTypes || null}
+            onSelectionChange={(name) => updatePieSelection('expenseTypes', name)}
+            getSecondaryText={(entry) => `${formatNumber(entry.count)} movimientos`}
+          />
+          <Table
+            emptyText="Sin gastos en el período."
+            columns={[
+              { key: 'name', label: 'Tipo de gasto', render: (row) => <span title={row.hint}>{row.name}</span> },
+              { key: 'count', label: 'Mov.', align: 'right', render: (row) => formatNumber(row.count) },
+              { key: 'value', label: 'Monto', align: 'right', render: (row) => <FancyPrice amount={row.value} /> },
+              { key: 'countsAs', label: 'Cómo cuenta' },
+            ]}
+            rows={expenseTypeRows}
+          />
+        </div>
       </Panel>
 
-      <Panel title={isHourlyMode ? 'Evolucion de caja por horario' : 'Evolucion de caja'} icon={TrendingUp}>
+      <Panel title={isHourlyMode ? 'Evolución de caja por horario' : 'Evolución de caja'} icon={TrendingUp}>
         <AreaMetricPanel
           data={metrics.current.dailySeries}
           areas={[
             { key: 'revenue', label: 'Ingreso', color: '#0ea5e9' },
-            { key: 'profit', label: 'Resultado', color: '#10b981' },
+            { key: 'profit', label: 'Caja', color: '#10b981' },
             { key: 'expenses', label: 'Gastos', color: '#ef4444' },
           ]}
           height={280}
@@ -1724,18 +1750,11 @@ export default function MetricsView({
       </Panel>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Panel title={isHourlyMode ? 'Detalle financiero por horario' : 'Detalle financiero por periodo'} icon={TrendingUp} hint={`Ingreso, resultado de caja, gastos y costo vendido por ${periodUnit}.`}>
-          <PieMetricPanel
-            data={financialPieData}
-            height={250}
-            valueType="currency"
-            selectedName={selectedFinancialName}
-            onSelectionChange={(name) => updatePieSelection('profitBreakdown', name)}
-          />
+        <Panel title={isHourlyMode ? 'Detalle financiero por horario' : 'Detalle financiero por período'} icon={TrendingUp} hint={`Ingreso, gastos, caja (cobrado − gastos) y costo vendido por ${periodUnit}.`}>
           <Table
             emptyText="Sin movimientos financieros."
             columns={[
-              { key: 'label', label: isHourlyMode ? 'Horario' : 'Periodo' },
+              { key: 'label', label: isHourlyMode ? 'Horario' : 'Período' },
               ...financialColumns,
             ]}
             rows={metrics.current.dailySeries}
@@ -1768,9 +1787,9 @@ export default function MetricsView({
         <StatStrip
           items={[
             { label: 'Productos vendidos', value: formatNumber(allSoldProductCount), sub: 'Con movimiento', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
-            { label: 'Unidades/items', value: formatNumber(metrics.current.stats.itemsSold), sub: 'Cantidad total', tone: 'border-violet-200 bg-violet-50 text-violet-700' },
+            { label: 'Vendido', value: formatMetricQuantity(metrics.current.stats.quantitySold), sub: 'Unidades + kilos a granel', tone: 'border-violet-200 bg-violet-50 text-violet-700' },
             { label: 'Bolsitas', value: formatNumber(metrics.current.posBagStats?.count || 0), sub: `${formatCurrency(metrics.current.posBagStats?.revenue || 0)} cobrados`, tone: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700' },
-            { label: 'Categorias', value: formatNumber(metrics.current.categoryStats.length), sub: 'Con ventas', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+            { label: 'Categorías', value: formatNumber(metrics.current.categoryStats.length), sub: 'Con ventas', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
             { label: 'Top producto', value: metrics.current.productStats[0]?.name || '-', sub: 'Mayor ingreso', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
           ]}
         />
@@ -1813,7 +1832,7 @@ export default function MetricsView({
                       </strong>
                     </div>
                     <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
-                      <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Categoria</span>
+                      <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Categoría</span>
                       <strong className="mt-1 block truncate text-[11px] text-slate-700" title={selectedProductLookup.category}>
                         {selectedProductLookup.category || '-'}
                       </strong>
@@ -1821,7 +1840,7 @@ export default function MetricsView({
                     <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
                       <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Stock</span>
                       <strong className="mt-1 block truncate text-[11px] text-slate-700">
-                        {Number.isFinite(selectedProductLookup.stock) ? formatNumber(selectedProductLookup.stock) : '-'}
+                        {Number.isFinite(selectedProductLookup.stock) ? formatQuantityForType(selectedProductLookup.stock, selectedProductLookup.type) : '-'}
                       </strong>
                     </div>
                     <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
@@ -1847,7 +1866,7 @@ export default function MetricsView({
                     <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
                       <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">Vendido</span>
                       <strong className="mt-1 block truncate text-[11px] text-slate-700">
-                        {formatNumber(selectedProductLookup.qty)}
+                        {formatQuantityForType(selectedProductLookup.qty, selectedProductLookup.type)}
                       </strong>
                     </div>
                     <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
@@ -1876,14 +1895,14 @@ export default function MetricsView({
                         {row.name}
                       </span>
                       {row.lookupOnly ? (
-                        <span className="mt-0.5 block text-[10px] font-bold text-slate-400">Sin ventas en periodo</span>
+                        <span className="mt-0.5 block text-[10px] font-bold text-slate-400">Sin ventas en el período</span>
                       ) : row.category ? (
                         <span className="mt-0.5 block max-w-[220px] truncate text-[10px] font-bold text-slate-400">{row.category}</span>
                       ) : null}
                     </div>
                   ),
                 },
-                { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
+                { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatQuantityForType(row.qty, row.type) },
                 { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
                 ...(canViewProfit ? PRODUCT_LOOKUP_COST_COLUMNS : []),
               ]}
@@ -1899,7 +1918,7 @@ export default function MetricsView({
                 valueType="currency"
                 selectedName={pieSelections.productTypes || null}
                 onSelectionChange={(name) => updatePieSelection('productTypes', name)}
-                getSecondaryText={(entry) => `${formatNumber(entry.qty)} unidades/items`}
+                getSecondaryText={(entry) => formatQuantityForType(entry.qty, entry.type)}
               />
             ) : <EmptyState />}
           </Panel>
@@ -1919,17 +1938,17 @@ export default function MetricsView({
       <div className="space-y-4">
         <StatStrip
           items={[
-            { label: 'Categorias', value: formatNumber(metrics.current.categoryStats.length), sub: 'Con ventas', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
-            { label: 'Top categoria', value: metrics.current.categoryStats[0]?.name || '-', sub: 'Mayor ingreso', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
-            { label: 'Ingreso top', value: <FancyPrice amount={metrics.current.categoryStats[0]?.revenue || 0} />, sub: 'Categoria lider', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
-            ...(canViewProfit ? [{ label: 'Margen vendido top', value: <FancyPrice amount={metrics.current.categoryStats[0]?.profit || 0} />, sub: 'Categoria lider', tone: 'border-violet-200 bg-violet-50 text-violet-700' }] : []),
+            { label: 'Categorías', value: formatNumber(metrics.current.categoryStats.length), sub: 'Con ventas', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
+            { label: 'Top categoría', value: metrics.current.categoryStats[0]?.name || '-', sub: 'Mayor ingreso', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+            { label: 'Ingreso top', value: <FancyPrice amount={metrics.current.categoryStats[0]?.revenue || 0} />, sub: 'Categoría líder', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
+            ...(canViewProfit ? [{ label: 'Margen vendido top', value: <FancyPrice amount={metrics.current.categoryStats[0]?.profit || 0} />, sub: 'Categoría líder', tone: 'border-violet-200 bg-violet-50 text-violet-700' }] : []),
           ]}
         />
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           <Panel
-            title="Categorias por ingreso"
+            title="Categorías por ingreso"
             icon={Boxes}
-            hint="Toca una porcion para ver los articulos incluidos en esa categoria."
+            hint="Tocá una porción para ver los artículos incluidos en esa categoría."
           >
             <PieMetricPanel
               data={categoryPieData}
@@ -1938,15 +1957,15 @@ export default function MetricsView({
               valueType="currency"
               selectedName={selectedCategory?.name}
               onSelectionChange={(name) => updatePieSelection('categories', name)}
-              getSecondaryText={(entry) => `${formatNumber(entry.qty)} unidades/items`}
+              getSecondaryText={(entry) => formatMetricQuantity(entry.quantity)}
             />
           </Panel>
-          <Panel title="Detalle de categorias" icon={Boxes}>
+          <Panel title="Detalle de categorías" icon={Boxes}>
             <Table
-              emptyText="Sin categorias vendidas."
+              emptyText="Sin categorías vendidas."
               columns={[
-                { key: 'name', label: 'Categoria' },
-                { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
+                { key: 'name', label: 'Categoría' },
+                { key: 'quantity', label: 'Cantidad', align: 'right', render: (row) => formatMetricQuantity(row.quantity) },
                 { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
                 ...(canViewProfit ? SOLD_COST_COLUMNS : []),
               ]}
@@ -1959,7 +1978,7 @@ export default function MetricsView({
 
         {selectedCategory && (
           <Panel
-            title={`Articulos de ${selectedCategory.name}`}
+            title={`Artículos de ${selectedCategory.name}`}
             icon={ShoppingBag}
             action={(
               <button
@@ -1972,10 +1991,10 @@ export default function MetricsView({
             )}
           >
             <Table
-              emptyText="Sin articulos para esta categoria."
+              emptyText="Sin artículos para esta categoría."
               columns={[
-                { key: 'name', label: 'Articulo' },
-                { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatNumber(row.qty) },
+                { key: 'name', label: 'Artículo' },
+                { key: 'qty', label: 'Cantidad', align: 'right', render: (row) => formatQuantityForType(row.qty, row.type) },
                 { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
                 ...(canViewProfit ? SOLD_COST_COLUMNS : []),
               ]}
@@ -2009,7 +2028,7 @@ export default function MetricsView({
     return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1fr]">
-      <Panel title="Distribucion de pagos" icon={CreditCard}>
+      <Panel title="Distribución de pagos" icon={CreditCard}>
         <PieMetricPanel
           data={metrics.current.paymentStats}
           dataKey="value"
@@ -2055,7 +2074,7 @@ export default function MetricsView({
             { key: 'method', label: 'Medio' },
             { key: 'clientName', label: 'Cliente' },
             { key: 'user', label: 'Usuario' },
-            { key: 'itemCount', label: 'Items', align: 'right', render: (row) => formatNumber(row.itemCount) },
+            { key: 'itemQuantity', label: 'Artículos', align: 'right', render: (row) => formatMetricQuantity(row.itemQuantity) },
             { key: 'amount', label: 'Importe', align: 'right', render: (row) => <FancyPrice amount={row.amount} /> },
           ]}
           rows={paymentHistoryRows}
@@ -2107,10 +2126,10 @@ export default function MetricsView({
             sublabel={newClientsSublabel}
             change={getClientChange(newClients, previousNewClients)}
             tone="emerald"
-            hint="Cuenta socios por fecha de alta. En rangos comparables usa el periodo anterior equivalente; en 30 dias son los 30 dias previos."
+            hint="Cuenta socios por fecha de alta. En rangos comparables usa el período anterior equivalente; en 30 días son los 30 días previos."
           />
           <MetricCard label="Socios con compras" value={formatNumber(clients.length)} sublabel="En el rango" change={getClientChange(clients.length, previousClients.length)} tone="sky" />
-          <MetricCard label="Recurrentes" value={formatNumber(recurringClients)} sublabel="Mas de una compra" change={getClientChange(recurringClients, previousRecurringClients)} tone="emerald" />
+          <MetricCard label="Recurrentes" value={formatNumber(recurringClients)} sublabel="Más de una compra" change={getClientChange(recurringClients, previousRecurringClients)} tone="emerald" />
           <MetricCard label="Ingreso socios" value={<FancyPrice amount={clientRevenue} />} sublabel="Total asociado" change={getClientChange(clientRevenue, previousClientRevenue)} tone="violet" />
           <MetricCard label="Ticket socio" value={<FancyPrice amount={clientAverageTicket} />} sublabel="Promedio" change={getClientChange(clientAverageTicket, previousClientAverageTicket)} tone="amber" />
           <MetricCard label="CONSUMIDOR FINAL" value={<FancyPrice amount={finalConsumer.revenue} />} sublabel={`${formatNumber(finalConsumer.salesCount)} ventas sin socio`} change={getClientChange(finalConsumer.revenue, previousFinalConsumer.revenue)} tone="rose" />
@@ -2122,7 +2141,7 @@ export default function MetricsView({
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-100 bg-sky-50 px-4 py-3">
                 <div className="min-w-0">
                   <p title={topClient.name} className="truncate text-base font-black text-slate-900">{topClient.name}</p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">Ultima compra: {topClient.lastDateLabel}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Última compra: {topClient.lastDateLabel}</p>
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-right">
                   <div className="rounded-lg bg-white px-3 py-2">
@@ -2162,7 +2181,7 @@ export default function MetricsView({
               { key: 'salesCount', label: 'Ventas', align: 'right', render: (row) => formatNumber(row.salesCount) },
               { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
               { key: 'averageTicket', label: 'Ticket prom.', align: 'right', render: (row) => <FancyPrice amount={row.averageTicket} /> },
-              { key: 'lastDateLabel', label: 'Ultima compra', align: 'right' },
+              { key: 'lastDateLabel', label: 'Última compra', align: 'right' },
             ]}
             rows={visibleClients}
           />
@@ -2195,7 +2214,7 @@ export default function MetricsView({
       <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
         <MetricCard label="Productos activos" value={formatNumber(metrics.stockStats.activeProducts)} sublabel="Catálogo actual" />
         <MetricCard label="Sin stock" value={formatNumber(metrics.stockStats.outOfStock.length)} sublabel="Requieren reposición" tone="rose" />
-        <MetricCard label="Bajo stock" value={formatNumber(metrics.stockStats.lowStock.length)} sublabel="Menos de 10 unidades" tone="amber" />
+        <MetricCard label="Bajo stock" value={formatNumber(metrics.stockStats.lowStock.length)} sublabel={`Menos de ${LOW_STOCK_UNITS} u. o ${LOW_STOCK_GRAMS} g`} tone="amber" />
         <MetricCard label="Por vencer" value={formatNumber(metrics.stockStats.expiring.length)} sublabel="Ventana de 14 días" tone="violet" />
       </div>
       <section className={`metrics-stock-valuation ${canViewProfit ? '' : 'is-restricted'}`} aria-label="Valorización del stock actual">
@@ -2235,7 +2254,7 @@ export default function MetricsView({
             emptyText="Sin productos agotados."
             columns={[
               { key: 'title', label: 'Producto' },
-              { key: 'stock', label: 'Stock', align: 'right', render: (row) => formatNumber(row.stock) },
+              { key: 'stock', label: 'Stock', align: 'right', render: (row) => formatQuantityForType(row.stock, row.product_type) },
             ]}
             rows={metrics.stockStats.outOfStock.slice(0, 30)}
           />
@@ -2245,7 +2264,7 @@ export default function MetricsView({
             emptyText="Sin alertas de bajo stock."
             columns={[
               { key: 'title', label: 'Producto' },
-              { key: 'stock', label: 'Stock', align: 'right', render: (row) => formatNumber(row.stock) },
+              { key: 'stock', label: 'Stock', align: 'right', render: (row) => formatQuantityForType(row.stock, row.product_type) },
             ]}
             rows={metrics.stockStats.lowStock.slice(0, 30)}
           />
@@ -2332,12 +2351,12 @@ export default function MetricsView({
         items={[
           { label: 'Usuarios activos', value: formatNumber(metrics.current.userStats.length), sub: 'Con ventas', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
           { label: 'Top usuario', value: metrics.current.userStats[0]?.name || '-', sub: 'Mayor ingreso', tone: 'border-violet-200 bg-violet-50 text-violet-700' },
-          { label: 'Ingreso top', value: <FancyPrice amount={metrics.current.userStats[0]?.revenue || 0} />, sub: 'Usuario lider', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+          { label: 'Ingreso top', value: <FancyPrice amount={metrics.current.userStats[0]?.revenue || 0} />, sub: 'Usuario líder', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
           { label: 'Ventas top', value: formatNumber(metrics.current.userStats[0]?.salesCount || 0), sub: 'Tickets', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
         ]}
       />
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1.2fr]">
-        <Panel title="Participacion por usuario" icon={ShieldCheck}>
+        <Panel title="Participación por usuario" icon={ShieldCheck}>
           <PieMetricPanel
             data={metrics.current.userStats.filter((row) => Number(row.revenue || 0) > 0)}
             dataKey="revenue"
@@ -2356,7 +2375,7 @@ export default function MetricsView({
               { key: 'salesCount', label: 'Ventas', align: 'right', render: (row) => formatNumber(row.salesCount) },
               { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
               { key: 'averageTicket', label: 'Ticket prom.', align: 'right', render: (row) => <FancyPrice amount={row.averageTicket} /> },
-              ...(canViewProfit ? [{ key: 'profit', label: 'Resultado', align: 'right', render: (row) => <FancyPrice amount={row.profit} /> }] : []),
+              ...(canViewProfit ? [{ key: 'margin', label: 'Margen', align: 'right', render: (row) => <FancyPrice amount={row.margin} /> }] : []),
             ]}
             rows={visibleUserRows}
           />
@@ -2397,7 +2416,7 @@ export default function MetricsView({
     const selectedClosureType = pieSelections.cash || null;
     const closureTypeData = [
       { name: 'Manual', count: metrics.closureStats.manual },
-      { name: 'Automatico', count: metrics.closureStats.automatic },
+      { name: 'Automático', count: metrics.closureStats.automatic },
     ].filter((item) => item.count > 0);
     const visibleClosureTypes = selectedClosureType
       ? closureTypeData.filter((item) => item.name === selectedClosureType)
@@ -2407,8 +2426,8 @@ export default function MetricsView({
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1.2fr]">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <MetricCard label="Cierres" value={formatNumber(metrics.closureStats.count)} sublabel={`${metrics.closureStats.manual} manuales / ${metrics.closureStats.automatic} auto`} />
-        <MetricCard label="Ventas cerradas" value={<FancyPrice amount={metrics.closureStats.totalSales} />} sublabel="Segun reportes" tone="sky" />
-        <MetricCard label="Ganancia cierre" value={<FancyPrice amount={metrics.closureStats.netProfit} />} sublabel="Segun reportes" tone="emerald" hidden={!canViewProfit} />
+        <MetricCard label="Ventas cerradas" value={<FancyPrice amount={metrics.closureStats.totalSales} />} sublabel="Según reportes" tone="sky" />
+        <MetricCard label="Ganancia cierre" value={<FancyPrice amount={metrics.closureStats.netProfit} />} sublabel="Según reportes" tone="emerald" hidden={!canViewProfit} />
         <MetricCard label="Ticket cierre" value={<FancyPrice amount={metrics.closureStats.averageTicket} />} sublabel="Promedio de cierres" tone="amber" />
       </div>
       <Panel title="Actividad de caja" icon={CalendarDays}>

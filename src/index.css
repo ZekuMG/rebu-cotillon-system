@@ -454,6 +454,29 @@ textarea,
 .metrics-cash-equation > p { color: var(--rebu-text-tertiary); font-size: 10px; font-weight: 600; line-height: 1.35; }
 .metrics-cash-equation > p strong { display: inline; color: var(--rebu-text-secondary); font-size: inherit; }
 
+/* Resultado del negocio: margen − sueldos − fijos = ganancia − retiros = queda.
+   Flex en vez de grid: la cantidad de pasos cambia según los permisos y los gastos. */
+.metrics-business-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--rebu-border-soft);
+  border-bottom: 1px solid var(--rebu-border-soft);
+  background: color-mix(in srgb, var(--rebu-surface-2) 72%, transparent);
+}
+.metrics-business-result > .metrics-equation-title { flex: 0 0 auto; min-width: 150px; }
+.metrics-business-result small { display: block; color: var(--rebu-text-tertiary); font-size: 9px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.metrics-business-result strong { display: block; margin-top: 2px; color: var(--rebu-text-primary); font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.metrics-business-result > b { color: var(--rebu-text-muted); font-size: 17px; font-weight: 500; }
+.metrics-business-result .is-key { padding: 4px 10px; border: 1px solid var(--rebu-border-soft); border-radius: 8px; background: var(--rebu-surface-1); }
+.metrics-business-result .is-key strong { font-size: 16px; }
+.metrics-business-result .is-positive strong { color: var(--rebu-success); }
+.metrics-business-result .is-negative strong { color: var(--rebu-danger); }
+.metrics-business-result > p { flex: 1 1 100%; margin: 2px 0 0; color: var(--rebu-text-tertiary); font-size: 10.5px; font-weight: 600; line-height: 1.4; }
+.metrics-business-result > p strong { display: inline; color: var(--rebu-text-secondary); font-size: inherit; }
+
 .metrics-analysis-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(360px, .9fr);

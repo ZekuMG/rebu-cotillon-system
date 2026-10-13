@@ -20,13 +20,10 @@ import {
   normalizeExpenseDateValue,
   parseExpenseDateValue,
 } from '../../utils/expenseDates';
+import { EXPENSE_CATEGORY_OPTIONS } from '../../utils/expenseTypes';
 
-const EXPENSE_CATEGORIES = [
-  'Proveedores',
-  'Servicios/Operativos',
-  'Retiros de Socios',
-  'Otros',
-];
+// Métricas lee el resultado del negocio por esta categoría (ver expenseTypes.js).
+const EXPENSE_CATEGORIES = EXPENSE_CATEGORY_OPTIONS;
 
 const getExpenseNote = (expense = {}) =>
   expense.note || expense.description || '';

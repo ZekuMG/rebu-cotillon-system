@@ -481,12 +481,22 @@ export const mergeTransactionsWithLogSales = (transactions = [], dailyLogs = [])
   return merged;
 };
 
+// isTestRecord recorre todo el objeto buscando "test": se recuerda por venta para no
+// repetirlo en cada cambio de filtro (las ventas no cambian entre filtros).
+const testRecordCache = new WeakMap();
+const isTestTransaction = (tx) => {
+  if (!tx || typeof tx !== 'object') return false;
+  if (tx.isTest) return true;
+  if (!testRecordCache.has(tx)) testRecordCache.set(tx, isTestRecord(tx));
+  return testRecordCache.get(tx);
+};
+
 export const filterTransactionsForSales = ({ transactions, range, filters = {}, lookups }) =>
   transactions
+    .filter((tx) => filters.includeTest || !isTestTransaction(tx))
     .map((tx) => ({ ...tx, metricDate: getTransactionDate(tx) }))
     .filter((tx) => {
       if (!isDateInRange(tx.metricDate, range)) return false;
-      if (!filters.includeTest && (tx.isTest || isTestRecord(tx))) return false;
 
       const status = getSaleStatus(tx);
       if (!filters.includeVoided && ['voided', 'deleted'].includes(status)) return false;
@@ -540,15 +550,18 @@ export const filterRecordsByDate = (records, range, filters = {}) =>
       return true;
     });
 
+// Una sola etiqueta para todo Métricas: el filtro compara contra esta misma cadena.
+export const UNCATEGORIZED_LABEL = 'Sin categoría';
+
 export const getItemCategories = (item = {}, product = null) => {
   const raw = Array.isArray(product?.categories) && product.categories.length
     ? product.categories
     : Array.isArray(item.categories) && item.categories.length
       ? item.categories
-      : String(product?.category || item.category || 'Sin categoria').split(',');
+      : String(product?.category || item.category || UNCATEGORIZED_LABEL).split(',');
 
   const categories = raw.map((category) => String(category || '').trim()).filter(Boolean);
-  return categories.length ? categories : ['Sin categoria'];
+  return categories.length ? categories : [UNCATEGORIZED_LABEL];
 };
 
 export const getItemProductType = (item = {}, product = null) =>
