@@ -39,6 +39,7 @@ import {
   YAxis,
 } from 'recharts';
 import useMetricsData from '../hooks/useMetricsData';
+import MetricsSummaryStory from '../components/metrics/MetricsSummaryStory';
 import { FancyPrice } from '../components/FancyPrice';
 import HintIcon from '../components/HintIcon';
 import { formatCurrency, formatNumber } from '../utils/helpers';
@@ -1326,202 +1327,21 @@ export default function MetricsView({
   }, [metrics]);
 
   const renderSummary = () => {
-    const stats = metrics.current.stats;
-    const revenue = Number(stats.revenue || 0);
-    const cost = Number(stats.cost || 0);
-    const grossProfit = revenue - cost;
-    const grossMarginRate = revenue ? (grossProfit / revenue) * 100 : 0;
-    const business = stats.business;
-    const businessMarginRate = business.collected ? (business.businessProfit / business.collected) * 100 : 0;
-    const comparisonLabel = getComparisonLabel(metrics);
-
-    // Mientras llega el historial completo solo están las últimas ventas: cualquier alarma
-    // calculada con eso es falsa (gastos del mes entero contra un tercio de las ventas).
-    const profitControlInsight = isHistoryLoading
-      ? {
-          tone: 'warning',
-          title: 'Cargando el historial completo',
-          text: 'Todavía faltan ventas del período: los números van a cambiar en unos segundos. Esperá a que termine antes de sacar conclusiones.',
-        }
-      : !canViewProfit
-      ? null
-      : isProfitUnverified
-        ? {
-            tone: 'warning',
-            title: 'Costos de inventario pendientes de verificación',
-            text: 'Hay productos vendidos sin costo cargado en el inventario. El margen y rentabilidad son estimados.',
-          }
-        // La mercadería comprada no se resta acá (ya está el costo de lo vendido) y los
-        // retiros se leen aparte: así una compra grande de stock no parece una pérdida.
-        : business.businessProfit < 0
-          ? {
-              tone: 'danger',
-              title: 'El negocio dio pérdida',
-              text: `El margen de lo vendido (${formatCurrency(business.grossMargin)}) no alcanza para sueldos y gastos fijos (${formatCurrency(business.operatingExpenses)}): faltan ${formatCurrency(Math.abs(business.businessProfit))}.`,
-            }
-          : business.afterWithdrawals < 0
-            ? {
-                tone: 'warning',
-                title: 'Los retiros superan la ganancia',
-                text: `El negocio ganó ${formatCurrency(business.businessProfit)}, pero salieron ${formatCurrency(business.withdrawals)} en retiros y préstamos.`,
-              }
-            : businessMarginRate < 8
-              ? {
-                  tone: 'warning',
-                  title: 'Ganancia ajustada',
-                  text: `Después de sueldos y gastos fijos queda un ${formatNumber(businessMarginRate, 1)}% de lo cobrado (${formatCurrency(business.businessProfit)}). Poco margen frente a imprevistos.`,
-                }
-              : {
-                  tone: 'success',
-                  title: 'El negocio dio ganancia',
-                  text: `Después de sueldos y gastos fijos queda ${formatCurrency(business.businessProfit)}, un ${formatNumber(businessMarginRate, 1)}% de lo cobrado.`,
-                };
-
-    const topProduct = metrics.current.productStats[0] || null;
-    const strongestPeriod = metrics.current.dailySeries.reduce((best, row) => (
-      Number(row.revenue || 0) > Number(best?.revenue || 0) ? row : best
-    ), null);
-    const topPayment = metrics.current.paymentStats[0] || null;
-    const paymentTotal = metrics.current.paymentStats.reduce((sum, item) => sum + Number(item.value || 0), 0);
-    const topPaymentShare = paymentTotal && topPayment ? (Number(topPayment.value || 0) / paymentTotal) * 100 : 0;
-    const topProductShare = revenue && topProduct ? (Number(topProduct.revenue || 0) / revenue) * 100 : 0;
-    const summarySignals = [
-      {
-        label: 'Mejor tramo',
-        value: strongestPeriod?.label || '-',
-        detail: strongestPeriod ? `${formatCurrency(strongestPeriod.revenue)} · pico ${hourlyPeak?.label || 'sin hora'}` : 'Sin ventas',
-        section: 'sales',
-      },
-      {
-        label: 'Cobro dominante',
-        value: topPayment?.name || '-',
-        detail: topPayment ? `${formatNumber(topPaymentShare, 1)}% · ${formatCurrency(topPayment.value)}` : 'Sin pagos',
-        section: 'payments',
-      },
-      {
-        label: 'Producto líder',
-        value: topProduct?.name || '-',
-        detail: topProduct ? `${formatNumber(topProductShare, 1)}% del ingreso · ${formatQuantityForType(topProduct.qty, topProduct.type)}` : 'Sin productos',
-        section: 'products',
-      },
-    ];
-    const allowedSectionIds = new Set(sections.map((section) => section.id));
-    const guidedRecommendations = isHistoryLoading
-      ? []
-      : metrics.recommendations
-        .filter((item) => !item.section || allowedSectionIds.has(item.section))
-        .slice(0, 3);
-    const recommendationRows = isHistoryLoading
-      ? [{ title: 'Esperando el historial', detail: 'Las alertas aparecen cuando terminen de cargar todas las ventas.', tone: 'info', section: null }]
-      : guidedRecommendations.length
-        ? guidedRecommendations
-        : [{ title: 'Sin alertas críticas', detail: 'Los indicadores del período no requieren atención inmediata.', tone: 'success', section: null }];
+    const sectionLabels = Object.fromEntries(sections.map((section) => [section.id, section.label]));
 
     return (
       <div className="metrics-summary space-y-4">
-        {profitControlInsight && (
-          <section className={`metrics-diagnostic-line is-${profitControlInsight.tone}`}>
-            {profitControlInsight.tone === 'success' ? <Sparkles size={15} /> : <AlertTriangle size={15} />}
-            <strong>{profitControlInsight.title}</strong>
-            <span>{profitControlInsight.text}</span>
-          </section>
-        )}
-
-        <section className="metrics-reading-band" aria-label="Lectura principal del período">
-          <div className="metrics-reading-primary">
-            <span>Ingreso bruto</span>
-            <strong><FancyPrice amount={revenue} /></strong>
-            <PeriodComparison context={metrics.range.label} change={metrics.changes.revenue} comparisonLabel={comparisonLabel} />
-          </div>
-          {canViewProfit && (
-            <div>
-              <span>Margen mercadería</span>
-              <strong><FancyPrice amount={grossProfit} /></strong>
-              <PeriodComparison context={`${formatNumber(grossMarginRate, 1)}% antes de gastos`} change={metrics.changes.grossProfit} comparisonLabel={comparisonLabel} />
-            </div>
-          )}
-          <div>
-            <span>Ganancia del negocio</span>
-            <strong>{canViewProfit ? (profitStatusLabel || <FancyPrice amount={business.businessProfit} />) : 'Restringido'}</strong>
-            {canViewProfit
-              ? <PeriodComparison context="después de sueldos y fijos" change={metrics.changes.businessProfit} comparisonLabel={comparisonLabel} />
-              : <small>Permiso requerido</small>}
-          </div>
-          <div>
-            <span>Compras</span>
-            <strong>{formatNumber(stats.salesCount)}</strong>
-            <PeriodComparison context="tickets emitidos" change={metrics.changes.salesCount} comparisonLabel={comparisonLabel} />
-          </div>
-          <div>
-            <span>Ticket medio</span>
-            <strong><FancyPrice amount={stats.averageTicket} /></strong>
-            <PeriodComparison context="promedio por compra" change={metrics.changes.averageTicket} comparisonLabel={comparisonLabel} />
-          </div>
-        </section>
-
-        {canViewProfit && <BusinessResultLine business={business} />}
-
-        <section className="metrics-guided-reading" aria-labelledby="metrics-guided-reading-title">
-          <header>
-            <Sparkles size={15} aria-hidden="true" />
-            <div>
-              <h3 id="metrics-guided-reading-title">Cómo leer este período</h3>
-              <p>Seguí las señales para pasar del resultado al detalle que lo explica.</p>
-            </div>
-          </header>
-          <div className="metrics-insight-line">
-            <div className="metrics-summary-patterns">
-              {summarySignals.map((signal) => {
-                const targetSection = sections.find((section) => section.id === signal.section);
-                return (
-                  <button
-                    key={signal.label}
-                    type="button"
-                    onClick={() => setActiveSection(signal.section)}
-                    aria-label={`${signal.label}: ${signal.value}. Abrir ${targetSection?.label || 'detalle'}`}
-                  >
-                    <span>{signal.label}</span>
-                    <strong title={signal.value}>{signal.value}</strong>
-                    <small>{signal.detail}</small>
-                    <em>Ver {targetSection?.label || 'detalle'} <ArrowRight size={11} aria-hidden="true" /></em>
-                  </button>
-                );
-              })}
-            </div>
-            <div className="metrics-recommendations">
-              <div className="metrics-recommendations-title">
-                <AlertTriangle size={14} aria-hidden="true" />
-                <span>Próximas decisiones</span>
-              </div>
-              {recommendationRows.map((item, index) => {
-                const targetSection = item.section ? sections.find((section) => section.id === item.section) : null;
-                const content = (
-                  <>
-                    <i aria-hidden="true" />
-                    <p>
-                      <strong>{item.title}</strong>
-                      <span>{item.detail}</span>
-                      {targetSection && <em>Revisar {targetSection.label} <ArrowRight size={11} aria-hidden="true" /></em>}
-                    </p>
-                  </>
-                );
-                return targetSection ? (
-                  <button
-                    key={`${item.title}-${index}`}
-                    type="button"
-                    className={`is-${item.tone || 'info'}`}
-                    onClick={() => setActiveSection(targetSection.id)}
-                    aria-label={`${item.title}. Revisar ${targetSection.label}`}
-                  >
-                    {content}
-                  </button>
-                ) : (
-                  <div key={`${item.title}-${index}`} className={`is-${item.tone || 'info'}`}>{content}</div>
-                );
-              })}
-            </div>
-          </div>
-        </section>
+        <MetricsSummaryStory
+          metrics={metrics}
+          inventory={inventory}
+          canViewProfit={canViewProfit}
+          isHistoryLoading={isHistoryLoading}
+          hourlyPeak={hourlyPeak}
+          periodLabel={formatComparisonRange(metrics.range)}
+          sectionLabels={sectionLabels}
+          onOpenSection={setActiveSection}
+          businessResultNode={canViewProfit ? <BusinessResultLine business={metrics.current.stats.business} showTitle={false} /> : null}
+        />
 
         <div className="metrics-analysis-grid">
           <section className="metrics-chart-section">
