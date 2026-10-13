@@ -48,6 +48,16 @@ test('qué reponer primero: lo que se vende y se agota antes', () => {
   assert.deepEqual(restock.map((row) => row.title), ['Bengala', 'Globo rojo', 'Confites']);
 });
 
+test('agotados: primero los que más se vendieron, no por orden alfabético', () => {
+  const extraInventory = [
+    ...inventory,
+    { id: 8, title: 'Adhesivo', stock: 0, purchasePrice: 10, price: 20, product_type: 'quantity' },
+  ];
+  const extraStats = [...productStats, { key: '8', name: 'Adhesivo', qty: 1, revenue: 20, type: 'quantity' }];
+  const { restock } = buildStockInsights({ inventory: extraInventory, productStats: extraStats, rangeDays: 10 });
+  assert.deepEqual(restock.slice(0, 2).map((row) => row.title), ['Bengala', 'Adhesivo']);
+});
+
 test('productos sin ventas: con stock, ordenados por plata parada', () => {
   const { unsold, unsoldCapital } = buildStockInsights({ inventory, productStats, rangeDays: 10 });
   assert.deepEqual(unsold.map((row) => row.title), ['Vela dorada']);

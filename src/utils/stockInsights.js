@@ -57,7 +57,8 @@ export const buildStockInsights = ({
     });
   });
 
-  coverage.sort((a, b) => a.daysOfStock - b.daysOfStock);
+  // A igual duración (por ejemplo, todos los agotados) va primero lo que más plata movió.
+  coverage.sort((a, b) => (a.daysOfStock - b.daysOfStock) || (b.revenue - a.revenue));
   unsold.sort((a, b) => b.capital - a.capital);
 
   const weightRanking = productStats

@@ -108,6 +108,14 @@ const formatPieValue = (value, valueType) => (
   valueType === 'currency' ? formatCurrency(value) : formatNumber(value)
 );
 
+// El centro de la torta es angosto: sin centavos y en millones cuando no entra.
+const formatPieCenterValue = (value, valueType) => {
+  if (valueType !== 'currency') return formatNumber(value);
+  const amount = Number(value) || 0;
+  if (Math.abs(amount) >= 1000000) return `$${formatNumber(amount / 1000000, 2)} M`;
+  return `$${formatNumber(Math.round(amount))}`;
+};
+
 const normalizeMetricText = (value) => String(value || '')
   .normalize('NFD')
   .replace(/[\u0300-\u036f]/g, '')
@@ -590,7 +598,7 @@ const signedTone = (value) => (Number(value || 0) >= 0 ? 'is-positive' : 'is-neg
 // Margen de lo vendido − sueldos − fijos = ganancia del negocio − retiros = queda.
 // La compra de mercadería no entra en la cuenta (ya está el costo de lo vendido): se
 // explica aparte como stock que quedó, para que cierre con lo que bajó la caja.
-const BusinessResultLine = ({ business }) => {
+const BusinessResultLine = ({ business, showTitle = true }) => {
   const fixedAndOther = business.byType.fixed + business.byType.other;
   const soldCost = business.merchandisePurchased - business.stockGap;
   const hasWithdrawals = business.withdrawals > 0;
@@ -598,10 +606,12 @@ const BusinessResultLine = ({ business }) => {
 
   return (
     <section className="metrics-business-result" aria-label="Resultado del negocio">
-      <div className="metrics-equation-title">
-        <WalletCards size={15} />
-        <span>Resultado del negocio</span>
-      </div>
+      {showTitle && (
+        <div className="metrics-equation-title">
+          <WalletCards size={15} />
+          <span>Resultado del negocio</span>
+        </div>
+      )}
       <div><small>Margen de lo vendido</small><strong><FancyPrice amount={business.grossMargin} /></strong></div>
       <b aria-hidden="true">−</b>
       <div><small>Sueldos</small><strong><FancyPrice amount={business.byType.salaries} /></strong></div>
@@ -953,7 +963,7 @@ const PieMetricPanel = ({
             </ResponsiveContainer>
             <div className="metrics-pie-center" aria-live="polite">
               <span title={focusEntry?.[nameKey]}>{focusEntry?.[nameKey] || totalLabel}</span>
-              <strong>{formatPieValue(centerValue, valueType)}</strong>
+              <strong title={formatPieValue(centerValue, valueType)}>{formatPieCenterValue(centerValue, valueType)}</strong>
               <small>{focusEntry ? `${formatNumber(centerPercent, 1)}% del total` : `${formatNumber(normalizedData.length)} grupos`}</small>
             </div>
           </>
@@ -1692,10 +1702,10 @@ export default function MetricsView({
         value: business.byType[type] || 0,
         count: business.countByType[type] || 0,
         countsAs: type === 'merchandise'
-          ? 'Stock (se resta el costo de lo vendido)'
+          ? 'Va al stock'
           : type === 'withdrawals'
-            ? 'Sale del negocio, aparte'
-            : 'Gasto del negocio',
+            ? 'Aparte'
+            : 'Resta a la ganancia',
       }))
       .filter((row) => row.count > 0);
     const financialColumns = [
@@ -1720,7 +1730,7 @@ export default function MetricsView({
         icon={WalletCards}
         hint="Ganancia del negocio = margen de lo vendido − sueldos − gastos fijos y otros. La compra de mercadería no se resta (ya está el costo de lo vendido) y los retiros se muestran aparte."
       >
-        <BusinessResultLine business={business} />
+        <BusinessResultLine business={business} showTitle={false} />
         <div className="mt-3 grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1fr]">
           <PieMetricPanel
             data={expenseTypeRows}
@@ -2275,8 +2285,12 @@ export default function MetricsView({
             columns={[
               { key: 'title', label: 'Producto', render: (row) => <ProductNameCell name={row.title} /> },
               { key: 'stock', label: 'Stock', align: 'right', render: (row) => formatQuantityForType(row.stock, row.type) },
-              { key: 'dailyRate', label: 'Vende por día', align: 'right', render: (row) => formatQuantityForType(row.dailyRate, row.type) },
-              { key: 'daysOfStock', label: 'Dura', align: 'right', render: (row) => (row.stock <= 0 ? <strong className="text-rose-600">Agotado</strong> : `${formatNumber(Math.max(1, Math.floor(row.daysOfStock)))} días`) },
+              { key: 'soldQty', label: 'Vendió', align: 'right', render: (row) => formatQuantityForType(row.soldQty, row.type) },
+              { key: 'daysOfStock', label: 'Dura', align: 'right', render: (row) => {
+                if (row.stock <= 0) return <strong className="text-rose-600">Agotado</strong>;
+                const days = Math.floor(row.daysOfStock);
+                return days < 1 ? 'Menos de 1 día' : `${formatNumber(days)} ${days === 1 ? 'día' : 'días'}`;
+              } },
             ]}
             rows={stockInsights.restock.slice(0, 40)}
           />
