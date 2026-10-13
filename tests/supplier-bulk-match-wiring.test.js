@@ -30,7 +30,8 @@ test('la vista vuelve a elegir prefiriendo la unidad en los dos caminos', async 
 
 test('al chequear un grupo ya enlazado se pasa el id, que manda sobre el nombre', async () => {
   const source = await readSource('../src/views/BulkEditorView.jsx');
-  const start = source.indexOf('preferUnitOverBulk(rawResult, {\n        expectedTitle');
+  // \r?\n: en Windows git hace checkout con CRLF (core.autocrlf) y un '\n' literal no matchea.
+  const start = source.search(/preferUnitOverBulk\(rawResult, \{\r?\n {8}expectedTitle/);
   assert.ok(start > 0, 'tiene que existir la llamada del chequeo por grupo');
   assert.match(source.slice(start, start + 300), /expectedId: group\.casaAlbertoId/);
 });
