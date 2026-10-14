@@ -41,6 +41,7 @@ import {
 } from 'recharts';
 import useMetricsData from '../hooks/useMetricsData';
 import MetricsSummaryStory from '../components/metrics/MetricsSummaryStory';
+import { buildSectionInsight } from '../utils/metricsSectionInsights';
 import { FancyPrice } from '../components/FancyPrice';
 import HintIcon from '../components/HintIcon';
 import { formatCurrency, formatNumber } from '../utils/helpers';
@@ -1340,6 +1341,15 @@ export default function MetricsView({
     });
   }, [metrics]);
 
+  const isSalesSubset = Boolean(filters.category || filters.product || filters.payment || filters.user || filters.client || filters.productType !== 'all');
+  const sectionInsight = useMemo(() => buildSectionInsight(activeSection, {
+    metrics,
+    canViewProfit,
+    isHourlyMode,
+    weeklyRhythm: weeklyRhythmSeries,
+    isSalesSubset,
+  }), [activeSection, metrics, canViewProfit, isHourlyMode, weeklyRhythmSeries, isSalesSubset]);
+
   const renderSummary = () => {
     const sectionLabels = Object.fromEntries(sections.map((section) => [section.id, section.label]));
 
@@ -1355,7 +1365,7 @@ export default function MetricsView({
           sectionLabels={sectionLabels}
           onOpenSection={setActiveSection}
           businessResultNode={canViewProfit ? <BusinessResultLine business={metrics.current.stats.business} showTitle={false} /> : null}
-          isSalesSubset={Boolean(filters.category || filters.product || filters.payment || filters.user || filters.client || filters.productType !== 'all')}
+          isSalesSubset={isSalesSubset}
         />
 
         <div className="metrics-analysis-grid">
@@ -1461,9 +1471,9 @@ export default function MetricsView({
         items={[
           { label: 'Ventas', value: formatNumber(metrics.current.stats.salesCount), sub: metrics.range.label, tone: 'border-violet-200 bg-violet-50 text-violet-700' },
           { label: 'Ingreso', value: <FancyPrice amount={metrics.current.stats.revenue} />, sub: 'Total vendido', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
-          { label: 'Ticket prom.', value: <FancyPrice amount={metrics.current.stats.averageTicket} />, sub: 'Por venta', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
+          { label: 'Promedio por venta', value: <FancyPrice amount={metrics.current.stats.averageTicket} />, sub: 'Total ÷ ventas', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
           {
-            label: 'Mejor tramo',
+            label: isHourlyMode ? 'Mejor horario' : 'Mejor día',
             value: metrics.current.dailySeries.reduce((best, row) => (
               Number(row.revenue || 0) > Number(best?.revenue || 0) ? row : best
             ), null)?.label || '-',
@@ -1999,8 +2009,8 @@ export default function MetricsView({
           <MetricCard label="Socios con compras" value={formatNumber(clients.length)} sublabel="En el rango" change={getClientChange(clients.length, previousClients.length)} tone="sky" />
           <MetricCard label="Recurrentes" value={formatNumber(recurringClients)} sublabel="Más de una compra" change={getClientChange(recurringClients, previousRecurringClients)} tone="emerald" />
           <MetricCard label="Ingreso socios" value={<FancyPrice amount={clientRevenue} />} sublabel="Total asociado" change={getClientChange(clientRevenue, previousClientRevenue)} tone="violet" />
-          <MetricCard label="Ticket socio" value={<FancyPrice amount={clientAverageTicket} />} sublabel="Promedio" change={getClientChange(clientAverageTicket, previousClientAverageTicket)} tone="amber" />
-          <MetricCard label="CONSUMIDOR FINAL" value={<FancyPrice amount={finalConsumer.revenue} />} sublabel={`${formatNumber(finalConsumer.salesCount)} ventas sin socio`} change={getClientChange(finalConsumer.revenue, previousFinalConsumer.revenue)} tone="rose" />
+          <MetricCard label="Promedio por compra" value={<FancyPrice amount={clientAverageTicket} />} sublabel="Promedio" change={getClientChange(clientAverageTicket, previousClientAverageTicket)} tone="amber" />
+          <MetricCard label="Consumidor final" value={<FancyPrice amount={finalConsumer.revenue} />} sublabel={`${formatNumber(finalConsumer.salesCount)} ventas sin socio`} change={getClientChange(finalConsumer.revenue, previousFinalConsumer.revenue)} tone="rose" />
         </div>
 
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.15fr_0.85fr]">
@@ -2048,7 +2058,7 @@ export default function MetricsView({
               { key: 'name', label: 'Socio' },
               { key: 'salesCount', label: 'Ventas', align: 'right', render: (row) => formatNumber(row.salesCount) },
               { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-              { key: 'averageTicket', label: 'Ticket prom.', align: 'right', render: (row) => <FancyPrice amount={row.averageTicket} /> },
+              { key: 'averageTicket', label: 'Promedio por venta', align: 'right', render: (row) => <FancyPrice amount={row.averageTicket} /> },
               { key: 'lastDateLabel', label: 'Última compra', align: 'right' },
             ]}
             rows={visibleClients}
@@ -2216,7 +2226,7 @@ export default function MetricsView({
         <MetricCard label="Pedidos" value={formatNumber(metrics.orderStats.ordersCount)} sublabel={<FancyPrice amount={metrics.orderStats.totalOrders} />} tone="sky" />
         <MetricCard label="Presupuestos" value={formatNumber(metrics.orderStats.budgetsCount)} sublabel={<FancyPrice amount={metrics.orderStats.totalBudgets} />} tone="violet" />
         <MetricCard label="Saldo pendiente" value={<FancyPrice amount={metrics.orderStats.pendingAmount} />} sublabel="Por cobrar" tone="amber" />
-        <MetricCard label="Conversion" value={`${formatNumber(metrics.orderStats.conversionRate, 1)}%`} sublabel="Presupuesto a pedido" tone="emerald" />
+        <MetricCard label="Presupuestos concretados" value={`${formatNumber(metrics.orderStats.conversionRate, 1)}%`} sublabel="Pasaron a pedido" tone="emerald" />
       </div>
       <Panel title="Pedidos por estado" icon={FileText}>
         <PieMetricPanel
@@ -2263,7 +2273,7 @@ export default function MetricsView({
           { label: 'Usuarios activos', value: formatNumber(metrics.current.userStats.length), sub: 'Con ventas', tone: 'border-sky-200 bg-sky-50 text-sky-700' },
           { label: 'Top usuario', value: metrics.current.userStats[0]?.name || '-', sub: 'Mayor ingreso', tone: 'border-violet-200 bg-violet-50 text-violet-700' },
           { label: 'Ingreso top', value: <FancyPrice amount={metrics.current.userStats[0]?.revenue || 0} />, sub: 'Usuario líder', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
-          { label: 'Ventas top', value: formatNumber(metrics.current.userStats[0]?.salesCount || 0), sub: 'Tickets', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
+          { label: 'Ventas top', value: formatNumber(metrics.current.userStats[0]?.salesCount || 0), sub: 'Ventas del líder', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
         ]}
       />
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.8fr_1.2fr]">
@@ -2285,7 +2295,7 @@ export default function MetricsView({
               { key: 'name', label: 'Usuario' },
               { key: 'salesCount', label: 'Ventas', align: 'right', render: (row) => formatNumber(row.salesCount) },
               { key: 'revenue', label: 'Ingreso', align: 'right', render: (row) => <FancyPrice amount={row.revenue} /> },
-              { key: 'averageTicket', label: 'Ticket prom.', align: 'right', render: (row) => <FancyPrice amount={row.averageTicket} /> },
+              { key: 'averageTicket', label: 'Promedio por venta', align: 'right', render: (row) => <FancyPrice amount={row.averageTicket} /> },
               ...(canViewProfit ? [{ key: 'margin', label: 'Margen', align: 'right', render: (row) => <FancyPrice amount={row.margin} /> }] : []),
             ]}
             rows={visibleUserRows}
@@ -2339,7 +2349,7 @@ export default function MetricsView({
         <MetricCard label="Cierres" value={formatNumber(metrics.closureStats.count)} sublabel={`${metrics.closureStats.manual} manuales / ${metrics.closureStats.automatic} auto`} />
         <MetricCard label="Ventas cerradas" value={<FancyPrice amount={metrics.closureStats.totalSales} />} sublabel="Según reportes" tone="sky" />
         <MetricCard label="Ganancia cierre" value={<FancyPrice amount={metrics.closureStats.netProfit} />} sublabel="Según reportes" tone="emerald" hidden={!canViewProfit} />
-        <MetricCard label="Ticket cierre" value={<FancyPrice amount={metrics.closureStats.averageTicket} />} sublabel="Promedio de cierres" tone="amber" />
+        <MetricCard label="Promedio por venta" value={<FancyPrice amount={metrics.closureStats.averageTicket} />} sublabel="Según los cierres" tone="amber" />
       </div>
       <Panel title="Actividad de caja" icon={CalendarDays}>
         <PieMetricPanel
@@ -2538,9 +2548,18 @@ export default function MetricsView({
           aria-labelledby={`metrics-section-tab-${activeSectionMeta.id}`}
         >
           {activeSection !== 'summary' && (
-            <div className="metrics-section-guide mb-3" aria-live="polite">
-              <span>{activeSectionGroup.label}</span>
-              <strong>{activeSectionMeta.question}</strong>
+            <div className={`metrics-takeaway is-${sectionInsight?.tone || 'info'}`} aria-live="polite">
+              <p className="metrics-takeaway-question"><b>{activeSectionGroup.label}</b>{activeSectionMeta.question}</p>
+              {sectionInsight ? (
+                <>
+                  <p className="metrics-takeaway-headline">{sectionInsight.headline}</p>
+                  {sectionInsight.points.length > 0 && (
+                    <ul>
+                      {sectionInsight.points.map((item) => <li key={item.text} className={`is-${item.tone}`}>{item.text}</li>)}
+                    </ul>
+                  )}
+                </>
+              ) : null}
             </div>
           )}
           {metrics.current.filteredTransactions.length === 0 && metrics.current.filteredExpenses.length === 0 && activeSection !== 'stock' ? (
