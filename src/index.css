@@ -1230,6 +1230,13 @@ button.app-update-status:hover {
   opacity: 0.82;
 }
 
+/* Historial: un solo botón en el menú y acá se elige Ventas o Cierres de caja. */
+.app-history-switch { display: inline-flex; margin-left: 10px; padding: 3px; gap: 2px; border: 1px solid var(--rebu-border); border-radius: 8px; background: var(--rebu-surface-2); }
+.app-history-switch button { height: 28px; padding: 0 12px; border-radius: 6px; color: var(--rebu-text-secondary); font-size: 12px; font-weight: 800; cursor: pointer; transition: background-color .15s, color .15s; }
+.app-history-switch button:hover { color: var(--rebu-text-primary); }
+.app-history-switch button.is-active { color: var(--rebu-brand); background: var(--rebu-surface-1); box-shadow: 0 0 0 1px var(--rebu-brand-border); }
+.app-history-switch button:focus-visible { outline: 2px solid var(--rebu-focus); outline-offset: 1px; }
+
 .app-topbar-title {
   display: grid;
   min-width: 0;

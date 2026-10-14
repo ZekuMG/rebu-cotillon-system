@@ -3,7 +3,6 @@ import {
   BarChart3,
   Building2,
   ClipboardList,
-  FileBarChart,
   FileText,
   History,
   LayoutDashboard,
@@ -13,6 +12,7 @@ import {
   Moon,
   Package,
   Percent,
+  Printer,
   Settings2,
   ShoppingCart,
   SlidersHorizontal,
@@ -241,6 +241,7 @@ export default function Sidebar({
   const canViewOrders = canAccessTab(currentUser, 'orders');
   const canViewExtras = canAccessTab(currentUser, 'extras');
   const canViewReports = canAccessTab(currentUser, 'reports');
+  const canViewHistory = canAccessTab(currentUser, 'history');
   const canViewMetrics = canAccessTab(currentUser, 'metrics');
   const canViewLogs = canAccessTab(currentUser, 'logs');
   const canViewSessions = canAccessTab(currentUser, 'sessions');
@@ -269,22 +270,29 @@ export default function Sidebar({
     { id: 'metrics', tab: 'metrics', section: 'top', canView: canViewMetrics, icon: BarChart3, label: 'Métricas' },
     { id: 'bulk-editor', tab: 'bulk-editor', section: 'top', canView: canViewBulkEditor, icon: Percent, label: 'Productos (Avanzado)' },
     { id: 'ai-images', tab: 'ai-images', section: 'top', canView: canViewAiImages, icon: WandSparkles, label: 'Estudio de imágenes IA' },
-    { id: 'ticket-test', tab: 'ticket-test', section: 'top', canView: Boolean(currentUser), icon: FileText, label: 'Prueba Tickets' },
-    { id: 'reports', tab: 'reports', section: 'bottom', canView: canViewReports, icon: FileBarChart, label: 'Reportes de Caja' },
-    { id: 'history', tab: 'history', section: 'bottom', canView: canAccessTab(currentUser, 'history'), icon: History, label: 'Historial de Ventas' },
+    // Historial de Ventas y Reportes de Caja comparten un solo botón; arriba se elige cuál ver.
+    {
+      id: 'history',
+      tab: canViewHistory ? 'history' : 'reports',
+      activeTabs: ['history', 'reports'],
+      section: 'bottom',
+      canView: canViewHistory || canViewReports,
+      icon: History,
+      label: 'Historial (ventas, gastos y cierres de caja)',
+    },
   ]), [
     canViewAgenda,
     canViewAiImages,
     canViewBulkEditor,
     canViewClients,
     canViewDashboard,
+    canViewHistory,
     canViewInventory,
     canViewMetrics,
     canViewOrders,
     canViewPos,
     canViewReports,
     canViewWhatsApp,
-    currentUser,
     whatsappSummary,
   ]);
 
@@ -423,7 +431,7 @@ export default function Sidebar({
         }
         setActiveTab(item.tab);
       }}
-      isActive={activeTab === item.tab}
+      isActive={(item.activeTabs || [item.tab]).includes(activeTab)}
       icon={item.icon}
       label={item.label}
       accentColor={navAccentColor}
@@ -606,6 +614,18 @@ export default function Sidebar({
             >
               <SlidersHorizontal size={14} /> Ajustes
             </button>
+
+            {canUseAdminArea && (
+              <button
+                onClick={() => {
+                  setActiveTab('ticket-test');
+                  setShowUserMenu(false);
+                }}
+                className="flex w-full items-center gap-2 border-b border-slate-50 px-4 py-2.5 text-left text-xs text-slate-600 transition-colors hover:bg-fuchsia-50 hover:text-fuchsia-700"
+              >
+                <Printer size={14} /> Prueba de tickets
+              </button>
+            )}
 
             {canManageUsers && (
               <button

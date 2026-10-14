@@ -6082,7 +6082,9 @@ export default function PartySupplyApp() {
 
   useEffect(() => {
     if (!currentUser) return;
-    if (activeTab !== 'ticket-test' && !canAccessTab(currentUser, activeTab)) {
+    // Prueba Tickets no tiene permiso propio: es una herramienta de configuración, solo para el dueño.
+    const canOpenTab = activeTab === 'ticket-test' ? hasOwnerAccess(currentUser) : canAccessTab(currentUser, activeTab);
+    if (!canOpenTab) {
       setActiveTab(getDefaultTabForUser(currentUser));
     }
   }, [activeTab, currentUser]);
@@ -16647,8 +16649,8 @@ export default function PartySupplyApp() {
     agenda: 'Agenda',
     orders: 'Pedidos',
     whatsapp: 'WhatsApp',
-    history: 'Historial de Ventas',
-    reports: 'Reportes de Caja',
+    history: 'Historial',
+    reports: 'Historial',
     metrics: 'Métricas',
     logs: 'Registro de Acciones',
     sessions: 'Gestor de Sesiones',
@@ -16891,6 +16893,24 @@ export default function PartySupplyApp() {
                   <span className="app-topbar-clock">{formatDateAR(currentTime)} {formatTimeAR(currentTime)}hrs</span>
                 </div>
               </div>
+              {(activeTab === 'history' || activeTab === 'reports') && canAccessTab(currentUser, 'history') && canViewReports && (
+                <div className="app-history-switch" role="group" aria-label="Qué historial ver">
+                  {[
+                    { tab: 'history', label: 'Ventas y gastos' },
+                    { tab: 'reports', label: 'Cierres de caja' },
+                  ].map((option) => (
+                    <button
+                      key={option.tab}
+                      type="button"
+                      onClick={() => setActiveTab(option.tab)}
+                      className={activeTab === option.tab ? 'is-active' : ''}
+                      aria-pressed={activeTab === option.tab}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="app-topbar-tools flex shrink-0 items-center gap-3">
               {imageImportTask && (
