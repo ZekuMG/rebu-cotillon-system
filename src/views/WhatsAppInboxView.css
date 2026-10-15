@@ -5894,6 +5894,12 @@
   color: #fff;
 }
 
+/* En oscuro el color de marca es un rosa claro: con letra blanca no se leía. */
+:root[data-theme='dark'] .wa-primary-action {
+  border-color: #c026d3;
+  background: #c026d3;
+}
+
 .wa-secondary-action {
   border: 1px solid var(--rebu-border);
   background: var(--rebu-control);

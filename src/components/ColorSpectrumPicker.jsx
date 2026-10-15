@@ -24,7 +24,7 @@ export default function ColorSpectrumPicker({
       </div>
 
       <label
-        className="block overflow-hidden rounded-[18px] border border-slate-200 bg-white px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)]"
+        className="block overflow-hidden rounded-[18px] border border-slate-200 px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)]"
         style={{
           backgroundImage:
             'linear-gradient(90deg,#ff4d4d 0%,#ff9a3d 16%,#ffe44d 32%,#48d597 48%,#3bb2ff 64%,#6f6cff 80%,#d84dff 100%)',

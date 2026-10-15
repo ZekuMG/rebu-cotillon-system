@@ -51,13 +51,16 @@ const buildPresentation = ({ displayName, nameColor, avatar, type }) => {
     nameColor: color,
     avatar,
     type,
+    // --rebu-user-color deja que el modo oscuro aclare el color elegido (ver index.css).
     badgeStyle: {
       color,
       backgroundColor,
       borderColor,
+      '--rebu-user-color': color,
     },
     textStyle: {
       color,
+      '--rebu-user-color': color,
     },
   };
 };

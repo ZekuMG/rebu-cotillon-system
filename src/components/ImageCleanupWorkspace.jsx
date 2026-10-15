@@ -601,7 +601,7 @@ export default function ImageCleanupWorkspace({
             <button
               type="button"
               onClick={() => setWatermarkEnabled((current) => !current)}
-              className={`h-6 w-11 rounded-full p-0.5 transition-colors ${
+              className={`h-6 w-11 shrink-0 rounded-full p-0.5 transition-colors ${
                 watermarkEnabled ? 'bg-sky-600' : 'bg-slate-300'
               }`}
               aria-pressed={watermarkEnabled}
