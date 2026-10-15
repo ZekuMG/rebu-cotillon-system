@@ -323,13 +323,16 @@ export const TicketPrintLayout = ({ transaction, profile }) => {
             padding: 0 !important;
             width: 100%;
           }
-          body * {
+          /* Solo al imprimir un ticket. La vista "Prueba de tickets" queda montada en
+             segundo plano, y sin este filtro escondía también los PDF (salían en blanco). */
+          body:not([data-pdf-capture='true']) * {
             visibility: hidden;
           }
-          #printable-area, #printable-area * {
+          body:not([data-pdf-capture='true']) #printable-area,
+          body:not([data-pdf-capture='true']) #printable-area * {
             visibility: visible;
           }
-          #printable-area {
+          body:not([data-pdf-capture='true']) #printable-area {
             position: absolute;
             left: 0;
             top: 0;
