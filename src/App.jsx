@@ -186,6 +186,7 @@ import {
   hasPermission,
 } from './utils/userPermissions';
 import { isSafeExcelImportNumber } from './utils/excelImportNumbers';
+import { getSaleDateChange, toDateTimeLocalValue } from './utils/saleDate';
 import {
   createOrderPaymentEntry,
   createOrderPaymentLine,
@@ -8003,6 +8004,27 @@ export default function PartySupplyApp() {
     return { id: editedSaleId };
   };
 
+  // La fecha de una venta solo se cambia con esta función de la base: la que
+  // registra ventas fija la hora sola y la de editar no deja tocarla.
+  const changeSaleDateCloud = async ({ saleId, createdAt }) => {
+    if (isLocalDemoMode()) {
+      localDemoUpdateRow('sales', saleId, { created_at: createdAt });
+      return;
+    }
+
+    const { error } = await supabase.rpc('change_sale_date', {
+      p_sale_id: String(saleId),
+      p_created_at: createdAt,
+    });
+    if (!error) return;
+
+    const errorText = [error.message, error.details, error.hint, error.code].filter(Boolean).join(' ');
+    if (/change_sale_date|PGRST202|schema cache|function .* does not exist/i.test(errorText)) {
+      throw new Error('Falta actualizar la base para poder cambiar la fecha de las ventas.');
+    }
+    throw new Error(error.message || 'No se pudo cambiar la fecha de la venta.');
+  };
+
   const voidSaleTransactionCloud = async ({
     saleId,
     voidedAt,
@@ -12306,6 +12328,7 @@ export default function PartySupplyApp() {
     safeTx.cashReceived = paymentInfo.cashReceived;
     safeTx.cashChange = paymentInfo.cashChange;
     safeTx.installments = paymentInfo.installments;
+    safeTx.saleDateInput = toDateTimeLocalValue(parseTxDate(tx));
     setEditingTransaction(safeTx);
     setTransactionSearch('');
     setEditReason('');
@@ -16037,6 +16060,23 @@ export default function PartySupplyApp() {
       return;
     }
 
+    const saleDateChange = getSaleDateChange(parseTxDate(originalTx), editingTransaction.saleDateInput);
+    if (saleDateChange.error) {
+      showNotification('warning', 'Fecha de la venta', saleDateChange.error);
+      return;
+    }
+    if (saleDateChange.changed && !canManageRegister) {
+      showNotification('error', 'Acceso Denegado', 'Solo quien maneja la caja puede cambiar la fecha de una venta.');
+      return;
+    }
+    const saleDateLogChange = saleDateChange.changed
+      ? {
+          old: saleDateChange.previousDate ? saleDateChange.previousDate.toISOString() : null,
+          new: saleDateChange.nextDate.toISOString(),
+        }
+      : null;
+    let saleDateSaved = false;
+
     try {
       Swal.fire({ title: 'Guardando cambios...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
@@ -16053,6 +16093,7 @@ export default function PartySupplyApp() {
       if (Number(originalTx.cashChange || 0) !== safeCashChange) {
         changes.cashChange = { old: Number(originalTx.cashChange || 0), new: safeCashChange };
       }
+      if (saleDateLogChange) changes.createdAt = saleDateLogChange;
 
       // 2. Normalización absoluta de items
       const finalItems = editingTransaction.items.map((i) => {
@@ -16168,6 +16209,12 @@ export default function PartySupplyApp() {
         }
       }
 
+      // La fecha va primero: si falla, no se tocó nada de la venta.
+      if (saleDateChange.changed) {
+        await changeSaleDateCloud({ saleId: editingTransaction.id, createdAt: saleDateLogChange.new });
+        saleDateSaved = true;
+      }
+
       let stockChanges = [];
       const transactionalEdit = await editSaleTransactionCloud({
         saleId: editingTransaction.id,
@@ -16239,8 +16286,16 @@ export default function PartySupplyApp() {
          pointsEarned: nextPointsEarned,
          pointsSpent: nextPointsSpent,
          cashReceived: safeCashReceived,
-         cashChange: safeCashChange
+         cashChange: safeCashChange,
+         ...(saleDateChange.changed
+           ? {
+               createdAt: saleDateLogChange.new,
+               date: formatDateAR(saleDateChange.nextDate),
+               time: formatTimeFullAR(saleDateChange.nextDate),
+             }
+           : {}),
       };
+      delete finalTx.saleDateInput;
       
       finalTx.isTest = isTestRecord(finalTx);
       
@@ -16302,10 +16357,19 @@ export default function PartySupplyApp() {
 
     } catch (error) {
       console.error("Error crítico al actualizar:", error);
+      if (saleDateSaved) {
+        // La fecha ya quedó cambiada en la base: se anota igual y se recarga.
+        addLog('Modificación Pedido', {
+          transactionId: editingTransaction.id,
+          total: Number(originalTx.total || 0),
+          changes: { createdAt: saleDateLogChange },
+        }, 'Cambio de fecha (el resto de la edición no se guardó)');
+        void loadTransactionsCloudData({ force: true });
+      }
       Swal.fire({
         icon: 'error',
         title: 'Error de Sincronización',
-        text: error.message || 'Error desconocido guardando en la nube.',
+        text: `${error.message || 'Error desconocido guardando en la nube.'}${saleDateSaved ? ' La fecha de la venta sí se cambió.' : ''}`,
         confirmButtonText: 'Entendido'
       });
     }
@@ -17479,7 +17543,7 @@ export default function PartySupplyApp() {
           {isClosingTimeModalOpen && <ClosingTimeModal isOpen onClose={() => setIsClosingTimeModalOpen(false)} closingTime={closingTime} setClosingTime={setClosingTime} onSave={handleSaveClosingTime} />}
           {isModalOpen && <AddProductModal isOpen onClose={() => { setIsModalOpen(false); }} newItem={newItem} setNewItem={setNewItem} categories={categories} onImageUpload={handleImageUpload} onAdd={handleAddItem} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} />}
           {editingProduct && <EditProductModal product={editingProduct} onClose={() => setEditingProduct(null)} setEditingProduct={setEditingProduct} categories={categories} onImageUpload={handleImageUpload} editReason={editReason} setEditReason={setEditReason} onSave={saveEditProduct} inventory={inventory} onDuplicateBarcode={handleDuplicateBarcodeDetected} isUploadingImage={isUploadingImage} onDuplicate={handleDuplicateProduct} onDeleteProduct={(product) => { setEditingProduct(null); handleDeleteProductRequest(product); }} onRetireDeletedProduct={handleRetireDeletedProduct} currentUser={currentUser} />}
-          {editingTransaction && <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} members={members} offers={offers} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} />}
+          {editingTransaction && <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} members={members} offers={offers} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} canChangeSaleDate={canManageRegister} registerOpenedAt={isRegisterClosed ? null : registerOpenedAt} />}
           {isImageModalOpen && <ImageModal isOpen image={selectedImage} onClose={() => setIsImageModalOpen(false)} />}
           {transactionToRefund && <RefundModal transaction={transactionToRefund} onClose={() => { setTransactionToRefund(null); setRefundReason(''); }} refundReason={refundReason} setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />}
           {isClosingCashModalOpen && <CloseCashModal isOpen onClose={() => setIsClosingCashModalOpen(false)} salesCount={cycleSalesCount} totalSales={cycleTotalSales} totalExpenses={cycleTotalExpenses} cashExpenses={cycleCashExpenses} cashSales={cycleCashSales} openingBalance={openingBalance} onConfirm={handleConfirmCloseCash} />}

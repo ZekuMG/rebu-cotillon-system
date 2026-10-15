@@ -11,7 +11,8 @@ import {
   User,
   Gift,
   TicketPercent,
-  ChevronDown
+  ChevronDown,
+  CalendarClock
 } from 'lucide-react';
 import { PAYMENT_METHODS } from '../../data';
 // ♻️ FIX: Importamos FancyPrice
@@ -30,6 +31,7 @@ import {
 } from '../../utils/paymentBreakdown';
 import { normalizeLegacyOffer } from '../../utils/offerHelpers';
 import { getClientSearchTerms, memberMatchesSearchTerms } from '../../utils/clientSearch';
+import { parseDateTimeLocalValue, toDateTimeLocalValue } from '../../utils/saleDate';
 
 const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
@@ -39,8 +41,11 @@ export const EditTransactionModal = ({
   editReason, setEditReason, onSave,
   members = [],
   offers = [],
+  canChangeSaleDate = false,
+  registerOpenedAt = null,
 }) => {
   const searchInputRef = useRef(null);
+  const [initialSaleDateInput] = useState(() => transaction?.saleDateInput || '');
   const { isPending, runAction } = usePendingAction();
   const [showMemberMenu, setShowMemberMenu] = useState(false);
   const [memberFilterSearch, setMemberFilterSearch] = useState('');
@@ -435,6 +440,13 @@ export const EditTransactionModal = ({
       couponCode: canonical.couponCode || '',
     });
   };
+
+  const nextSaleDate = parseDateTimeLocalValue(transaction.saleDateInput);
+  const saleDateMoved = Boolean(nextSaleDate) && transaction.saleDateInput !== initialSaleDateInput;
+  const registerStart = registerOpenedAt ? new Date(registerOpenedAt) : null;
+  const saleDateLeavesRegister = Boolean(
+    saleDateMoved && registerStart && !Number.isNaN(registerStart.getTime()) && nextSaleDate < registerStart,
+  );
 
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-[200] p-3 animate-in fade-in duration-200">
@@ -921,6 +933,30 @@ export const EditTransactionModal = ({
               )}
             </div>
           )}
+
+          <div className="mb-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+            <label htmlFor="edit-sale-date" className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1"><CalendarClock size={12} /> Fecha y hora de la venta</label>
+            {canChangeSaleDate ? (
+              <input
+                id="edit-sale-date"
+                type="datetime-local"
+                max={toDateTimeLocalValue(new Date())}
+                value={transaction.saleDateInput || ''}
+                onChange={(e) => setEditingTransaction({ ...transaction, saleDateInput: e.target.value })}
+                className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm font-bold text-slate-800 bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+            ) : (
+              <p className="text-sm font-bold text-slate-700">{transaction.date} {transaction.time}</p>
+            )}
+            {saleDateMoved && (
+              <p className="mt-1 text-[11px] font-semibold text-amber-700">
+                {saleDateLeavesRegister
+                  ? 'La venta sale de la caja abierta ahora. '
+                  : ''}
+                Si ese día ya tuvo cierre de caja, ese cierre no se recalcula. Historial y Métricas sí la pasan a la nueva fecha.
+              </p>
+            )}
+          </div>
 
           <div className="mb-2">
             <label className="text-[10px] font-bold text-amber-600 uppercase tracking-wide block mb-1 flex items-center gap-1"><FileText size={12} /> Motivo / Nota de la modificación (Opcional)</label>

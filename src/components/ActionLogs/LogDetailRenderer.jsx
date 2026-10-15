@@ -1664,6 +1664,13 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
           )}
 
           <Card icon="💰" title="Ajuste Financiero">
+             {changes.createdAt && (
+                <ChangeRow
+                  field="Fecha de la venta"
+                  oldVal={changes.createdAt.old ? new Date(changes.createdAt.old).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' }) : '-'}
+                  newVal={new Date(changes.createdAt.new).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' })}
+                />
+             )}
              {isTotalActuallyChanged && (
                 <ChangeRow field="Monto Total" oldVal={changes.total.old} newVal={changes.total.new} isPrice={true} />
              )}
