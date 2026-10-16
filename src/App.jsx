@@ -16029,6 +16029,91 @@ export default function PartySupplyApp() {
     });
   };
 
+  // Venta que viene de un pedido: no se tocan productos, pagos, stock ni puntos
+  // (eso es del pedido). Solo la fecha, con la misma función de la base que usa
+  // Editar venta. Antes esto estaba bloqueado y la única salida era borrar el
+  // pedido, que anula la venta y le saca los puntos al cliente.
+  const handleSaveOrderSaleDate = async (originalTx) => {
+    const saleDateChange = getSaleDateChange(parseTxDate(originalTx), editingTransaction.saleDateInput);
+    if (saleDateChange.error) {
+      showNotification('warning', 'Fecha de la venta', saleDateChange.error);
+      return;
+    }
+    if (!saleDateChange.changed) {
+      showNotification('info', 'Fecha de la venta', 'La fecha es la misma; no hay nada para guardar.');
+      return;
+    }
+    if (!canManageRegister) {
+      showNotification('error', 'Acceso Denegado', 'Solo quien maneja la caja puede cambiar la fecha de una venta.');
+      return;
+    }
+    const saleDateLogChange = {
+      old: saleDateChange.previousDate ? saleDateChange.previousDate.toISOString() : null,
+      new: saleDateChange.nextDate.toISOString(),
+    };
+
+    try {
+      Swal.fire({ title: 'Cambiando la fecha...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      await changeSaleDateCloud({ saleId: originalTx.id, createdAt: saleDateLogChange.new });
+
+      const finalTx = {
+        ...originalTx,
+        createdAt: saleDateLogChange.new,
+        date: formatDateAR(saleDateChange.nextDate),
+        time: formatTimeFullAR(saleDateChange.nextDate),
+      };
+      const currentTransactionsSnapshot = Array.isArray(dataStateRef.current.transactions)
+        ? dataStateRef.current.transactions
+        : [];
+      const nextTransactionsSnapshot = currentTransactionsSnapshot.map((t) => (
+        String(t.id) === String(originalTx.id) ? finalTx : t
+      ));
+      rememberLocalTransactionOverride(finalTx);
+      localDataMutationRef.current.transactions = Date.now();
+      markCloudSourceMutation('sales');
+      dataStateRef.current = {
+        ...dataStateRef.current,
+        transactions: nextTransactionsSnapshot,
+      };
+      setTransactions(nextTransactionsSnapshot);
+      saveOfflineTransactionsSnapshot({
+        savedAt: new Date().toISOString(),
+        transactions: nextTransactionsSnapshot,
+        transactionsScope: transactionSnapshotScopeRef.current,
+      });
+
+      addLog('Modificación Pedido', {
+        transactionId: originalTx.id,
+        orderId: originalTx.orderId,
+        client: originalTx.client?.name || originalTx.clientName || null,
+        total: Number(originalTx.total || 0),
+        previousTotal: Number(originalTx.total || 0),
+        newTotal: Number(originalTx.total || 0),
+        changes: { createdAt: saleDateLogChange },
+        itemsSnapshot: originalTx.items || [],
+      }, editReason || 'Cambio de fecha de una venta de pedido');
+      await lastLogWritePromiseRef.current;
+
+      await Promise.all([
+        loadTransactionsCloudData({ force: true }),
+        loadHistoryCloudData({ force: true }),
+      ]);
+
+      setEditingTransaction(null);
+      setEditReason('');
+      Swal.close();
+      showNotification('success', 'Fecha cambiada', `La venta #${originalTx.id} quedó el ${finalTx.date} a las ${finalTx.time}.`);
+    } catch (error) {
+      console.error('Error cambiando la fecha de una venta de pedido:', error);
+      Swal.fire({
+        icon: 'error',
+        title: 'No se pudo cambiar la fecha',
+        text: error.message || 'Error desconocido guardando en la nube.',
+        confirmButtonText: 'Entendido',
+      });
+    }
+  };
+
   const handleSaveEditedTransaction = async (e) => {
     if (blockIfOfflineReadonly('editar ventas')) return;
     e?.preventDefault?.();
@@ -16038,11 +16123,8 @@ export default function PartySupplyApp() {
       transactions.find((t) => String(t.id) === String(editingTransaction.id)) ||
       editingTransaction;
     if (originalTx?.orderId) {
-      showNotification(
-        'warning',
-        'Venta vinculada a un pedido',
-        'Editá el pedido original; esta venta no administra puntos de forma independiente.',
-      );
+      // De una venta de pedido solo se cambia la fecha; el resto lo maneja el pedido.
+      await handleSaveOrderSaleDate(originalTx);
       return;
     }
     const editedBaseTotal = getEditedTransactionTotal(editingTransaction.items, 'Efectivo');

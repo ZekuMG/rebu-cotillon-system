@@ -991,7 +991,20 @@ export default function OrdersView({ budgets, orders, members, inventory, catego
   };
 
   const handleDeleteSelectedOrder = async (orderRecord) => {
-    const result = await Swal.fire({ title: 'Eliminar pedido', text: 'El pedido dejará de aparecer en Pedidos.', icon: 'warning', showCancelButton: true, confirmButtonText: 'Sí, eliminar', cancelButtonText: 'Volver', confirmButtonColor: '#dc2626', cancelButtonColor: '#94a3b8' });
+    // Borrar un pedido ya retirado deshace la compra entera (venta anulada,
+    // stock devuelto, puntos quitados). Antes el aviso decía solo que "dejaba de
+    // aparecer" y se borraron pedidos buscando cambiarles la fecha.
+    const pointsCredited = Number(orderRecord.pointsCredited || 0);
+    const undoesSale = orderRecord.status === 'Retirado';
+    const consequences = [
+      undoesSale ? 'Se <b>anula la venta</b> del pedido y sale de la caja, el Historial y Métricas.' : '',
+      undoesSale ? 'Los productos <b>vuelven al stock</b>.' : '',
+      pointsCredited > 0 ? `Al cliente se le <b>quitan ${pointsCredited} puntos</b>.` : '',
+    ].filter(Boolean);
+    const html = consequences.length > 0
+      ? `<div style="text-align:left;font-size:14px">Además de sacarlo de Pedidos:<ul style="margin:8px 0 8px 18px;list-style:disc">${consequences.map((line) => `<li>${line}</li>`).join('')}</ul>Para corregir solo la fecha, usá <b>Historial → Editar</b> en la venta. No hace falta borrar.</div>`
+      : 'El pedido dejará de aparecer en Pedidos.';
+    const result = await Swal.fire({ title: 'Eliminar pedido', html, icon: 'warning', showCancelButton: true, focusCancel: true, confirmButtonText: consequences.length > 0 ? 'Sí, deshacer la compra' : 'Sí, eliminar', cancelButtonText: 'Volver', confirmButtonColor: '#dc2626', cancelButtonColor: '#94a3b8' });
     if (result.isConfirmed) await onDeleteOrder(orderRecord);
   };
 

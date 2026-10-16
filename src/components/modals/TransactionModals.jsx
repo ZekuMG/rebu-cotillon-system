@@ -448,6 +448,77 @@ export const EditTransactionModal = ({
     saleDateMoved && registerStart && !Number.isNaN(registerStart.getTime()) && nextSaleDate < registerStart,
   );
 
+  // Una venta que sale de un pedido no se edita acá: productos, pagos y puntos
+  // los maneja el pedido. Lo único que se puede tocar es la fecha (por ejemplo,
+  // un pedido viejo que se marcó "Retirado" hoy y cayó en la caja de hoy).
+  if (transaction.orderId) {
+    const savePending = isPending(`edit-transaction:${transaction.id}`);
+    return (
+      <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-[200] p-3 animate-in fade-in duration-200">
+        <div className="bg-white rounded-[14px] shadow-2xl w-full max-w-md border border-slate-200">
+          <div className="flex justify-between items-center p-2.5 border-b border-slate-100 bg-slate-50/50 rounded-t-[14px]">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shadow-sm">
+                <CalendarClock size={15} />
+              </div>
+              <div>
+                <h3 className="text-[15px] font-bold text-slate-800">Venta #{transaction.id} de un pedido</h3>
+                <p className="text-[10px] text-slate-500"><FancyPrice amount={transaction.total} /> · {transaction.date} {transaction.time}</p>
+              </div>
+            </div>
+            <button type="button" onClick={onClose} className="p-1.5 bg-white border border-slate-200 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-50 transition-colors">
+              <X size={16} />
+            </button>
+          </div>
+          <form onSubmit={(event) => {
+            event.preventDefault();
+            void runAction(`edit-transaction:${transaction.id}`, async () => {
+              await onSave(event);
+            });
+          }} className="p-3">
+            <p className="mb-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] font-semibold text-blue-800">
+              Productos, pagos y puntos se cambian desde Pedidos. Acá solo se puede corregir la fecha de la venta.
+              No hace falta borrar el pedido: borrarlo anula la venta y le quita los puntos al cliente.
+            </p>
+            <div className="mb-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+              <label htmlFor="edit-sale-date" className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1"><CalendarClock size={12} /> Fecha y hora de la venta</label>
+              {canChangeSaleDate ? (
+                <input
+                  id="edit-sale-date"
+                  type="datetime-local"
+                  max={toDateTimeLocalValue(new Date())}
+                  value={transaction.saleDateInput || ''}
+                  onChange={(e) => setEditingTransaction({ ...transaction, saleDateInput: e.target.value })}
+                  className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm font-bold text-slate-800 bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              ) : (
+                <p className="text-sm font-bold text-slate-700">
+                  {transaction.date} {transaction.time}
+                  <span className="block text-[11px] font-semibold text-slate-500">Cambiar la fecha lo puede hacer quien maneja la caja.</span>
+                </p>
+              )}
+              {saleDateMoved && (
+                <p className="mt-1 text-[11px] font-semibold text-amber-700">
+                  {saleDateLeavesRegister
+                    ? 'La venta sale de la caja abierta ahora. '
+                    : ''}
+                  Si ese día ya tuvo cierre de caja, ese cierre no se recalcula. Historial y Métricas sí la pasan a la nueva fecha.
+                </p>
+              )}
+            </div>
+            <div className="mb-2">
+              <label className="text-[10px] font-bold text-amber-600 uppercase tracking-wide block mb-1 flex items-center gap-1"><FileText size={12} /> Motivo (Opcional)</label>
+              <textarea className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-amber-50 focus:ring-2 focus:ring-amber-500 outline-none text-amber-900" rows="2" placeholder="Ej: El pedido se retiró el 12/10 y se marcó tarde" value={editReason} onChange={(e) => setEditReason(e.target.value)}></textarea>
+            </div>
+            <AsyncActionButton type="submit" pending={savePending} disabled={!canChangeSaleDate || !saleDateMoved || savePending} loadingLabel="Guardando..." className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-md disabled:bg-slate-300 disabled:cursor-not-allowed">
+              Cambiar la fecha
+            </AsyncActionButton>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-[200] p-3 animate-in fade-in duration-200">
       <div className="bg-white rounded-[14px] shadow-2xl w-full max-w-4xl flex flex-col max-h-[88vh] border border-slate-200">
