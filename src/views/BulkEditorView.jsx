@@ -59,6 +59,19 @@ import {
 import { mergePendingEdits } from '../utils/bulkEditorEdits';
 import { describeSupplierCostDrift } from '../utils/supplierCostDrift';
 import {
+  DEFAULT_IMAGE_IMPORT_FILTERS,
+  IMAGE_IMPORT_AGE_OPTIONS,
+  IMAGE_IMPORT_SORT_OPTIONS,
+  getImageImportCategoryOptions,
+  getImageImportMatchLabel,
+  getImageImportProductFields,
+  hasActiveImageImportFilters,
+  isSafeImageImportMatch,
+  matchesImageImportFilters,
+  selectImageImportBatch,
+  sortImageImportRows,
+} from '../utils/imageImportQueue';
+import {
   getPendingSupplierEditKeys,
   hasPendingSupplierEdit,
   sortSupplierGroupsForReview,
@@ -105,8 +118,16 @@ const IMAGE_IMPORT_LIMIT_OPTIONS = [
   { value: '1', label: '1 foto' },
   { value: '5', label: '5 fotos' },
   { value: '10', label: '10 fotos' },
+  { value: '25', label: '25 fotos' },
+  { value: '50', label: '50 fotos' },
   { value: 'all', label: 'Todas' },
 ];
+
+const IMAGE_MATCH_TONE_CLASS = {
+  emerald: 'bg-emerald-100 text-emerald-800',
+  amber: 'bg-amber-100 text-amber-800',
+  sky: 'bg-sky-100 text-sky-800',
+};
 
 const normalizeToolMode = (mode) => (
   mode === 'excel' || mode === 'supplier' || mode === 'image-cleanup' || mode === 'whatsapp-catalog' ? mode : 'bulk'
@@ -229,6 +250,9 @@ export default function BulkEditorView({
   const [imageImportSearchLimit, setImageImportSearchLimit] = useState('10');
   const [isImageImportLimitMenuOpen, setIsImageImportLimitMenuOpen] = useState(false);
   const [imageCandidatePickerRowId, setImageCandidatePickerRowId] = useState(null);
+  const [imageImportSort, setImageImportSort] = useState('newest');
+  const [imageImportFilters, setImageImportFilters] = useState(DEFAULT_IMAGE_IMPORT_FILTERS);
+  const [isImageImportCategoryMenuOpen, setIsImageImportCategoryMenuOpen] = useState(false);
   const [replaceExistingProductImages, setReplaceExistingProductImages] = useState(false);
   const [productImagePreview, setProductImagePreview] = useState('');
   const imageImportPausedRef = useRef(false);
@@ -762,6 +786,7 @@ export default function BulkEditorView({
       title: product.title || 'Producto sin nombre',
       barcode: String(product.barcode || '').trim(),
       category: Array.isArray(product.categories) ? product.categories.join(', ') : product.category || '',
+      ...getImageImportProductFields(product),
       status: 'pending',
       approved: false,
       foundTitle: '',
@@ -1027,11 +1052,23 @@ export default function BulkEditorView({
       return;
     }
 
-    const rowsToSearch = imageImportRows
-      .filter((row) => ['pending', 'error', 'login_required'].includes(row.status))
-      .slice(0, limit || imageImportRows.length);
+    const rowsToSearch = selectImageImportBatch(imageImportRows, {
+      filters: imageImportFilters,
+      sort: imageImportSort,
+      limit,
+    });
 
-    if (rowsToSearch.length === 0) return;
+    if (rowsToSearch.length === 0) {
+      if (hasActiveImageImportFilters(imageImportFilters)) {
+        Swal.fire({
+          title: 'Nada pendiente con estos filtros',
+          text: 'Cambiá o limpiá los filtros para buscar otros productos.',
+          icon: 'info',
+          confirmButtonColor: '#0f172a',
+        });
+      }
+      return;
+    }
 
     if (!limit && rowsToSearch.length > 80) {
       const result = await Swal.fire({
@@ -1062,8 +1099,10 @@ export default function BulkEditorView({
         updateImageImportRow(row.rowId, { status: 'searching', message: 'Buscando en proveedor...' });
         const result = await window.electronAPI.supplierImageSearch({
           barcode: row.barcode,
-            title: row.title,
-            searchMode: row.barcode ? 'barcode_then_title' : 'title_only',
+          title: row.title,
+          searchMode: row.barcode ? 'barcode_then_title' : 'title_only',
+          casaAlbertoId: row.casaAlbertoId || '',
+          productUrl: row.casaAlbertoUrl || '',
         });
 
         if (result?.status === 'login_required') {
@@ -1099,6 +1138,7 @@ export default function BulkEditorView({
           const selectedCandidate = candidates[0] || {};
           const isTitleSimilarityMatch = selectedCandidate.matchQuality === 'title_similarity' || result.matchQuality === 'title_similarity';
           const isTrimmedBarcodeMatch = result.fallbackSearch === 'trimmed_barcode';
+          const isLinkedMatch = selectedCandidate.matchQuality === 'casa_alberto_link' || result.matchQuality === 'casa_alberto_link';
           updateImageImportRow(row.rowId, {
             status: 'found',
             approved: false,
@@ -1117,7 +1157,9 @@ export default function BulkEditorView({
             searchedQuery: result.searchedQuery || '',
             searchedBarcode: result.searchedBarcode || '',
             titleSimilarity: selectedCandidate.titleSimilarity || result.titleSimilarity || 0,
-            message: isTitleSimilarityMatch
+            message: isLinkedMatch
+              ? 'Ficha del enlace guardado de Casa Alberto'
+              : isTitleSimilarityMatch
               ? `Coincidencia por nombre${selectedCandidate.titleSimilarity ? ` (${selectedCandidate.titleSimilarity}%)` : ''}`
               : isTrimmedBarcodeMatch
                 ? 'Codigo corregido: sin ultimo digito'
@@ -1136,7 +1178,6 @@ export default function BulkEditorView({
         if (imageImportStopRef.current) break;
         await waitForImageImportResume();
         if (imageImportStopRef.current) break;
-        await new Promise((resolve) => setTimeout(resolve, 350));
       }
     } finally {
       setIsSearchingImages(false);
@@ -1177,6 +1218,37 @@ export default function BulkEditorView({
           : `Opcion ${candidateIndex + 1} seleccionada`,
       };
     }));
+  };
+
+  const handleApproveSafeImageImports = () => {
+    setImageImportRows((prev) => prev.map((row) => {
+      if (!isSafeImageImportMatch(row)) return row;
+      const candidate = row.candidates?.[0];
+      return {
+        ...row,
+        approved: true,
+        selectedCandidateIndex: 0,
+        imageDataUrl: candidate?.imageDataUrl || row.imageDataUrl,
+        imageUrl: candidate?.imageUrl || row.imageUrl,
+        foundTitle: candidate?.foundTitle || row.foundTitle,
+      };
+    }));
+  };
+
+  const updateImageImportFilter = (key, value) => {
+    setImageImportFilters((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const toggleImageImportCategoryFilter = (category) => {
+    setImageImportFilters((prev) => {
+      const current = prev.categories || [];
+      return {
+        ...prev,
+        categories: current.includes(category)
+          ? current.filter((item) => item !== category)
+          : [...current, category],
+      };
+    });
   };
 
   const handleApplyImageImports = async () => {
@@ -3325,6 +3397,8 @@ export default function BulkEditorView({
       if (row.approved) acc.approved += 1;
       if (row.matchQuality === 'title_similarity') {
         acc.foundByName += 1;
+      } else if (row.matchQuality === 'casa_alberto_link') {
+        acc.foundByLink += 1;
       } else {
         acc.foundByCode += 1;
       }
@@ -3342,13 +3416,23 @@ export default function BulkEditorView({
     approved: 0,
     foundByCode: 0,
     foundByName: 0,
+    foundByLink: 0,
   });
   const imageImportProcessedCount = imageImportRows.length - imageImportStats.pending;
   const imageImportProgressPercent = imageImportRows.length > 0
     ? Math.round((imageImportProcessedCount / imageImportRows.length) * 100)
     : 0;
   const normalizedImageImportSearchTerm = imageImportReviewSearchTerm.trim().toLowerCase();
-  const imageImportVisibleRows = imageImportRows.filter((row) => (
+  const imageImportSafeCount = imageImportRows.filter(isSafeImageImportMatch).length;
+  const imageImportCategoryOptions = getImageImportCategoryOptions(imageImportRows);
+  const imageImportHasFilters = hasActiveImageImportFilters(imageImportFilters);
+  const imageImportPendingMatchingCount = selectImageImportBatch(imageImportRows, {
+    filters: imageImportFilters,
+    sort: imageImportSort,
+  }).length;
+  const imageImportVisibleRows = sortImageImportRows(imageImportRows.filter((row) => (
+    matchesImageImportFilters(row, imageImportFilters)
+  )).filter((row) => (
     showImageImportPendingRows ||
     normalizedImageImportSearchTerm ||
     row.status !== 'pending' ||
@@ -3372,7 +3456,7 @@ export default function BulkEditorView({
         pending: 'Pendiente',
       }[row.status],
     ].some((value) => String(value || '').toLowerCase().includes(normalizedImageImportSearchTerm));
-  });
+  }), imageImportSort);
   const imageCandidatePickerRow = imageImportRows.find((row) => row.rowId === imageCandidatePickerRowId) || null;
 
   useEffect(() => {
@@ -6005,18 +6089,147 @@ export default function BulkEditorView({
                     </div>
                   )}
                   <p className="mt-2 text-[10px] font-bold leading-snug text-emerald-800/80">
-                    Elegi una cantidad y busca la proxima tanda pendiente. Pausar o detener se aplica al terminar la consulta actual.
+                    Cada tanda toma los pendientes en el orden y con los filtros de abajo. Pausar o detener se aplica al terminar la consulta actual.
                   </p>
                 </section>
 
-                <section className="grid grid-cols-2 gap-2">
+                <section className="rounded-lg border border-slate-200 bg-white p-2.5" data-testid="image-import-queue-filters">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">Qué buscar primero</p>
+                    {imageImportHasFilters && (
+                      <button
+                        type="button"
+                        onClick={() => setImageImportFilters(DEFAULT_IMAGE_IMPORT_FILTERS)}
+                        disabled={isSearchingImages}
+                        className="text-[10px] font-black text-slate-500 hover:text-slate-800 disabled:opacity-45"
+                      >
+                        Limpiar
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">
+                      Orden
+                      <select
+                        value={imageImportSort}
+                        onChange={(event) => setImageImportSort(event.target.value)}
+                        disabled={isSearchingImages}
+                        className="mt-1 h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[11px] font-black text-slate-700 outline-none transition-colors hover:border-emerald-300 focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        {IMAGE_IMPORT_SORT_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">
+                      Agregados
+                      <select
+                        value={imageImportFilters.ageDays}
+                        onChange={(event) => updateImageImportFilter('ageDays', event.target.value)}
+                        disabled={isSearchingImages}
+                        className="mt-1 h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[11px] font-black text-slate-700 outline-none transition-colors hover:border-emerald-300 focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        {IMAGE_IMPORT_AGE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">
+                      Stock
+                      <select
+                        value={imageImportFilters.stock}
+                        onChange={(event) => updateImageImportFilter('stock', event.target.value)}
+                        disabled={isSearchingImages}
+                        className="mt-1 h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[11px] font-black text-slate-700 outline-none transition-colors hover:border-emerald-300 focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        <option value="all">Todos</option>
+                        <option value="with">Solo con stock</option>
+                      </select>
+                    </label>
+                    <label className="block text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">
+                      Código
+                      <select
+                        value={imageImportFilters.code}
+                        onChange={(event) => updateImageImportFilter('code', event.target.value)}
+                        disabled={isSearchingImages}
+                        className="mt-1 h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[11px] font-black text-slate-700 outline-none transition-colors hover:border-emerald-300 focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        <option value="all">Todos</option>
+                        <option value="with">Con código</option>
+                        <option value="without">Sin código</option>
+                      </select>
+                    </label>
+                    <label className="block text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">
+                      Casa Alberto
+                      <select
+                        value={imageImportFilters.link}
+                        onChange={(event) => updateImageImportFilter('link', event.target.value)}
+                        disabled={isSearchingImages}
+                        className="mt-1 h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[11px] font-black text-slate-700 outline-none transition-colors hover:border-emerald-300 focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        <option value="all">Todos</option>
+                        <option value="linked">Ya enlazados</option>
+                        <option value="unlinked">Sin enlace</option>
+                      </select>
+                    </label>
+                    <div className="relative">
+                      <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">Categorías</p>
+                      <button
+                        type="button"
+                        onClick={() => setIsImageImportCategoryMenuOpen((prev) => !prev)}
+                        disabled={isSearchingImages || imageImportCategoryOptions.length === 0}
+                        aria-expanded={isImageImportCategoryMenuOpen}
+                        className="mt-1 flex h-8 w-full items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-2 text-left text-[11px] font-black text-slate-700 transition-colors hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        <span className="truncate">
+                          {imageImportFilters.categories.length === 0
+                            ? 'Todas'
+                            : imageImportFilters.categories.length === 1
+                              ? imageImportFilters.categories[0]
+                              : `${imageImportFilters.categories.length} categorías`}
+                        </span>
+                        <ChevronDown size={13} className={`shrink-0 text-slate-400 transition-transform ${isImageImportCategoryMenuOpen ? 'rotate-180' : ''}`} />
+                      </button>
+                      {isImageImportCategoryMenuOpen && !isSearchingImages && (
+                        <div className="absolute left-0 right-0 top-full z-40 mt-1 max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-xl shadow-slate-900/10 custom-scrollbar">
+                          {imageImportCategoryOptions.map((option) => {
+                            const checked = imageImportFilters.categories.includes(option.value);
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                role="menuitemcheckbox"
+                                aria-checked={checked}
+                                onClick={() => toggleImageImportCategoryFilter(option.value)}
+                                className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-[11px] font-bold transition-colors ${
+                                  checked ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50'
+                                }`}
+                              >
+                                <span className="flex min-w-0 items-center gap-1.5">
+                                  {checked ? <CheckSquare size={13} className="shrink-0" /> : <Square size={13} className="shrink-0 text-slate-300" />}
+                                  <span className="truncate">{option.value}</span>
+                                </span>
+                                <span className="shrink-0 text-[10px] font-black text-slate-400">{option.count}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <p className="mt-2 text-[10px] font-bold text-slate-500" data-testid="image-import-pending-matching">
+                    {imageImportPendingMatchingCount} pendiente(s) {imageImportHasFilters ? 'con estos filtros' : 'en el lote'}
+                  </p>
+                </section>
+                <section className="grid grid-cols-3 gap-2">
                   {[
                     ['Pendientes', imageImportStats.pending],
                     ['Encontradas', imageImportStats.found],
+                    ['Aprobadas', imageImportStats.approved],
                     ['Por codigo', imageImportStats.foundByCode],
                     ['Por nombre', imageImportStats.foundByName],
+                    ['Por enlace', imageImportStats.foundByLink],
                     ['Sin foto', imageImportStats.not_found],
-                    ['Aprobadas', imageImportStats.approved],
                     ['Aplicadas', imageImportStats.applied],
                     ['Problemas', imageImportStats.error + imageImportStats.apply_error + imageImportStats.login_required],
                   ].map(([label, value]) => (
@@ -6071,6 +6284,15 @@ export default function BulkEditorView({
                       </button>
                       <button
                         type="button"
+                        onClick={handleApproveSafeImageImports}
+                        disabled={imageImportSafeCount === 0 || isApplyingImages}
+                        className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-800 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-45"
+                        title="Marca las fotos encontradas por código exacto. Las de nombre, enlace o código recortado se revisan a mano."
+                      >
+                        Aprobar seguras ({imageImportSafeCount})
+                      </button>
+                      <button
+                        type="button"
                         onClick={handleApplyImageImports}
                         disabled={imageImportStats.approved === 0 || isSearchingImages || isApplyingImages}
                         className="flex items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-3 py-2 text-xs font-black text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-45"
@@ -6097,7 +6319,7 @@ export default function BulkEditorView({
                         </div>
                         <h4 className="mt-3 text-sm font-black text-slate-900">Lote preparado</h4>
                         <p className="mt-1 text-xs font-bold leading-relaxed text-slate-500">
-                          Hay {imageImportRows.length} productos sin foto. Los que no tienen codigo se buscaran por nombre. Usa <span className="font-black text-slate-800">Probar 10</span> para validar la sesion.
+                          Hay {imageImportRows.length} productos sin foto. Se buscan en el orden elegido ({IMAGE_IMPORT_SORT_OPTIONS.find((option) => option.value === imageImportSort)?.label.toLowerCase()}). Los que no tienen código se buscan por nombre y los ya enlazados van directo a su ficha de Casa Alberto. Empezá con una tanda corta para validar la sesion.
                         </p>
                       </div>
                     </div>
@@ -6169,11 +6391,17 @@ export default function BulkEditorView({
                                     <p className="block max-w-full truncate text-xs font-black leading-tight text-slate-800" title={row.title}>{row.title}</p>
                                     <p className="mt-0.5 block max-w-full truncate text-[9px] font-bold uppercase leading-tight tracking-wide text-slate-400">{row.category || 'Sin categoria'}</p>
                                   </div>
-                                  {row.status === 'found' && (
-                                    <p className="mt-0.5 block max-w-full truncate text-[9px] font-bold leading-tight text-emerald-500">
-                                      {row.approved ? 'Foto elegida' : `${row.candidates?.length || 1} opcion(es), toca la foto`}
-                                    </p>
-                                  )}
+                                  {row.status === 'found' && (() => {
+                                    const match = getImageImportMatchLabel(row, row);
+                                    return (
+                                      <p className="mt-0.5 flex max-w-full items-center gap-1.5 overflow-hidden text-[9px] font-bold leading-tight text-emerald-600">
+                                        <span className={`shrink-0 rounded px-1 py-px text-[8px] font-black uppercase tracking-wide ${IMAGE_MATCH_TONE_CLASS[match.tone]}`}>{match.label}</span>
+                                        <span className="truncate text-slate-500" title={row.foundTitle}>
+                                          {row.approved ? 'Foto elegida · ' : `${row.candidates?.length || 1} opcion(es) · `}Alberto: {row.foundTitle || 'sin nombre'}
+                                        </span>
+                                      </p>
+                                    );
+                                  })()}
                                   {row.status !== 'found' && row.message && (
                                     <p className="mt-0.5 block max-w-full truncate text-[9px] font-bold leading-tight text-slate-400" title={row.message}>{row.message}</p>
                                   )}
@@ -6246,9 +6474,23 @@ export default function BulkEditorView({
                               <img src={candidate.imageDataUrl} alt="" className="h-44 w-full object-contain" />
                             </button>
                             <div className="space-y-2 p-2.5">
+                              {(() => {
+                                const match = getImageImportMatchLabel(candidate, imageCandidatePickerRow);
+                                return (
+                                  <span className={`inline-flex rounded px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide ${IMAGE_MATCH_TONE_CLASS[match.tone]}`}>
+                                    {match.label}
+                                  </span>
+                                );
+                              })()}
                               <p className="line-clamp-2 min-h-[28px] text-[11px] font-black leading-snug text-slate-800" title={candidate.foundTitle}>
                                 {candidate.foundTitle || 'Foto encontrada'}
                               </p>
+                              {candidate.supplierCode && (
+                                <p className="text-[10px] font-bold text-slate-500">
+                                  Código Alberto: {candidate.supplierCode}
+                                  {imageCandidatePickerRow.barcode && imageCandidatePickerRow.barcode !== candidate.supplierCode ? ` · Rebu: ${imageCandidatePickerRow.barcode}` : ''}
+                                </p>
+                              )}
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex flex-wrap items-center gap-2">
                                   {candidateProductUrl ? (

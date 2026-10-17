@@ -16,6 +16,10 @@ let mainWindow;
 let supplierImageLoginWindow;
 let supplierPriceWorkerWindow;
 let supplierPriceSearchQueue = Promise.resolve();
+let supplierImageWorkerWindow;
+let supplierImageWorkerIdleTimer = null;
+let supplierImageSearchQueue = Promise.resolve();
+const SUPPLIER_IMAGE_WORKER_IDLE_MS = 60000;
 let supplierSessionVerified = false;
 
 const updateManager = createUpdateManager({
@@ -886,6 +890,40 @@ const destroySupplierPriceWorker = () => {
   if (workerWindow && !workerWindow.isDestroyed()) workerWindow.destroy();
 };
 
+// La busqueda de fotos reusa una sola ventana oculta durante la tanda; antes
+// abria y cerraba una por producto. Se cierra sola tras un minuto sin uso.
+const destroySupplierImageWorker = () => {
+  clearTimeout(supplierImageWorkerIdleTimer);
+  supplierImageWorkerIdleTimer = null;
+  const workerWindow = supplierImageWorkerWindow;
+  supplierImageWorkerWindow = null;
+  if (workerWindow && !workerWindow.isDestroyed()) workerWindow.destroy();
+};
+
+const getSupplierImageWorker = () => {
+  clearTimeout(supplierImageWorkerIdleTimer);
+  supplierImageWorkerIdleTimer = null;
+  if (supplierImageWorkerWindow && !supplierImageWorkerWindow.isDestroyed()) {
+    return supplierImageWorkerWindow;
+  }
+
+  const workerWindow = createSupplierBrowserWindow({ show: false, width: 1000, height: 760 });
+  supplierImageWorkerWindow = workerWindow;
+  workerWindow.on('closed', () => {
+    if (supplierImageWorkerWindow === workerWindow) supplierImageWorkerWindow = null;
+  });
+  workerWindow.webContents.on('render-process-gone', () => {
+    if (supplierImageWorkerWindow === workerWindow) supplierImageWorkerWindow = null;
+    if (!workerWindow.isDestroyed()) workerWindow.destroy();
+  });
+  return workerWindow;
+};
+
+const releaseSupplierImageWorker = () => {
+  clearTimeout(supplierImageWorkerIdleTimer);
+  supplierImageWorkerIdleTimer = setTimeout(destroySupplierImageWorker, SUPPLIER_IMAGE_WORKER_IDLE_MS);
+};
+
 const getSupplierPriceWorker = () => {
   if (supplierPriceWorkerWindow && !supplierPriceWorkerWindow.isDestroyed()) {
     return supplierPriceWorkerWindow;
@@ -1199,6 +1237,7 @@ const restoreSupplierSession = async () => {
 const clearSupplierSession = async () => {
   supplierSessionVerified = false;
   destroySupplierPriceWorker();
+  destroySupplierImageWorker();
   if (supplierImageLoginWindow && !supplierImageLoginWindow.isDestroyed()) {
     supplierImageLoginWindow.destroy();
     supplierImageLoginWindow = null;
@@ -1347,12 +1386,26 @@ const buildSupplierTitleSearchQueries = (title) => {
   return [...new Set(queries)].slice(0, 5);
 };
 
-const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
+const getSupplierLinkedDetailPath = ({ casaAlbertoId = '', productUrl = '' } = {}) => {
+  const safeId = String(casaAlbertoId || '').replace(/\D/g, '').replace(/^0+(?=\d)/, '');
+  if (safeId) return `/pedido/detalle.php?idp=${safeId}`;
+  try {
+    const parsedUrl = new URL(String(productUrl || '').trim(), SUPPLIER_DEFAULT_ORIGIN);
+    if (!parsedUrl.hostname.includes('cotilloncasaalberto.com.ar')) return '';
+    const idp = String(parsedUrl.searchParams.get('idp') || '').replace(/\D/g, '');
+    return idp ? `/pedido/detalle.php?idp=${idp}` : '';
+  } catch {
+    return '';
+  }
+};
+
+const buildSupplierExtractScript = (barcode, productTitle, searchMode = '', linkedDetailPath = '') => `
 (function () {
   try {
     var barcode = ${JSON.stringify(String(barcode || '').trim())};
     var productTitle = ${JSON.stringify(String(productTitle || '').trim())};
     var searchMode = ${JSON.stringify(String(searchMode || '').trim())};
+    var linkedDetailPath = ${JSON.stringify(String(linkedDetailPath || '').trim())};
     var normalize = function (value) {
       return String(value || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
     };
@@ -1445,7 +1498,7 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
     var imageNodes = Array.prototype.slice.call(document.images || []);
     var seenSources = {};
     var isSupplierDetailUrl = function (href) {
-      return /\/pedido\/detalle(?:_mobile)?\.php\?[^#]*\bidp=\d+/i.test(String(href || ''));
+      return /\\/pedido\\/detalle(?:_mobile)?\\.php\\?[^#]*\\bidp=\\d+/i.test(String(href || ''));
     };
     var getSupplierProductId = function (href) {
       try {
@@ -1675,6 +1728,27 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
       }).slice(0, 8);
     }
 
+    // Producto ya enlazado: se leen directo las fotos de su ficha guardada.
+    if (linkedDetailPath) {
+      var linkedUrl = normalizeSupplierHref(linkedDetailPath);
+      matchedCandidates = linkedUrl && isSupplierDetailUrl(linkedUrl) ? [{
+        src: '',
+        productUrl: linkedUrl,
+        casaAlbertoId: getSupplierProductId(linkedUrl),
+        title: productTitle,
+        supplierCode: '',
+        width: 300,
+        height: 300,
+        score: 400,
+        hasBarcode: false,
+        tokenMatches: 0,
+        titleSimilarity: 0,
+        productishSource: true,
+        contextLength: 0,
+        matchQuality: 'casa_alberto_link'
+      }] : [];
+    }
+
     if (matchedCandidates.length === 0) {
       return {
         status: 'not_found',
@@ -1688,10 +1762,13 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
       };
     }
 
+    // Solo las 3 mejores coincidencias abren su ficha, para no cargar de mas al proveedor.
+    var detailFetchesLeft = 3;
     var collectDetailImageCandidates = function (candidate) {
-      if (!candidate.productUrl || !isSupplierDetailUrl(candidate.productUrl)) {
+      if (!candidate.productUrl || !isSupplierDetailUrl(candidate.productUrl) || detailFetchesLeft <= 0) {
         return Promise.resolve([candidate]);
       }
+      detailFetchesLeft -= 1;
 
       return fetch(candidate.productUrl, { credentials: 'include', cache: 'no-store' }).then(function (response) {
         if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -1720,7 +1797,12 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
           );
         }).slice(0, 8);
 
-        if (detailImages.length === 0) return [candidate];
+        var isLinkedCandidate = candidate.matchQuality === 'casa_alberto_link';
+        if (detailImages.length === 0) return isLinkedCandidate ? [] : [candidate];
+        var detailTitleText = normalize(detailTitle);
+        var detailSimilarity = isLinkedCandidate && titleTokens.length > 0
+          ? Math.round((titleTokens.filter(function (token) { return tokenMatchesText(token, detailTitleText); }).length / titleTokens.length) * 100)
+          : candidate.titleSimilarity;
         return detailImages.map(function (src, index) {
           seenSources['detail:' + src] = true;
           return {
@@ -1734,14 +1816,14 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
             score: candidate.score + Math.max(0, 20 - index),
             hasBarcode: candidate.hasBarcode,
             tokenMatches: candidate.tokenMatches,
-            titleSimilarity: candidate.titleSimilarity,
+            titleSimilarity: detailSimilarity,
             productishSource: true,
             contextLength: candidate.contextLength,
             matchQuality: candidate.matchQuality,
           };
         });
       }).catch(function () {
-        return [candidate];
+        return candidate.matchQuality === 'casa_alberto_link' ? [] : [candidate];
       });
     };
 
@@ -1832,17 +1914,19 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '') => `
 })()
 `;
 
-const searchSupplierImageByBarcode = async ({ barcode, title, searchMode = '' }) => {
+const searchSupplierImageByBarcode = async ({ barcode, title, searchMode = '', casaAlbertoId = '', productUrl = '' }) => {
   const safeBarcode = String(barcode || '').trim();
   const safeTitle = String(title || '').replace(/\s+/g, ' ').trim();
   const titleOnly = searchMode === 'title_only' || !safeBarcode;
-  if (!safeBarcode && !safeTitle) {
+  const linkedDetailPath = getSupplierLinkedDetailPath({ casaAlbertoId, productUrl });
+  if (!safeBarcode && !safeTitle && !linkedDetailPath) {
     return { status: 'skipped', message: 'Producto sin codigo ni nombre para buscar.' };
   }
 
   let workerWindow;
+  let keepWorker = true;
   try {
-    workerWindow = createSupplierBrowserWindow({ show: false, width: 1000, height: 760 });
+    workerWindow = getSupplierImageWorker();
 
     const initialLoad = await loadUrlAndWait(workerWindow, getSupplierRestrictedUrl(), 10000);
     if (!initialLoad.success && !initialLoad.timeout) {
@@ -1959,6 +2043,35 @@ const searchSupplierImageByBarcode = async ({ barcode, title, searchMode = '' })
       };
     };
 
+    if (linkedDetailPath) {
+      try {
+        const linkedResult = await workerWindow.webContents.executeJavaScript(
+          buildSupplierExtractScript(safeBarcode, safeTitle, 'casa_alberto_link', linkedDetailPath),
+          true
+        );
+        if (linkedResult?.status === 'login_required') return linkedResult;
+        if (linkedResult?.status === 'found') {
+          return {
+            ...linkedResult,
+            fallbackSearch: 'casa_alberto_link',
+            searchedQuery: linkedDetailPath,
+            searchedBarcode: safeBarcode,
+            originalBarcode: safeBarcode,
+            via: 'linked-detail',
+            message: 'Ficha del enlace guardado de Casa Alberto',
+          };
+        }
+      } catch (error) {
+        workerWindow.__rebuSupplierPushErrorEvent?.('linked-detail-error', {
+          barcode: safeBarcode,
+          title: safeTitle,
+          linkedDetailPath,
+          message: error?.message || '',
+        });
+      }
+      // Si la ficha guardada no tiene fotos (o el enlace quedo viejo), sigue la busqueda normal.
+    }
+
     const attempts = [];
     if (!titleOnly) {
       attempts.push({
@@ -2031,12 +2144,21 @@ const searchSupplierImageByBarcode = async ({ barcode, title, searchMode = '' })
       message: error?.message || '',
       stack: error?.stack || '',
     });
+    keepWorker = false;
     return { status: 'error', message: error?.message || 'Fallo la busqueda en el proveedor.' };
   } finally {
-    if (workerWindow && !workerWindow.isDestroyed()) {
-      workerWindow.close();
-    }
+    if (keepWorker) releaseSupplierImageWorker();
+    else destroySupplierImageWorker();
   }
+};
+
+const enqueueSupplierImageSearch = (request = {}) => {
+  const queuedSearch = supplierImageSearchQueue.then(
+    () => searchSupplierImageByBarcode(request),
+    () => searchSupplierImageByBarcode(request),
+  );
+  supplierImageSearchQueue = queuedSearch.catch(() => undefined);
+  return queuedSearch;
 };
 
 const buildSupplierPriceExtractScript = (request = {}) => `
@@ -2405,6 +2527,7 @@ function createWindow() {
   });
   mainWindow.on('closed', () => {
     destroySupplierPriceWorker();
+    destroySupplierImageWorker();
     mainWindow = null;
   });
 }
@@ -2781,7 +2904,9 @@ app.on('ready', () => {
     const barcode = String(request?.barcode || '').trim();
     const title = String(request?.title || '').trim();
     const searchMode = String(request?.searchMode || '').trim();
-    const result = await searchSupplierImageByBarcode({ barcode, title, searchMode });
+    const casaAlbertoId = String(request?.casaAlbertoId || '').trim();
+    const productUrl = String(request?.productUrl || '').trim();
+    const result = await enqueueSupplierImageSearch({ barcode, title, searchMode, casaAlbertoId, productUrl });
     if (result?.status === 'login_required') supplierSessionVerified = false;
     return result;
   });

@@ -13,7 +13,7 @@
     "audit:queries": "node scripts/audit-supabase-query-latency.mjs",
     "test": "node scripts/correr-pruebas.mjs",
     "test:regression": "node scripts/correr-pruebas.mjs",
-    "test:smoke:offline": "playwright test scripts/smoke-offline.spec.cjs scripts/cache-persistence.spec.cjs scripts/startup-cache-gating.spec.cjs scripts/dashboard-dark-loading.spec.cjs scripts/dynamic-import-recovery.spec.cjs scripts/excel-import-flow.spec.cjs scripts/excel-import-conflicts.spec.cjs scripts/gross-margin-flow.spec.cjs scripts/budget-pdf-smoke.spec.cjs scripts/budget-responsive.spec.cjs scripts/supplier-price-report-ui.spec.cjs scripts/supplier-session-control.spec.cjs scripts/supplier-link-suggestions-ui.spec.cjs --reporter=line --workers=1",
+    "test:smoke:offline": "playwright test scripts/smoke-offline.spec.cjs scripts/cache-persistence.spec.cjs scripts/startup-cache-gating.spec.cjs scripts/dashboard-dark-loading.spec.cjs scripts/dynamic-import-recovery.spec.cjs scripts/excel-import-flow.spec.cjs scripts/excel-import-conflicts.spec.cjs scripts/image-import-queue.spec.cjs scripts/gross-margin-flow.spec.cjs scripts/budget-pdf-smoke.spec.cjs scripts/budget-responsive.spec.cjs scripts/supplier-price-report-ui.spec.cjs scripts/supplier-session-control.spec.cjs scripts/supplier-link-suggestions-ui.spec.cjs --reporter=line --workers=1",
     "preview": "vite preview",
     "electron:dev": "concurrently -k -s first \"cross-env BROWSER=none npm run dev -- --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on tcp:127.0.0.1:5173 && cross-env ELECTRON_START_URL=http://127.0.0.1:5173 electron .\"",
     "electron:build": "vite build && dotenv -e .env -- electron-builder -w --publish always",
