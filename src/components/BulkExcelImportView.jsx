@@ -40,6 +40,10 @@ import {
   mergeExcelImportProductResult,
 } from '../utils/excelImportOperations';
 import {
+  buildExcelImportConsolidation,
+  getExcelImportProductConflicts,
+} from '../utils/excelImportProductConflicts';
+import {
   getExcelImportAliases,
   normalizeProductLinkCode,
   normalizeProductLinkText,
@@ -76,6 +80,7 @@ const EXCEL_IMPORT_EXTENSIONS = new Set(['xlsx', 'xls']);
 const EXCEL_IMPORT_RESULT_FILTERS = new Set([
   'all',
   'applicable',
+  'conflicts',
   'unassigned',
   'blocked',
   'changes',
@@ -357,6 +362,8 @@ const buildReviewRow = ({
 
 const getRowStatus = (row) => {
   if (!row.product) return { label: 'Sin asignar', tone: 'amber' };
+  if (row.applied) return { label: 'Aplicado', tone: 'green' };
+  if (row.excludedFromApply) return { label: 'Excluido', tone: 'slate' };
   if (row.reviewInvalidated) return { label: 'Revisar de nuevo', tone: 'amber' };
   const selectedCount = FIELD_KEYS.filter((field) => row.approvals[field]).length;
   if (hasBlockingErrorsForApply(row)) return { label: 'Revisar', tone: 'red' };
@@ -429,7 +436,7 @@ const hasBarcodeAssignmentChange = (row) =>
   );
 
 const isRowApplicable = (row) => canApplyExcelImportRow({
-  applied: row?.applied,
+  applied: row?.applied || row?.excludedFromApply,
   hasProduct: Boolean(row?.product),
   hasBlockingErrors: hasBlockingErrorsForApply(row),
   hasApplicableChanges: Boolean(
@@ -438,6 +445,36 @@ const isRowApplicable = (row) => canApplyExcelImportRow({
     || shouldSaveExcelLinkForRow(row)
   ),
 });
+
+const restoreConsolidationForRow = (currentRows, rowId) => {
+  const leader = currentRows.find((row) => (
+    row.consolidation?.originalRows?.some((item) => String(item.id) === String(rowId))
+  ));
+  if (!leader) return currentRows;
+  const originals = new Map(leader.consolidation.originalRows.map((item) => [String(item.id), item]));
+  return currentRows.map((row) => {
+    const original = originals.get(String(row.id));
+    if (!original) return row;
+    return {
+      ...row,
+      entry: original.entry,
+      approvals: original.approvals,
+      errors: original.errors,
+      hasChanges: original.hasChanges,
+      reviewedProductState: original.reviewedProductState,
+      reviewInvalidated: original.reviewInvalidated,
+      excludedFromApply: original.excludedFromApply,
+      consolidatedInto: null,
+      consolidation: null,
+      applied: false,
+    };
+  });
+};
+
+const restoreAllConsolidations = (currentRows) => currentRows.reduce(
+  (result, row) => row.consolidation ? restoreConsolidationForRow(result, row.id) : result,
+  currentRows,
+);
 
 const getRowErrorHints = (errors = []) =>
   errors.map((error) => {
@@ -540,6 +577,10 @@ export default function BulkExcelImportView({
   const [resultFilter, setResultFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [visibleRowLimit, setVisibleRowLimit] = useState(EXCEL_IMPORT_VISIBLE_CHUNK);
+  const jumpLimitRef = useRef(null);
+  const [pendingJumpRowId, setPendingJumpRowId] = useState('');
+  const [consolidationDraft, setConsolidationDraft] = useState(null);
+  const [consolidationError, setConsolidationError] = useState('');
   const [selectedCreateRowIds, setSelectedCreateRowIds] = useState([]);
   // el panel de crear pendientes arranca abierto: antes venia plegado y el
   // "0/4" parecia un error en vez de "ninguno tildado".
@@ -707,9 +748,13 @@ export default function BulkExcelImportView({
     });
   }, [findProductForEntry, inventory, inventoryById, isDraftHydrated]);
 
+  const lastMarginRef = useRef(marginPercent);
   useEffect(() => {
     if (!isDraftHydrated) return;
-    setRows((currentRows) => currentRows.map((row, index) => {
+    const marginChanged = lastMarginRef.current !== marginPercent;
+    lastMarginRef.current = marginPercent;
+    setRows((currentRows) => (marginChanged ? restoreAllConsolidations(currentRows) : currentRows).map((row, index) => {
+      if (!marginChanged && (row.consolidation || row.consolidatedInto)) return row;
       if (row.entry.salePriceEdited || Number(row.entry.cost || 0) <= 0) return row;
       const nextEntry = repriceExcelImportEntryForMargin(row.entry, marginPercent);
       if (nextEntry === row.entry || nextEntry.salePrice === row.entry.salePrice) return row;
@@ -745,7 +790,7 @@ export default function BulkExcelImportView({
     if (!isDraftHydrated) return;
     if (vatModeRef.current === costIncludesVat) return;
     vatModeRef.current = costIncludesVat;
-    setRows((currentRows) => currentRows.map((row, index) => {
+    setRows((currentRows) => restoreAllConsolidations(currentRows).map((row, index) => {
       const nextEntry = repriceExcelImportEntryForMultiplier(
         row.entry,
         row.entry.multiplier || 1,
@@ -942,17 +987,22 @@ export default function BulkExcelImportView({
     return errors;
   };
 
+  const productConflicts = useMemo(
+    () => getExcelImportProductConflicts(rows, isRowApplicable),
+    [rows],
+  );
+
   const summary = useMemo(() => {
     const blocked = rows.filter((row) => hasBlockingErrorsForApply(row)).length;
     const unassigned = rows.filter((row) => !row.product).length;
     const approved = rows.filter((row) => isRowApplicable(row)).length;
     const duplicates = rows.filter((row) => row.duplicateOptions && !row.duplicateResolved).length;
-    return { total: rows.length, blocked, unassigned, approved, duplicates };
-  }, [rows]);
+    return { total: rows.length, blocked, unassigned, approved, duplicates, productConflicts: productConflicts.length };
+  }, [rows, productConflicts]);
 
   const currentStep = useMemo(() => {
     if (summary.total === 0) return 1;
-    if (summary.duplicates > 0 || summary.unassigned > 0) return 2;
+    if (summary.duplicates > 0 || summary.productConflicts > 0 || summary.unassigned > 0) return 2;
     if (summary.blocked > 0) return 2;
     if (summary.approved === 0) return 3;
     return 4;
@@ -963,6 +1013,26 @@ export default function BulkExcelImportView({
       rows.filter((row) => isRowApplicable(row)),
     [rows],
   );
+
+  const conflictRowIds = useMemo(
+    () => new Set(productConflicts.flatMap((group) => group.rows.map((row) => String(row.id)))),
+    [productConflicts],
+  );
+  const conflictProductIds = useMemo(
+    () => new Set(productConflicts.map((group) => group.productId)),
+    [productConflicts],
+  );
+  const activeConsolidationConflict = consolidationDraft
+    ? productConflicts.find((group) => group.productId === consolidationDraft.productId)
+    : null;
+  const consolidationPreview = useMemo(() => {
+    if (!activeConsolidationConflict || !consolidationDraft) return null;
+    try {
+      return { plan: buildExcelImportConsolidation(activeConsolidationConflict, consolidationDraft), error: '' };
+    } catch (error) {
+      return { plan: null, error: error?.message || 'Revisá la consolidación.' };
+    }
+  }, [activeConsolidationConflict, consolidationDraft]);
 
   const creatableRows = useMemo(
     () => rows.filter((row) => !row.isAssociated && !row.product && row.duplicateResolved),
@@ -1006,19 +1076,21 @@ export default function BulkExcelImportView({
     const assignedRows = productRows.filter((row) => row.product);
     return {
       applicable: productRows.some((row) => isRowApplicable(row)),
+      conflicts: productRows.some((row) => conflictRowIds.has(String(row.id))),
       unassigned: productRows.some((row) => !row.product),
       blocked: productRows.some((row) => row.product && hasBlockingErrorsForApply(row)),
-      changes: productRows.some((row) => row.product && !row.applied && row.hasChanges),
+      changes: productRows.some((row) => row.product && !row.applied && !row.excludedFromApply && row.hasChanges),
       unchanged: assignedRows.length > 0
         && assignedRows.every((row) => !row.applied && !row.hasChanges)
         && assignedRows.length === productRows.length,
       applied: productRows.some((row) => row.applied),
     };
-  }, []);
+  }, [conflictRowIds]);
 
   const resultFilterCounts = useMemo(() => ({
     all: rowGroups.length,
     applicable: rowGroups.filter((group) => getGroupFlags(group).applicable).length,
+    conflicts: rowGroups.filter((group) => getGroupFlags(group).conflicts).length,
     unassigned: rowGroups.filter((group) => getGroupFlags(group).unassigned).length,
     blocked: rowGroups.filter((group) => getGroupFlags(group).blocked).length,
     changes: rowGroups.filter((group) => getGroupFlags(group).changes).length,
@@ -1058,6 +1130,7 @@ export default function BulkExcelImportView({
       const matchesFilter = (
         resultFilter === 'all'
         || (resultFilter === 'applicable' && flags.applicable)
+        || (resultFilter === 'conflicts' && flags.conflicts)
         || (resultFilter === 'unassigned' && flags.unassigned)
         || (resultFilter === 'blocked' && flags.blocked)
         || (resultFilter === 'changes' && flags.changes)
@@ -1076,8 +1149,27 @@ export default function BulkExcelImportView({
   );
 
   useEffect(() => {
-    setVisibleRowLimit(EXCEL_IMPORT_VISIBLE_CHUNK);
+    setVisibleRowLimit(jumpLimitRef.current || EXCEL_IMPORT_VISIBLE_CHUNK);
+    jumpLimitRef.current = null;
   }, [resultFilter, searchTerm, rows.length]);
+
+  useEffect(() => {
+    if (consolidationDraft && !activeConsolidationConflict) setConsolidationDraft(null);
+  }, [activeConsolidationConflict, consolidationDraft]);
+
+  useEffect(() => {
+    if (!pendingJumpRowId) return undefined;
+    const target = rows.find((row) => String(row.id) === String(pendingJumpRowId));
+    const sourceId = String(target?.sourceRowId || target?.id || '');
+    if (!renderedRowGroups.some((group) => String(group.primaryRow.id) === sourceId)) return undefined;
+    const animationId = window.requestAnimationFrame(() => {
+      const element = document.getElementById(`excel-import-source-${sourceId}`);
+      element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      element?.focus({ preventScroll: true });
+      setPendingJumpRowId('');
+    });
+    return () => window.cancelAnimationFrame(animationId);
+  }, [pendingJumpRowId, renderedRowGroups, rows]);
 
   const parseWorkbookRows = (sheetRows, fileFingerprint) => {
     const missing = getMissingExcelColumns(Object.keys(sheetRows[0] || {}));
@@ -1192,7 +1284,7 @@ export default function BulkExcelImportView({
 
   const replaceRowEntry = (rowId, entry, duplicateResolved = true) => {
     setRows((prev) =>
-      prev.map((row, index) => {
+      restoreConsolidationForRow(prev, rowId).map((row, index) => {
         if (row.id !== rowId) return row;
         const found = row.productCleared ? { product: null, linkedByExcelAlias: false } : findProductForEntry(entry);
         const product = found.product || row.product;
@@ -1214,6 +1306,7 @@ export default function BulkExcelImportView({
           linkedByExcelAlias: found.linkedByExcelAlias || row.linkedByExcelAlias,
           createdFromExcel: row.createdFromExcel,
           productCleared: row.productCleared,
+          excludedFromApply: row.excludedFromApply,
         };
       }),
     );
@@ -1221,7 +1314,7 @@ export default function BulkExcelImportView({
 
   const assignProductToRow = (rowId, product) => {
     setRows((prev) =>
-      prev.map((row, index) => {
+      restoreConsolidationForRow(prev, rowId).map((row, index) => {
         if (row.id !== rowId) return row;
         return {
           ...buildReviewRow({ entry: row.entry, product, duplicateOptions: row.duplicateOptions, duplicateResolved: row.duplicateResolved }, index),
@@ -1235,6 +1328,7 @@ export default function BulkExcelImportView({
           isAssociated: row.isAssociated,
           sourceRowId: row.sourceRowId,
           duplicateOptions: row.duplicateOptions,
+          excludedFromApply: false,
         };
       }),
     );
@@ -1245,7 +1339,7 @@ export default function BulkExcelImportView({
     const sourceId = targetRow?.sourceRowId || targetRow?.id;
 
     setRows((prev) =>
-      prev.map((row, index) => {
+      restoreConsolidationForRow(prev, rowId).map((row, index) => {
         if (row.id !== rowId) return row;
         return {
           ...buildReviewRow(
@@ -1268,6 +1362,7 @@ export default function BulkExcelImportView({
           sourceRowId: row.sourceRowId,
           duplicateOptions: row.duplicateOptions,
           applied: false,
+          excludedFromApply: false,
         };
       }),
     );
@@ -1275,10 +1370,12 @@ export default function BulkExcelImportView({
     if (sourceId) setActiveTarget(sourceId, rowId);
   };
 
-  const addAssociatedProductRow = (sourceRow) => {
-    const associatedId = `${sourceRow.id}-assoc-${Date.now()}`;
+  const addAssociatedProductRow = (sourceRowInput) => {
+    const associatedId = `${sourceRowInput.id}-assoc-${Date.now()}`;
     setRows((prev) => {
-      const sourceIndex = prev.findIndex((row) => row.id === sourceRow.id);
+      const restored = restoreConsolidationForRow(prev, sourceRowInput.id);
+      const sourceRow = restored.find((row) => row.id === sourceRowInput.id) || sourceRowInput;
+      const sourceIndex = restored.findIndex((row) => row.id === sourceRow.id);
       const safeMultiplier = Number(sourceRow.entry.multiplier || 0) > 0 ? Number(sourceRow.entry.multiplier) : 1;
       const pricing = calculateExcelImportUnitPricing({
         lotCost: sourceRow.entry.lotCost ?? sourceRow.entry.cost,
@@ -1324,15 +1421,15 @@ export default function BulkExcelImportView({
         assignmentQuery: '',
       };
 
-      const nextRows = [...prev];
+      const nextRows = [...restored];
       nextRows.splice(sourceIndex + 1, 0, nextRow);
       return nextRows;
     });
-    setActiveTarget(sourceRow.id, associatedId);
+    setActiveTarget(sourceRowInput.id, associatedId);
   };
 
   const removeAssociatedProductRow = (rowId) => {
-    setRows((prev) => prev.filter((row) => row.id !== rowId));
+    setRows((prev) => restoreConsolidationForRow(prev, rowId).filter((row) => row.id !== rowId));
     setActiveTargetBySource((prev) => {
       const next = { ...prev };
       Object.keys(next).forEach((sourceId) => {
@@ -1365,7 +1462,7 @@ export default function BulkExcelImportView({
       : parsedNumericValue;
     const inputKey = getEntryInputKey(field);
     setRows((prev) =>
-      prev.map((row, index) => {
+      restoreConsolidationForRow(prev, rowId).map((row, index) => {
         if (row.id !== rowId) return row;
         const nextEntry = { ...row.entry, [field]: numericValue, [inputKey]: value };
         if (field === 'quantity' && row.entry.originalQuantity == null) {
@@ -1407,6 +1504,7 @@ export default function BulkExcelImportView({
           applied: row.applied,
           reviewedProductState: getProductReviewState(row.product),
           reviewInvalidated: row.reviewInvalidated,
+          excludedFromApply: row.excludedFromApply,
         };
         return {
           ...nextRow,
@@ -1421,7 +1519,7 @@ export default function BulkExcelImportView({
 
   const toggleApproval = (rowId, field) => {
     setRows((prev) =>
-      prev.map((row) => {
+      restoreConsolidationForRow(prev, rowId).map((row) => {
         if (row.id !== rowId || !isFieldEligible(row, field) || isFieldInvalidForRow(row, field)) return row;
         return {
           ...row,
@@ -1435,7 +1533,7 @@ export default function BulkExcelImportView({
 
   const setFieldForEligibleRows = (field, value) => {
     setRows((prev) =>
-      prev.map((row) => {
+      restoreAllConsolidations(prev).map((row) => {
         if (!isFieldEligible(row, field) || isFieldInvalidForRow(row, field)) return row;
         return {
           ...row,
@@ -1448,7 +1546,7 @@ export default function BulkExcelImportView({
   };
 
   const clearApprovals = () => {
-    setRows((prev) => prev.map((row) => ({ ...row, approvals: { stock: false, cost: false, price: false } })));
+    setRows((prev) => restoreAllConsolidations(prev).map((row) => ({ ...row, approvals: { stock: false, cost: false, price: false } })));
   };
 
   const clearImport = () => {
@@ -1612,6 +1710,109 @@ export default function BulkExcelImportView({
     setActiveTargetBySource((prev) => ({ ...prev, [sourceRowId]: targetId }));
   };
 
+  const jumpToConflictRow = (row) => {
+    const sourceId = String(row.sourceRowId || row.id);
+    const index = rowGroups.findIndex((group) => String(group.primaryRow.id) === sourceId);
+    jumpLimitRef.current = Math.max(EXCEL_IMPORT_VISIBLE_CHUNK, index + 1);
+    setResultFilter('all');
+    setSearchTerm('');
+    setVisibleRowLimit(jumpLimitRef.current);
+    setActiveTarget(sourceId, row.id);
+    setPendingJumpRowId(row.id);
+  };
+
+  const toggleRowExclusion = (rowId) => {
+    setRows((prev) => {
+      const isConsolidated = prev.some((row) => row.id === rowId && (row.consolidation || row.consolidatedInto));
+      const restored = restoreConsolidationForRow(prev, rowId);
+      if (isConsolidated) return restored;
+      return restored.map((row) => row.id === rowId
+        ? { ...row, excludedFromApply: !row.excludedFromApply }
+        : row);
+    });
+  };
+
+  const openConsolidation = (conflict) => {
+    setConsolidationError('');
+    setConsolidationDraft({
+      productId: conflict.productId,
+      leaderId: conflict.rows[0].id,
+      costRowId: '',
+      priceRowId: '',
+    });
+  };
+
+  const confirmConsolidation = () => {
+    const plan = consolidationPreview?.plan;
+    if (!plan || !activeConsolidationConflict) {
+      setConsolidationError(consolidationPreview?.error || 'Revisá las opciones de la consolidación.');
+      return;
+    }
+    const originals = plan.sourceRows.map((row) => ({
+      id: row.id,
+      entry: row.entry,
+      approvals: row.approvals,
+      errors: row.errors,
+      hasChanges: row.hasChanges,
+      reviewedProductState: row.reviewedProductState,
+      reviewInvalidated: row.reviewInvalidated,
+      excludedFromApply: Boolean(row.excludedFromApply),
+    }));
+    const signatures = plan.sourceRows.map((row) => ({
+      signature: getRowImportSignature(row),
+      fileFingerprint: row.entry.fileFingerprint,
+      rowNumber: row.entry.rowNumber,
+      code: row.entry.code,
+      description: row.entry.description,
+    }));
+    setRows((prev) => prev.map((row, index) => {
+      if (!plan.sourceRows.some((source) => source.id === row.id)) return row;
+      if (row.id !== plan.leader.id) {
+        return {
+          ...row,
+          approvals: { stock: false, cost: false, price: false },
+          excludedFromApply: true,
+          consolidatedInto: plan.leader.id,
+        };
+      }
+      const entry = {
+        ...row.entry,
+        quantity: plan.stockDelta,
+        originalQuantity: plan.stockDelta,
+        quantityInput: String(plan.stockDelta),
+        multiplier: 1,
+        multiplierInput: '1',
+        quantityMissing: false,
+        cost: plan.cost.value,
+        costInput: String(plan.cost.value),
+        costEdited: true,
+        salePrice: plan.price.value,
+        salePriceInput: String(plan.price.value),
+        salePriceEdited: true,
+      };
+      const rebuilt = buildReviewRow({
+        entry,
+        product: row.product,
+        duplicateOptions: row.duplicateOptions,
+        duplicateResolved: row.duplicateResolved,
+        linkedByExcelAlias: row.linkedByExcelAlias,
+      }, index);
+      return {
+        ...row,
+        entry,
+        errors: rebuilt.errors,
+        hasChanges: rebuilt.hasChanges,
+        approvals: { stock: true, cost: plan.cost.approved, price: plan.price.approved },
+        reviewedProductState: getProductReviewState(row.product),
+        reviewInvalidated: false,
+        excludedFromApply: false,
+        consolidation: { originalRows: originals, sourceRows: signatures },
+      };
+    }));
+    setConsolidationDraft(null);
+    setConsolidationError('');
+  };
+
   const getProductCandidates = (row) => {
     const query = row.assignmentQuery.trim().toLowerCase();
     if (!query) return [];
@@ -1657,6 +1858,11 @@ export default function BulkExcelImportView({
           description: row.entry.description,
           rowNumber: row.entry.rowNumber,
         },
+        excelLinks: row.consolidation?.sourceRows?.map((source) => ({
+          code: source.code,
+          description: source.description,
+          rowNumber: source.rowNumber,
+        })) || null,
         importApplication: {
           signature: getRowImportSignature(row),
           fileFingerprint: row.entry.fileFingerprint,
@@ -1664,6 +1870,8 @@ export default function BulkExcelImportView({
           code: row.entry.code,
           description: row.entry.description,
         },
+        importApplications: row.consolidation?.sourceRows || null,
+        consolidatedRows: row.consolidation?.sourceRows?.map((source) => source.rowNumber) || null,
         approvals: row.approvals,
         quantity: getStockDelta(row.entry),
         importedQuantity: Number(row.entry.quantity || 0),
@@ -1702,10 +1910,9 @@ export default function BulkExcelImportView({
     if (isOperationBusy || !canEditInventory) return;
     const rowsToApply = targetRows.filter((row) => isRowApplicable(row));
     if (rowsToApply.length === 0 || !onApplyImport) return;
-    const productIds = rowsToApply.map((row) => String(row.product.id));
-    const duplicatedProduct = productIds.find((id, index) => productIds.indexOf(id) !== index);
-    if (duplicatedProduct) {
-      setFileError('Hay mas de una fila aprobada para el mismo producto. Resolve esa repeticion antes de aplicar.');
+    if (rowsToApply.some((row) => conflictProductIds.has(String(row.product.id)))) {
+      setResultFilter('conflicts');
+      setSearchTerm('');
       return;
     }
 
@@ -1775,8 +1982,12 @@ export default function BulkExcelImportView({
       const itemByRowId = new Map(lastApplyBatch.items.map((item) => [item.rowId, item]));
       const remainingItems = lastApplyBatch.items.filter((item) => !undoneIds.has(item.rowId));
 
-      setRows((prev) =>
-        prev.map((row) => {
+      setRows((prev) => {
+        const consolidatedIds = new Set(prev.filter((row) => row.consolidation).map((row) => String(row.id)));
+        const restoredRows = undoneIds.size > 0
+          ? [...undoneIds].reduce((current, rowId) => restoreConsolidationForRow(current, rowId), prev)
+          : prev;
+        return restoredRows.map((row) => {
           if (!undoneIds.has(row.id)) return row;
           const undoItem = itemByRowId.get(row.id);
           if (!undoItem) return row;
@@ -1796,7 +2007,7 @@ export default function BulkExcelImportView({
           return {
             ...row,
             product: restoredProduct,
-            approvals: {
+            approvals: consolidatedIds.has(String(row.id)) ? row.approvals : {
               stock: Boolean(undoItem.approvals?.stock),
               cost: Boolean(undoItem.approvals?.cost),
               price: Boolean(undoItem.approvals?.price),
@@ -1805,8 +2016,8 @@ export default function BulkExcelImportView({
             reviewInvalidated: false,
             applied: false,
           };
-        }),
-      );
+        });
+      });
       setLastApplyBatch(remainingItems.length > 0
         ? {
             ...lastApplyBatch,
@@ -1895,6 +2106,89 @@ export default function BulkExcelImportView({
               {fileError}
             </div>
           )}
+
+          {productConflicts.length > 0 && (
+            <div role="alert" className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-amber-950" data-testid="excel-product-conflicts">
+              <div className="flex items-center justify-between gap-2">
+                <p className="flex items-center gap-1.5 text-[11px] font-black">
+                  <AlertTriangle size={14} className="text-amber-700" />
+                  {productConflicts.length} producto(s) con filas por resolver
+                </p>
+                <button
+                  type="button"
+                  onClick={() => { setResultFilter('conflicts'); setSearchTerm(''); }}
+                  className="shrink-0 rounded-md border border-amber-300 bg-white px-2 py-1 text-[9px] font-black text-amber-900 hover:bg-amber-100"
+                >
+                  Ver conflictos
+                </button>
+              </div>
+              <p className="mt-1 text-[10px] leading-snug text-amber-800">Estas filas apuntan al mismo producto Rebu. Corregí la asignación, excluí una repetición o consolidá compras válidas.</p>
+              <div className="mt-2 max-h-64 space-y-2 overflow-auto pr-0.5">
+                {productConflicts.slice(0, 20).map((conflict) => (
+                  <div key={conflict.productId} className="rounded-md border border-amber-200 bg-white p-2">
+                    <p className="truncate text-[10px] font-black text-slate-900" title={conflict.product.title}>{conflict.product.title || 'Producto sin nombre'}</p>
+                    <p className="text-[9px] font-bold text-slate-500">Código Rebu: {conflict.product.barcode || 'sin código'} · ID {conflict.productId}</p>
+                    <div className="mt-1.5 space-y-1">
+                      {conflict.rows.map((conflictRow) => (
+                        <div key={conflictRow.id} className="flex items-start justify-between gap-2 border-t border-slate-100 pt-1">
+                          <div className="min-w-0">
+                            <p className="truncate text-[10px] font-bold text-slate-800" title={conflictRow.entry.description}>Fila {conflictRow.entry.rowNumber}: {conflictRow.entry.description || conflictRow.entry.code || 'Sin descripción'}</p>
+                            <p className="text-[9px] text-slate-500">{FIELD_KEYS.filter((field) => conflictRow.approvals[field]).map((field) => ({ stock: 'Stock', cost: 'Costo', price: 'Venta' })[field]).join(' · ') || 'Vínculo o código'}</p>
+                          </div>
+                          <button type="button" onClick={() => jumpToConflictRow(conflictRow)} className="shrink-0 text-[9px] font-black text-sky-700 hover:underline">Ir a fila</button>
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openConsolidation(conflict)}
+                      disabled={!canEditInventory || isOperationBusy}
+                      className="mt-2 rounded-md border border-amber-300 bg-amber-100 px-2 py-1 text-[9px] font-black text-amber-950 hover:bg-amber-200 disabled:opacity-50"
+                    >
+                      Consolidar compras
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {productConflicts.length > 20 && <p className="mt-1 text-[9px] font-bold text-amber-800">Hay {productConflicts.length - 20} producto(s) más en el filtro Conflictos.</p>}
+              {activeConsolidationConflict && (
+                <div className="mt-2 rounded-md border border-amber-300 bg-white p-2" data-testid="excel-consolidation-preview">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] font-black text-slate-900">Consolidar {activeConsolidationConflict.product.title}</p>
+                    <button type="button" onClick={() => { setConsolidationDraft(null); setConsolidationError(''); }} aria-label="Cerrar consolidación" className="text-slate-500 hover:text-slate-900"><X size={13} /></button>
+                  </div>
+                  <p className="mt-1 text-[9px] text-slate-600">Se sumará únicamente el stock marcado. Elegí qué fila conserva el código, el costo y la venta.</p>
+                  {[
+                    { key: 'leaderId', label: 'Fila principal' },
+                    { key: 'costRowId', label: 'Costo final' },
+                    { key: 'priceRowId', label: 'Venta final' },
+                  ].map(({ key, label }) => (
+                    <label key={key} className="mt-2 block text-[9px] font-black text-slate-600">
+                      {label}
+                      <select
+                        value={consolidationDraft[key]}
+                        onChange={(event) => { setConsolidationDraft((prev) => ({ ...prev, [key]: event.target.value })); setConsolidationError(''); }}
+                        className="mt-0.5 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-900 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100"
+                      >
+                        {key !== 'leaderId' && <option value="">Elegir...</option>}
+                        {key !== 'leaderId' && <option value="keep">Conservar valor actual de Rebu</option>}
+                        {activeConsolidationConflict.rows.map((row) => (
+                          <option key={row.id} value={row.id}>Fila {row.entry.rowNumber} · {key === 'costRowId' ? `$${Number(row.entry.cost || 0).toLocaleString('es-AR')}` : key === 'priceRowId' ? `$${Number(row.entry.salePrice || 0).toLocaleString('es-AR')}` : row.entry.description || row.entry.code || 'Sin descripción'}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                  <div className="mt-2 rounded-md bg-slate-50 p-2 text-[10px] font-bold text-slate-700">
+                    <p>Stock aprobado: +{activeConsolidationConflict.rows.filter((row) => row.approvals.stock).reduce((sum, row) => sum + getStockDelta(row.entry), 0).toLocaleString('es-AR')} {getStockUnit(activeConsolidationConflict.product)}</p>
+                    {consolidationPreview?.plan && <p>Final: {Number(activeConsolidationConflict.product.stock || 0).toLocaleString('es-AR')} → {(Number(activeConsolidationConflict.product.stock || 0) + consolidationPreview.plan.stockDelta).toLocaleString('es-AR')} · Costo ${consolidationPreview.plan.cost.value.toLocaleString('es-AR')} · Venta ${consolidationPreview.plan.price.value.toLocaleString('es-AR')}</p>}
+                    <p>Filas incluidas: {activeConsolidationConflict.rows.map((row) => row.entry.rowNumber).join(', ')}</p>
+                  </div>
+                  {(consolidationError || (consolidationDraft.costRowId && consolidationDraft.priceRowId && consolidationPreview?.error)) && <p role="alert" className="mt-1 text-[9px] font-bold text-red-700">{consolidationError || consolidationPreview.error}</p>}
+                  <button type="button" onClick={confirmConsolidation} disabled={!consolidationPreview?.plan || isOperationBusy || !canEditInventory} className="mt-2 w-full rounded-md bg-amber-700 px-2 py-1.5 text-[10px] font-black text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50">Confirmar consolidación</button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="border-b border-slate-200 bg-white px-3 py-3">
@@ -1904,6 +2198,8 @@ export default function BulkExcelImportView({
               <p className="mt-0.5 truncate text-[11px] font-bold text-slate-400">
                 {summary.total === 0
                   ? 'Esperando archivo'
+                  : summary.productConflicts > 0
+                    ? 'Resolver productos repetidos'
                   : summary.unassigned > 0
                     ? 'Asignar productos pendientes'
                     : summary.approved > 0
@@ -1933,6 +2229,7 @@ export default function BulkExcelImportView({
             <span className="text-slate-500"><strong className="text-slate-800">{summary.total}</strong> filas</span>
             <span className="text-sky-600"><strong>{summary.unassigned}</strong> sin asignar</span>
             <span className={summary.blocked > 0 ? 'text-red-600' : 'text-slate-400'}><strong>{summary.blocked}</strong> bloqueadas</span>
+            <span className={productConflicts.length > 0 ? 'text-amber-700' : 'text-slate-400'}><strong>{productConflicts.length}</strong> conflictos</span>
             <span className={applicableRows.length > 0 ? 'text-emerald-600' : 'text-slate-400'}><strong>{applicableRows.length}</strong> para aplicar</span>
           </div>
         </div>
@@ -2042,6 +2339,7 @@ export default function BulkExcelImportView({
               >
                 <option value="all">Todos ({resultFilterCounts.all})</option>
                 <option value="applicable">Por aplicar ({resultFilterCounts.applicable})</option>
+                <option value="conflicts">Conflictos ({resultFilterCounts.conflicts})</option>
                 <option value="unassigned">Sin asignar ({resultFilterCounts.unassigned})</option>
                 <option value="blocked">Bloqueados ({resultFilterCounts.blocked})</option>
                 <option value="changes">Con cambios ({resultFilterCounts.changes})</option>
@@ -2066,13 +2364,17 @@ export default function BulkExcelImportView({
             <AsyncActionButton
               onAction={handleApply}
               pending={isApplying}
-              disabled={applicableRows.length === 0 || isOperationBusy || !canEditInventory}
+              disabled={applicableRows.length === 0 || productConflicts.length > 0 || isOperationBusy || !canEditInventory}
+              title={productConflicts.length > 0 ? 'Resolvé los productos repetidos antes de aplicar el lote' : 'Aplicar todos los cambios seleccionados'}
               loadingLabel="Aplicando..."
               className="excel-apply-all inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-emerald-300/40 bg-emerald-500 px-3 text-[9px] font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-950/20 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-35"
             >
               {isApplying ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
               Aplicar {applicableRows.length}
             </AsyncActionButton>
+            {productConflicts.length > 0 && (
+              <button type="button" onClick={() => { setResultFilter('conflicts'); setSearchTerm(''); }} className="inline-flex h-8 items-center rounded-md border border-amber-300/60 bg-amber-400/15 px-2.5 text-[9px] font-black text-amber-100 hover:bg-amber-400/25">Ver conflictos ({productConflicts.length})</button>
+            )}
             {summary.duplicates > 0 && (
               <span className="rounded-md border border-amber-300/30 bg-amber-400/10 px-2.5 py-1 text-[10px] font-black text-amber-100">
                 {summary.duplicates} duplicado(s)
@@ -2110,6 +2412,7 @@ export default function BulkExcelImportView({
                 const status = getRowStatus(row);
                 const associatedRows = rowGroup.associatedRows;
                 const productRows = rowGroup.productRows;
+                const consolidationLeader = productRows.find((target) => target.consolidation);
                 const activeTargetId = activeTargetBySource[row.id] || 'article';
                 const activeReviewRow = activeTargetId === 'article'
                   ? null
@@ -2138,11 +2441,13 @@ export default function BulkExcelImportView({
                 return (
                   <article
                     key={row.id}
+                    id={`excel-import-source-${row.id}`}
+                    tabIndex={-1}
                     aria-current={isActiveSource ? 'true' : undefined}
                     onClick={() => {
                       setActiveSourceRowId(row.id);
                     }}
-                    className={`excel-review-row excel-review-row-${status.tone} excel-review-row-collapsed ${rowIndex % 2 === 1 ? 'excel-review-row-alternate' : ''} ${isActiveSource ? 'excel-review-row-active' : ''} ${status.tone === 'amber' ? 'excel-review-row-attention' : ''} border-l-2 px-3 py-2 transition-colors ${statusAccentClass[status.tone] || 'border-l-slate-200'}`}
+                    className={`excel-review-row excel-review-row-${status.tone} excel-review-row-collapsed ${rowIndex % 2 === 1 ? 'excel-review-row-alternate' : ''} ${isActiveSource ? 'excel-review-row-active' : ''} ${status.tone === 'amber' || productRows.some((target) => conflictRowIds.has(String(target.id))) ? 'excel-review-row-attention' : ''} border-l-2 px-3 py-2 transition-colors ${productRows.some((target) => conflictRowIds.has(String(target.id))) ? 'border-l-amber-500' : statusAccentClass[status.tone] || 'border-l-slate-200'}`}
                   >
                     <div className="excel-review-content grid grid-cols-1 2xl:grid-cols-[minmax(390px,0.92fr)_minmax(560px,1.08fr)] gap-3">
                       <div className="excel-review-left min-w-0">
@@ -2221,6 +2526,13 @@ export default function BulkExcelImportView({
                           </div>
                         )}
 
+                        {consolidationLeader && (
+                          <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5">
+                            <p className="text-[9px] font-bold text-emerald-900">Compra consolidada: filas {consolidationLeader.consolidation.sourceRows.map((source) => source.rowNumber).join(', ')} · +{getStockDelta(consolidationLeader.entry).toLocaleString('es-AR')} {getStockUnit(consolidationLeader.product)}</p>
+                            {!consolidationLeader.applied && <button type="button" onClick={() => setRows((prev) => restoreConsolidationForRow(prev, consolidationLeader.id))} className="shrink-0 text-[9px] font-black text-emerald-800 hover:underline">Deshacer unión</button>}
+                          </div>
+                        )}
+
                         <div className="excel-target-list mt-2 divide-y divide-slate-200/70 border-y border-slate-200/70">
                           {productRows.map((targetRow, targetIndex) => {
                             const hasSplitControls = productRows.length > 1;
@@ -2232,7 +2544,7 @@ export default function BulkExcelImportView({
                               ? `Rebu ${targetIndex + 1} asociado`
                               : 'Rebu 1 principal';
                             const targetSubtitle = targetRow.product
-                              ? `${targetQuantity.toLocaleString('es-AR')} compra x ${targetMultiplier.toLocaleString('es-AR')} equiv. = ${targetStockDelta.toLocaleString('es-AR')} ${targetUnit}`
+                              ? `${conflictRowIds.has(String(targetRow.id)) ? 'Conflicto · ' : ''}${targetRow.excludedFromApply ? 'Excluida · ' : ''}${targetQuantity.toLocaleString('es-AR')} compra x ${targetMultiplier.toLocaleString('es-AR')} equiv. = ${targetStockDelta.toLocaleString('es-AR')} ${targetUnit}`
                               : targetRow.isAssociated
                                 ? 'Elegí producto y cantidad para repartir'
                                 : 'Elegí producto del inventario';
@@ -2261,13 +2573,24 @@ export default function BulkExcelImportView({
                                       onChange={() => toggleChangeProductMode(targetRow.id)}
                                       onRemove={() => clearProductFromRow(targetRow.id)}
                                     />
+                                    {!targetRow.applied && (
+                                      <button
+                                        type="button"
+                                        onClick={(event) => { event.stopPropagation(); toggleRowExclusion(targetRow.id); }}
+                                        disabled={isOperationBusy || !canEditInventory}
+                                        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[8px] font-black uppercase text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                                        title={targetRow.consolidation || targetRow.consolidatedInto ? 'Deshacer consolidación para volver a revisar las filas' : targetRow.excludedFromApply ? 'Volver a incluir esta fila en la aplicación' : 'Excluir esta fila del lote sin perder la revisión'}
+                                      >
+                                        {targetRow.consolidation || targetRow.consolidatedInto ? 'Deshacer unión' : targetRow.excludedFromApply ? 'Incluir' : 'Excluir'}
+                                      </button>
+                                    )}
                                     <button
                                       type="button"
                                       onClick={(event) => {
                                         event.stopPropagation();
                                         handleApplyRows([targetRow]);
                                       }}
-                                      disabled={!isRowApplicable(targetRow) || isOperationBusy || !canEditInventory}
+                                      disabled={!isRowApplicable(targetRow) || conflictProductIds.has(String(targetRow.product.id)) || isOperationBusy || !canEditInventory}
                                       className="excel-target-apply inline-flex h-7 items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2 text-[8px] font-black uppercase tracking-wide text-emerald-800 shadow-sm shadow-emerald-950/5 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
                                       title={isRowApplicable(targetRow) ? 'Aplicar solo esta fila' : 'Marca campos o cambia el producto asignado'}
                                     >
@@ -2631,7 +2954,7 @@ export default function BulkExcelImportView({
                                           <button
                                             type="button"
                                             onClick={() => handleApplyRows([associatedRow])}
-                                            disabled={!canApplyAssociatedRow || isOperationBusy || !canEditInventory}
+                                            disabled={!canApplyAssociatedRow || conflictProductIds.has(String(associatedRow.product.id)) || isOperationBusy || !canEditInventory}
                                             className="excel-target-apply shrink-0 inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-white disabled:text-slate-400"
                                             title={canApplyAssociatedRow ? 'Aplicar solo este asociado' : 'Marca Stock, Costo o Venta para aplicar'}
                                           >

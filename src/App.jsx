@@ -13363,6 +13363,11 @@ export default function PartySupplyApp() {
     if (blockIfOfflineReadonly('importar productos desde Excel')) return { appliedRowIds: [] };
     const safeRows = Array.isArray(rowsToApply) ? rowsToApply : [];
     if (safeRows.length === 0) return { appliedRowIds: [] };
+    const productIds = safeRows.map((row) => String(row.productId));
+    if (new Set(productIds).size !== productIds.length) {
+      showNotification('error', 'Productos repetidos', 'Revisá las filas que actualizan el mismo producto antes de aplicar.');
+      return { appliedRowIds: [] };
+    }
 
     try {
       Swal.fire({
@@ -13431,18 +13436,21 @@ export default function PartySupplyApp() {
         }
         if (row.shouldAssignBarcode && row.importedCode) payload.barcode = String(row.importedCode);
 
-        if (row.shouldSaveExcelLink && row.excelLink) {
-          nextSupplierLinks = upsertExcelImportAlias(nextSupplierLinks, row.excelLink);
+        const excelLinks = Array.isArray(row.excelLinks) && row.excelLinks.length > 0
+          ? row.excelLinks
+          : row.shouldSaveExcelLink && row.excelLink ? [row.excelLink] : [];
+        excelLinks.forEach((link) => {
+          nextSupplierLinks = upsertExcelImportAlias(nextSupplierLinks, link);
           payload.supplier_links = nextSupplierLinks;
-        }
+        });
 
-        if (row.importApplication?.signature) {
-          nextSupplierLinks = recordExcelImportApplication(
-            nextSupplierLinks,
-            row.importApplication,
-          );
+        const importApplications = Array.isArray(row.importApplications) && row.importApplications.length > 0
+          ? row.importApplications
+          : row.importApplication?.signature ? [row.importApplication] : [];
+        importApplications.forEach((application) => {
+          nextSupplierLinks = recordExcelImportApplication(nextSupplierLinks, application);
           payload.supplier_links = nextSupplierLinks;
-        }
+        });
 
         if (stockDelta !== 0) {
           const lifecycle = buildStockLifecyclePayload(
@@ -13596,9 +13604,10 @@ export default function PartySupplyApp() {
           manualAssigned: update.source.manualAssigned,
           isAssociated: update.source.isAssociated,
           shouldAssignBarcode: update.source.shouldAssignBarcode,
-          excelLinkSaved: Boolean(update.source.shouldSaveExcelLink),
+          excelLinkSaved: Boolean(update.source.shouldSaveExcelLink || update.source.excelLinks?.length),
           approvals: update.source.approvals,
           importedQuantity: update.source.importedQuantity,
+          consolidatedRows: update.source.consolidatedRows || null,
           multiplier: update.source.multiplier,
           clearedBarcodeOwner: update.clearedProductBefore ? {
             id: update.clearedProductBefore.id,
@@ -13637,7 +13646,7 @@ export default function PartySupplyApp() {
               old: update.before.barcode || 'Sin codigo',
               new: update.product.barcode || 'Sin codigo',
             },
-            update.source.shouldSaveExcelLink && {
+            (update.source.shouldSaveExcelLink || update.source.excelLinks?.length > 0) && {
               field: 'Vinculo Excel',
               old: 'Sin referencia',
               new: update.source.importedCode || update.source.importedDescription || 'Referencia guardada',
