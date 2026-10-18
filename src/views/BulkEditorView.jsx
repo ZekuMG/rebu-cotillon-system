@@ -15,6 +15,7 @@ import {
   PricingFormulaTrace,
 } from '../components/pricing/PricingFormulaControls';
 import { ImageModal } from '../components/modals/SaleModals';
+import { createPortal } from 'react-dom';
 import Swal from 'sweetalert2';
 import usePendingAction from '../hooks/usePendingAction';
 import { getProductImageUrl, hasProductImage } from '../utils/productImages';
@@ -5978,8 +5979,9 @@ export default function BulkEditorView({
         </div>
       )}
 
-      {isImageImportModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/70 p-3 backdrop-blur-sm sm:p-4">
+      {/* z-90: por encima de la barra superior (.app-topbar usa 80) y debajo de los avisos (100). */}
+      {isImageImportModalOpen && createPortal(
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/70 p-3 backdrop-blur-sm sm:p-4">
           <div className="flex h-full max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-slate-300 bg-slate-100 shadow-2xl animate-in zoom-in-95 duration-150">
             <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
               <div className="min-w-0">
@@ -6143,7 +6145,7 @@ export default function BulkEditorView({
                         className="mt-1 h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[11px] font-black text-slate-700 outline-none transition-colors hover:border-emerald-300 focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         <option value="all">Todos</option>
-                        <option value="with">Solo con stock</option>
+                        <option value="with">Con stock</option>
                       </select>
                     </label>
                     <label className="block text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">
@@ -6226,7 +6228,7 @@ export default function BulkEditorView({
                     ['Pendientes', imageImportStats.pending],
                     ['Encontradas', imageImportStats.found],
                     ['Aprobadas', imageImportStats.approved],
-                    ['Por codigo', imageImportStats.foundByCode],
+                    ['Por código', imageImportStats.foundByCode],
                     ['Por nombre', imageImportStats.foundByName],
                     ['Por enlace', imageImportStats.foundByLink],
                     ['Sin foto', imageImportStats.not_found],
@@ -6234,7 +6236,7 @@ export default function BulkEditorView({
                     ['Problemas', imageImportStats.error + imageImportStats.apply_error + imageImportStats.login_required],
                   ].map(([label, value]) => (
                     <div key={label} className="rounded-lg border border-slate-200 bg-white p-2">
-                      <p className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">{label}</p>
+                      <p className="truncate whitespace-nowrap text-[9px] font-black uppercase tracking-[0.04em] text-slate-400" title={label}>{label}</p>
                       <p className="mt-1 text-lg font-black text-slate-900">{value}</p>
                     </div>
                   ))}
@@ -6553,7 +6555,8 @@ export default function BulkEditorView({
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
       <ImageModal
         isOpen={Boolean(productImagePreview)}
