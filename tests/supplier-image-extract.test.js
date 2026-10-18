@@ -16,8 +16,18 @@ const ORIGIN = 'https://cotilloncasaalberto.com.ar';
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 const PAGES = {
   '/pedido/index_restringido.php': '<h1>Buscador</h1>',
-  '/pedido/resultados.php': '<div class="caja_productos"><img class="producto_imagen" src="/imagen/producto/chica/a451.jpg" width="120" height="120"><div class="producto_txt"><a href="/pedido/detalle.php?idp=451">Antifaz veneciano dorado</a></div><span>Cod: 7790001</span></div>',
-  '/pedido/detalle.php?idp=451': '<h1>Antifaz veneciano dorado x12</h1><img src="/imagen/producto/grande/a451.jpg"><img src="/imagen/producto/grande/b451.jpg"><img src="/img/logo.png">',
+  // Alberto a veces lista el mismo producto dos veces en los resultados.
+  '/pedido/resultados.php': ['a451', 'b451'].map((image) => (
+    `<div class="caja_productos"><img class="producto_imagen" src="/imagen/producto/chica/${image}.jpg" width="120" height="120"><div class="producto_txt"><a href="/pedido/detalle.php?idp=451">Antifaz veneciano dorado</a></div><span>Cod: 7790001</span></div>`
+  )).join(''),
+  // Igual que la ficha real: el h1 es el slogan, la galeria repite cada foto en chico
+  // y afuera del bloque hay fotos de otros productos.
+  '/pedido/detalle.php?idp=451': '<h1>EL COTILLÓN MAYORISTA MÁS GRANDE DEL PAÍS</h1><img src="/img/logo.png">'
+    + '<div class="producto_contenedor_detalle"><div id="451"><section class="gallery">'
+    + '<div class="gallery__item"><img class="gallery__img" src="/imagen/producto/grande/a451.jpg?111"><label class="gallery__thumb"><img src="/imagen/producto/chica/a451.jpg"></label></div>'
+    + '<div class="gallery__item"><img class="gallery__img" src="/imagen/producto/grande/b451.jpg"><label class="gallery__thumb"><img src="/imagen/producto/chica/b451.jpg"></label></div>'
+    + '</section><div class="producto_id">Código: 7790001</div><div class="producto_txt">Antifaz veneciano dorado x12</div></div></div>'
+    + '<div class="relacionados"><img src="/imagen/producto/grande/otro999.jpg"></div>',
   '/pedido/detalle.php?idp=999': '<h1>Producto sin fotos</h1>',
 };
 
@@ -60,7 +70,8 @@ test('la búsqueda por código trae las fotos grandes de la ficha', async () => 
   assert.deepEqual(result.candidates.map((candidate) => new URL(candidate.imageUrl).pathname), [
     '/imagen/producto/grande/a451.jpg',
     '/imagen/producto/grande/b451.jpg',
-  ]);
+  ], 'solo las fotos grandes del producto: sin miniaturas repetidas ni fotos de otros productos');
+  assert.equal(result.foundTitle, 'Antifaz veneciano dorado x12', 'el nombre sale de la ficha, no del slogan del sitio');
 });
 
 test('un producto enlazado lee directo su ficha y una ficha sin fotos no devuelve foto', async () => {
@@ -73,5 +84,7 @@ test('un producto enlazado lee directo su ficha y una ficha sin fotos no devuelv
   assert.equal(linked.casaAlbertoId, '451');
   assert.equal(linked.candidates.length, 2);
   assert.equal(linked.titleSimilarity, 100);
+  assert.equal(linked.foundTitle, 'Antifaz veneciano dorado x12');
+  assert.equal(linked.supplierCode, '7790001');
   assert.notEqual(empty.status, 'found');
 });

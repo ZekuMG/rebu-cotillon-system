@@ -1764,30 +1764,52 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '', link
 
     // Solo las 3 mejores coincidencias abren su ficha, para no cargar de mas al proveedor.
     var detailFetchesLeft = 3;
+    var expandedProductIds = {};
+    var getImageKey = function (src) {
+      return normalize(src).split('?')[0].replace('/chica/', '/grande/').replace('/mediana/', '/grande/');
+    };
     var collectDetailImageCandidates = function (candidate) {
+      // Alberto a veces lista el mismo producto dos veces: su galeria ya se trajo.
+      var productKey = getSupplierProductId(candidate.productUrl) || candidate.productUrl;
+      if (productKey && expandedProductIds[productKey]) return Promise.resolve([]);
       if (!candidate.productUrl || !isSupplierDetailUrl(candidate.productUrl) || detailFetchesLeft <= 0) {
         return Promise.resolve([candidate]);
       }
       detailFetchesLeft -= 1;
+      expandedProductIds[productKey] = true;
 
       return fetch(candidate.productUrl, { credentials: 'include', cache: 'no-store' }).then(function (response) {
         if (!response.ok) throw new Error('HTTP ' + response.status);
         return response.text();
       }).then(function (html) {
         var doc = new DOMParser().parseFromString(html, 'text/html');
+        // En la ficha el h1 es el slogan del sitio: el nombre y el codigo viven en el bloque del producto.
+        var detailBlock = doc.querySelector('.producto_contenedor_detalle');
         var detailTitle = cleanText(
-          (doc.querySelector('h1, h2, .titulo, .title, [class*="nombre"], [class*="producto"]') || {}).innerText ||
+          ((detailBlock && detailBlock.querySelector('.producto_txt')) || {}).textContent ||
           candidate.title ||
           productTitle
         );
-        var detailImages = Array.prototype.slice.call(doc.images || []).map(function (detailImg) {
+        var detailCode = cleanText(((detailBlock && detailBlock.querySelector('.producto_id')) || {}).textContent || '')
+          .replace(/^c[oó]digo:?\\s*/i, '');
+        var detailImageNodes = Array.prototype.slice.call(
+          detailBlock ? detailBlock.querySelectorAll('img') : (doc.images || [])
+        );
+        var detailImageKeys = {};
+        var detailImages = detailImageNodes.filter(function (detailImg) {
+          // Las miniaturas de la galeria repiten la misma foto en chico.
+          return !(detailImg.closest && detailImg.closest('.gallery__thumb'));
+        }).map(function (detailImg) {
           return normalizeSupplierHref(detailImg.currentSrc || detailImg.src || detailImg.getAttribute('src') || '');
         }).filter(function (src) {
           var srcLower = normalize(src);
+          var imageKey = getImageKey(src);
+          if (detailImageKeys[imageKey]) return false;
+          detailImageKeys[imageKey] = true;
           return (
             src &&
             src.includes('cotilloncasaalberto.com.ar') &&
-            !seenSources['detail:' + src] &&
+            !seenSources['detail:' + imageKey] &&
             !srcLower.includes('logo') &&
             !srcLower.includes('banner') &&
             !srcLower.includes('sprite') &&
@@ -1804,13 +1826,13 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '', link
           ? Math.round((titleTokens.filter(function (token) { return tokenMatchesText(token, detailTitleText); }).length / titleTokens.length) * 100)
           : candidate.titleSimilarity;
         return detailImages.map(function (src, index) {
-          seenSources['detail:' + src] = true;
+          seenSources['detail:' + getImageKey(src)] = true;
           return {
             src: src,
             productUrl: candidate.productUrl,
             casaAlbertoId: candidate.casaAlbertoId || getSupplierProductId(candidate.productUrl),
             title: detailTitle || candidate.title,
-            supplierCode: candidate.supplierCode || '',
+            supplierCode: candidate.supplierCode || detailCode || '',
             width: candidate.width,
             height: candidate.height,
             score: candidate.score + Math.max(0, 20 - index),
@@ -1856,11 +1878,15 @@ const buildSupplierExtractScript = (barcode, productTitle, searchMode = '', link
       });
     };
 
+    var hydratedImageKeys = {};
     return matchedCandidates.reduce(function (chain, candidate) {
       return chain.then(function (hydratedCandidates) {
         return collectDetailImageCandidates(candidate).then(function (expandedCandidates) {
           return expandedCandidates.reduce(function (imageChain, expandedCandidate) {
             return imageChain.then(function () {
+              var imageKey = getImageKey(expandedCandidate.src);
+              if (!expandedCandidate.src || hydratedImageKeys[imageKey]) return null;
+              hydratedImageKeys[imageKey] = true;
               return hydrateCandidate(expandedCandidate).then(function (hydrated) {
                 hydratedCandidates.push(hydrated);
               }).catch(function (imageError) {
