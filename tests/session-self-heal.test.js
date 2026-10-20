@@ -8,6 +8,7 @@ import {
   esErrorDeDesfaseDeReloj,
   esLecturaPublica,
   esPedidoDeAuth,
+  esRenovacionAuth,
 } from '../src/supabase/sessionSelfHeal.js';
 
 const ANON = 'anon-key';
@@ -128,6 +129,26 @@ test('no toca los endpoints de Auth ni los pedidos que ya eran anónimos', async
   })).status, 200);
   assert.equal(renovaciones, 0);
   assert.equal(llamadas.length, 2);
+});
+
+test('un 500 o 429 temporal de renovación se clasifica como reintentable por Auth', async () => {
+  for (const status of [500, 429]) {
+    const { envuelto, diagnosticos } = armar({
+      respuestas: [new Response('error temporal', { status })],
+    });
+    const respuesta = await envuelto(
+      'https://x.supabase.co/auth/v1/token?grant_type=refresh_token',
+      conToken('POST'),
+    );
+    assert.equal(respuesta.status, 503);
+    assert.equal(diagnosticos[0].estado, status);
+  }
+  const { envuelto } = armar({ respuestas: [new Response('clave incorrecta', { status: 500 })] });
+  assert.equal((await envuelto(
+    'https://x.supabase.co/auth/v1/token?grant_type=password', conToken('POST'),
+  )).status, 500);
+  assert.equal(esRenovacionAuth('https://x.supabase.co/auth/v1/token?grant_type=refresh_token', 'POST'), true);
+  assert.equal(esRenovacionAuth('https://x.supabase.co/auth/v1/token?grant_type=password', 'POST'), false);
 });
 
 test('el desfase de reloj no renueva ni descarta la sesión', async () => {

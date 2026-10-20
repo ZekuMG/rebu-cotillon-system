@@ -18,6 +18,17 @@ const rutaDe = (entrada) => {
 };
 
 export const esPedidoDeAuth = (entrada) => rutaDe(entrada).startsWith(RUTA_DE_AUTH);
+export const esRenovacionAuth = (entrada, metodo) => {
+  if (String(metodo || 'GET').toUpperCase() !== 'POST' || rutaDe(entrada) !== '/auth/v1/token') {
+    return false;
+  }
+  try {
+    const url = typeof entrada === 'string' ? entrada : entrada?.url || '';
+    return new URL(url, 'http://local').searchParams.get('grant_type') === 'refresh_token';
+  } catch {
+    return false;
+  }
+};
 export const esLecturaPublica = (entrada, metodo) =>
   METODOS_REINTENTABLES.has(String(metodo || 'GET').toUpperCase()) &&
   RUTAS_PUBLICAS.has(rutaDe(entrada));
@@ -95,13 +106,25 @@ export const crearFetchAutoreparable = ({
 
   return async (entrada, init = {}) => {
     const respuesta = await fetchOriginal(entrada, init);
-    if (respuesta.status !== 401 || esPedidoDeAuth(entrada)) return respuesta;
+    const metodo = String(init?.method || 'GET').toUpperCase();
+    if (esPedidoDeAuth(entrada)) {
+      // auth-js conserva el refresh token ante 502/503/504, pero lo borra
+      // ante 500/429. Esos dos estados tambien pueden ser transitorios.
+      if (esRenovacionAuth(entrada, metodo) && [429, 500].includes(respuesta.status)) {
+        registrarDiagnostico({ url: rutaDe(entrada), metodo, estado: respuesta.status });
+        return new Response('{"message":"La renovación de Auth está temporalmente ocupada"}', {
+          status: 503,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return respuesta;
+    }
+    if (respuesta.status !== 401) return respuesta;
 
     const cabeceras = new Headers(init?.headers || {});
     const portador = (cabeceras.get('Authorization') || '').replace(/^Bearer\s+/i, '');
     if (!portador || portador === anonKey) return respuesta;
 
-    const metodo = String(init?.method || 'GET').toUpperCase();
     const detalle = await describirRechazo(respuesta, { url: entrada, metodo });
     registrarDiagnostico(detalle);
     if (esErrorDeDesfaseDeReloj(`${detalle.code} ${detalle.message} ${detalle.wwwAuthenticate}`)) {
