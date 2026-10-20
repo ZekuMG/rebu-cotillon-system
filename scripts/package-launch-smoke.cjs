@@ -2,6 +2,7 @@ const { _electron: electron } = require('playwright');
 const { join, resolve } = require('node:path');
 const { mkdtempSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
+const { version: expectedVersion } = require('../package.json');
 
 const executablePath = resolve(
   __dirname,
@@ -14,7 +15,7 @@ const screenshotPath = resolve(
   __dirname,
   '..',
   'test-results',
-  'package-launch-1.2.35.png',
+  `package-launch-${expectedVersion}.png`,
 );
 
 (async () => {
@@ -32,7 +33,7 @@ const screenshotPath = resolve(
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(2500);
     const rendererText = (await page.locator('body').innerText()).trim();
-    if (version !== '1.2.35') throw new Error(`Versión empaquetada inesperada: ${version}`);
+    if (version !== expectedVersion) throw new Error(`Versión empaquetada inesperada: ${version}`);
     if (!page.url().includes('app.asar') || !rendererText) {
       throw new Error(`El renderer empaquetado no inició correctamente: ${page.url()}`);
     }
