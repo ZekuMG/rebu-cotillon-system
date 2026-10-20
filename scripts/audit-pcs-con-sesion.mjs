@@ -2,7 +2,7 @@
 //
 // Cada inicio de sesion deja en la bitacora un campo `supabaseAuth.signedIn`.
 // Con eso se comprueba que una maquina uso Auth en su ultimo ingreso. NO se
-// registra la version exacta: hay que confirmar 1.2.54 en cada caja activa
+// registra la version exacta: hay que confirmar la version vigente en cada caja activa
 // antes de cerrar los permisos de `anon` sobre las tablas de punto de venta.
 //
 //   node scripts/audit-pcs-con-sesion.mjs [dias]

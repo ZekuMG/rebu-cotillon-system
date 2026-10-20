@@ -49,3 +49,9 @@ export const getExpectedAuthUserId = (user, sessionMeta) =>
   user?.auth_user_id ||
   sessionMeta?.supabaseAuth?.authUserId ||
   null;
+
+export const decideSecureCloudWrite = ({ assessment, offline = false } = {}) => {
+  if (offline || assessment?.status === SECURE_SESSION_STATUS.ERROR) return 'wait';
+  if (assessment?.isUsable) return 'allow';
+  return 'reauth';
+};

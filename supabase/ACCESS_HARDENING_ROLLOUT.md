@@ -4,11 +4,11 @@
 
 - `20261020010138_harden_user_identity_and_permissions.sql` está aplicada en producción. La prueba de alta/cambio de clave se ejecutó en una transacción revertida; luego se verificaron los privilegios reales.
 - `20261020020000_cerrar_anon_sobre_las_tablas_de_la_caja.sql` está preparada y **no está aplicada**. Su verificador la ejecutó en la base real con `ROLLBACK` y comprobó RLS, permisos de vendedor, escritura de logs, bloqueo de puntos directos y ajuste autorizado por RPC.
-- El instalador publicado 1.2.53 todavía usa escrituras directas en la caja. Activar la segunda migración antes de distribuir esta versión corregida impediría cobrar en esas PCs.
+- Los instaladores 1.2.53 y anteriores todavía usan escrituras directas en la caja. La 1.2.54 exige Auth, pero puede cerrar sesión ante un error transitorio al renovarla. Distribuir 1.2.55 antes del corte RLS.
 
 ## Secuencia de despliegue
 
-1. Publicar la versión 1.2.54 de la app. No reutilizar 1.2.53.
+1. Publicar la versión 1.2.55 de la app. No reutilizar 1.2.53 ni instalar 1.2.54.
 2. Instalarla en **todas** las cajas y comprobar ingreso de cada operador, venta de prueba controlada, apertura/cierre manual y cierre automático cuando corresponda.
 3. Ejecutar `npm run audit:pcs -- 30` desde el proyecto con acceso a la base. El script confirma que las PCs vistas abrieron sesión Auth; contrastar con el inventario real de equipos, ya que una PC sin actividad no aparece en el registro.
 4. Volver a ejecutar `scripts/verify-security-migration.mjs` con el SQL y su contingencia. El verificador revierte todo.

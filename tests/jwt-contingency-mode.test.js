@@ -7,7 +7,7 @@ import path from 'node:path';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const readSource = (relativePath) => readFileSync(path.join(root, relativePath), 'utf8');
 
-test('el cliente no abre ni renueva una sesion JWT cuando Auth esta apagado', () => {
+test('el cliente renueva Auth y persiste la sesión solo si se configuró', () => {
   const source = readSource('src/supabase/client.js');
   assert.match(source, /autoRefreshToken:\s*enableAuthSession/);
   assert.match(source, /persistSession:\s*persistAuthenticatedSession/);
@@ -15,7 +15,7 @@ test('el cliente no abre ni renueva una sesion JWT cuando Auth esta apagado', ()
   assert.match(source, /window\.localStorage\.removeItem\(key\)/);
 });
 
-test('el login solo abre Supabase Auth si se pide para la bandeja de WhatsApp', () => {
+test('el login de Rebu abre Supabase Auth antes de usar la nube', () => {
   const source = readSource('src/App.jsx');
   assert.match(
     source,
@@ -38,5 +38,6 @@ test('el cliente Supabase engancha la red de seguridad de sesion', () => {
   const source = readSource('src/supabase/client.js');
   assert.match(source, /crearFetchAutoreparable/);
   assert.match(source, /fetch: fetchConSesionAutoreparable/);
-  assert.ok(source.includes("signOut({ scope: 'local' })"));
+  assert.match(source, /renovarSesion: async \(\) =>/);
+  assert.doesNotMatch(source, /auth\.signOut/);
 });

@@ -171,6 +171,7 @@ import { readDiagnosticErrors, recordDiagnosticError } from './utils/diagnostics
 import { describeCloudSourceFailures, formatCloudConnectionReport } from './utils/cloudConnectionDiagnostics';
 import {
   assessSecureSession,
+  decideSecureCloudWrite,
   getExpectedAuthUserId,
   SECURE_SESSION_STATUS,
 } from './utils/secureSession';
@@ -753,7 +754,7 @@ const isRecoverableCloudError = (error) => {
 
   return (
     isBrowserOffline() ||
-    /timeout|tiempo de espera|failed to fetch|network|load failed|abort|402|egress|quota|restricted/i.test(errorText)
+    /timeout|tiempo de espera|failed to fetch|network|load failed|abort|authretryablefetcherror|connection|500|502|503|504|402|egress|quota|restricted/i.test(errorText)
   );
 };
 
@@ -6113,11 +6114,13 @@ export default function PartySupplyApp() {
           rememberedUser,
           rememberedSession.sessionMeta,
         );
-        if (!expectedAuthUserId || isBrowserOffline()) {
+        if (!expectedAuthUserId) {
           clearRememberedSession();
           return;
         }
+        if (isBrowserOffline()) return;
         const { data, error } = await supabase.auth.getUser();
+        if (error && isRecoverableCloudError(error)) return;
         if (error || String(data?.user?.id || '') !== String(expectedAuthUserId)) {
           clearRememberedSession();
           await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
@@ -6148,6 +6151,7 @@ export default function PartySupplyApp() {
     };
 
     void restoreRememberedSession().catch((error) => {
+      if (isRecoverableCloudError(error)) return;
       clearRememberedSession();
       console.warn('No se pudo restaurar la sesión recordada de Supabase:', error);
       setLoginError('No se pudo validar la sesión recordada. Ingresá nuevamente.');
@@ -6562,22 +6566,13 @@ export default function PartySupplyApp() {
       try {
         const { data, error } = await supabase.auth.refreshSession();
 
-        // Un JWT guardado invalido no se puede renovar: no hay reintento posible
-        // porque el refresh token viaja en el mismo paquete. Lo unico util es
-        // descartarlo para que el proximo ingreso arranque limpio.
         if (error) {
-          console.error(
-            '[REBU][auth] se descarta la sesion: no se pudo renovar',
+          console.warn(
+            '[REBU][auth] no se pudo renovar la sesion; se conserva para reintentar',
             recordDiagnosticError('auth:refresh', error, {
               tokenPersistidoInvalido: isPersistedSupabaseJwtError(error),
             }),
           );
-          // Se descarta SIEMPRE, no solo ante errores de JWT. Un token que no
-          // se puede renovar viaja igual en el header de cada pedido y hace que
-          // Supabase conteste 401 a TODO, incluso a las lecturas que el rol
-          // anonimo tiene permitidas. Sin sesion la app funciona; con una
-          // sesion rota, no.
-          await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
         }
 
         const assessment = assessSecureSession({
@@ -7023,6 +7018,10 @@ export default function PartySupplyApp() {
 
   const requireSecureSessionForCloudWrite = async () => {
     if (isLocalDemoMode()) return true;
+    if (isBrowserOffline()) {
+      showNotification('warning', 'Sin conexión', 'Conservamos tu sesión y el carrito. Reintentá cuando vuelva internet.');
+      return false;
+    }
     if (!ENABLE_LOGIN_AUTH_SESSION) {
       showNotification('error', 'Rebu necesita actualizarse', 'Esta instalación no habilita sesiones de Supabase Auth.');
       return false;
@@ -7035,7 +7034,17 @@ export default function PartySupplyApp() {
     const assessment = expectedAuthUserId
       ? await recoverSecureSessionForCheckout()
       : { isUsable: false };
-    if (assessment.isUsable) return true;
+    const decision = decideSecureCloudWrite({ assessment, offline: isBrowserOffline() });
+    if (decision === 'allow') return true;
+
+    if (decision === 'wait') {
+      showNotification(
+        'warning',
+        'Conexión interrumpida',
+        'No se confirmó la operación. Conservamos tu sesión y el carrito; reintentá cuando vuelva la conexión.',
+      );
+      return false;
+    }
 
     clearAuthenticatedState({
       preserveCart: true,
