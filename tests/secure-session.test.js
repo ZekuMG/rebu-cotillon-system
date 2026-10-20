@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import {
   assessSecureSession,
+  decideSecureCloudWrite,
   getExpectedAuthUserId,
   SECURE_SESSION_STATUS,
 } from '../src/utils/secureSession.js';
@@ -42,6 +43,25 @@ test('uses remembered Supabase auth metadata when the public user lacks auth fie
     ),
     'auth-user-1',
   );
+});
+
+test('una interrupción temporal espera sin cerrar la sesión; una identidad ausente pide ingreso', () => {
+  assert.equal(decideSecureCloudWrite({
+    assessment: assessSecureSession({ error: new Error('Failed to fetch') }),
+  }), 'wait');
+  assert.equal(decideSecureCloudWrite({
+    assessment: assessSecureSession({ session: { access_token: 'token', user: { id: 'u1' } } }),
+    offline: true,
+  }), 'wait');
+  assert.equal(decideSecureCloudWrite({
+    assessment: assessSecureSession({ session: null }),
+  }), 'reauth');
+  assert.equal(decideSecureCloudWrite({
+    assessment: assessSecureSession({
+      session: { access_token: 'token', user: { id: 'u2' } },
+      expectedAuthUserId: 'u1',
+    }),
+  }), 'reauth');
 });
 
 test('session synchronization is event-driven and does not poll', () => {

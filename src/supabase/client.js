@@ -60,15 +60,20 @@ let clienteSupabase = null
 const fetchConSesionAutoreparable = crearFetchAutoreparable({
   fetchOriginal: (entrada, init) => fetch(entrada, init),
   anonKey: supabaseKey,
-  // Se resuelve tarde a proposito: el cliente todavia no existe cuando se
-  // construye este envoltorio.
-  descartarSesion: async () => {
+  // El SDK conserva el refresh token ante errores de red. Un 401 aislado
+  // intenta renovarlo; nunca cierra por si solo la sesion del operador.
+  renovarSesion: async () => {
     if (!clienteSupabase) throw new Error('cliente Supabase todavia no construido')
-    await clienteSupabase.auth.signOut({ scope: 'local' })
+    const { data, error } = await clienteSupabase.auth.refreshSession()
+    if (error) {
+      recordDiagnosticError('auth:refresh-after-401', error)
+      return null
+    }
+    return data?.session?.access_token || null
   },
   registrarDiagnostico: (detalle) => recordDiagnosticError('supabase:401', detalle, detalle),
   avisar: (detalle) => console.warn(
-    '[REBU][auth] Supabase rechazo el token de la sesion; se descarta',
+    '[REBU][auth] Supabase rechazo el token de la sesion; se intenta renovar',
     detalle,
   ),
 })
