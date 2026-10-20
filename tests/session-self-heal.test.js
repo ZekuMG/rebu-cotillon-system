@@ -5,6 +5,7 @@ import {
   crearFetchAutoreparable,
   describirRechazo,
   esErrorDeDesfaseDeReloj,
+  esLecturaPublica,
   esPedidoDeAuth,
 } from '../src/supabase/sessionSelfHeal.js';
 
@@ -46,13 +47,22 @@ const conToken = (metodo = 'GET') => ({
   headers: { Authorization: `Bearer ${TOKEN}`, apikey: ANON },
 });
 
-test('una lectura rechazada se reintenta como anonima y devuelve 200', async () => {
+test('una lectura publica rechazada se reintenta como anonima y devuelve 200', async () => {
   const { envuelto, llamadas } = armar({ respuestas: [respuesta401(), respuestaOk()] });
 
   const r = await envuelto('https://x.supabase.co/rest/v1/products', conToken('GET'));
 
   assert.equal(r.status, 200);
   assert.equal(llamadas.length, 2, 'deberia reintentar exactamente una vez');
+});
+
+test('una lectura privada rechazada exige reingreso y no se reintenta como anonima', async () => {
+  const { envuelto, llamadas } = armar({ respuestas: [respuesta401(), respuestaOk()] });
+
+  const r = await envuelto('https://x.supabase.co/rest/v1/sales', conToken('GET'));
+
+  assert.equal(r.status, 401);
+  assert.equal(llamadas.length, 1);
 });
 
 test('NUNCA reintenta una escritura: una venta no se puede duplicar', async () => {
@@ -97,7 +107,7 @@ test('repara TODOS los pedidos concurrentes, no solo el primero', async () => {
   });
 
   const resultados = await Promise.all(
-    ['a', 'b', 'c', 'd'].map((n) => envuelto(`https://x.supabase.co/rest/v1/${n}`, conToken('GET'))),
+    ['a', 'b', 'c', 'd'].map((n) => envuelto(`https://x.supabase.co/rest/v1/products?request=${n}`, conToken('GET'))),
   );
 
   assert.deepEqual(resultados.map((r) => r.status), [200, 200, 200, 200], 'los 4 deberian repararse');
@@ -195,6 +205,13 @@ test('distingue un endpoint de Auth por su ruta, no por substring', () => {
   assert.equal(esPedidoDeAuth('https://x.supabase.co/rest/v1/products'), false);
   // Un archivo de Storage con ese nombre no debe confundirse con Auth.
   assert.equal(esPedidoDeAuth('https://x.supabase.co/storage/v1/object/pub/auth/v1/logo.png'), false);
+});
+
+test('solo productos y directorio publico permiten recuperacion anonima', () => {
+  assert.equal(esLecturaPublica('https://x.supabase.co/rest/v1/products?select=id', 'GET'), true);
+  assert.equal(esLecturaPublica('https://x.supabase.co/rest/v1/app_users_public', 'HEAD'), true);
+  assert.equal(esLecturaPublica('https://x.supabase.co/rest/v1/sales', 'GET'), false);
+  assert.equal(esLecturaPublica('https://x.supabase.co/rest/v1/products', 'POST'), false);
 });
 
 test('describirRechazo no consume la respuesta original', async () => {

@@ -1,19 +1,14 @@
 // Red de seguridad contra un token de sesion rechazado.
 //
-// EL PROBLEMA. PostgREST le da prioridad a la cabecera `Authorization` por
-// encima de la apikey. Si Supabase rechaza el token de la sesion, la respuesta
-// pasa a ser 401 en TODO: hasta en lecturas que el rol anonimo tiene
-// permitidas. La app queda inutilizable con una sesion rota, cuando SIN sesion
-// funcionaria perfecto. Paso el 26-ago-2026: una ventana no podia ni leer
-// productos mientras otra, abierta al mismo tiempo, andaba bien.
+// PostgREST prioriza Authorization sobre la apikey. Un token rechazado deja
+// inaccesibles incluso las lecturas publicas necesarias para volver a entrar.
 //
 // LA CURA. Ante ese 401 se descarta la sesion local, y el pedido se reintenta
 // una vez como anonimo. Con varios cuidados aprendidos de la auditoria:
 //
-//   * SOLO se reintentan GET/HEAD. Reintentar un POST podria registrar la
-//     misma venta dos veces, o cobrar dos veces una llamada de IA. En las
-//     escrituras se descarta la sesion igual (para que el proximo pedido salga
-//     limpio) pero NO se repite el pedido.
+//   * SOLO se reintentan GET/HEAD de productos y el directorio publico de
+//     usuarios. Las lecturas privadas y las escrituras conservan el 401 para
+//     que Rebu pida reingreso. Reintentar un POST podria duplicar una venta.
 //   * El descarte es una promesa compartida, no un booleano. Al arrancar, la
 //     app dispara muchas consultas en paralelo: con un booleano se reparaba
 //     UNA sola y el resto le llegaba rota a la pantalla igual.
@@ -29,6 +24,7 @@
 
 const METODOS_REINTENTABLES = new Set(['GET', 'HEAD']);
 const RUTA_DE_AUTH = '/auth/v1/';
+const RUTAS_PUBLICAS = new Set(['/rest/v1/products', '/rest/v1/app_users_public']);
 
 export const esErrorDeDesfaseDeReloj = (texto) =>
   /jwt.*issued.*future|issued at future|issuedatfuture|not before/i.test(String(texto || ''));
@@ -43,6 +39,9 @@ const rutaDe = (entrada) => {
 };
 
 export const esPedidoDeAuth = (entrada) => rutaDe(entrada).startsWith(RUTA_DE_AUTH);
+export const esLecturaPublica = (entrada, metodo) =>
+  METODOS_REINTENTABLES.has(String(metodo || 'GET').toUpperCase()) &&
+  RUTAS_PUBLICAS.has(rutaDe(entrada));
 
 // El motivo del rechazo vive repartido entre cabeceras y cuerpo. Se lee sobre
 // un clon para no consumir la respuesta que despues se devuelve.
@@ -134,9 +133,9 @@ export const crearFetchAutoreparable = ({
     avisar(detalle);
     const seDescarto = await descartarUnaSolaVez();
 
-    // Reintentar una escritura podria duplicar una venta o una llamada paga.
-    // La sesion ya quedo descartada, asi que el proximo pedido sale limpio.
-    if (!METODOS_REINTENTABLES.has(metodo)) return respuesta;
+    // Una lectura privada no debe degradarse a anon. Al descartar la sesion,
+    // App pide reingreso y conserva el carrito sin confirmar operaciones.
+    if (!esLecturaPublica(entrada, metodo)) return respuesta;
     if (!seDescarto) return respuesta;
 
     cabeceras.set('Authorization', `Bearer ${anonKey}`);

@@ -5,7 +5,7 @@ import { crearFetchAutoreparable } from './sessionSelfHeal'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
-const enableAuthSession = import.meta.env.VITE_REBU_WHATSAPP_AUTH_SESSION === '1'
+const enableAuthSession = true
 const persistAuthenticatedSession =
   enableAuthSession && import.meta.env.VITE_REBU_PERSIST_AUTH_SESSION === '1'
 const realtimeHeartbeatListeners = new Set()

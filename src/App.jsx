@@ -143,14 +143,13 @@ import {
   normalizeInstagramHandle,
 } from './utils/socialConnections';
 import {
-  bootstrapAppUsers,
+  activateAppUserPermissionsAfterLogin,
   buildLegacyBootstrapSeed,
   buildLegacyUsers,
   buildUserCatalog,
   fetchAppUsersPrivate,
   createAppUser,
   fetchAppUsersPublic,
-  hasUnsafeLegacyBootstrapPasswords,
   hasOwnerAccess,
   isUnsafeLegacyPassword,
   normalizeMetricsViewMode,
@@ -163,7 +162,6 @@ import {
 } from './utils/appUsers';
 import {
   getAppUserDirectoryLoadErrorMessage,
-  isMissingSharedUsersSchemaError,
   mergeAppUserDirectories,
   resolveLoginUsers,
   shouldLoadPrivateAppUserDirectory,
@@ -357,19 +355,10 @@ const CLOUD_FETCH_BATCH_SIZE = 200;
 const CLOUD_CORE_FETCH_BATCH_SIZE = 1000;
 const CLOUD_RECENT_SYNC_LIMIT = 250;
 const CLOUD_RECENT_TRANSACTION_OVERLAP_LIMIT = 80;
-const ENABLE_TRANSACTION_RPCS =
-  import.meta.env.VITE_REBU_ENABLE_TRANSACTION_RPC === '1'
-  || (
-    import.meta.env.VITE_REBU_ENABLE_TRANSACTION_RPC === undefined
-    && import.meta.env.VITE_REBU_ENABLE_AUTH_RPC === '1'
-  );
+const ENABLE_TRANSACTION_RPCS = true;
 
-// Abrir sesion de Supabase Auth al ingresar dejo de ser gratis: medido, la
-// misma consulta responde 200 como anon y 401 con sesion. Y desde que anon
-// tiene acceso completo, la sesion no habilita nada mas: la unica que la
-// necesita es la bandeja de WhatsApp, para que el bot valide al operador.
-const ENABLE_LOGIN_AUTH_SESSION =
-  import.meta.env.VITE_REBU_WHATSAPP_AUTH_SESSION === '1';
+// La base aplica permisos usando el JWT de cada operador.
+const ENABLE_LOGIN_AUTH_SESSION = true;
 
 const createTransactionRpcRequiredError = (operationLabel, error = null) => {
   const details = [
@@ -378,9 +367,7 @@ const createTransactionRpcRequiredError = (operationLabel, error = null) => {
     error?.hint,
     error?.code,
   ].filter(Boolean).join(' ');
-  const configHint = ENABLE_TRANSACTION_RPCS
-    ? 'Verifica que el rol anon tenga permiso EXECUTE sobre las RPC transaccionales de la version sin JWT.'
-    : 'Activa VITE_REBU_ENABLE_TRANSACTION_RPC=1 y aplica las migraciones de venta sin JWT.';
+  const configHint = 'Verificá que la sesión del operador pueda ejecutar la RPC transaccional.';
   const message = [
     `Operacion bloqueada: ${operationLabel} requiere RPC transaccional.`,
     'No se uso el fallback anterior porque podia dejar ventas, items, stock o puntos guardados a medias.',
@@ -405,7 +392,7 @@ const prepareUserAvatarForCloud = async (avatar, userId) => {
 
 const getSupabaseAuthLoginRequiredMessage = (authMeta = {}) => {
   if (authMeta.reason === 'missing-auth-email') {
-    return 'Este usuario no esta vinculado a Supabase Auth. Vinculalo con auth_email/auth_user_id o mantene VITE_REBU_WHATSAPP_AUTH_SESSION=0 mientras se usa el modo sin JWT.';
+    return 'Este usuario no está vinculado a Supabase Auth. Hay que reparar su cuenta antes de operar.';
   }
 
   if (authMeta.reason === 'auth-login-failed') {
@@ -421,10 +408,6 @@ const getSupabaseAuthLoginRequiredMessage = (authMeta = {}) => {
   return 'La sesion segura de Supabase Auth no esta activa. Ingresa nuevamente con la clave del usuario antes de cobrar.';
 };
 
-// Las RPC transaccionales tienen permiso para `anon` desde la migracion
-// 20260826220000_venta_sin_sesion_auth.sql: ninguna usa auth.uid() ni exige
-// sesion adentro. Cobrar dejo de depender de que la sesion de Supabase Auth
-// este viva, que era lo que trababa la caja y obligaba a pedir la clave.
 const canUseTransactionRpcs = async () => ENABLE_TRANSACTION_RPCS;
 const SNAPSHOT_STORAGE_SOFT_LIMIT = 1_500_000;
 const SNAPSHOT_COMPACT_LIMITS = {
@@ -722,7 +705,7 @@ const verifyCloudConnection = async () => {
   }
 
   const { error } = await withTimeout(
-    supabase.from('register_state').select('id').eq('id', 1).limit(1),
+    supabase.from('products').select('id').limit(1),
     CLOUD_RECONNECT_TIMEOUT_MS,
     'Reconexión'
   );
@@ -3682,19 +3665,6 @@ export default function PartySupplyApp() {
           'Carga de usuarios',
         );
 
-        if (users.length === 0) {
-          const seed = buildLegacyBootstrapSeed(USERS, userSettings);
-          if (hasUnsafeLegacyBootstrapPasswords(seed)) {
-            throw new Error('Bootstrap de usuarios bloqueado: las claves legacy por defecto 1234/4321 no se permiten en nube.');
-          }
-          await withTimeout(bootstrapAppUsers(seed), APP_USERS_BOOT_TIMEOUT_MS, 'Inicializacion de usuarios');
-          users = await withTimeout(
-            readUsers(),
-            APP_USERS_BOOT_TIMEOUT_MS,
-            'Recarga de usuarios',
-          );
-        }
-
         if (users.length > 0) {
           sharedUsersCache.recoverableRetryCount = 0;
           if (sharedUsersCache.retryTimer) {
@@ -3742,18 +3712,6 @@ export default function PartySupplyApp() {
             scope: canServeSharedUsersScope(inMemoryRequestedScope, requestedScope)
               ? inMemoryRequestedScope
               : 'active',
-            loadError: '',
-          };
-        }
-
-        const isMissingSharedUsersSchema = isMissingSharedUsersSchemaError(error);
-
-        if (isMissingSharedUsersSchema) {
-          console.warn('No existe todavía el schema compartido de usuarios. Seguimos con el login legacy.');
-          return {
-            users: buildLegacyUsers(USERS, userSettings),
-            authMode: 'legacy',
-            scope: 'active',
             loadError: '',
           };
         }
@@ -6148,6 +6106,25 @@ export default function PartySupplyApp() {
         return;
       }
 
+      if (authMode === 'supabase' && !isLocalDemoMode()) {
+        // El usuario recordado no es prueba de identidad. Solo restauramos la
+        // pantalla cuando Auth confirma al mismo operador en este equipo.
+        const expectedAuthUserId = getExpectedAuthUserId(
+          rememberedUser,
+          rememberedSession.sessionMeta,
+        );
+        if (!expectedAuthUserId || isBrowserOffline()) {
+          clearRememberedSession();
+          return;
+        }
+        const { data, error } = await supabase.auth.getUser();
+        if (error || String(data?.user?.id || '') !== String(expectedAuthUserId)) {
+          clearRememberedSession();
+          await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+          return;
+        }
+      }
+
       const restoredSession = {
         ...rememberedSession.sessionMeta,
         userId: rememberedUser.id || rememberedSession.sessionMeta.userId,
@@ -6170,7 +6147,11 @@ export default function PartySupplyApp() {
       saveRememberedSession(rememberedUser, restoredSession);
     };
 
-    void restoreRememberedSession();
+    void restoreRememberedSession().catch((error) => {
+      clearRememberedSession();
+      console.warn('No se pudo restaurar la sesión recordada de Supabase:', error);
+      setLoginError('No se pudo validar la sesión recordada. Ingresá nuevamente.');
+    });
 
   }, [appUsers, authMode, currentUser, isAuthBootLoading]);
 
@@ -6650,6 +6631,15 @@ export default function PartySupplyApp() {
         source: `auth:${String(event || 'unknown').toLowerCase()}`,
         checkedAt: Date.now(),
       };
+      if (event === 'SIGNED_OUT' && currentUserRef.current) {
+        clearRememberedSession();
+        currentUserRef.current = null;
+        currentSessionMetaRef.current = null;
+        setCurrentUser(null);
+        setCurrentSessionMeta(null);
+        setLoginStep('select');
+        setLoginError('La sesión de Supabase terminó. Volvé a ingresar para continuar; tu carrito sigue guardado.');
+      }
     };
 
     const { data: authListener } = supabase.auth.onAuthStateChange(updateFromAuthEvent);
@@ -7010,7 +7000,7 @@ export default function PartySupplyApp() {
     };
   };
 
-  const clearAuthenticatedState = () => {
+  const clearAuthenticatedState = ({ preserveCart = false, loginMessage = '' } = {}) => {
     const signOutPromise = supabase.auth.signOut({ scope: 'local' }).catch(() => {});
     clearRememberedSession();
     secureSessionHealthRef.current = assessSecureSession();
@@ -7018,17 +7008,40 @@ export default function PartySupplyApp() {
     currentUserRef.current = null;
     setCurrentSessionMeta(null);
     setCurrentUser(null);
-    resetPosCartWorkspace();
+    if (!preserveCart) resetPosCartWorkspace();
     setLoginStep('select');
     setSelectedUserIdForLogin(null);
     setPasswordInput('');
     setRememberLoginSession(false);
-    setLoginError('');
+    setLoginError(loginMessage);
     void signOutPromise.finally(() => {
       void loadAppUsers({ force: true, includeInactive: false }).catch((error) => {
         console.warn('No se pudo refrescar el directorio de usuarios despues de cerrar sesion.', error);
       });
     });
+  };
+
+  const requireSecureSessionForCloudWrite = async () => {
+    if (isLocalDemoMode()) return true;
+    if (!ENABLE_LOGIN_AUTH_SESSION) {
+      showNotification('error', 'Rebu necesita actualizarse', 'Esta instalación no habilita sesiones de Supabase Auth.');
+      return false;
+    }
+
+    const expectedAuthUserId = getExpectedAuthUserId(
+      currentUserRef.current,
+      currentSessionMetaRef.current,
+    );
+    const assessment = expectedAuthUserId
+      ? await recoverSecureSessionForCheckout()
+      : { isUsable: false };
+    if (assessment.isUsable) return true;
+
+    clearAuthenticatedState({
+      preserveCart: true,
+      loginMessage: 'La sesión de Supabase terminó. Volvé a ingresar antes de operar; tu carrito sigue guardado.',
+    });
+    return false;
   };
 
   const handleUpdateLogNote = async (logId, newNote) => {
@@ -7819,42 +7832,12 @@ export default function PartySupplyApp() {
     const numericDelta = Number(delta || 0);
     if (!product || !numericDelta) return Number(product?.stock || 0);
 
-    if (await canUseTransactionRpcs()) {
-      const rpcResult = await supabase.rpc('apply_product_stock_delta', {
-        p_product_id: product.id,
-        p_delta: numericDelta,
-      });
-
-      if (!rpcResult.error) {
-        return Number(rpcResult.data ?? Number(product.stock || 0) + numericDelta);
-      }
-
-      const rpcErrorText = [
-        rpcResult.error?.message,
-        rpcResult.error?.details,
-        rpcResult.error?.hint,
-        rpcResult.error?.code,
-      ].filter(Boolean).join(' ');
-
-      if (!/apply_product_stock_delta|function .* does not exist|schema cache|PGRST202|permission denied|42501/i.test(rpcErrorText)) {
-        throw rpcResult.error;
-      }
-    }
-
-    const currentStock = Number(product.stock || 0);
-    const fallbackStock = currentStock + numericDelta;
-    const { data: updatedProduct, error: stockErr } = await supabase
-      .from('products')
-      .update({ stock: fallbackStock })
-      .eq('id', product.id)
-      .eq('stock', currentStock)
-      .select('stock')
-      .maybeSingle();
-    if (stockErr) throw stockErr;
-    if (!updatedProduct) {
-      throw new Error('El stock cambio en otra caja. Recarga los datos e intenta nuevamente.');
-    }
-    return Number(updatedProduct.stock ?? fallbackStock);
+    const { data, error } = await supabase.rpc('apply_product_stock_delta', {
+      p_product_id: product.id,
+      p_delta: numericDelta,
+    });
+    if (error) throw error;
+    return Number(data ?? Number(product.stock || 0) + numericDelta);
   };
 
   const applyStockEntriesCloudWithRollback = async (entries = []) => {
@@ -7918,7 +7901,7 @@ export default function PartySupplyApp() {
     expectedVersion = null,
     stockDeltaByProduct = {},
   }) => {
-    if (isLocalDemoMode() || !ENABLE_TRANSACTION_RPCS) return null;
+    if (isLocalDemoMode()) return null;
     if (!(await canUseTransactionRpcs())) {
       throw createTransactionRpcRequiredError('guardar pedidos y puntos');
     }
@@ -7932,10 +7915,14 @@ export default function PartySupplyApp() {
       p_stock_deltas: stockDeltaByProduct || {},
     });
     if (error) {
-      if (isIncrementalPointsRpcMissing(error, 'save_order_with_points_once')) return null;
+      if (isIncrementalPointsRpcMissing(error, 'save_order_with_points_once')) {
+        throw createTransactionRpcRequiredError('guardar pedidos y puntos', error);
+      }
       throw error;
     }
-    return Array.isArray(data) ? data[0] : data;
+    const savedOrder = Array.isArray(data) ? data[0] : data;
+    if (!savedOrder) throw createTransactionRpcRequiredError('guardar pedidos y puntos');
+    return savedOrder;
   };
 
   const registerOrderSaleCloud = async ({
@@ -7976,7 +7963,7 @@ export default function PartySupplyApp() {
     entryType = 'manual_adjustment',
     earnedAt = new Date().toISOString(),
   }) => {
-    if (!delta || isLocalDemoMode() || !ENABLE_TRANSACTION_RPCS) return null;
+    if (!delta || isLocalDemoMode()) return null;
     if (!(await canUseTransactionRpcs())) {
       throw createTransactionRpcRequiredError('ajustar puntos del socio');
     }
@@ -7990,10 +7977,14 @@ export default function PartySupplyApp() {
       p_earned_at: earnedAt,
     });
     if (error) {
-      if (isIncrementalPointsRpcMissing(error, 'adjust_member_points_once')) return null;
+      if (isIncrementalPointsRpcMissing(error, 'adjust_member_points_once')) {
+        throw createTransactionRpcRequiredError('ajustar puntos del socio', error);
+      }
       throw error;
     }
-    return Array.isArray(data) ? data[0] : data;
+    const adjustedPoints = Array.isArray(data) ? data[0] : data;
+    if (!adjustedPoints) throw createTransactionRpcRequiredError('ajustar puntos del socio');
+    return adjustedPoints;
   };
 
   const syncMemberPointBalancesCloud = async (...memberIds) => {
@@ -8017,10 +8008,9 @@ export default function PartySupplyApp() {
     operationKey = null,
   }) => {
     if (isLocalDemoMode()) return null;
-    if (!ENABLE_TRANSACTION_RPCS) return null;
+    if (!ENABLE_TRANSACTION_RPCS) throw createTransactionRpcRequiredError('registrar ventas');
     if (!(await canUseTransactionRpcs())) {
-      console.warn('Venta sin RPC autenticada: se usara el guardado compatible para no bloquear la caja.');
-      return null;
+      throw createTransactionRpcRequiredError('registrar ventas');
     }
 
     const { data, error } = await retryOnSupabaseClockSkew(() => supabase.rpc(
@@ -8784,6 +8774,9 @@ export default function PartySupplyApp() {
           stockDeltaByProduct: deltaByProduct,
           clientPointUpdates,
         });
+    if (!sale && !isLocalDemoMode()) {
+      throw createTransactionRpcRequiredError('finalizar la venta de un pedido');
+    }
     let stockChanges = [];
 
     if (sale) {
@@ -11585,6 +11578,13 @@ export default function PartySupplyApp() {
   const finalizeLogin = async (verifiedUser, { offline = false, rememberSession = false, password = '', onStage = () => {} } = {}) => {
     let supabaseAuthMeta = { signedIn: false, reason: offline ? 'offline' : 'not-attempted' };
 
+    if (!offline && !isLocalDemoMode() && authMode !== 'supabase') {
+      throw new Error('Los usuarios compartidos no están disponibles. No se puede operar en la nube.');
+    }
+    if (!offline && authMode === 'supabase' && !ENABLE_LOGIN_AUTH_SESSION) {
+      throw new Error('Esta instalación no habilita sesiones de Supabase Auth. Actualizá Rebu antes de operar en la nube.');
+    }
+
     if (!offline && authMode === 'supabase' && ENABLE_LOGIN_AUTH_SESSION) {
       onStage('sesion');
       supabaseAuthMeta = await signInSupabaseAuthForAppUser({
@@ -11597,19 +11597,28 @@ export default function PartySupplyApp() {
       }
     }
 
-    if (!offline && ENABLE_LOGIN_AUTH_SESSION && !supabaseAuthMeta.signedIn) {
-      // No es un error: cobrar ya no depende de esto. Solo se pierde el token
-      // que usa la bandeja de WhatsApp para hablar con el bot.
-      console.warn(
-        '[REBU][auth] se entro sin sesion de Supabase Auth:',
-        getSupabaseAuthLoginRequiredMessage(supabaseAuthMeta),
-      );
+    if (!offline && authMode === 'supabase' && (
+      !supabaseAuthMeta.signedIn ||
+      (verifiedUser.authUserId && String(supabaseAuthMeta.authUser?.id || '') !== String(verifiedUser.authUserId))
+    )) {
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+      throw new Error(getSupabaseAuthLoginRequiredMessage(supabaseAuthMeta));
+    }
+
+    if (!offline && authMode === 'supabase') {
+      try {
+        await activateAppUserPermissionsAfterLogin();
+      } catch (error) {
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+        throw error;
+      }
     }
 
     if (!offline && !isLocalDemoMode()) {
       try {
         onStage('datos');
-        await loadCoreCloudData({ showSpinner: false, force: true, requireCloud: true });
+        const coreLoaded = await loadCoreCloudData({ showSpinner: false, force: true, requireCloud: true });
+        if (!coreLoaded) throw new Error('No se pudieron validar los datos de la nube.');
         setIsOfflineReadOnly(false);
       } catch (error) {
         if (!isRecoverableCloudError(error)) throw error;
@@ -11635,7 +11644,7 @@ export default function PartySupplyApp() {
     );
     setCurrentUser(verifiedUser);
     setCurrentSessionMeta(nextSession);
-    setActiveTab(getDefaultTabForUser(verifiedUser));
+    setActiveTab(cart.length > 0 ? 'pos' : getDefaultTabForUser(verifiedUser));
     setLoginStep('select');
     setSelectedUserIdForLogin(null);
     setPasswordInput('');
@@ -11692,7 +11701,7 @@ export default function PartySupplyApp() {
 
     try {
       let verifiedUser = null;
-      let shouldSkipCloudLoginLog = isBrowserOffline() || isOfflineReadOnly;
+      let shouldSkipCloudLoginLog = isBrowserOffline();
 
       if (authMode === 'supabase') {
         try {
@@ -12210,7 +12219,7 @@ export default function PartySupplyApp() {
       'success',
       'Permisos actualizados',
       applyNow
-        ? 'Los nuevos permisos se aplicarán cuando el usuario vuelva a iniciar sesión.'
+        ? 'Los nuevos permisos se aplicaron. Se pedirá al usuario volver a ingresar.'
         : 'Los permisos quedaron guardados para la próxima sesión.',
     );
   };
@@ -12478,6 +12487,7 @@ export default function PartySupplyApp() {
 
   const executeRegisterClose = async (isAuto = false) => {
     if (blockIfOfflineReadonly('cerrar la caja')) return;
+    if (!(await requireSecureSessionForCloudWrite())) return;
     if (!isAuto && !canManageRegister) {
       showNotification('error', 'Acceso Denegado', 'No tenes permiso para cerrar la caja.');
       return;
@@ -12787,6 +12797,7 @@ export default function PartySupplyApp() {
 
   const handleSaveOpeningBalance = async () => {
     if (blockIfOfflineReadonly('abrir la caja')) return;
+    if (!(await requireSecureSessionForCloudWrite())) return;
     if (!canManageRegister) {
       showNotification('error', 'Acceso Denegado', 'No tenes permiso para abrir la caja.');
       setIsOpeningBalanceModalOpen(false);
@@ -15311,10 +15322,9 @@ export default function PartySupplyApp() {
       isCheckoutInProgressRef.current = false;
       return;
     }
-    if (ENABLE_LOGIN_AUTH_SESSION) {
-      // Sin await a proposito: la venta no espera a la sesion. Se renueva de
-      // fondo solo porque la bandeja de WhatsApp necesita un token de usuario.
-      void recoverSecureSessionForCheckout().catch(() => {});
+    if (!(await requireSecureSessionForCloudWrite())) {
+      isCheckoutInProgressRef.current = false;
+      return;
     }
 
     const merchandiseSubtotal = cart.reduce(
@@ -15461,6 +15471,9 @@ export default function PartySupplyApp() {
           ? [{ client_id: String(clientId), points: newPoints, expected_points: previousPoints }]
           : [],
       });
+      if (!sale && !isLocalDemoMode()) {
+        throw createTransactionRpcRequiredError('registrar ventas');
+      }
 
       if (sale && shouldConsumeCouponOverride && clientId && !isLocalDemoMode()) {
         const { error: couponOverrideUpdateError } = await supabase
@@ -15986,6 +15999,9 @@ export default function PartySupplyApp() {
         stockDeltaByProduct: restoreStockDelta,
         clientPointUpdates,
       });
+      if (!newSale && !isLocalDemoMode()) {
+        throw createTransactionRpcRequiredError('restaurar ventas');
+      }
 
       if (newSale) {
         stockChanges = getSaleStockDeltaPreview(restoreStockDelta).stockChanges;
