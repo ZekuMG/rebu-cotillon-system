@@ -169,7 +169,8 @@ import {
   shouldLoadPrivateAppUserDirectory,
 } from './utils/appUserLoadControl';
 import { isPersistedSupabaseJwtError, retryOnSupabaseClockSkew } from './utils/supabaseAuthRecovery';
-import { recordDiagnosticError } from './utils/diagnosticsLog';
+import { readDiagnosticErrors, recordDiagnosticError } from './utils/diagnosticsLog';
+import { describeCloudSourceFailures, formatCloudConnectionReport } from './utils/cloudConnectionDiagnostics';
 import {
   assessSecureSession,
   getExpectedAuthUserId,
@@ -1562,6 +1563,9 @@ const fetchCoreCloudPayload = async ({ signal = null, productUpdatedAfter = null
     failedSources,
     optionalFailedSources,
     criticalFailedSources,
+    failureDetails: hasCloudConnection
+      ? []
+      : describeCloudSourceFailures(coreResults, CORE_OPTIONAL_SOURCE_NAMES),
     isComplete,
     shouldRetry,
     productSyncMode:
@@ -3972,6 +3976,7 @@ export default function PartySupplyApp() {
     }
 
     const run = async () => {
+      const startedAt = Date.now();
       const requestId = beginModuleLoadRequest('core');
       if (showSpinner) setIsCloudLoading(true);
       setModuleState('core', { status: 'loading', dirty: false });
@@ -4033,6 +4038,13 @@ export default function PartySupplyApp() {
         if (!isCurrentModuleLoadRequest('core', requestId)) return false;
 
         if (!payload?.hasCloudConnection) {
+          recordDiagnosticError('cloud:core', {
+            message: 'La carga de datos base no se completo.',
+          }, {
+            browserOnline: !isBrowserOffline(),
+            elapsedMs: Date.now() - startedAt,
+            failures: payload?.failureDetails || [],
+          });
           initialBootstrapPromise = null;
           return applyCachedCoreFallback(true);
         }
@@ -4080,6 +4092,11 @@ export default function PartySupplyApp() {
         return true;
       } catch (error) {
         if (!isCurrentModuleLoadRequest('core', requestId)) return false;
+        recordDiagnosticError('cloud:core', error, {
+          browserOnline: !isBrowserOffline(),
+          elapsedMs: Date.now() - startedAt,
+          failures: [],
+        });
         console.error('Error general de conexion (core):', error);
         initialBootstrapPromise = null;
         return applyCachedCoreFallback(true);
@@ -5047,18 +5064,22 @@ export default function PartySupplyApp() {
   // ==========================================
   // 1.5 CONEXIÓN SUPABASE
   // ==========================================
-  const fetchCloudData = async (showSpinner = true, { force = true, includeActiveModule = true, moduleKeys = null, full = false } = {}) => {
+  const fetchCloudData = async (showSpinner = true, { force = true, includeActiveModule = true, moduleKeys = null, full = false, forceCore = false } = {}) => {
     if (isLocalDemoMode()) {
       await loadAppUsers({ force });
       applyLocalDemoSnapshot();
       setIsOfflineReadOnly(false);
-      return;
+      return true;
     }
 
     try {
       if (showSpinner) setIsCloudLoading(true);
       const [coreLoaded] = await Promise.all([
-        loadCoreCloudData({ showSpinner: false, force: full ? force : false }),
+        loadCoreCloudData({
+          showSpinner: false,
+          force: forceCore || (full && force),
+          requireCloud: forceCore,
+        }),
         loadAppUsers({ force }),
       ]);
       if (!coreLoaded) {
@@ -5066,7 +5087,7 @@ export default function PartySupplyApp() {
           'No se pudo completar la carga',
           'La nube no devolvio los datos base. Rebu sigue con lo que tenga cargado localmente.'
         );
-        return;
+        return false;
       }
 
       const explicitModuleKeys = Array.isArray(moduleKeys) ? moduleKeys.filter(Boolean) : [];
@@ -5101,9 +5122,11 @@ export default function PartySupplyApp() {
           });
         }
       }
+      return true;
     } catch (error) {
-        console.error('Error general de conexión (metrics):', error);
+      console.error('Error general de conexión (metrics):', error);
       Swal.fire('Error de Conexión', 'Fallo total de red o configuración.', 'error');
+      return false;
     } finally {
       if (showSpinner) setIsCloudLoading(false);
     }
@@ -5202,6 +5225,9 @@ export default function PartySupplyApp() {
     }
 
     if (isBrowserOffline()) {
+      recordDiagnosticError('cloud:network', {
+        message: 'La aplicacion inicio sin conexion de red.',
+      }, { browserOnline: false });
       void loadAppUsers().finally(() => {
         if (!disposed) setIsAuthBootLoading(false);
       });
@@ -5395,6 +5421,14 @@ export default function PartySupplyApp() {
 
     const markRealtimeChannelDegraded = (status, error = null) => {
       shouldReconcileAfterSubscribe = true;
+      if (realtimeConnectionStateRef.current.channelStatus !== status) {
+        recordDiagnosticError('cloud:realtime', error || {
+          message: `El canal Realtime cambio a ${status}.`,
+        }, {
+          channelStatus: status,
+          browserOnline: !isBrowserOffline(),
+        });
+      }
       setRealtimeConnection({
         status,
         channelStatus: status,
@@ -5712,6 +5746,14 @@ export default function PartySupplyApp() {
       }
       if (heartbeat.status === 'timeout' || heartbeat.status === 'disconnected' || heartbeat.status === 'error') {
         shouldReconcileAfterSubscribe = true;
+        if (realtimeConnectionStateRef.current.heartbeatStatus !== heartbeat.status) {
+          recordDiagnosticError('cloud:realtime', {
+            message: `Heartbeat Realtime: ${heartbeat.status}.`,
+          }, {
+            heartbeatStatus: heartbeat.status,
+            browserOnline: !isBrowserOffline(),
+          });
+        }
         setRealtimeConnection((prev) => reconcileRealtimeHeartbeatState(prev, heartbeat));
         markModulesDirty(['core', 'transactions', 'dashboard', 'history', 'orders', 'reports', 'metrics']);
         if (heartbeat.status === 'disconnected') supabase.realtime.connect();
@@ -5739,6 +5781,9 @@ export default function PartySupplyApp() {
     };
 
     const handleBrowserOffline = () => {
+      recordDiagnosticError('cloud:network', {
+        message: 'El navegador informo que no hay conexion de red.',
+      }, { browserOnline: false });
       const recoveredFromCache = hydrateOfflineSnapshots();
       if (recoveredFromCache || isBrowserOffline()) {
         setIsOfflineReadOnly(true);
@@ -6680,10 +6725,21 @@ export default function PartySupplyApp() {
         return;
       }
 
-      await fetchCloudData(false, { force: true, includeActiveModule: true });
+      const cloudLoaded = await fetchCloudData(false, {
+        force: true,
+        forceCore: true,
+        includeActiveModule: true,
+      });
+      if (!cloudLoaded) {
+        showNotification('warning', 'No se pudo reconectar', 'La base responde, pero no se pudieron cargar todos los datos necesarios. Copiá el diagnóstico para revisar la causa.');
+        return;
+      }
       setIsOfflineReadOnly(false);
       showNotification('success', 'Reconectado', 'Se conectó la base de datos correctamente.');
     } catch (error) {
+      recordDiagnosticError('cloud:reconnect', error, {
+        browserOnline: !isBrowserOffline(),
+      });
       console.error('No se pudo reconectar:', error);
       setIsOfflineReadOnly(true);
       showNotification(
@@ -6693,6 +6749,28 @@ export default function PartySupplyApp() {
       );
     } finally {
       setIsReconnectAttempting(false);
+    }
+  };
+
+  const handleCopyCloudDiagnostic = async () => {
+    const report = formatCloudConnectionReport({
+      entries: readDiagnosticErrors(),
+      appVersion: appPackage.version,
+      online: !isBrowserOffline(),
+    });
+    try {
+      await navigator.clipboard.writeText(report);
+      showNotification('success', 'Diagnóstico copiado', 'Pegalo en el chat para revisar por qué se perdió la conexión.');
+    } catch (error) {
+      console.error('No se pudo copiar el diagnóstico:', error);
+      await Swal.fire({
+        title: 'Diagnóstico de conexión',
+        text: 'Seleccioná y copiá este texto para compartirlo.',
+        input: 'textarea',
+        inputValue: report,
+        inputAttributes: { readOnly: true, 'aria-label': 'Diagnóstico de conexión' },
+        confirmButtonText: 'Cerrar',
+      });
     }
   };
 
@@ -10953,7 +11031,7 @@ export default function PartySupplyApp() {
   const cycleCashExpenses = cycleExpenses
     .filter(e => e.paymentMethod === 'Efectivo')
     .reduce((acc, exp) => acc + (Number(exp.amount) || 0), 0);
-  const getTransactionPaymentTotals = (tx) =>
+  const getTransactionPaymentTotals = useCallback((tx) =>
     getPaymentMethodTotals(
       tx?.paymentBreakdown,
       tx?.primaryPaymentMethod || tx?.payment,
@@ -10961,8 +11039,7 @@ export default function PartySupplyApp() {
       tx?.cashReceived,
       tx?.cashChange,
       tx?.total,
-    );
-  const getTransactionCashTotal = (tx) => Number(getTransactionPaymentTotals(tx).Efectivo || 0);
+    ), []);
   const getReportLineSubtotal = (item = {}) => {
     const explicitSubtotal = Number(item.subtotal ?? item.lineSubtotal ?? item.line_total ?? item.lineTotal);
     if (Number.isFinite(explicitSubtotal) && explicitSubtotal !== 0) return explicitSubtotal;
@@ -11168,7 +11245,13 @@ export default function PartySupplyApp() {
         };
       })
       .filter(Boolean);
-  const cycleCashSales = cycleTransactions.reduce((acc, tx) => acc + getTransactionCashTotal(tx), 0);
+  const cyclePaymentMethodsSummary = useMemo(() => cycleTransactions.reduce((totals, tx) => {
+    Object.entries(getTransactionPaymentTotals(tx)).forEach(([method, amount]) => {
+      totals[method] = (totals[method] || 0) + (Number(amount) || 0);
+    });
+    return totals;
+  }, {}), [cycleTransactions, getTransactionPaymentTotals]);
+  const cycleCashSales = Number(cyclePaymentMethodsSummary.Efectivo || 0);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -12377,10 +12460,19 @@ export default function PartySupplyApp() {
         didOpen: () => Swal.showLoading() 
       });
       
-      await fetchCloudData(false, { force: true, moduleKeys: ['dashboard'], full: true });
-      Swal.close();
-      
-      setIsClosingCashModalOpen(true);
+      try {
+        const loaded = await loadDashboardCloudData({ force: true, full: true, requireCloud: true });
+        if (!loaded) {
+          showNotification('error', 'No se pudo sincronizar la caja', 'Reintentá cuando las ventas y gastos estén actualizados. No se realizó ningún cierre.');
+          return;
+        }
+        setIsClosingCashModalOpen(true);
+      } catch (error) {
+        console.error('Error al preparar el cierre de caja:', error);
+        showNotification('error', 'No se pudo sincronizar la caja', 'No se realizó ningún cierre. Reintentá en unos minutos.');
+      } finally {
+        Swal.close();
+      }
     }
   };
 
@@ -12392,7 +12484,11 @@ export default function PartySupplyApp() {
     }
 
     if (isAuto) {
-      await loadDashboardCloudData({ force: true, full: true });
+      const loaded = await loadDashboardCloudData({ force: true, full: true, requireCloud: true });
+      if (!loaded) {
+        showNotification('error', 'No se pudo cerrar la caja', 'No se pudieron sincronizar las ventas y gastos. El cierre automático se reintentará.');
+        return;
+      }
     }
 
     const closeDate = new Date();
@@ -12469,8 +12565,8 @@ export default function PartySupplyApp() {
     const cashExpenses = cycleExpenses.filter(e => e.paymentMethod === 'Efectivo').reduce((acc, curr) => acc + Number(curr.amount), 0);
     const averageTicket = cycleSalesCount > 0 ? (cycleTotalSales / cycleSalesCount) : 0;
     const netProfit = cycleTotalSales - totalCost - totalExpenses;
-    const cashSales = cycleTransactions.reduce((acc, tx) => acc + getTransactionCashTotal(tx), 0);
-    const finalPhysicalBalance = openingBalance + cashSales - cashExpenses;
+    const cashSales = Number(paymentMethodsSummary.Efectivo || 0);
+    const finalPhysicalBalance = Number(openingBalance || 0) + cashSales - cashExpenses;
 
     const cycleNewClients = (members || [])
       .filter((member) => {
@@ -12523,44 +12619,6 @@ export default function PartySupplyApp() {
     }
 
     try {
-        const lockResult = isLocalDemoMode()
-          ? {
-              data: [
-                localDemoUpdateRow('register_state', 1, {
-                  is_open: false,
-                  opening_balance: 0,
-                  opened_at: null,
-                  last_updated_by: currentUser?.name || 'Sistema (Auto)',
-                }),
-              ],
-              error: null,
-            }
-          : await supabase
-              .from('register_state')
-              .update({
-                  is_open: false,
-                  opening_balance: 0,
-                  opened_at: null,
-                  last_updated_by: currentUser?.name || 'Sistema (Auto)'
-              })
-              .eq('id', 1)
-              .eq('is_open', true)
-              .select(CLOUD_SELECTS.registerState);
-        const { data: lockData, error: lockError } = lockResult;
-
-        if (lockError) throw lockError;
-
-        if (!lockData || lockData.length === 0) {
-            console.log("Cierre cancelado: OTRO dispositivo ya ejecutó el cierre exitosamente.");
-            setIsRegisterClosed(true);
-            setRegisterOpenedAt(null);
-            setIsClosingCashModalOpen(false);
-            setTransactions([]);
-            setExpenses([]);
-            if (isAuto) setIsAutoCloseAlertOpen(true);
-            return;
-        }
-
         const openTime = registerOpenedAt
           ? formatTimeFullAR(new Date(registerOpenedAt))
           : '--:--';
@@ -12617,14 +12675,66 @@ export default function PartySupplyApp() {
           isTestMode: !shouldSaveReport
         };
 
-        if (shouldSaveReport) {
-            const { data: savedReport, error } = await insertWithSchemaFallback(
-              'cash_closures',
-              closurePayload,
-              CLOUD_SELECTS.cashClosuresDetail,
-            );
-            if (error) throw error;
+        let closeResult;
+        let localSavedReport = null;
+        if (isLocalDemoMode()) {
+          const localRegister = getLocalDemoStore().register_state?.[0];
+          if (!localRegister?.is_open) {
+            closeResult = { status: 'already_closed' };
+          } else if ((localRegister.opened_at || null) !== (registerOpenedAt || null)) {
+            closeResult = { status: 'cycle_changed' };
+          } else {
+            if (shouldSaveReport) {
+              const { data, error } = await insertWithSchemaFallback(
+                'cash_closures', closurePayload, CLOUD_SELECTS.cashClosuresDetail,
+              );
+              if (error) throw error;
+              localSavedReport = data;
+            }
+            localDemoUpdateRow('register_state', 1, {
+              is_open: false,
+              opening_balance: 0,
+              opened_at: null,
+              last_updated_by: currentUser?.name || 'Sistema (Auto)',
+            });
+            closeResult = { status: 'closed' };
+          }
+        } else {
+          const { data, error } = await supabase.rpc('close_register_once', {
+            p_expected_opened_at: registerOpenedAt,
+            p_closure: shouldSaveReport ? closurePayload : null,
+            p_save_report: shouldSaveReport,
+            p_last_updated_by: currentUser?.name || 'Sistema (Auto)',
+          });
+          if (error) throw error;
+          closeResult = data;
+        }
 
+        if (closeResult?.status !== 'closed') {
+          const latestRegister = isLocalDemoMode()
+            ? getLocalDemoStore().register_state?.[0]
+            : (await supabase.from('register_state')
+              .select(CLOUD_SELECTS.registerState).eq('id', 1).maybeSingle()).data;
+          if (latestRegister) syncRegisterState(latestRegister);
+          setIsClosingCashModalOpen(false);
+          Swal.close();
+          if (closeResult?.status === 'already_closed') {
+            if (isAuto) setIsAutoCloseAlertOpen(true);
+            showNotification('info', 'Caja ya cerrada', 'Otro equipo completó el cierre. No se generó un informe duplicado.');
+          } else if (closeResult?.status === 'cycle_changed') {
+            showNotification('warning', 'La caja cambió de turno', 'Recargá el ciclo antes de volver a cerrar.');
+          } else {
+            showNotification('error', 'No se pudo cerrar la caja', 'La base devolvió una respuesta inesperada.');
+          }
+          return;
+        }
+
+        if (shouldSaveReport) {
+            const savedReport = localSavedReport || {
+              ...closurePayload,
+              id: closeResult.report_id,
+              created_at: closeResult.report_created_at,
+            };
             const adaptedReport = mapCashClosureRecord(savedReport);
             markCloudSourceMutation('closures');
             setPastClosures((prev) => [adaptedReport, ...prev]);
@@ -12635,7 +12745,8 @@ export default function PartySupplyApp() {
         setRegisterOpenedAt(null);
         
         const logMsg = isAuto ? 'Cierre Automático' : shouldSaveReport ? 'Cierre de Caja' : 'Cierre de Caja (Silencioso)';
-        addLog(logMsg, closureLogDetails, isAuto ? 'Automático' : shouldSaveReport ? 'Manual' : 'Cierre silencioso');
+        void addLog(logMsg, closureLogDetails, isAuto ? 'Automático' : shouldSaveReport ? 'Manual' : 'Cierre silencioso')
+          .catch((error) => console.error('No se pudo registrar el cierre en la bitácora:', error));
         
         setTransactions([]);
         setExpenses([]); 
@@ -12651,8 +12762,24 @@ export default function PartySupplyApp() {
 
     } catch (e) {
         console.error("Error guardando cierre:", e);
-        showNotification('error', 'Error al Cerrar', 'Ocurrió un problema en la nube.');
+        Swal.close();
         setIsClosingCashModalOpen(false);
+        if (!isLocalDemoMode()) {
+          try {
+            const { data: latestRegister } = await supabase.from('register_state')
+              .select(CLOUD_SELECTS.registerState).eq('id', 1).maybeSingle();
+            if (latestRegister) {
+              syncRegisterState(latestRegister);
+              if (!latestRegister.is_open) {
+                showNotification('warning', 'Verificá el informe de caja', 'La base indica que la caja está cerrada, pero no se pudo confirmar el resultado del cierre. Revisá el historial antes de reabrirla.');
+                return;
+              }
+            }
+          } catch (refreshError) {
+            console.error('No se pudo verificar el estado de la caja:', refreshError);
+          }
+        }
+        showNotification('error', 'No se pudo cerrar la caja', 'La operación no se confirmó. Revisá el estado de la caja antes de reintentar.');
     }
   };
 
@@ -17383,6 +17510,13 @@ export default function PartySupplyApp() {
                             <RefreshCw size={13} className={isReconnectAttempting ? 'animate-spin' : ''} />
                             {isReconnectAttempting ? 'Reconectando' : 'Reconectar ahora'}
                           </button>
+                        <button
+                          type="button"
+                          onClick={handleCopyCloudDiagnostic}
+                          className="inline-flex h-8 items-center rounded-md border border-slate-500 px-3 text-[11px] font-black uppercase tracking-[0.08em] text-slate-100 transition hover:bg-white/10"
+                        >
+                          Copiar diagnóstico
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -17637,7 +17771,7 @@ export default function PartySupplyApp() {
           {editingTransaction && <EditTransactionModal transaction={editingTransaction} onClose={() => setEditingTransaction(null)} inventory={inventory} members={members} offers={offers} setEditingTransaction={setEditingTransaction} transactionSearch={transactionSearch} setTransactionSearch={setTransactionSearch} addTxItem={addTxItem} removeTxItem={removeTxItem} setTxItemQty={setTxItemQty} handlePaymentChange={handleEditTxPaymentChange} editReason={editReason} setEditReason={setEditReason} onSave={handleSaveEditedTransaction} canChangeSaleDate={canManageRegister} registerOpenedAt={isRegisterClosed ? null : registerOpenedAt} />}
           {isImageModalOpen && <ImageModal isOpen image={selectedImage} onClose={() => setIsImageModalOpen(false)} />}
           {transactionToRefund && <RefundModal transaction={transactionToRefund} onClose={() => { setTransactionToRefund(null); setRefundReason(''); }} refundReason={refundReason} setRefundReason={setRefundReason} onConfirm={handleConfirmRefund} />}
-          {isClosingCashModalOpen && <CloseCashModal isOpen onClose={() => setIsClosingCashModalOpen(false)} salesCount={cycleSalesCount} totalSales={cycleTotalSales} totalExpenses={cycleTotalExpenses} cashExpenses={cycleCashExpenses} cashSales={cycleCashSales} openingBalance={openingBalance} onConfirm={handleConfirmCloseCash} />}
+          {isClosingCashModalOpen && <CloseCashModal isOpen onClose={() => setIsClosingCashModalOpen(false)} salesCount={cycleSalesCount} totalSales={cycleTotalSales} totalExpenses={cycleTotalExpenses} cashExpenses={cycleCashExpenses} cashSales={cycleCashSales} paymentMethodsSummary={cyclePaymentMethodsSummary} openingBalance={openingBalance} onConfirm={handleConfirmCloseCash} />}
           {saleSuccessModal && (
             <SaleSuccessModal
               transaction={saleSuccessModal}

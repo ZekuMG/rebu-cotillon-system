@@ -109,87 +109,88 @@ export const ClosingTimeModal = ({ isOpen, onClose: _onClose, closingTime, setCl
 };
 
 
-export const CloseCashModal = ({ isOpen, onClose, salesCount, totalSales, totalExpenses = 0, cashExpenses = 0, cashSales = 0, openingBalance, onConfirm }) => {
+export const CloseCashModal = ({ isOpen, onClose, salesCount, totalSales, totalExpenses = 0, cashExpenses = 0, cashSales = 0, paymentMethodsSummary = {}, openingBalance, onConfirm }) => {
   const { isPending, runAction } = usePendingAction();
   if (!isOpen) return null;
-  
-  const finalCashBalance = openingBalance + cashSales - cashExpenses;
-  
+
+  const initialCash = Number(openingBalance) || 0;
+  const cashIncome = Number(cashSales) || 0;
+  const cashOutgoings = Number(cashExpenses) || 0;
+  const invoiced = Number(totalSales) || 0;
+  const expensesTotal = Number(totalExpenses) || 0;
+  const finalCashBalance = initialCash + cashIncome - cashOutgoings;
+  const operatingResult = invoiced - expensesTotal;
+  const paymentRows = Object.entries(paymentMethodsSummary || {})
+    .map(([method, amount]) => ({ method, amount: Number(amount) || 0 }))
+    .filter(({ amount }) => amount !== 0)
+    .sort((a, b) => (a.method === 'Efectivo' ? -1 : b.method === 'Efectivo' ? 1 : b.amount - a.amount));
+  if (paymentRows.length === 0 && invoiced !== 0) {
+    if (cashIncome !== 0) paymentRows.push({ method: 'Efectivo', amount: cashIncome });
+    if (invoiced !== cashIncome) paymentRows.push({ method: 'Otros medios', amount: invoiced - cashIncome });
+  }
+
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-        <div className="p-5 bg-gradient-to-r from-slate-800 to-slate-700 text-white flex items-center gap-3">
-          <div className="p-2 bg-white/10 rounded-lg">
-            <Lock size={22} className="text-white" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 backdrop-blur-sm sm:p-4">
+      <div role="dialog" aria-modal="true" aria-labelledby="cash-close-title" className="flex max-h-[calc(100dvh-1rem)] w-full max-w-[480px] flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:max-h-[calc(100dvh-2rem)]">
+        <div className="flex shrink-0 items-center gap-2.5 bg-slate-800 px-4 py-3 text-white">
+          <div className="rounded-md bg-white/10 p-1.5">
+            <Lock size={18} aria-hidden="true" />
           </div>
           <div>
-            <h3 className="font-bold text-lg leading-tight">Cerrar Caja</h3>
-            <p className="text-slate-300 text-xs">Resumen del ciclo actual</p>
+            <h3 id="cash-close-title" className="text-base font-bold leading-tight">Cerrar caja</h3>
+            <p className="text-xs text-slate-300">Resumen del ciclo · {salesCount} operaciones</p>
           </div>
         </div>
-        
-        <div className="p-6 space-y-5">
-          
-          <div className="space-y-3">
-            
-            {/* Facturado: Fila completa */}
-            <div className="bg-fuchsia-50 p-5 rounded-xl border border-fuchsia-100 flex flex-col items-center text-center shadow-inner">
-              <p className="text-[11px] font-bold text-fuchsia-500 uppercase tracking-widest mb-1">Total Facturado</p>
-              <p className="text-4xl font-black text-fuchsia-700 tracking-tight">
-                <FancyPrice amount={totalSales} />
-              </p>
-            </div>
-            
-            {/* Ventas y Gastos: 2 Columnas */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 text-center shadow-sm">
-                <p className="text-[10px] font-bold text-blue-500 uppercase tracking-wider mb-1">Operaciones</p>
-                <p className="text-3xl font-bold text-blue-700">{salesCount}</p>
-              </div>
-              <div className="bg-red-50 p-4 rounded-xl border border-red-100 text-center shadow-sm min-w-0">
-                <p className="text-[10px] font-bold text-red-500 uppercase tracking-wider mb-1">Total Gastos</p>
-                <p className="text-2xl font-bold text-red-600 truncate w-full">
-                  <FancyPrice amount={totalExpenses} />
-                </p>
-              </div>
-            </div>
-            
-          </div>
 
-          {/* Desglose de caja física */}
-          <div className="bg-slate-50 p-5 rounded-xl border border-slate-200 space-y-3">
-            <div className="flex justify-between items-center text-sm">
-              <span className="text-slate-500 font-medium">Caja Inicial</span>
-              <span className="font-bold text-slate-700 text-base"><FancyPrice amount={openingBalance} /></span>
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3">
+          <section className="grid grid-cols-2 gap-2" aria-label="Totales del ciclo">
+            <div className="min-w-0 rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-3 py-2">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-fuchsia-700">Total facturado</p>
+              <p className="truncate text-xl font-black tabular-nums text-fuchsia-800 sm:text-2xl"><FancyPrice amount={invoiced} /></p>
             </div>
-            <div className="flex justify-between items-center text-sm">
-              <span className="text-slate-500 font-medium">+ Ventas en efectivo</span>
-              <span className="font-bold text-emerald-600 text-base">+<FancyPrice amount={cashSales} /></span>
+            <div className="min-w-0 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Ingresos − gastos</p>
+              <p className="truncate text-xl font-black tabular-nums text-emerald-800 sm:text-2xl"><FancyPrice amount={operatingResult} /></p>
             </div>
-            {cashExpenses > 0 && (
-              <div className="flex justify-between items-center text-sm">
-                <span className="text-slate-500 font-medium">− Gastos en efectivo</span>
-                <span className="font-bold text-red-500 text-base">-<FancyPrice amount={cashExpenses} /></span>
-              </div>
-            )}
-            <div className="border-t border-slate-200 pt-3 mt-1 flex justify-between items-center">
-              <span className="font-bold text-slate-800 text-lg">Efectivo en Caja</span>
-              <span className="text-2xl font-black text-green-600"><FancyPrice amount={finalCashBalance} /></span>
-            </div>
-          </div>
+          </section>
 
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 flex gap-3 items-start shadow-sm">
-            <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-bold mb-0.5">Atención</p>
-              <p className="text-xs leading-relaxed opacity-90">Esta acción vaciará la caja y preparará el sistema para el próximo turno. Asegurate de haber contado el efectivo.</p>
+          <section className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2" aria-label="Arqueo de efectivo">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-1">
+              <h4 className="text-xs font-bold text-slate-800">Efectivo a contar</h4>
+              <span className="text-xl font-black tabular-nums text-emerald-700"><FancyPrice amount={finalCashBalance} /></span>
             </div>
-          </div>
+            <div className="flex justify-between gap-3 text-xs text-slate-600"><span>Caja inicial</span><span className="tabular-nums"><FancyPrice amount={initialCash} /></span></div>
+            <div className="flex justify-between gap-3 text-xs text-slate-600"><span>+ Ventas en efectivo</span><span className="tabular-nums"><FancyPrice amount={cashIncome} /></span></div>
+            <div className="flex justify-between gap-3 text-xs text-slate-600"><span>− Gastos en efectivo</span><span className="tabular-nums"><FancyPrice amount={cashOutgoings} /></span></div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 px-3 py-2" aria-label="Cobros y gastos">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-1">
+              <h4 className="text-xs font-bold text-slate-800">Cobros por medio</h4>
+              <span className="text-[11px] text-slate-500">{salesCount} ventas</span>
+            </div>
+            {paymentRows.length ? paymentRows.map(({ method, amount }) => (
+              <div key={method} className="flex justify-between gap-3 text-xs">
+                <span className="min-w-0 truncate text-slate-600">{method}</span>
+                <span className="shrink-0 font-semibold tabular-nums text-slate-800"><FancyPrice amount={amount} /></span>
+              </div>
+            )) : <p className="py-1 text-xs text-slate-500">Sin cobros registrados</p>}
+            <div className="mt-0.5 flex justify-between gap-3 border-t border-slate-100 pt-1 text-xs">
+              <span className="text-slate-600">Gastos del ciclo</span>
+              <span className="font-semibold tabular-nums text-rose-700">−<FancyPrice amount={expensesTotal} /></span>
+            </div>
+            <p className="mt-1 text-[11px] text-slate-500">Los cobros digitales no se suman al efectivo físico.</p>
+          </section>
+
+          <p className="flex items-start gap-1.5 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-900">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+            Al confirmar, la caja quedará cerrada. Contá el efectivo antes de continuar.
+          </p>
         </div>
-        
-        <div className="p-5 bg-slate-50 border-t border-slate-200 flex gap-3 justify-end">
-          <button onClick={onClose} className="px-5 py-2.5 text-sm font-bold text-slate-500 hover:bg-slate-200 hover:text-slate-700 rounded-xl transition-colors">Cancelar</button>
-          <AsyncActionButton onAction={() => runAction('cash-close-confirm', onConfirm)} pending={isPending('cash-close-confirm')} loadingLabel="Procesando..." className="px-6 py-2.5 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-xl transition-all shadow-md hover:shadow-lg flex items-center gap-2 transform active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait"><Lock size={16} /> Procesar Cierre</AsyncActionButton>
+
+        <div className="flex shrink-0 justify-end gap-2 border-t border-slate-200 bg-white px-4 py-2.5">
+          <button type="button" onClick={onClose} disabled={isPending('cash-close-confirm')} className="rounded-lg px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Cancelar</button>
+          <AsyncActionButton onAction={() => runAction('cash-close-confirm', onConfirm)} pending={isPending('cash-close-confirm')} loadingLabel="Procesando..." className="flex items-center gap-1.5 rounded-lg bg-slate-800 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700 disabled:cursor-wait disabled:opacity-60"><Lock size={14} /> Procesar cierre</AsyncActionButton>
         </div>
       </div>
     </div>
