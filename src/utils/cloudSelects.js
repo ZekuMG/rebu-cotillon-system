@@ -162,6 +162,7 @@ export const CLOUD_SELECTS = {
     'amount',
     'category',
     'payment_method',
+    'payment_breakdown',
     'user_id',
     'user_role',
     'user_name',

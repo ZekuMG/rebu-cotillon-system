@@ -22,7 +22,7 @@ test(`el modo real recupera ${withCheckoutDraft ? 'bolsita y pagos combinados' :
   };
   if (withCheckoutDraft) {
     snapshots.party_pos_snapshot_v1.posCarts = [{
-      id: 'persisted-cart', cart: [product], selectedPayment: 'Efectivo',
+      id: 'persisted-cart', cart: [product], selectedPayment: 'Efectivo', selectedUserId: userId,
       checkoutDraft: {
         hasPosBag: true, isSplitPaymentMode: true, activeSplitLineIndex: 1,
         paymentLines: [
@@ -57,6 +57,7 @@ test(`el modo real recupera ${withCheckoutDraft ? 'bolsita y pagos combinados' :
     await page.getByRole('button', { name: /Punto de Venta/i }).click();
     await expect(page.getByText('Total a Pagar', { exact: true }).locator('..')).toContainText(withCheckoutDraft ? '$2.735,15' : '$2.685,15');
     if (withCheckoutDraft) {
+      await expect(page.locator('.pos-sale-user-picker summary')).toContainText(user.displayName);
       await expect(page.getByRole('checkbox', { name: /Lleva bolsita/ })).toHaveAttribute('aria-checked', 'true');
       await expect(page.getByPlaceholder('Monto', { exact: true }).first()).toHaveValue('1000');
       await expect(page.getByPlaceholder('Monto', { exact: true }).nth(1)).toHaveValue('1735.15');

@@ -510,20 +510,25 @@ export default function POSView({
     const storedWidth = Number(window.localStorage.getItem('rebu-pos-cart-width'));
     return Number.isFinite(storedWidth) ? clampCartWidth(storedWidth, initialBounds) : initialBounds.default;
   });
-  const cartTabGap = 4;
-  const cartTabWidth = cartTabs.length > 0
-    ? `max(68px, calc(${100 / cartTabs.length}% - ${(Math.max(0, cartTabs.length - 1) * cartTabGap) / cartTabs.length}px))`
-    : '100%';
-
   useEffect(() => {
     const tabsRail = cartTabsRailRef.current;
     if (!tabsRail) return;
 
-    const activeTab = Array.from(tabsRail.children).find(
-      (tabElement) => tabElement.dataset.posCartId === String(activeCartId),
-    );
+    const revealActiveTab = () => {
+      const activeTab = Array.from(tabsRail.children).find(
+        (tabElement) => tabElement.dataset.posCartId === String(activeCartId),
+      );
+      if (!activeTab) return;
+      const railBounds = tabsRail.getBoundingClientRect();
+      const tabBounds = activeTab.getBoundingClientRect();
+      if (tabBounds.left < railBounds.left) tabsRail.scrollLeft += tabBounds.left - railBounds.left;
+      else if (tabBounds.right > railBounds.right) tabsRail.scrollLeft += tabBounds.right - railBounds.right;
+    };
 
-    activeTab?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    revealActiveTab();
+    const resizeObserver = new ResizeObserver(revealActiveTab);
+    resizeObserver.observe(tabsRail);
+    return () => resizeObserver.disconnect();
   }, [activeCartId, cartTabs.length]);
 
   const startCartResize = (event) => {
@@ -2194,14 +2199,13 @@ export default function POSView({
         
         <div className="pos-cart-header shrink-0 border-b bg-white px-3 pb-2">
             <div
-              className="pos-cart-tabs is-multiple -mx-3 flex min-w-0 items-end gap-1 overflow-hidden px-2 pt-1"
+              className={`pos-cart-tabs -mx-3${cartTabs.length > 1 ? ' is-multiple' : ''}`}
               role="tablist"
               aria-label="Carritos abiertos"
             >
               <div
                 ref={cartTabsRailRef}
-                className="pos-cart-tab-rail flex min-w-0 flex-1 items-end gap-1 overflow-x-auto"
-                style={{ '--pos-cart-tab-width': cartTabWidth }}
+                className="pos-cart-tab-rail"
               >
                 {cartTabs.map((tab, tabIndex) => {
                   const isActive = String(tab.id) === String(activeCartId);
@@ -2215,12 +2219,12 @@ export default function POSView({
                     <div
                       key={tab.id}
                       data-pos-cart-id={String(tab.id)}
-                      className={`pos-cart-tab group relative flex h-8 shrink-0 items-center border px-1 ${isActive ? 'is-active' : ''}`}
+                      className={`pos-cart-tab group${isActive ? ' is-active' : ''}`}
                     >
                       <button
                         type="button"
                         onClick={() => onSelectCart?.(tab.id)}
-                        className="flex min-w-0 flex-1 items-center gap-1 px-1 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/50"
+                        className="pos-cart-tab-select text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/50"
                         role="tab"
                         aria-selected={isActive}
                         aria-label={`Carrito ${visibleTabNumber}`}
@@ -2251,7 +2255,7 @@ export default function POSView({
               <button
                 type="button"
                 onClick={onAddCart}
-                className="pos-cart-add inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-t-md border focus:outline-none focus:ring-2 focus:ring-fuchsia-400/40"
+                className="pos-cart-add focus:outline-none focus:ring-2 focus:ring-fuchsia-400/40"
                 aria-label="Abrir nuevo carrito"
                 title="Abrir nuevo carrito"
               >

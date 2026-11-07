@@ -3,6 +3,7 @@ import { useCallback, useMemo } from 'react';
 import { PAYMENT_METHODS } from '../data';
 import { buildDashboardTransactionSummary } from '../utils/dashboardAggregations';
 import { getPaymentMethodTotals } from '../utils/paymentBreakdown';
+import { getExpensePaymentTotals } from '../utils/expensePayments';
 import {
   buildInventoryLookups,
   buildSalesDataset,
@@ -148,9 +149,10 @@ export default function useDashboardData({
     });
     const byPayment = {};
     filteredExpenses.forEach(exp => {
-      const method = exp.paymentMethod || 'Efectivo';
-      if (!byPayment[method]) byPayment[method] = { name: method, total: 0 };
-      byPayment[method].total += (Number(exp.amount) || 0);
+      Object.entries(getExpensePaymentTotals(exp)).forEach(([method, amount]) => {
+        if (!byPayment[method]) byPayment[method] = { name: method, total: 0 };
+        byPayment[method].total += amount;
+      });
     });
     return {
       total, count,

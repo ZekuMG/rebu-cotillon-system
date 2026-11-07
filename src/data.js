@@ -22,12 +22,7 @@ export const INITIAL_MEMBERS = [
   },
 ];
 
-export const PAYMENT_METHODS = [
-  { id: 'Efectivo', label: 'Efectivo' },
-  { id: 'MercadoPago', label: 'Mercado Pago' },
-  { id: 'Debito', label: 'Débito' },
-  { id: 'Credito', label: 'Crédito' },
-];
+export { PAYMENT_METHODS } from './data/paymentMethods.js';
 
 export const INITIAL_CATEGORIES = [
   'Globos',

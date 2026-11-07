@@ -1,5 +1,6 @@
 import { formatDateAR, formatTimeFullAR, isTestRecord } from './helpers';
 import { normalizeExpenseDateValue, parseExpenseDateValue } from './expenseDates';
+import { getExpensePaymentBreakdown, getExpensePaymentMethod } from './expensePayments';
 import {
   getOrderPaymentHistorySummary,
   getPrimaryPaymentInfo,
@@ -423,7 +424,8 @@ export const mapExpenseRecords = (expenses = []) =>
       createdAtDate.getSeconds(),
       createdAtDate.getMilliseconds(),
     );
-    const paymentMethod = expense.payment_method || expense.paymentMethod || 'Efectivo';
+    const paymentBreakdown = getExpensePaymentBreakdown(expense);
+    const paymentMethod = getExpensePaymentMethod({ paymentBreakdown });
     const mappedExpense = {
       id: expense.id,
       created_at: createdAt,
@@ -435,6 +437,7 @@ export const mapExpenseRecords = (expenses = []) =>
       amount: Number(expense.amount || 0),
       category: expense.category || 'Varios',
       paymentMethod,
+      paymentBreakdown,
       date: formatDateAR(metricDate),
       time: formatTimeFullAR(createdAtDate),
       user: expense.user_name || 'Sistema',

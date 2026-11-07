@@ -45,6 +45,7 @@ import {
 } from '../utils/userFilters';
 import { selectPageWindowExtras } from '../utils/historyServerQuery';
 import { EXPENSE_CATEGORY_OPTIONS } from '../utils/expenseTypes';
+import { getExpensePaymentBreakdown } from '../utils/expensePayments';
 import useHistoryTransactionsFeed from '../hooks/useHistoryTransactionsFeed';
 
 // --- HELPER LOCAL PARA FORMATO VISUAL ---
@@ -1450,10 +1451,9 @@ const filterHistoryTransactions = ({
     }
 
     if (expensePaymentFilter) {
-      list = list.filter((exp) => {
-        const pm = String(exp.paymentMethod || exp.payment_method || '').toLowerCase();
-        return pm === expensePaymentFilter.toLowerCase();
-      });
+      list = list.filter((exp) => getExpensePaymentBreakdown(exp).some((line) => (
+        line.method.toLowerCase() === expensePaymentFilter.toLowerCase()
+      )));
     }
 
     if (selectedExpenseUserFilter) {

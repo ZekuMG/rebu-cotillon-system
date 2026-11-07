@@ -11,6 +11,7 @@ import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
+  Plus,
 } from 'lucide-react';
 import AsyncActionButton from '../AsyncActionButton';
 import usePendingAction from '../../hooks/usePendingAction';
@@ -21,6 +22,13 @@ import {
   parseExpenseDateValue,
 } from '../../utils/expenseDates';
 import { EXPENSE_CATEGORY_OPTIONS } from '../../utils/expenseTypes';
+import { formatCurrency } from '../../utils/helpers';
+import {
+  getExpenseCashAmount,
+  getExpensePaymentBreakdown,
+  getExpensePaymentError,
+  getExpensePaymentMethod,
+} from '../../utils/expensePayments';
 
 // Métricas lee el resultado del negocio por esta categoría (ver expenseTypes.js).
 const EXPENSE_CATEGORIES = EXPENSE_CATEGORY_OPTIONS;
@@ -196,7 +204,7 @@ export const ExpenseModal = ({
   const actionKey = isEditMode ? 'expense-modal-edit' : 'expense-modal-save';
   const [amount, setAmount] = useState('');
   const [category, setCategory] = useState(EXPENSE_CATEGORIES[0]);
-  const [paymentMethod, setPaymentMethod] = useState('Efectivo');
+  const [paymentLines, setPaymentLines] = useState([{ method: 'Efectivo', amount: '' }]);
   const [note, setNote] = useState('');
   const [expenseDate, setExpenseDate] = useState(() => formatLocalDateInputValue());
 
@@ -206,7 +214,7 @@ export const ExpenseModal = ({
     if (isEditMode) {
       setAmount(String(Number(initialExpense.amount || 0) || ''));
       setCategory(initialExpense.category || EXPENSE_CATEGORIES[0]);
-      setPaymentMethod(initialExpense.paymentMethod || initialExpense.payment_method || 'Efectivo');
+      setPaymentLines(getExpensePaymentBreakdown(initialExpense));
       setNote(getExpenseNote(initialExpense));
       setExpenseDate(normalizeExpenseDateValue(
         initialExpense.expenseDate ||
@@ -220,7 +228,7 @@ export const ExpenseModal = ({
 
     setAmount('');
     setCategory(EXPENSE_CATEGORIES[0]);
-    setPaymentMethod('Efectivo');
+    setPaymentLines([{ method: 'Efectivo', amount: '' }]);
     setNote('');
     setExpenseDate(formatLocalDateInputValue());
   }, [initialExpense, isEditMode, isOpen]);
@@ -252,11 +260,36 @@ export const ExpenseModal = ({
     };
   }, [isEditMode, readOnly]);
 
+  const isSplitPayment = paymentLines.length > 1;
+  const effectivePaymentLines = isSplitPayment
+    ? paymentLines
+    : [{ ...paymentLines[0], amount }];
+  const paymentError = getExpensePaymentError(effectivePaymentLines, amount);
+  const allocatedAmount = effectivePaymentLines.reduce((sum, line) => sum + Math.round(Number(line.amount || 0) * 100), 0) / 100;
+  const remainingAmount = Math.round((Number(amount || 0) - allocatedAmount) * 100) / 100;
+  const cashAmount = getExpenseCashAmount({ paymentBreakdown: effectivePaymentLines });
+  const isSaving = isPending(actionKey);
+  const controlsDisabled = readOnly || isSaving;
+
+  const addPaymentLine = () => {
+    const nextMethod = PAYMENT_METHODS.find((method) => !paymentLines.some((line) => line.method === method.id));
+    if (!nextMethod) return;
+    setPaymentLines([
+      ...effectivePaymentLines,
+      { method: nextMethod.id, amount: remainingAmount > 0 ? String(remainingAmount) : '' },
+    ]);
+  };
+
+  const updatePaymentLine = (index, field, value) => {
+    setPaymentLines((current) => current.map((line, lineIndex) => (
+      lineIndex === index ? { ...line, [field]: value } : line
+    )));
+  };
+
   if (!isOpen) return null;
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (readOnly) return;
+  const handleSubmit = async () => {
+    if (readOnly || paymentError) return;
 
     const value = parseFloat(amount);
     if (!value || value <= 0 || !parseExpenseDateValue(expenseDate)) return;
@@ -265,7 +298,8 @@ export const ExpenseModal = ({
       id: initialExpense?.id || null,
       amount: value,
       category,
-      paymentMethod,
+      paymentMethod: getExpensePaymentMethod({ paymentBreakdown: effectivePaymentLines }),
+      paymentBreakdown: getExpensePaymentBreakdown({ paymentBreakdown: effectivePaymentLines }),
       note,
       description: note,
       expenseDate,
@@ -279,23 +313,26 @@ export const ExpenseModal = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
+      <div role="dialog" aria-modal="true" aria-labelledby="expense-modal-title" className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
         <div className="bg-red-50 px-6 py-4 border-b border-red-100 flex justify-between items-center">
           <div className="flex items-center gap-2 text-red-700">
             <div className="bg-red-100 p-2 rounded-lg">
               <FormIcon size={20} />
             </div>
             <div>
-              <h3 className="font-bold text-lg leading-tight">{modalCopy.title}</h3>
+              <h3 id="expense-modal-title" className="font-bold text-lg leading-tight">{modalCopy.title}</h3>
               <p className="text-[10px] uppercase font-bold opacity-70">{modalCopy.eyebrow}</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors">
+          <button aria-label="Cerrar gasto" disabled={isSaving} onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors disabled:cursor-wait disabled:opacity-40">
             <X size={24} />
           </button>
         </div>
 
-        <form onSubmit={(e) => void runAction(actionKey, () => handleSubmit(e))} className="p-6 space-y-5 overflow-y-auto">
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          void runAction(actionKey, handleSubmit);
+        }} className="p-6 space-y-5 overflow-y-auto">
           {readOnly && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-700">
               No tenes permiso para editar gastos.
@@ -303,15 +340,17 @@ export const ExpenseModal = ({
           )}
 
           <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Monto del Gasto *</label>
+            <label htmlFor="expense-amount" className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Monto del Gasto *</label>
             <div className="relative">
               <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
               <input
+                id="expense-amount"
                 type="number"
                 step="0.01"
+                min="0.01"
                 autoFocus={!readOnly}
                 required
-                disabled={readOnly}
+                disabled={controlsDisabled}
                 className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xl font-bold text-slate-800 focus:ring-2 focus:ring-red-500 focus:bg-white outline-none transition-all placeholder:text-slate-300 disabled:cursor-not-allowed disabled:text-slate-500"
                 placeholder="0.00"
                 value={amount}
@@ -325,7 +364,7 @@ export const ExpenseModal = ({
             <ExpenseDatePicker
               value={expenseDate}
               onChange={setExpenseDate}
-              disabled={readOnly}
+              disabled={controlsDisabled}
             />
             <p className="ml-1 mt-1 text-[10px] font-medium text-slate-400">
               Define el dia al que se imputara en historial y metricas.
@@ -337,7 +376,7 @@ export const ExpenseModal = ({
             <div className="relative">
               <Tag className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
               <select
-                disabled={readOnly}
+                disabled={controlsDisabled}
                 className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl font-medium text-slate-700 focus:ring-2 focus:ring-red-500 outline-none appearance-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
@@ -349,33 +388,78 @@ export const ExpenseModal = ({
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Origen del Dinero *</label>
-            <div className="relative">
-              <CreditCard className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-              <select
-                disabled={readOnly}
-                className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl font-medium text-slate-700 focus:ring-2 focus:ring-red-500 outline-none appearance-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
-                value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value)}
+          <fieldset className="min-w-0 space-y-2" disabled={controlsDisabled}>
+            <legend className="mb-1.5 ml-1 text-xs font-bold uppercase text-slate-500">Origen del Dinero *</legend>
+            {paymentLines.map((line, index) => (
+              <div key={index} className="flex items-center gap-2">
+                <div className="relative min-w-0 flex-1">
+                  <CreditCard className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <select
+                    aria-label={`Método de pago ${index + 1}`}
+                    className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-3 text-sm font-medium text-slate-700 outline-none focus:ring-2 focus:ring-red-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
+                    value={line.method}
+                    onChange={(e) => updatePaymentLine(index, 'method', e.target.value)}
+                  >
+                    {PAYMENT_METHODS.map((method) => (
+                      <option key={method.id} value={method.id} disabled={paymentLines.some((other, otherIndex) => otherIndex !== index && other.method === method.id)}>
+                        {method.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {isSplitPayment && (
+                  <>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      required
+                      aria-label={`Importe del método ${index + 1}`}
+                      aria-describedby="expense-payment-summary"
+                      className="w-24 min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-right text-sm font-bold tabular-nums text-slate-800 outline-none focus:ring-2 focus:ring-red-500 disabled:cursor-not-allowed disabled:text-slate-500 sm:w-28"
+                      placeholder="0.00"
+                      value={line.amount}
+                      onChange={(e) => updatePaymentLine(index, 'amount', e.target.value)}
+                    />
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        aria-label={`Quitar método de pago ${index + 1}`}
+                        onClick={() => setPaymentLines((current) => current.filter((_, lineIndex) => lineIndex !== index))}
+                        className="shrink-0 rounded-lg p-2 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:opacity-40"
+                      >
+                        <X size={16} />
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            ))}
+            {!readOnly && paymentLines.length < PAYMENT_METHODS.length && (
+              <button
+                type="button"
+                onClick={addPaymentLine}
+                className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:opacity-40"
               >
-                {PAYMENT_METHODS.map((method) => (
-                  <option key={method.id} value={method.id}>
-                    {method.label} {method.id === 'Efectivo' ? '(Resta de Caja)' : '(Banco/Digital)'}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {paymentMethod === 'Efectivo' ? (
-              <p className="text-[10px] text-orange-500 mt-1 ml-1 font-bold flex items-center gap-1">
-                Afecta al cierre de caja fisico.
-              </p>
-            ) : (
-              <p className="text-[10px] text-blue-500 mt-1 ml-1 font-bold flex items-center gap-1">
-                No afecta la caja fisica, solo la ganancia neta.
+                <Plus size={15} />
+                Agregar método
+              </button>
+            )}
+            {isSplitPayment && (
+              <p id="expense-payment-summary" role="status" className={`ml-1 text-xs font-medium tabular-nums ${paymentError ? 'text-amber-700' : 'text-green-700'}`}>
+                {remainingAmount > 0
+                  ? `Falta repartir ${formatCurrency(remainingAmount)}`
+                  : remainingAmount < 0
+                    ? `El reparto supera el total por ${formatCurrency(-remainingAmount)}`
+                    : paymentError || `Total repartido: ${formatCurrency(allocatedAmount)}`}
               </p>
             )}
-          </div>
+            <p className={`ml-1 text-[10px] font-bold ${cashAmount > 0 ? 'text-orange-500' : 'text-blue-500'}`}>
+              {cashAmount > 0
+                ? `Se descuentan ${formatCurrency(cashAmount)} de la caja física.`
+                : 'No afecta la caja física, solo la ganancia neta.'}
+            </p>
+          </fieldset>
 
           <div>
             <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Detalle / Nota</label>
@@ -383,7 +467,7 @@ export const ExpenseModal = ({
               <FileText className="absolute left-3 top-3 text-slate-400" size={18} />
               <textarea
                 rows="3"
-                disabled={readOnly}
+                disabled={controlsDisabled}
                 className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 focus:ring-2 focus:ring-red-500 outline-none resize-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                 placeholder="Ej: Pago factura luz Edesur..."
                 value={note}
@@ -396,7 +480,7 @@ export const ExpenseModal = ({
             <AsyncActionButton
               type="submit"
               pending={isPending(actionKey)}
-              disabled={isPending(actionKey)}
+              disabled={isSaving || Boolean(paymentError)}
               className="w-full py-3.5 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold shadow-lg shadow-red-200 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
             >
               <Save size={20} />

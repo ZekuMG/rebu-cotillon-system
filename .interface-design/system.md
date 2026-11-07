@@ -32,6 +32,7 @@ Rebu is a point-of-sale and cash-control tool. The interface should feel like an
 - Product names use bold, readable type; prices and quantities remain easy to scan.
 - Keep checkout content compact, with no reserved blank rows between payment controls, summary, and total. The product list absorbs unused vertical space.
 - Anchor the total and charge button at the bottom. Adapt controls to short windows without overlapping labels or shrinking the text to compensate.
+- Cart tabs use a 36px header row with 32px tabs and a 4px gap. Keep these dimensions in pixels: the app's 18px root font makes Tailwind rem heights larger than fixed grid rows. Let flex distribute the available width down to 68px per tab, then scroll the rail; reveal the active tab after selection or resizing without scrolling the entire workspace.
 
 ## Header Pattern
 

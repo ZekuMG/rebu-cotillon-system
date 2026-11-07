@@ -33,6 +33,12 @@ import { hasProductImage } from './utils/productImages';
 import { formatCurrency, formatDateAR, formatNumber, formatTimeAR, formatTimeFullAR, isTestRecord } from './utils/helpers';
 import { isFutureExpenseDate, normalizeExpenseDateValue } from './utils/expenseDates';
 import {
+  getExpenseCashAmount,
+  getExpensePaymentBreakdown,
+  getExpensePaymentError,
+  getExpensePaymentMethod,
+} from './utils/expensePayments';
+import {
   mapAgendaContactRecord,
   mapAgendaContactRecords,
   mapBudgetRecords,
@@ -10088,9 +10094,15 @@ export default function PartySupplyApp() {
       const userTypedNote = expenseData.note || ''; 
       const safeDescription = userTypedNote || expenseData.description || 'Gasto General';
       const safeAmount = Number(expenseData.amount) || 0;
+      const paymentBreakdown = getExpensePaymentBreakdown(expenseData);
+      const paymentError = getExpensePaymentError(paymentBreakdown, safeAmount);
       const safeExpenseDate = normalizeExpenseDateValue(expenseData.expenseDate, new Date());
       const actor = getActorContext();
 
+      if (paymentError) {
+        showNotification('warning', 'Revisá el pago del gasto', paymentError);
+        return null;
+      }
       if (!safeExpenseDate || isFutureExpenseDate(safeExpenseDate)) {
         showNotification('warning', 'Fecha no valida', 'Elegí una fecha de hoy o anterior.');
         return null;
@@ -10100,7 +10112,8 @@ export default function PartySupplyApp() {
         description: safeDescription,
         amount: safeAmount,
         category: expenseData.category || 'Varios',
-        payment_method: expenseData.paymentMethod || 'Efectivo',
+        payment_method: getExpensePaymentMethod({ paymentBreakdown }),
+        payment_breakdown: paymentBreakdown,
         expense_date: safeExpenseDate,
         user_id: toOptionalDbId(actor.userId),
         user_role: actor.userRole,
@@ -10116,6 +10129,7 @@ export default function PartySupplyApp() {
         amount: data.amount ?? safeAmount,
         category: data.category || payload.category,
         payment_method: data.payment_method || payload.payment_method,
+        payment_breakdown: data.payment_breakdown ?? payload.payment_breakdown,
         expense_date: data.expense_date || payload.expense_date,
         created_at: data.created_at || new Date().toISOString(),
         user_name: data.user_name || actor.userName,
@@ -10136,6 +10150,7 @@ export default function PartySupplyApp() {
           amount: newExpense.amount,
           category: newExpense.category,
           paymentMethod: newExpense.paymentMethod,
+          paymentBreakdown: newExpense.paymentBreakdown,
           expenseDate: newExpense.expenseDate,
         },
         userTypedNote || 'Salida de dinero'
@@ -10162,12 +10177,18 @@ export default function PartySupplyApp() {
       const userTypedNote = expenseData.note || '';
       const safeDescription = userTypedNote || expenseData.description || currentExpense.description || 'Gasto General';
       const safeAmount = Number(expenseData.amount) || 0;
+      const paymentBreakdown = getExpensePaymentBreakdown(expenseData);
+      const paymentError = getExpensePaymentError(paymentBreakdown, safeAmount);
       const safeExpenseDate = normalizeExpenseDateValue(
         expenseData.expenseDate,
         currentExpense.expenseDate || currentExpense.expense_date || currentExpense.createdAt || new Date(),
       );
 
       if (!expenseId || safeAmount <= 0) return null;
+      if (paymentError) {
+        showNotification('warning', 'Revisá el pago del gasto', paymentError);
+        return null;
+      }
       if (!safeExpenseDate || isFutureExpenseDate(safeExpenseDate)) {
         showNotification('warning', 'Fecha no valida', 'Elegí una fecha de hoy o anterior.');
         return null;
@@ -10177,7 +10198,8 @@ export default function PartySupplyApp() {
         description: safeDescription,
         amount: safeAmount,
         category: expenseData.category || currentExpense.category || 'Varios',
-        payment_method: expenseData.paymentMethod || currentExpense.paymentMethod || 'Efectivo',
+        payment_method: getExpensePaymentMethod({ paymentBreakdown }),
+        payment_breakdown: paymentBreakdown,
         expense_date: safeExpenseDate,
       };
 
@@ -10191,6 +10213,7 @@ export default function PartySupplyApp() {
         amount: data.amount ?? payload.amount,
         category: data.category || payload.category,
         payment_method: data.payment_method || payload.payment_method,
+        payment_breakdown: data.payment_breakdown ?? payload.payment_breakdown,
         expense_date: data.expense_date || payload.expense_date,
         created_at: data.created_at || currentExpense.created_at || currentExpense.createdAt || new Date().toISOString(),
         user_name: data.user_name || currentExpense.user,
@@ -10218,6 +10241,7 @@ export default function PartySupplyApp() {
             amount: currentExpense.amount,
             category: currentExpense.category,
             paymentMethod: currentExpense.paymentMethod,
+            paymentBreakdown: getExpensePaymentBreakdown(currentExpense),
             expenseDate: currentExpense.expenseDate || currentExpense.expense_date,
           },
           next: {
@@ -10225,6 +10249,7 @@ export default function PartySupplyApp() {
             amount: updatedExpense.amount,
             category: updatedExpense.category,
             paymentMethod: updatedExpense.paymentMethod,
+            paymentBreakdown: updatedExpense.paymentBreakdown,
             expenseDate: updatedExpense.expenseDate,
           },
         },
@@ -11121,9 +11146,7 @@ export default function PartySupplyApp() {
   const cycleTotalExpenses = cycleExpenses.reduce(
     (acc, exp) => acc + (Number(exp.amount) || 0), 0
   );
-  const cycleCashExpenses = cycleExpenses
-    .filter(e => e.paymentMethod === 'Efectivo')
-    .reduce((acc, exp) => acc + (Number(exp.amount) || 0), 0);
+  const cycleCashExpenses = cycleExpenses.reduce((acc, exp) => acc + getExpenseCashAmount(exp), 0);
   const getTransactionPaymentTotals = useCallback((tx) =>
     getPaymentMethodTotals(
       tx?.paymentBreakdown,
@@ -12672,7 +12695,7 @@ export default function PartySupplyApp() {
     });
 
     const totalExpenses = cycleExpenses.reduce((acc, curr) => acc + Number(curr.amount), 0);
-    const cashExpenses = cycleExpenses.filter(e => e.paymentMethod === 'Efectivo').reduce((acc, curr) => acc + Number(curr.amount), 0);
+    const cashExpenses = cycleExpenses.reduce((acc, expense) => acc + getExpenseCashAmount(expense), 0);
     const averageTicket = cycleSalesCount > 0 ? (cycleTotalSales / cycleSalesCount) : 0;
     const netProfit = cycleTotalSales - totalCost - totalExpenses;
     const cashSales = Number(paymentMethodsSummary.Efectivo || 0);

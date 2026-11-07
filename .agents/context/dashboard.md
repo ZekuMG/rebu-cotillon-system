@@ -295,6 +295,11 @@ Used by:
 - `create` mode for new expenses.
 - `edit` mode for existing expenses.
 - read-only edit mode when the current user lacks `extras.expenses.manage`.
+- split expenses through `+ Agregar método`, with one positive amount per distinct payment method and a sum matching the expense total.
+
+Expense payment allocation is stored in `expenses.payment_breakdown` and mapped to `paymentBreakdown`. `paymentMethod` retains the single method or a joined summary for display. Use `src/utils/expensePayments.js` for expense allocation, method totals, validation, and cash outflow; sales payment helpers apply credit surcharges and must not be used for expenses. Legacy expenses without a breakdown allocate their full amount to `payment_method`. Both the live close-cash preview and the saved closure must subtract only `getExpenseCashAmount(expense)` from physical cash.
+
+`ExpenseModal` must cancel every form submit before checking the pending-action lock, including repeated submits while saving. Keep its fields and close button disabled until the save resolves. Run `npx playwright test --config scripts/expense-payments.playwright.cjs` for the isolated browser regressions (legacy/read-only, split-to-single, four methods/centavos, repeated submits, retry, reset, mapper/cache/metrics).
 
 Expense updates are handled by `handleUpdateExpense`, which uses `updateWithSchemaFallback('expenses', id, payload, CLOUD_SELECTS.expenses)`, updates local `expenses`, updates `dataStateRef.current.expenses`, and logs `Gasto Editado`.
 

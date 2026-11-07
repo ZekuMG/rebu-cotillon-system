@@ -1,5 +1,6 @@
 import { isTestRecord, isVentaLog, normalizeDate } from './helpers';
 import { normalizePaymentBreakdown } from './paymentBreakdown';
+import { getExpensePaymentTotals } from './expensePayments';
 import { isPosBagItem } from './posSaleExtras';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -537,7 +538,7 @@ export const filterExpensesForSales = ({ expenses, range, filters = {} }) =>
       if (!isDateInRange(expense.metricDate, range)) return false;
       if (!filters.includeTest && (expense.isTest || isTestRecord(expense))) return false;
       if (filters.user && getUserKey(expense) !== filters.user) return false;
-      if (filters.payment && expense.paymentMethod !== filters.payment) return false;
+      if (filters.payment && !(getExpensePaymentTotals(expense)[filters.payment] > 0)) return false;
       return true;
     });
 

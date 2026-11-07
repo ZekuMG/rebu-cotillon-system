@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { formatCurrency, formatNumber, isTestRecord, isVentaLog } from '../utils/helpers';
 import { getPaymentMethodLabel, normalizePaymentBreakdown } from '../utils/paymentBreakdown';
+import { getExpensePaymentTotals } from '../utils/expensePayments';
 import {
   buildSalesDataset,
   getCostBasisStatus,
@@ -430,7 +431,7 @@ const _filterExpenses = ({ expenses, range, filters }) =>
       if (!isInRange(expense.metricDate, range)) return false;
       if (!filters.includeTest && (expense.isTest || isTestRecord(expense))) return false;
       if (filters.user && getUserKey(expense) !== filters.user) return false;
-      if (filters.payment && expense.paymentMethod !== filters.payment) return false;
+      if (filters.payment && !(getExpensePaymentTotals(expense)[filters.payment] > 0)) return false;
       return true;
     });
 

@@ -2,13 +2,18 @@
 import React, { useState } from 'react';
 import { ArrowRight, CheckCircle, Edit3, Plus, Save, AlertTriangle, FileText, Download } from 'lucide-react';
 import AsyncActionButton from '../AsyncActionButton';
-import { formatNumber } from '../../utils/helpers';
+import { formatCurrency, formatNumber } from '../../utils/helpers';
 import { FancyPrice } from '../FancyPrice';
 import { HintIcon } from '../HintIcon';
 import { extractRealNote, normalizeLogAction } from './logHelpers';
 import UserDisplayBadge from '../UserDisplayBadge';
 import { APP_PERMISSION_GROUPS, getEffectivePermissions, getPermissionSummary } from '../../utils/userPermissions';
-import { getPaymentBreakdownDisplayItems, getPaymentSummary } from '../../utils/paymentBreakdown';
+import { getPaymentBreakdownDisplayItems, getPaymentMethodLabel, getPaymentSummary } from '../../utils/paymentBreakdown';
+import { getExpensePaymentBreakdown } from '../../utils/expensePayments';
+
+const describeExpensePayments = (expense) => getExpensePaymentBreakdown(expense)
+  .map((line) => `${getPaymentMethodLabel(line.method)}: ${formatCurrency(line.amount)}`)
+  .join(' + ');
 
 // ════════════════════════════════════════════
 //  HELPERS EXPORTABLES
@@ -1923,6 +1928,9 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
             </Item>
             <Item label="Categoría" value={details.category || 'Sin categoría'} />
             <Item label="Método de Pago" value={details.paymentMethod || 'No especificado'} />
+            {details.paymentBreakdown?.length > 1 && (
+              <Item label="Reparto del pago" value={describeExpensePayments(details)} />
+            )}
           </Card>
           <EditableReasonCard note={validNote} logId={log.id} onUpdateNote={onUpdateNote} />
         </div>
@@ -1965,6 +1973,13 @@ export default function LogDetailRenderer({ log, onUpdateNote, onReprintPdf, use
           old: cleanText(previousPayment),
           new: cleanText(nextPayment),
           changed: didTextChange(previousPayment, nextPayment),
+        },
+        {
+          field: 'Reparto del pago',
+          old: describeExpensePayments(previous),
+          new: describeExpensePayments(next),
+          changed: (previous.paymentBreakdown?.length > 1 || next.paymentBreakdown?.length > 1)
+            && describeExpensePayments(previous) !== describeExpensePayments(next),
         },
       ].filter((change) => change.changed);
 

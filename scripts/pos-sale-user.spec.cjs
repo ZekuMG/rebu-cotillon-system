@@ -34,8 +34,37 @@ test('POS exige responsable por venta, lo conserva por carrito y lo muestra en e
   // Select someone other than the demo session user.
   const radio = page.getByRole('radio').last();
   const seller = await radio.locator('..').innerText();
-  await radio.check();
+  const sellerId = await radio.getAttribute('value');
+  // Operators click the name, not just the small radio control.
+  await radio.locator('..').getByText(seller, { exact: true }).click();
   await expect(picker.locator('summary')).toContainText(seller);
+  await expect(picker).toHaveJSProperty('open', false);
+  await picker.locator('summary').click();
+  const otherRadio = page.getByRole('radio').first();
+  const otherSeller = await otherRadio.locator('..').innerText();
+  await otherRadio.locator('..').getByText(otherSeller, { exact: true }).click();
+  await expect(picker.locator('summary')).toContainText(otherSeller);
+  await expect(picker).toHaveJSProperty('open', false);
+  await picker.locator('summary').click();
+  await page.getByRole('radio').last().locator('..').getByText(seller, { exact: true }).click();
+  await expect(picker.locator('summary')).toContainText(seller);
+  await expect(picker).toHaveJSProperty('open', false);
+  await expect.poll(() => page.evaluate(() => {
+    const snapshot = JSON.parse(localStorage.getItem('party_pos_snapshot_v1'));
+    return snapshot.posCarts.find((cart) => cart.id === snapshot.activePosCartId).selectedUserId;
+  })).toBe(sellerId);
+  await picker.locator('summary').click();
+  await page.getByRole('radio').last().locator('..').getByText(seller, { exact: true }).click();
+  await expect(picker).toHaveJSProperty('open', false);
+  await expect(picker.locator('summary')).toContainText(seller);
+  await picker.locator('summary').click();
+  await page.getByPlaceholder('Buscar producto...').click();
+  await expect(picker).toHaveJSProperty('open', false);
+  await expect(picker.locator('summary')).toContainText(seller);
+  await picker.locator('summary').click();
+  await page.keyboard.press('Escape');
+  await expect(picker).toHaveJSProperty('open', false);
+  await expect(picker.locator('summary')).toBeFocused();
   await expect(charge).toBeEnabled();
   await page.getByRole('button', { name: 'Abrir nuevo carrito', exact: true }).click();
   await expect(picker.locator('summary')).toContainText('Elegir usuario de caja');
@@ -54,6 +83,7 @@ test('POS exige responsable por venta, lo conserva por carrito y lo muestra en e
   await chosenEmployee.click();
   await page.getByRole('button', { name: 'No socio', exact: true }).click();
   await page.getByRole('button', { name: 'Continuar como consumidor final', exact: true }).click();
+  await expect(picker.locator('summary')).toContainText(confirmedSeller);
   await charge.click();
   await expect(page.getByRole('heading', { name: 'Venta exitosa' })).toBeVisible();
   await expect(employeeDialog).toBeHidden();

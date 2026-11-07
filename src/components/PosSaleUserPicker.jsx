@@ -1,12 +1,33 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { ChevronDown, User } from 'lucide-react';
 
 export default function PosSaleUserPicker({ users, selectedUser, onSelect, cartId, disabled }) {
   const pickerRef = useRef(null);
+  const closeFrameRef = useRef(null);
   const closePicker = () => {
-    pickerRef.current.open = false;
-    pickerRef.current.querySelector('summary')?.focus();
+    // Let the label finish activating its radio before hiding or refocusing it.
+    // Closing synchronously can cancel the change or crash Chromium/Electron.
+    cancelAnimationFrame(closeFrameRef.current);
+    closeFrameRef.current = requestAnimationFrame(() => {
+      const picker = pickerRef.current;
+      if (!picker) return;
+      const restoreFocus = picker.contains(document.activeElement) || document.activeElement === document.body;
+      picker.open = false;
+      if (restoreFocus) picker.querySelector('summary')?.focus();
+    });
   };
+
+  useEffect(() => {
+    const closeOutside = (event) => {
+      const picker = pickerRef.current;
+      if (picker && !picker.contains(event.target)) picker.open = false;
+    };
+    document.addEventListener('pointerdown', closeOutside);
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside);
+      cancelAnimationFrame(closeFrameRef.current);
+    };
+  }, []);
 
   return (
     <div className="pos-sale-user my-2 min-w-0">
@@ -15,7 +36,7 @@ export default function PosSaleUserPicker({ users, selectedUser, onSelect, cartI
         ref={pickerRef}
         className="pos-sale-user-picker relative"
         onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
+          if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
         }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') closePicker();
@@ -47,8 +68,13 @@ export default function PosSaleUserPicker({ users, selectedUser, onSelect, cartI
                 value={String(user.id)}
                 checked={String(user.id) === String(selectedUser?.id)}
                 disabled={disabled}
-                onChange={() => onSelect(String(user.id))}
-                onClick={closePicker}
+                onChange={() => {
+                  onSelect(String(user.id));
+                  closePicker();
+                }}
+                onClick={() => {
+                  if (String(user.id) === String(selectedUser?.id)) closePicker();
+                }}
               />
               <span className="min-w-0 flex-1 truncate">{user.displayName}</span>
             </label>
