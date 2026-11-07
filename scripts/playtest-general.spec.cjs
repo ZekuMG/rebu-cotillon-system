@@ -198,10 +198,8 @@ test('presupuestos: crear uno con item manual', async ({ page }) => {
   expect(estado.errores).toEqual([]);
 });
 
-// La app es de escritorio a proposito: index.css fija --app-min-width: 1024px en
-// body, #root y .app-shell. En pantalla chica NO se reacomoda, se desplaza. Lo
-// que se verifica aca es que respete ese minimo y siga navegable, no que sea
-// responsive: si algun dia se rompe el ancho minimo, esta prueba lo canta.
+// Las pantallas generales mantienen el mínimo de escritorio. Punto de Venta
+// adapta catálogo, filtros y carrito hasta 720px; debajo mantiene desplazamiento.
 const ANCHO_MINIMO_ESPERADO = 1024;
 
 test('pantalla chica: respeta el ancho minimo de escritorio y sigue navegable', async ({ page }) => {
@@ -222,8 +220,9 @@ test('pantalla chica: respeta el ancho minimo de escritorio y sigue navegable', 
     await page.waitForTimeout(900);
     const ancho = await page.evaluate(() => document.documentElement.scrollWidth);
     anchos.push(nombre + '=' + ancho + 'px');
-    if (ancho !== ANCHO_MINIMO_ESPERADO) {
-      problemas.push(nombre + ' -> ancho ' + ancho + 'px, se esperaba ' + ANCHO_MINIMO_ESPERADO);
+    const anchoEsperado = nombre === 'Punto de Venta' ? 720 : ANCHO_MINIMO_ESPERADO;
+    if (ancho !== anchoEsperado) {
+      problemas.push(nombre + ' -> ancho ' + ancho + 'px, se esperaba ' + anchoEsperado);
     }
     const titulo = (await tituloDelApartado(page).textContent().catch(() => '') || '').trim();
     if (!titulo) problemas.push(nombre + ' -> no muestra titulo en pantalla chica');

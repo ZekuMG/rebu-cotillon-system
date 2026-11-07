@@ -2,6 +2,34 @@ const { test, expect } = require('playwright/test');
 
 const appUrl = process.env.REBU_SMOKE_URL || 'http://127.0.0.1:5174/?demo=1';
 
+test('una venta sincronizada conserva centavos de cada pesaje al reiniciar el cache', async ({ page }) => {
+  await page.goto(appUrl, { waitUntil: 'domcontentloaded' });
+  const synced = await page.evaluate(async () => {
+    const { mapSaleRecords } = await import('/src/utils/cloudMappers.js');
+    const cache = await import('/src/utils/transactionHistoryCache.js');
+    const transactions = mapSaleRecords([{
+      id: 990001, created_at: new Date().toISOString(), total: 5370.30,
+      payment_method: 'Efectivo', cash_received: 6000, cash_change: 629.70,
+      status: 'completed', sale_items: [
+        { product_id: 81, product_title: 'Pesaje A', quantity: 333, price: 8.0635, subtotal: 2685.15, product_type: 'weight' },
+        { product_id: 82, product_title: 'Pesaje B', quantity: 333, price: 8.0635, subtotal: 2685.15, product_type: 'weight' },
+      ],
+    }], []);
+    const snapshot = { savedAt: new Date().toISOString(), transactionsScope: 'full', transactions };
+    await cache.saveTransactionHistorySnapshot(snapshot);
+    return snapshot;
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const restored = await page.evaluate(async () => {
+    const cache = await import('/src/utils/transactionHistoryCache.js');
+    return cache.loadTransactionHistorySnapshot();
+  });
+  expect(restored).toEqual(synced);
+  expect(restored.transactions[0].total).toBe(5370.30);
+  expect(restored.transactions[0].cashChange).toBe(629.70);
+  expect(restored.transactions[0].items.map(item => item.subtotal)).toEqual([2685.15, 2685.15]);
+});
+
 test('el historial completo persiste en IndexedDB y sobrevive una recarga', async ({ page }) => {
   await page.goto(appUrl, { waitUntil: 'domcontentloaded' });
 

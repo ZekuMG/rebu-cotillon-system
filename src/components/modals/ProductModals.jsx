@@ -45,6 +45,24 @@ import {
   normalizeFinalPurchaseCost,
 } from '../../utils/finalPurchaseCost';
 
+const SalePriceSuggestion = ({ value, onSelect }) => {
+  const enteredPrice = Number(value);
+  if (value === '' || !Number.isFinite(enteredPrice) || enteredPrice < 0) return null;
+
+  const suggestedPrice = normalizeFinalSalePrice(enteredPrice);
+  if (suggestedPrice <= 0 || suggestedPrice === enteredPrice) return null;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(String(suggestedPrice))}
+      className="mt-1 text-left text-[11px] font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 transition hover:text-fuchsia-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-fuchsia-500"
+    >
+      Te recomendamos usar este precio: <span className="font-bold text-slate-700">${formatNumber(suggestedPrice)}</span>
+    </button>
+  );
+};
+
 // ==========================================
 // COMPONENTE: Selector multi-categoría
 // ==========================================
@@ -635,7 +653,8 @@ export const AddProductModal = ({ isOpen, onClose, newItem, setNewItem, categori
               <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
                 {productType === 'weight' ? 'Precio ($/kg)' : 'Precio ($)'}
               </label>
-              <input required type="number" step="1" min="0" className="w-full px-3 py-2 border rounded-lg font-bold text-slate-800" value={newItem.price} onChange={(e) => setNewItem({ ...newItem, price: e.target.value })} onBlur={(e) => setNewItem({ ...newItem, price: String(normalizeFinalSalePrice(e.target.value)) })} />
+              <input required type="number" step="any" min="0" className="w-full px-3 py-2 border rounded-lg font-bold text-slate-800" value={newItem.price} onChange={(e) => setNewItem({ ...newItem, price: e.target.value })} />
+              <SalePriceSuggestion value={newItem.price} onSelect={(price) => setNewItem({ ...newItem, price })} />
               {productType === 'weight' && newItem.price && (
                 <p className="text-[10px] text-slate-400 mt-1">= ${(Number(newItem.price) / 1000).toFixed(2)}/g</p>
               )}
@@ -712,15 +731,12 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
     : 0;
   const displayCost = product ? getVisibleProductPurchaseCost(normalizedPurchasePrice, productType) : 0;
 
-  // Mientras escribis, el campo guarda el TEXTO tal cual. Antes cada tecla pasaba
-  // por el redondeo comercial y volvia al input ya convertido: escribir "2000"
-  // terminaba en "000" y "1000" en "10100010", porque el numero se reescribia y
-  // el cursor saltaba al principio. El redondeo va al salir del campo.
+  // El texto ingresado queda intacto; la decena se ofrece solo si se elige.
   const [priceText, setPriceText] = useState('');
   const [costText, setCostText] = useState('');
 
   useEffect(() => {
-    setPriceText(displayPrice ? String(displayPrice) : '');
+    setPriceText(String(displayPrice));
     setCostText(displayCost ? String(displayCost) : '');
   }, [product?.id, displayPrice, displayCost]);
 
@@ -730,10 +746,8 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
   const isProductActive = product.is_active !== false && product.isActive !== false;
 
   const commitPrice = (val) => {
-    const visible = normalizeFinalSalePrice(val);
-    setPriceText(visible ? String(visible) : '');
-    setEditingProduct({ ...product, price: getStoredProductSalePrice(visible, productType) });
-    return visible;
+    if (val === '') return;
+    setEditingProduct({ ...product, price: getStoredProductSalePrice(val, productType) });
   };
 
   const commitCost = (val) => {
@@ -757,7 +771,7 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
       // Si apretaste Enter sin salir del campo, el texto todavia no se confirmo.
       const normalizedProduct = {
         ...product,
-        price: getStoredProductSalePrice(normalizeFinalSalePrice(priceText), productType),
+        price: getStoredProductSalePrice(priceText, productType),
         purchasePrice: normalizeProductPurchasePrice(
           getStoredProductPurchaseCost(normalizeFinalPurchaseCost(costText), productType),
           productType,
@@ -847,9 +861,10 @@ export const EditProductModal = ({ product, onClose, setEditingProduct, categori
               <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
                 {productType === 'weight' ? 'Precio ($/kg)' : 'Precio ($)'}
               </label>
-              <input required type="number" step="1" min="0" className="w-full px-3 py-2 border rounded-lg font-bold" value={priceText} onChange={(e) => setPriceText(e.target.value)} onBlur={(e) => commitPrice(e.target.value)} />
-              {productType === 'weight' && displayPrice > 0 && (
-                <p className="text-[10px] text-slate-400 mt-1">= ${(Number(displayPrice) / 1000).toFixed(2)}/g</p>
+              <input required type="number" step="any" min="0" className="w-full px-3 py-2 border rounded-lg font-bold" value={priceText} onChange={(e) => setPriceText(e.target.value)} onBlur={(e) => commitPrice(e.target.value)} />
+              <SalePriceSuggestion value={priceText} onSelect={(price) => { setPriceText(price); commitPrice(price); }} />
+              {productType === 'weight' && priceText !== '' && (
+                <p className="text-[10px] text-slate-400 mt-1">= ${(Number(priceText) / 1000).toFixed(2)}/g</p>
               )}
             </div>
           </div>

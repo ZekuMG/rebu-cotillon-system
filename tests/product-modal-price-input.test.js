@@ -7,25 +7,28 @@ const leerModal = () => readFile(
   'utf8',
 );
 
-test('el precio y el costo se escriben como texto y se redondean al salir', async () => {
+test('el precio se escribe sin redondeo automatico y el costo conserva su regla', async () => {
   const source = await leerModal();
-  // El bug: el input mostraba el valor YA redondeado y lo recalculaba en cada
-  // tecla, asi que escribir "2000" quedaba en "000" y "1000" en "10100010".
-  assert.doesNotMatch(source, /value=\{displayPrice\}/, 'el input no puede mostrar el valor redondeado mientras escribis');
+  assert.doesNotMatch(source, /value=\{displayPrice\}/);
   assert.doesNotMatch(source, /value=\{displayCost\}/);
   assert.match(source, /value=\{priceText\}/);
   assert.match(source, /value=\{costText\}/);
   assert.match(source, /onBlur=\{\(e\) => commitPrice\(e\.target\.value\)\}/);
   assert.match(source, /onBlur=\{\(e\) => commitCost\(e\.target\.value\)\}/);
+  assert.match(source, /Te recomendamos usar este precio:/);
+  assert.match(source, /<SalePriceSuggestion value=\{priceText\}/);
+  assert.doesNotMatch(source, /price: getStoredProductSalePrice\(normalizeFinalSalePrice\(priceText\)/);
 });
 
 test('al guardar se toma lo tipeado aunque no hayas salido del campo', async () => {
   const source = await leerModal();
-  assert.match(source, /price: getStoredProductSalePrice\(normalizeFinalSalePrice\(priceText\), productType\)/);
+  assert.match(source, /price: getStoredProductSalePrice\(priceText, productType\)/);
   assert.match(source, /normalizeFinalPurchaseCost\(costText\)/);
 });
 
-test('el alta de producto ya usaba el criterio correcto y sigue igual', async () => {
+test('el alta de producto tambien ofrece la sugerencia sin cambiar el precio', async () => {
   const source = await leerModal();
   assert.match(source, /onChange=\{\(e\) => setNewItem\(\{ \.\.\.newItem, price: e\.target\.value \}\)\}/);
+  assert.match(source, /<SalePriceSuggestion value=\{newItem\.price\}/);
+  assert.doesNotMatch(source, /onBlur=\{\(e\) => setNewItem\(\{ \.\.\.newItem, price: String\(normalizeFinalSalePrice/);
 });

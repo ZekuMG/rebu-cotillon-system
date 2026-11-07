@@ -1,11 +1,15 @@
 {
   "name": "cotillon-rebu-system",
   "productName": "Rebu Cotillón",
-  "version": "1.2.53",
+  "version": "1.2.57",
   "private": true,
   "main": "electron-main.cjs",
   "type": "module",
   "scripts": {
+    "dev:mobile": "vite --config mobile/vite.config.js",
+    "build:mobile": "vite build --config mobile/vite.config.js",
+    "preview:mobile": "vite preview --config mobile/vite.config.js",
+    "test:mobile:db": "node scripts/verify-mobile-stock.mjs",
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
@@ -13,7 +17,7 @@
     "audit:queries": "node scripts/audit-supabase-query-latency.mjs",
     "test": "node scripts/correr-pruebas.mjs",
     "test:regression": "node scripts/correr-pruebas.mjs",
-    "test:smoke:offline": "playwright test scripts/smoke-offline.spec.cjs scripts/cache-persistence.spec.cjs scripts/startup-cache-gating.spec.cjs scripts/dashboard-dark-loading.spec.cjs scripts/dynamic-import-recovery.spec.cjs scripts/excel-import-flow.spec.cjs scripts/excel-import-conflicts.spec.cjs scripts/image-import-queue.spec.cjs scripts/gross-margin-flow.spec.cjs scripts/budget-pdf-smoke.spec.cjs scripts/budget-responsive.spec.cjs scripts/supplier-price-report-ui.spec.cjs scripts/supplier-session-control.spec.cjs scripts/supplier-link-suggestions-ui.spec.cjs --reporter=line --workers=1",
+    "test:smoke:offline": "playwright test scripts/smoke-offline.spec.cjs scripts/cache-persistence.spec.cjs scripts/startup-cache-gating.spec.cjs scripts/dashboard-dark-loading.spec.cjs scripts/dynamic-import-recovery.spec.cjs scripts/excel-import-flow.spec.cjs scripts/excel-import-conflicts.spec.cjs scripts/image-import-queue.spec.cjs scripts/gross-margin-flow.spec.cjs scripts/budget-pdf-smoke.spec.cjs scripts/budget-responsive.spec.cjs scripts/supplier-price-report-ui.spec.cjs scripts/supplier-session-control.spec.cjs scripts/supplier-link-suggestions-ui.spec.cjs scripts/pos-bag.spec.cjs scripts/pos-sale-user.spec.cjs scripts/pos-weight-price.spec.cjs scripts/pos-prerelease.spec.cjs scripts/pos-cache-recovery.spec.cjs scripts/pos-checkout-recovery.spec.cjs scripts/reconnect-session.spec.cjs scripts/update-notification.spec.cjs --reporter=line --workers=1",
     "preview": "vite preview",
     "electron:dev": "concurrently -k -s first \"cross-env BROWSER=none npm run dev -- --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on tcp:127.0.0.1:5173 && cross-env ELECTRON_START_URL=http://127.0.0.1:5173 electron .\"",
     "electron:build": "vite build && dotenv -e .env -- electron-builder -w --publish always",
@@ -24,6 +28,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",
+    "@zxing/browser": "^0.2.1",
     "electron-updater": "^6.3.9",
     "lucide-react": "^0.453.0",
     "react": "^18.3.1",

@@ -25,6 +25,14 @@ Rebu is a point-of-sale and cash-control tool. The interface should feel like an
 - Warning/cutoff: translucent amber, text `#fbbf24`.
 - Error/closed state: translucent red, text `#fca5a5`.
 
+## POS Cart
+
+- Preserve the established colorful counter style: violet member card and item-count pill, turquoise earned-points pill, and amber weighted products, credit installments, and surcharges.
+- Keep member name, member number, available points, redeem, and remove actions visible in the compact member card.
+- Product names use bold, readable type; prices and quantities remain easy to scan.
+- Keep checkout content compact, with no reserved blank rows between payment controls, summary, and total. The product list absorbs unused vertical space.
+- Anchor the total and charge button at the bottom. Adapt controls to short windows without overlapping labels or shrinking the text to compensate.
+
 ## Header Pattern
 
 - Main header is an operative control bar, not a collection of badges.

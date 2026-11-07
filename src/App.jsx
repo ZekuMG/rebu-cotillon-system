@@ -170,10 +170,12 @@ import {
 } from './utils/appUserLoadControl';
 import { isPersistedSupabaseJwtError, retryOnSupabaseClockSkew } from './utils/supabaseAuthRecovery';
 import { readDiagnosticErrors, recordDiagnosticError } from './utils/diagnosticsLog';
+import AppWorkspaceStatus from './components/AppWorkspaceStatus';
 import { describeCloudSourceFailures, formatCloudConnectionReport } from './utils/cloudConnectionDiagnostics';
 import {
   assessSecureSession,
   getExpectedAuthUserId,
+  reauthenticateCloudUser,
   SECURE_SESSION_STATUS,
 } from './utils/secureSession';
 import { getSupabaseDiagnosticMessage } from './utils/supabaseErrorDiagnostics';
@@ -208,6 +210,9 @@ import {
   createPosBagSaleItem,
   isPosBagItem,
 } from './utils/posSaleExtras';
+import { getPosLineSubtotal, getPosSubtotal } from './utils/posMoney';
+import { resolvePosSaleUser } from './utils/posSaleUser';
+import { compactPosCheckoutItems, createPosCheckoutJournal, executePosCheckoutAttempt, posCheckoutValuesEqual } from './utils/posCheckoutRecovery';
 import {
   addPosCartTab,
   closePosCartTab,
@@ -5897,10 +5902,11 @@ export default function PartySupplyApp() {
   const memberCreationRequestsRef = useRef(new Set());
   const lastCloudFallbackNoticeRef = useRef(0);
   const isCheckoutInProgressRef = useRef(false);
-  // Clave de cobro por carrito. Se genera en el primer intento y se conserva
-  // hasta que la venta entra de verdad: asi un reintento del MISMO carrito
-  // llega con la misma clave y la base lo reconoce como repetido.
-  const checkoutOperationKeysRef = useRef(new Map());
+  const [posCheckoutAttempts, setPosCheckoutAttempts] = useState(() => {
+    if (isLocalDemoMode()) return {};
+    try { return createPosCheckoutJournal({ storage: window.localStorage }).read(); }
+    catch (error) { console.error('No se pudo leer el registro local de cobros:', error); return {}; }
+  });
   const secureSessionHealthRef = useRef(assessSecureSession());
   const secureSessionCheckPromiseRef = useRef(null);
   const secureSessionRefreshPromiseRef = useRef(null);
@@ -6034,11 +6040,22 @@ export default function PartySupplyApp() {
   const activePosCart = useMemo(() => getActivePosCart(posCartWorkspace), [posCartWorkspace]);
   const cart = useMemo(() => activePosCart?.cart || EMPTY_POS_CART, [activePosCart]);
   const posSelectedClient = activePosCart?.selectedClient || null;
+  const posSelectedUserId = activePosCart?.selectedUserId || '';
   const selectedPayment = activePosCart?.selectedPayment || 'Efectivo';
   const installments = Number(activePosCart?.installments || 1) || 1;
+  const pendingPosCheckout = posCheckoutAttempts[activePosCartId]
+    || Object.values(posCheckoutAttempts).find((attempt) => attempt.status !== 'completed')
+    || null;
 
   const setActivePosCartField = useCallback((field, valueOrUpdater) => {
-    setPosCartWorkspace((current) => updateActivePosCartField(current, field, valueOrUpdater));
+    setPosCartWorkspace((current) => {
+      if (!isLocalDemoMode()) {
+        try {
+          if (createPosCheckoutJournal({ storage: window.localStorage }).get(current.activeId)) return current;
+        } catch { return current; }
+      }
+      return updateActivePosCartField(current, field, valueOrUpdater);
+    });
   }, []);
   const setCart = useCallback((valueOrUpdater) => {
     setActivePosCartField('cart', valueOrUpdater);
@@ -6046,11 +6063,17 @@ export default function PartySupplyApp() {
   const setPosSelectedClient = useCallback((valueOrUpdater) => {
     setActivePosCartField('selectedClient', valueOrUpdater);
   }, [setActivePosCartField]);
+  const setPosSelectedUserId = useCallback((value) => {
+    setActivePosCartField('selectedUserId', value);
+  }, [setActivePosCartField]);
   const setSelectedPayment = useCallback((valueOrUpdater) => {
     setActivePosCartField('selectedPayment', valueOrUpdater);
   }, [setActivePosCartField]);
   const setInstallments = useCallback((valueOrUpdater) => {
     setActivePosCartField('installments', valueOrUpdater);
+  }, [setActivePosCartField]);
+  const setPosCheckoutDraft = useCallback((valueOrUpdater) => {
+    setActivePosCartField('checkoutDraft', valueOrUpdater);
   }, [setActivePosCartField]);
   const resetPosCartWorkspace = useCallback(() => {
     setPosCartWorkspace(createPosCartWorkspace());
@@ -6462,6 +6485,19 @@ export default function PartySupplyApp() {
     };
 
     saveOfflinePosSnapshot(nextPosSnapshot);
+    if (!isLocalDemoMode()) {
+      try {
+        // Keep completed attempts until the closed cart is durably absent from
+        // the snapshot. A crash between receipt and tab removal stays safe.
+        const persisted = loadOfflinePosSnapshot();
+        if (Array.isArray(persisted?.posCarts)) {
+          const journal = createPosCheckoutJournal({ storage: window.localStorage });
+          if (journal.pruneCompleted(persisted.posCarts.map((tab) => tab.id))) {
+            setPosCheckoutAttempts(journal.read());
+          }
+        }
+      } catch (error) { console.warn('Se conserva el registro de cobros para recuperarlo:', error); }
+    }
   }, [
     activePosCartId,
     cart,
@@ -6484,7 +6520,8 @@ export default function PartySupplyApp() {
     const now = Date.now();
     if (now - Number(lastCloudFallbackNoticeRef.current || 0) < 15000) return;
     lastCloudFallbackNoticeRef.current = now;
-    showNotificationRef.current?.(type, title, message);
+    // Background connection notices belong in the reserved status rail, not a blocking modal.
+    recordDiagnosticError('cloud:fallback', { message }, { title, type });
   }
 
   const closeNotification = () => {
@@ -6708,6 +6745,59 @@ export default function PartySupplyApp() {
     return true;
   };
 
+  const ensureCloudSessionForReconnect = async () => {
+    if (isLocalDemoMode() || !ENABLE_LOGIN_AUTH_SESSION || !currentUserRef.current || isBrowserOffline()) return true;
+    const assessment = await checkSecureSession({ source: 'cloud:reconnect' });
+    if (assessment.isUsable) return true;
+    if (assessment.status === SECURE_SESSION_STATUS.ERROR) throw new Error(assessment.reason);
+
+    const userId = currentUserRef.current.id;
+    const userName = currentUserRef.current.displayName || currentUserRef.current.name;
+    setIsOfflineReadOnly(true);
+    const result = await Swal.fire({
+      title: 'Volvé a ingresar tu clave',
+      text: `Necesitamos renovar el acceso a la nube de ${userName}. Los carritos y pagos se conservan.`,
+      input: 'password',
+      inputAttributes: { autocomplete: 'current-password', 'aria-label': 'Clave para reconectar' },
+      confirmButtonText: 'Reconectar',
+      cancelButtonText: 'Cancelar',
+      showCancelButton: true,
+      showLoaderOnConfirm: true,
+      allowOutsideClick: () => !Swal.isLoading(),
+      allowEscapeKey: () => !Swal.isLoading(),
+      preConfirm: async (password) => {
+        if (!password) { Swal.showValidationMessage('Ingresá tu clave.'); return false; }
+        try {
+          if (String(currentUserRef.current?.id) !== String(userId)) throw new Error('El usuario cambió. Volvé a intentar.');
+          return await withTimeout(reauthenticateCloudUser({
+            userId, password,
+            verifyUser: verifyAppUserLogin,
+            signIn: signInSupabaseAuthForAppUser,
+            clearSession: (options) => supabase.auth.signOut(options),
+          }), CLOUD_RECONNECT_TIMEOUT_MS, 'Renovación de sesión');
+        } catch (error) {
+          Swal.showValidationMessage(getSupabaseDiagnosticMessage(error) || error.message || 'No se pudo renovar el acceso.');
+          return false;
+        }
+      },
+    });
+    if (!result.isConfirmed || !result.value) return false;
+    const { user, assessment: renewed } = result.value;
+    if (String(currentUserRef.current?.id) !== String(userId)) return false;
+    secureSessionHealthRef.current = { ...renewed, source: 'cloud:reauthenticated', checkedAt: Date.now() };
+    const sessionMeta = {
+      ...currentSessionMetaRef.current,
+      supabaseAuth: { signedIn: true, reason: null, authUserId: renewed.sessionAuthUserId, authEmail: user.authEmail || user.auth_email || null },
+    };
+    currentUserRef.current = user;
+    currentSessionMetaRef.current = sessionMeta;
+    setCurrentUser(user);
+    setCurrentSessionMeta(sessionMeta);
+    setAppUsers((previous) => previous.map((entry) => String(entry.id) === String(user.id) ? { ...entry, ...user } : entry));
+    if (sessionMeta.rememberedSession) saveRememberedSession(user, sessionMeta);
+    return true;
+  };
+
   const handleReconnectCloud = async () => {
     if (isLocalDemoMode()) {
       showNotification('info', 'Modo demo local', 'Este modo no se conecta a Supabase. Salí con ?demo=0 para volver a la nube.');
@@ -6718,6 +6808,7 @@ export default function PartySupplyApp() {
 
     setIsReconnectAttempting(true);
     try {
+      if (!await ensureCloudSessionForReconnect()) return;
       const isReachable = await verifyCloudConnection();
       if (!isReachable) {
         setIsOfflineReadOnly(true);
@@ -6823,6 +6914,7 @@ export default function PartySupplyApp() {
 
     setIsForceReloading(true);
     try {
+      if (!await ensureCloudSessionForReconnect()) return;
       const isReachable = await verifyCloudConnection();
       if (!isReachable) {
         throw new Error('Windows informa que no hay conexion disponible.');
@@ -6902,9 +6994,9 @@ export default function PartySupplyApp() {
            isTestRecord(transactionSearch);
   }, [posCartTabs, posSearch, newItem, editingProduct, editingTransaction, transactionSearch]);
 
-  const writeLogEntry = async ({ action, details, reason = '', userName, skipCloud = false }) => {
+  const writeLogEntry = async ({ action, details, reason = '', userName, skipCloud = false, actorOverride }) => {
     const now = new Date();
-    const actor = getActorContext(userName);
+    const actor = actorOverride || getActorContext(userName);
     const normalizedDetails =
       details && typeof details === 'object'
         ? {
@@ -6967,7 +7059,7 @@ export default function PartySupplyApp() {
 
   writeLogEntryRef.current = writeLogEntry;
 
-  const addLog = async (action, details, defaultReason = '') => {
+  const addLog = async (action, details, defaultReason = '', actorOverride) => {
     let finalReason = defaultReason;
     if (details && typeof details === 'object') {
         const userNote = details.description || details.note || details.extraInfo;
@@ -6980,6 +7072,7 @@ export default function PartySupplyApp() {
       action,
       details,
       reason: finalReason,
+      actorOverride,
     });
     lastLogWritePromiseRef.current = logWritePromise;
     await logWritePromise;
@@ -8046,7 +8139,8 @@ export default function PartySupplyApp() {
 
     const saleId = data?.id || data?.sale_id || (Array.isArray(data) ? data[0]?.id : null);
     if (!saleId) throw new Error('La RPC register_sale_transaction no devolvio el id de la venta.');
-    return { id: saleId };
+    const result = Array.isArray(data) ? data[0] : data;
+    return { ...result, id: saleId };
   };
 
   const editSaleTransactionCloud = async ({
@@ -10938,10 +11032,7 @@ export default function PartySupplyApp() {
   };
 
   const calculateTotal = (paymentLines = null) => {
-    const subtotal = cart.reduce(
-      (t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0),
-      0
-    );
+    const subtotal = getPosSubtotal(cart);
     if (Array.isArray(paymentLines) && paymentLines.length > 0) {
       const totals = getPaymentBreakdownTotals(paymentLines);
       return totals.baseTotal > 0 ? totals.chargedTotal : subtotal;
@@ -15303,8 +15394,140 @@ export default function PartySupplyApp() {
     return handleSelectPosClient(createdClient);
   };
 
+  const finishDurablePosCheckout = async (attempt) => {
+    const journal = createPosCheckoutJournal({ storage: window.localStorage });
+    const { sale: tx } = await executePosCheckoutAttempt({
+      journal,
+      attempt,
+      registerSale: registerSaleTransactionCloud,
+      onConfirmed: async (confirmed) => {
+        if (!confirmed.duplicate) {
+          // Existing supplier depletion metadata remains best effort. Inventory
+          // is fetched from the server below, never decremented on recovery.
+          await syncStockLifecycleForDeltas(confirmed.request.stockDeltaByProduct, { trackDepletion: true });
+        }
+        if (!confirmed.duplicate && !confirmed.logScheduled) {
+          journal.patch(confirmed.cartId, { logScheduled: true });
+          void addLog('Venta Realizada', {
+            ...confirmed.logDetails,
+            transactionId: confirmed.saleId,
+          }, 'Venta regular', confirmed.actor).catch((error) => {
+            console.warn('No se pudo guardar el log del cobro confirmado:', error);
+          });
+        }
+      },
+      loadSale: async (confirmed) => {
+        // Coupon metadata is a post-commit step on existing installations.
+        // Compare-and-set prevents recovery from overwriting newer client data.
+        if (confirmed.couponUpdate && !journal.get(confirmed.cartId).couponConsumed) {
+          const { clientId, previous, next } = confirmed.couponUpdate;
+          const { data: client, error } = await supabase.from('clients')
+            .select('id,social_connections').eq('id', clientId).maybeSingle();
+          if (error) throw error;
+          if (!client) throw new Error('No se pudo verificar el socio del cobro confirmado.');
+          if (!posCheckoutValuesEqual(client.social_connections, next)) {
+            if (!posCheckoutValuesEqual(client.social_connections, previous)) {
+              throw new Error('La venta está registrada, pero los cupones del socio cambiaron. Revisá el socio antes de continuar.');
+            }
+            let update = supabase.from('clients').update({ social_connections: next }).eq('id', clientId);
+            update = previous == null
+              ? update.is('social_connections', null)
+              : update.eq('social_connections', JSON.stringify(previous));
+            const result = await update.select('id').maybeSingle();
+            if (result.error) throw result.error;
+            if (!result.data) throw new Error('Los datos del socio cambiaron mientras se verificaba el cobro. Volvé a verificar la venta.');
+          }
+          journal.patch(confirmed.cartId, { couponConsumed: true });
+        }
+
+        const payload = await fetchTransactionsCloudPayloadByIds([confirmed.saleId]);
+        if (!payload.hasCloudConnection) throw payload.error || new Error('No se pudo consultar la venta confirmada.');
+        const canonical = payload.transactions?.find((row) => String(row.id) === String(confirmed.saleId));
+        if (!canonical || !canonical.items?.length) throw new Error('Todavía no se pudo recuperar el comprobante completo de la nube.');
+
+        const productIds = Object.keys(confirmed.request.stockDeltaByProduct || {});
+        if (productIds.length > 0) {
+          const products = await runSelectWithSchemaFallback(
+            (columns) => supabase.from('products').select(columns).in('id', productIds),
+            CLOUD_SELECTS.products,
+          );
+          if (products.error) throw products.error;
+          const mapped = mapInventoryRecords(products.data || []).filter(getProductActiveState);
+          const byId = new Map(mapped.map((product) => [String(product.id), product]));
+          const affected = new Set(productIds.map(String));
+          setInventory((prev) => prev.filter((product) => !affected.has(String(product.id)) || byId.has(String(product.id)))
+            .map((product) => byId.get(String(product.id)) || product));
+        }
+        const clientId = confirmed.request.salePayload.client_id;
+        if (clientId) {
+          const clientResult = await runSelectWithSchemaFallback(
+            (columns) => supabase.from('clients').select(columns).eq('id', clientId),
+            CLOUD_SELECTS.clients,
+          );
+          if (clientResult.error) throw clientResult.error;
+          const member = mapMemberRecords(clientResult.data || [])[0];
+          if (member) {
+            setMembers((prev) => prev.map((entry) => String(entry.id) === String(member.id) ? member : entry));
+            canonical.client = { ...member, ...canonical.client };
+          }
+        }
+        canonical.pointsChange = canonical.pointsChange || confirmed.logDetails.pointsChange;
+        return canonical;
+      },
+    });
+    upsertLocalTransaction(tx);
+    // Retain the completed record until the POS snapshot has durably removed
+    // the original cart; a crash at any intermediate point remains recoverable.
+    journal.patch(attempt.cartId, { status: 'completed' });
+    setPosCheckoutAttempts(journal.read());
+    setSaleSuccessModal(tx);
+    closePosCartAfterCheckout(attempt.cartId);
+    setPosSearch('');
+    Swal.close();
+  };
+
   const handleCheckout = async (checkoutOptions = {}) => {
     if (isCheckoutInProgressRef.current) return;
+    if (!isLocalDemoMode()) {
+      try {
+        const journal = createPosCheckoutJournal({ storage: window.localStorage });
+        const entries = journal.read();
+        const pending = entries[activePosCartId] || Object.values(entries).find((entry) => entry.status !== 'completed');
+        if (pending) {
+          if (isRegisterClosed && !pending.saleId) {
+            showNotification('warning', 'Caja cerrada', 'Abrí la caja para verificar el intento pendiente. Conservamos su identificación para evitar registrar la misma venta dos veces.');
+            return;
+          }
+          isCheckoutInProgressRef.current = true;
+          try {
+            Swal.fire({ title: 'Verificando venta…', didOpen: () => Swal.showLoading() });
+            await finishDurablePosCheckout(pending);
+          } catch (error) {
+            setPosCheckoutAttempts(journal.read());
+            recordDiagnosticError('checkout:recovery', error);
+            Swal.fire('No se pudo completar la verificación', getCheckoutErrorMessage(error), 'error');
+          } finally { isCheckoutInProgressRef.current = false; }
+          return;
+        }
+        if (!ENABLE_TRANSACTION_RPCS) {
+          showNotification('error', 'Cobro no disponible', 'Esta instalación necesita activar el registro transaccional de ventas para asegurar los cobros y sus reintentos.');
+          return;
+        }
+      } catch (error) {
+        showNotification('error', 'No se puede asegurar el cobro', error.message);
+        return;
+      }
+    }
+    const saleUser = resolvePosSaleUser(userCatalog, checkoutOptions.saleUserId ?? posSelectedUserId);
+    if (!saleUser) {
+      showNotification('warning', 'Empleado obligatorio', 'Elegí al empleado que atiende para registrar esta venta.');
+      return;
+    }
+    const actor = {
+      userId: saleUser.id,
+      userRole: saleUser.role,
+      userName: saleUser.displayName || saleUser.name,
+    };
     isCheckoutInProgressRef.current = true;
     const checkoutPosCartId = activePosCartId;
     if (blockIfOfflineReadonly('registrar ventas')) {
@@ -15317,10 +15540,7 @@ export default function PartySupplyApp() {
       void recoverSecureSessionForCheckout().catch(() => {});
     }
 
-    const merchandiseSubtotal = cart.reduce(
-      (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
-      0,
-    );
+    const merchandiseSubtotal = getPosSubtotal(cart);
     const checkoutSaleExtras = (Array.isArray(checkoutOptions.saleExtras)
       ? checkoutOptions.saleExtras
       : []
@@ -15329,10 +15549,7 @@ export default function PartySupplyApp() {
       .slice(0, 1)
       .map(() => createPosBagSaleItem());
     const checkoutItems = [...cart, ...checkoutSaleExtras];
-    const extrasSubtotal = checkoutSaleExtras.reduce(
-      (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
-      0,
-    );
+    const extrasSubtotal = getPosSubtotal(checkoutSaleExtras);
     const subtotal = merchandiseSubtotal + extrasSubtotal;
     const fallbackCheckoutTotal = selectedPayment === 'Credito'
       ? subtotal * 1.1
@@ -15378,11 +15595,17 @@ export default function PartySupplyApp() {
       const pointsEarned = Math.floor(total / 500)
       const pointsSpent = cart.reduce((acc, i) => acc + (i.isReward ? i.pointsCost : 0), 0);
       const clientId = toOptionalDbId(posSelectedClient?.id);
-      const actor = getActorContext();
       const saleCouponCodes = Array.from(
         new Set(cart.map((item) => extractCouponCodeFromSaleItem(item)).filter(Boolean)),
       );
-      const checkoutItemsSnapshot = checkoutItems.map((item) => buildSaleItemSnapshot(item));
+      const checkoutItemsSnapshot = checkoutItems.map((item) => {
+        const lineSubtotal = getPosLineSubtotal(item);
+        return {
+          ...buildSaleItemSnapshot({ ...item, subtotal: lineSubtotal }),
+          subtotal: lineSubtotal,
+          lineSubtotal,
+        };
+      });
 
       const salePayload = {
         total,
@@ -15393,6 +15616,7 @@ export default function PartySupplyApp() {
         points_earned: clientId ? pointsEarned : 0,
         points_spent: pointsSpent,
         user_id: toOptionalDbId(actor.userId),
+        pos_user_id: toOptionalDbId(actor.userId),
         user_role: actor.userRole,
         user_name: actor.userName,
         cash_received: cashReceived,
@@ -15443,14 +15667,45 @@ export default function PartySupplyApp() {
         };
       }
 
-      const claveDeCobro = (() => {
-        const claves = checkoutOperationKeysRef.current;
-        const existente = claves.get(checkoutPosCartId);
-        if (existente) return existente;
-        const nueva = `pos-${checkoutPosCartId || 'sin-carrito'}-${crypto.randomUUID()}`;
-        claves.set(checkoutPosCartId, nueva);
-        return nueva;
-      })();
+      const claveDeCobro = `pos-${checkoutPosCartId}-${crypto.randomUUID()}`;
+
+      if (!isLocalDemoMode() && ENABLE_TRANSACTION_RPCS) {
+        const journal = createPosCheckoutJournal({ storage: window.localStorage });
+        const attempt = journal.ensure({
+          cartId: String(checkoutPosCartId),
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          request: {
+            operationKey: claveDeCobro,
+            salePayload,
+            itemsPayload: validatedItemsPayload,
+            stockDeltaByProduct: checkoutStockDelta,
+            clientPointUpdates: clientId
+              ? [{ client_id: String(clientId), points: newPoints, expected_points: previousPoints }]
+              : [],
+          },
+          actor,
+          couponUpdate: shouldConsumeCouponOverride
+            ? { clientId, previous: previousClientSocialConnections, next: nextClientSocialConnections }
+            : null,
+          logDetails: {
+            sessionUser: getActorContext(),
+            total, subtotal, merchandiseSubtotal,
+            items: compactPosCheckoutItems(checkoutItemsSnapshot),
+            saleExtras: checkoutSaleExtras,
+            payment: paymentSummary, primaryPaymentMethod,
+            paymentBreakdown: normalizedPaymentBreakdown,
+            installments: primaryInstallments, cashReceived, cashChange,
+            client: clientId ? posSelectedClient?.name : null,
+            memberNumber: clientId ? posSelectedClient?.memberNumber : null,
+            pointsEarned: clientId ? pointsEarned : 0, pointsSpent, pointsChange,
+            stockChanges: getSaleStockDeltaPreview(checkoutStockDelta).stockChanges,
+          },
+        });
+        setPosCheckoutAttempts(journal.read());
+        await finishDurablePosCheckout(attempt);
+        return;
+      }
 
       let sale = await registerSaleTransactionCloud({
         operationKey: claveDeCobro,
@@ -15482,7 +15737,9 @@ export default function PartySupplyApp() {
         );
         void syncStockLifecycleForDeltas(checkoutStockDelta, { trackDepletion: true });
       } else {
-        const { data: insertedSale, error: saleErr } = await insertWithSchemaFallback('sales', salePayload, 'id');
+        const compatibleSalePayload = { ...salePayload };
+        delete compatibleSalePayload.pos_user_id; // RPC metadata is not a sales column.
+        const { data: insertedSale, error: saleErr } = await insertWithSchemaFallback('sales', compatibleSalePayload, 'id');
         if (saleErr) throw saleErr;
         sale = insertedSale;
         const itemsPayload = validatedItemsPayload.map((item) => ({ ...item, sale_id: sale.id }));
@@ -15574,9 +15831,9 @@ export default function PartySupplyApp() {
         id: sale.id,
         date: formatDateAR(new Date()),
         time: formatTimeFullAR(new Date()),
-        user: currentUser.displayName || currentUser.name,
-        userId: currentUser.id || null,
-        userRole: currentUser.role || null,
+        user: actor.userName,
+        userId: actor.userId,
+        userRole: actor.userRole,
         total,
         payment: paymentSummary,
         primaryPaymentMethod,
@@ -15600,6 +15857,7 @@ export default function PartySupplyApp() {
       const isGuest = !posSelectedClient || posSelectedClient.id === 'guest';
       
       void addLog('Venta Realizada', {
+        sessionUser: getActorContext(),
         transactionId: tx.id, total: total, items: logItems,
         subtotal,
         merchandiseSubtotal,
@@ -15616,17 +15874,20 @@ export default function PartySupplyApp() {
         pointsSpent: pointsSpent,
         pointsChange: pointsChange,
         stockChanges,
-      }, 'Venta regular').catch((logErr) => {
+      }, 'Venta regular', actor).catch((logErr) => {
         console.warn('Error no bloqueante guardando log de venta en nube:', logErr);
       });
       
       setSaleSuccessModal(tx);
-      checkoutOperationKeysRef.current.delete(checkoutPosCartId);
       closePosCartAfterCheckout(checkoutPosCartId);
       setPosSearch('');
       Swal.close();
 
     } catch (e) {
+      if (!isLocalDemoMode()) {
+        try { setPosCheckoutAttempts(createPosCheckoutJournal({ storage: window.localStorage }).read()); }
+        catch { /* Keep the last known state if storage itself failed. */ }
+      }
       console.error('[REBU][checkout] fallo el cobro', recordDiagnosticError('checkout', e), e);
       Swal.fire('Error', getCheckoutErrorMessage(e), 'error');
     } finally {
@@ -17144,13 +17405,6 @@ export default function PartySupplyApp() {
         />
         <div className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden">
           
-          {isTestActive && (
-            <div className="bg-orange-500 text-white text-xs font-bold px-4 py-2.5 flex items-center justify-center gap-2 z-50 shadow-md w-full animate-in slide-in-from-top">
-              <AlertTriangle size={16} />
-              <span>Estás usando la palabra "test". Esta acción no se contabilizará en el sistema y será usada solo como prueba.</span>
-            </div>
-          )}
-
           <header className="app-topbar relative z-10 flex h-14 shrink-0 items-center justify-between gap-4 border-b bg-white px-5 shadow-sm">
             <div className="app-topbar-main flex min-w-0 items-center gap-3">
               <div className="app-topbar-title">
@@ -17433,97 +17687,16 @@ export default function PartySupplyApp() {
               </div>
             </div>
           </header>
-          {isOfflineReadOnly && (
-            <div className="z-20 border-b border-red-950/20 bg-red-600 px-5 py-3 text-white shadow-lg shadow-red-950/20">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/25 bg-white/15">
-                    <WifiOff size={21} />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-red-100">
-                      Modo local activo - solo lectura
-                    </p>
-                    <p className="mt-0.5 text-sm font-black leading-snug text-white">
-                      Estás viendo datos guardados en esta computadora. No se puede cobrar ni guardar cambios hasta recuperar la conexión.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleReconnectCloud}
-                  disabled={isReconnectAttempting}
-                  className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-white/30 bg-white px-3 text-[11px] font-black uppercase tracking-[0.08em] text-red-700 shadow-sm transition hover:bg-red-50 disabled:cursor-wait disabled:opacity-75"
-                >
-                  <RefreshCw size={13} className={isReconnectAttempting ? 'animate-spin' : ''} />
-                  {isReconnectAttempting ? 'Reconectando' : 'Reconectar'}
-                </button>
-              </div>
-            </div>
-          )}
-          {isLocalDemoMode() && (
-            <div className="flex flex-wrap items-center gap-2 border-b border-sky-200 bg-sky-50 px-5 py-2 text-[11px] font-semibold text-sky-900 shadow-sm">
-              <span className="font-black uppercase tracking-[0.08em]">Modo demo local</span>
-              <span className="text-sky-700">-</span>
-              <span>No se lee ni se escribe en Supabase. Para salir, abrí la app con <span className="font-mono">?demo=0</span>.</span>
-            </div>
-          )}
-          {isOfflineReadOnly && (
-            <div className="pointer-events-none fixed right-5 top-28 z-[80] w-[430px] max-w-[calc(100vw-2rem)]">
-              <div className="pointer-events-auto overflow-hidden rounded-xl border border-amber-300/35 bg-[#0f1e33] text-slate-100 shadow-2xl shadow-slate-950/35">
-                <div className="h-1.5 bg-amber-300" />
-                <div className="p-4">
-                  <div className="flex items-start gap-3">
-                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-amber-300/35 bg-amber-300/12 text-amber-200">
-                      <WifiOff size={22} />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-200">
-                            Datos locales
-                          </p>
-                          <h3 className="mt-1 text-base font-black text-white">
-                            Supabase no esta confirmado
-                          </h3>
-                        </div>
-                      </div>
-                      <p className="mt-2 text-xs font-bold leading-relaxed text-slate-300">
-                        La app esta usando el ultimo snapshot local. Las ventas y cambios quedan bloqueados para evitar datos desactualizados.
-                      </p>
-                      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-700/70 pt-3 text-[11px] font-bold text-slate-400">
-                        <span>
-                          Desde <span className="text-slate-100">{formatDateAR(offlineNoticeStartedAt)} {formatTimeAR(offlineNoticeStartedAt)}</span>
-                        </span>
-                        <span className="h-1 w-1 rounded-full bg-slate-600" />
-                        <span>
-                          En local hace <span className="text-amber-100">{offlineNoticeElapsed}</span>
-                        </span>
-                      </div>
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <button
-                            type="button"
-                            onClick={handleReconnectCloud}
-                            disabled={isReconnectAttempting}
-                            className="inline-flex h-8 items-center gap-2 rounded-md border border-amber-300/35 bg-amber-300/12 px-3 text-[11px] font-black uppercase tracking-[0.08em] text-amber-50 transition hover:bg-amber-300/18 disabled:cursor-wait disabled:opacity-70"
-                          >
-                            <RefreshCw size={13} className={isReconnectAttempting ? 'animate-spin' : ''} />
-                            {isReconnectAttempting ? 'Reconectando' : 'Reconectar ahora'}
-                          </button>
-                        <button
-                          type="button"
-                          onClick={handleCopyCloudDiagnostic}
-                          className="inline-flex h-8 items-center rounded-md border border-slate-500 px-3 text-[11px] font-black uppercase tracking-[0.08em] text-slate-100 transition hover:bg-white/10"
-                        >
-                          Copiar diagnóstico
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+          <AppWorkspaceStatus
+            offline={isOfflineReadOnly}
+            offlineDetail={`Desde ${formatDateAR(offlineNoticeStartedAt)} ${formatTimeAR(offlineNoticeStartedAt)} · ${offlineNoticeElapsed}`}
+            demo={isLocalDemoMode()}
+            test={isTestActive}
+            connection={cloudStatusMeta}
+            reconnecting={isReconnectAttempting}
+            onReconnect={handleReconnectCloud}
+            onCopyDiagnostic={handleCopyCloudDiagnostic}
+          />
           <main className={mainContentClass}>
             {isCoreHydratingForSession ? (
               <div className="flex h-full items-center justify-center rounded-[28px] border border-slate-200 bg-white shadow-sm">
@@ -17582,7 +17755,7 @@ export default function PartySupplyApp() {
               </PersistentTabPanel>
             )}
             {canAccessTab(currentUser, 'inventory') && <PersistentTabPanel tab="inventory" activeTab={activeTab} className="h-full min-h-0"><InventoryView inventory={inventory} categories={categories} currentUser={currentUser} inventoryViewMode={inventoryViewMode} setInventoryViewMode={setInventoryViewMode} gridColumns={inventoryGridColumns} setGridColumns={setInventoryGridColumns} inventorySearch={inventorySearch} setInventorySearch={setInventorySearch} inventoryCategoryFilter={inventoryCategoryFilter} setInventoryCategoryFilter={setInventoryCategoryFilter} setIsModalOpen={setIsModalOpen} setEditingProduct={handleEditProductRequest} handleDeleteProduct={handleDeleteProductRequest} setSelectedImage={setSelectedImage} setIsImageModalOpen={setIsImageModalOpen} closeDetailsToken={inventoryPanelCloseToken} navigationRequest={inventoryNavigationRequest} onProductDetailRequest={handleProductDetailRequest} onSearchInactiveProducts={handleSearchInactiveInventoryProducts} /></PersistentTabPanel>}
-            <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{canManageRegister ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">Necesitas permiso para abrir la caja y realizar ventas.</p>)}</div>) : (<POSView key={activePosCartId} inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} cartTabs={posCartTabs} activeCartId={activePosCartId} onAddCart={handleAddPosCart} onSelectCart={handleSelectPosCart} onCloseCart={handleClosePosCart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} onUpdateClient={handleUpdateMemberWithLog} offers={offers} currentUser={currentUser} userCatalog={userCatalog} />)}</PersistentTabPanel>
+            <PersistentTabPanel tab="pos" activeTab={activeTab} className="h-full min-h-0">{isRegisterClosed && !pendingPosCheckout ? (<div className="h-full flex flex-col items-center justify-center text-slate-400"><Lock size={64} className="mb-4 text-slate-300" /><h3 className="text-xl font-bold text-slate-600">Caja Cerrada</h3>{canManageRegister ? (<><p className="mb-6">Debes abrir la caja para realizar ventas.</p><button onClick={toggleRegisterStatus} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700">Abrir Caja</button></>) : (<p className="mb-6 text-center">Necesitas permiso para abrir la caja y realizar ventas.</p>)}</div>) : (<POSView key={activePosCartId} inventory={inventory} categories={categories} addToCart={addToCart} cart={cart} cartTabs={posCartTabs} activeCartId={activePosCartId} onAddCart={handleAddPosCart} onSelectCart={handleSelectPosCart} onCloseCart={handleClosePosCart} removeFromCart={removeFromCart} updateCartItemQty={updateCartItemQty} selectedPayment={selectedPayment} setSelectedPayment={setSelectedPayment} installments={installments} setInstallments={setInstallments} calculateTotal={calculateTotal} handleCheckout={handleCheckout} posSearch={posSearch} setPosSearch={setPosSearch} selectedCategory={posSelectedCategory} setSelectedCategory={setPosSelectedCategory} posViewMode={posViewMode} setPosViewMode={setPosViewMode} gridColumns={posGridColumns} setGridColumns={setPosGridColumns} selectedClient={posSelectedClient} setSelectedClient={setPosSelectedClient} selectedUserId={posSelectedUserId} setSelectedUserId={setPosSelectedUserId} checkoutDraft={activePosCart.checkoutDraft} onCheckoutDraftChange={setPosCheckoutDraft} pendingCheckout={pendingPosCheckout} onOpenClientModal={() => setIsClientModalOpen(true)} onOpenRedemptionModal={() => setIsRedemptionModalOpen(true)} onUpdateClient={handleUpdateMemberWithLog} offers={offers} currentUser={currentUser} userCatalog={userCatalog} />)}</PersistentTabPanel>
             {canViewWhatsApp && (
               <PersistentTabPanel tab="whatsapp" activeTab={activeTab} className="h-full min-h-0">
                 <WhatsAppInboxView

@@ -205,11 +205,9 @@ test('describirRechazo no consume la respuesta original', async () => {
 });
 
 // --- Idempotencia del cobro ------------------------------------------------
-// Estas afirmaciones miran el texto fuente porque el cableado del cobro no se
-// puede levantar sin Electron. El comportamiento de la base esta probado en
-// supabase/migrations/20260827030000_venta_idempotente.sql (3 cobros con la
-// misma clave = 1 venta, verificado contra produccion con rollback).
-test('el cobro manda una clave de operacion y la reusa si se reintenta', async () => {
+// Verifica que el POS use el ejecutor probado en pos-checkout-recovery.test.js.
+// Los casos de corte, reinicio y respuesta perdida se prueban por comportamiento allí.
+test('el cobro conecta la clave de operacion con el ejecutor de recuperacion persistente', async () => {
   const { readFileSync } = await import('node:fs');
   const { fileURLToPath } = await import('node:url');
   const path = await import('node:path');
@@ -218,9 +216,7 @@ test('el cobro manda una clave de operacion y la reusa si se reintenta', async (
 
   // La clave viaja a la RPC.
   assert.ok(fuente.includes('p_operation_key: operationKey'));
-  // Vive por carrito, no por intento: un reintento del mismo carrito la reusa.
-  assert.ok(fuente.includes('checkoutOperationKeysRef'));
-  assert.ok(fuente.includes('const existente = claves.get(checkoutPosCartId);'));
-  // Y se libera recien cuando la venta entro de verdad.
-  assert.ok(fuente.includes('checkoutOperationKeysRef.current.delete(checkoutPosCartId);'));
+  assert.match(fuente, /executePosCheckoutAttempt\(\{[\s\S]*?registerSale: registerSaleTransactionCloud/);
+  assert.ok(fuente.includes('createPosCheckoutJournal({ storage: window.localStorage })'));
+  assert.ok(fuente.includes('journal.pruneCompleted(persisted.posCarts.map((tab) => tab.id))'));
 });

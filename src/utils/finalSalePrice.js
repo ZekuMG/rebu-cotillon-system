@@ -9,6 +9,8 @@ const toFiniteNumber = (value) => {
   return Number.isFinite(numericValue) ? numericValue : 0;
 };
 
+const normalizeManualSalePrice = (value) => Math.max(0, toFiniteNumber(value));
+
 /**
  * Como se redondea el precio final. El escalon de $10 con tolerancia hacia abajo
  * es el de siempre; el de centena hacia arriba sirve para listas donde se quiere
@@ -29,9 +31,8 @@ export const normalizeSaleRoundingMode = (mode) => (
 );
 
 /**
- * Commercial sale prices never use cents. Calculations may keep their full
- * precision until this final boundary, where the value is rounded to the
- * commercial step configured for the context.
+ * Redondeo comercial para recomendaciones y calculos automaticos. El precio
+ * ingresado manualmente para un producto se conserva por separado.
  */
 export const normalizeFinalSalePrice = (value, mode = DEFAULT_SALE_ROUNDING_MODE) => {
   const monto = toFiniteNumber(value);
@@ -63,20 +64,19 @@ export const normalizeFinalSalePrice = (value, mode = DEFAULT_SALE_ROUNDING_MODE
 export const applyPercentageToSalePrice = (visiblePrice, percentage, mode = DEFAULT_SALE_ROUNDING_MODE) =>
   normalizeFinalSalePrice(toFiniteNumber(visiblePrice) * (1 + (toFiniteNumber(percentage) / 100)), mode);
 
+// Los precios de productos son decisiones del operador. El redondeo comercial
+// queda disponible como sugerencia, pero nunca modifica lo escrito o guardado.
 export const getVisibleProductSalePrice = (storedPrice, productType = 'quantity') => (
   productType === 'weight'
-    ? normalizeFinalSalePrice(toFiniteNumber(storedPrice) * WEIGHT_PRICE_FACTOR)
-    : normalizeFinalSalePrice(storedPrice)
+    ? Number((normalizeManualSalePrice(storedPrice) * WEIGHT_PRICE_FACTOR).toFixed(6))
+    : normalizeManualSalePrice(storedPrice)
 );
 
 export const getStoredProductSalePrice = (visiblePrice, productType = 'quantity') => (
   productType === 'weight'
-    ? normalizeFinalSalePrice(visiblePrice) / WEIGHT_PRICE_FACTOR
-    : normalizeFinalSalePrice(visiblePrice)
+    ? normalizeManualSalePrice(visiblePrice) / WEIGHT_PRICE_FACTOR
+    : normalizeManualSalePrice(visiblePrice)
 );
 
-export const normalizeStoredProductSalePrice = (storedPrice, productType = 'quantity') =>
-  getStoredProductSalePrice(
-    productType === 'weight' ? toFiniteNumber(storedPrice) * WEIGHT_PRICE_FACTOR : storedPrice,
-    productType,
-  );
+export const normalizeStoredProductSalePrice = (storedPrice) =>
+  normalizeManualSalePrice(storedPrice);

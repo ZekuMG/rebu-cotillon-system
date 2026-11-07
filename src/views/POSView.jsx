@@ -21,7 +21,6 @@ import {
   ScanBarcode,
   User, 
   Gift,
-  UserMinus,
   Scale,
   Edit2,
   Wand2,
@@ -49,8 +48,13 @@ import {
   createPosBagSaleItem,
   POS_BAG_PRICE,
 } from '../utils/posSaleExtras';
-import { getPosCartItemCount } from '../utils/posCartTabs';
+import { createPosCheckoutDraft, getPosCartItemCount, updatePosCheckoutDraftField } from '../utils/posCartTabs';
+import { getPosSaleUsers, resolvePosSaleUser } from '../utils/posSaleUser';
+import PosSaleUserPicker from '../components/PosSaleUserPicker';
+import PosSaleUserDialog from '../components/PosSaleUserDialog';
+import PosClientSummary from '../components/PosClientSummary';
 import { getStoredProductSalePrice, normalizeFinalSalePrice } from '../utils/finalSalePrice';
+import { getPosLineSubtotal, getPosSubtotal, roundPosMoney } from '../utils/posMoney';
 import {
   getStoredProductPurchaseCost,
   getVisibleProductPurchaseCost,
@@ -117,7 +121,7 @@ const isProductExpired = (dateString) => {
 const WeightInputModal = ({ product, effectiveStock, onConfirm, onClose }) => {
   const [grams, setGrams] = useState('');
   const gramsNum = parseInt(grams) || 0;
-  const totalPrice = gramsNum * (Number(product.price) || 0);
+  const totalPrice = getPosLineSubtotal({ price: product.price, quantity: gramsNum });
   const isValid = gramsNum > 0 && gramsNum <= effectiveStock;
   const quickAmounts = [50, 100, 250, 500, 1000];
   
@@ -237,13 +241,14 @@ const CustomProductModal = ({ isOpen, onClose, onConfirm, inventory = [] }) => {
 
   if (!isOpen) return null;
 
-  const p = normalizeFinalSalePrice(price);
+  // El precio por kilo debe coincidir con la balanza, sin escalones comerciales.
+  const p = type === 'weight' ? Number(price) : normalizeFinalSalePrice(price);
   const c = Number(cost);
   const a = Number(amount) || 0;
   const hasValidCost = cost.trim() !== '' && Number.isFinite(c) && c >= 0;
-  const isValid = title.trim().length > 0 && p > 0 && a > 0 && hasValidCost;
+  const isValid = title.trim().length > 0 && Number.isFinite(p) && p > 0 && a > 0 && hasValidCost;
   
-  const totalEstimado = type === 'quantity' ? (p * a) : ((p / 1000) * a);
+  const totalEstimado = roundPosMoney(type === 'quantity' ? (p * a) : ((p / 1000) * a));
   const totalCostEstimado = hasValidCost ? (type === 'quantity' ? c * a : ((c / 1000) * a)) : 0;
 
   const handleSubmit = (e) => {
@@ -350,14 +355,16 @@ No lo ve el cliente; sirve para calcular margen y costo estimado."
               </label>
               <input 
                 type="number" 
-                min="1" 
-                step="1" 
+                min={type === 'weight' ? '0.01' : '1'}
+                step={type === 'weight' ? '0.01' : '1'}
                 required
                 placeholder="0" 
                 className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-bold text-slate-800" 
                 value={price} 
                 onChange={(e) => setPrice(e.target.value)} 
-                onBlur={(e) => setPrice(String(normalizeFinalSalePrice(e.target.value)))}
+                onBlur={(e) => {
+                  if (type !== 'weight') setPrice(String(normalizeFinalSalePrice(e.target.value)));
+                }}
               />
             </div>
             <div>
@@ -449,6 +456,8 @@ export default function POSView({
   handleCheckout, posSearch, setPosSearch,
   selectedCategory, setSelectedCategory, posViewMode, setPosViewMode,
   gridColumns, setGridColumns, selectedClient, setSelectedClient,
+  selectedUserId = '', setSelectedUserId,
+  checkoutDraft, onCheckoutDraftChange, pendingCheckout = null,
   onOpenMemberPanel,
   onOpenClientModal,
   onOpenRedemptionModal,
@@ -456,8 +465,12 @@ export default function POSView({
   transactions = [],
   offers = [], // Recibimos las ofertas
   currentUser: _currentUser = null,
-  userCatalog: _userCatalog = null,
+  userCatalog = null,
 }) {
+  const saleUsers = useMemo(() => getPosSaleUsers(userCatalog), [userCatalog]);
+  const selectedSaleUser = resolvePosSaleUser(userCatalog, selectedUserId);
+  const [isSaleUserDialogOpen, setIsSaleUserDialogOpen] = useState(false);
+  const confirmedSaleUserIdRef = useRef(null);
   const [showGridMenu, setShowGridMenu] = useState(false);
   const [showCategoryMenu, setShowCategoryMenu] = useState(false);
   const [categoryFilterSearch, setCategoryFilterSearch] = useState('');
@@ -474,10 +487,17 @@ export default function POSView({
   const [isDiscountDrawerOpen, setIsDiscountDrawerOpen] = useState(false);
   const [customDiscountPercent, setCustomDiscountPercent] = useState('');
   const [visibleCount, setVisibleCount] = useState(POS_BATCH_SIZE);
-  const [hasPosBag, setHasPosBag] = useState(false);
-  const [paymentLines, setPaymentLines] = useState([createPaymentLine({ method: selectedPayment || 'Efectivo', installments: installments || 1, cashReceived: '' })]);
-  const [isSplitPaymentMode, setIsSplitPaymentMode] = useState(false);
-  const [activeSplitLineIndex, setActiveSplitLineIndex] = useState(0);
+  const [localCheckoutDraft, setLocalCheckoutDraft] = useState(() => createPosCheckoutDraft(null, selectedPayment, installments));
+  const currentCheckoutDraft = checkoutDraft || localCheckoutDraft;
+  const updateCheckoutDraft = onCheckoutDraftChange || setLocalCheckoutDraft;
+  const setCheckoutField = useCallback((field, value) => {
+    updateCheckoutDraft((draft) => updatePosCheckoutDraftField(draft, field, value));
+  }, [updateCheckoutDraft]);
+  const { hasPosBag, paymentLines, isSplitPaymentMode, activeSplitLineIndex } = currentCheckoutDraft;
+  const setHasPosBag = useCallback((value) => setCheckoutField('hasPosBag', value), [setCheckoutField]);
+  const setPaymentLines = useCallback((value) => setCheckoutField('paymentLines', value), [setCheckoutField]);
+  const setIsSplitPaymentMode = useCallback((value) => setCheckoutField('isSplitPaymentMode', value), [setCheckoutField]);
+  const setActiveSplitLineIndex = useCallback((value) => setCheckoutField('activeSplitLineIndex', value), [setCheckoutField]);
   const [isWideLayout, setIsWideLayout] = useState(isWideResolution);
   const [productHoverPreview, setProductHoverPreview] = useState(null);
   const cartTabsRailRef = useRef(null);
@@ -490,7 +510,6 @@ export default function POSView({
     const storedWidth = Number(window.localStorage.getItem('rebu-pos-cart-width'));
     return Number.isFinite(storedWidth) ? clampCartWidth(storedWidth, initialBounds) : initialBounds.default;
   });
-  const hasMultipleCartTabs = cartTabs.length > 1;
   const cartTabGap = 4;
   const cartTabWidth = cartTabs.length > 0
     ? `max(68px, calc(${100 / cartTabs.length}% - ${(Math.max(0, cartTabs.length - 1) * cartTabGap) / cartTabs.length}px))`
@@ -604,7 +623,7 @@ export default function POSView({
       setActiveSplitLineIndex(0);
       setPaymentLines([createPaymentLine({ method: 'Efectivo', installments: 1, cashReceived: '' })]);
     }
-  }, [cart.length]);
+  }, [cart.length, setHasPosBag, setIsSplitPaymentMode, setActiveSplitLineIndex, setPaymentLines]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -690,11 +709,7 @@ export default function POSView({
   };
 
   // AGREGAR OFERTA AL CARRITO
-  const getDiscountBaseTotal = () =>
-    cart.reduce((acc, item) => {
-      if (item.isDiscount) return acc;
-      return acc + (Number(item.price) || 0) * (Number(item.quantity) || 0);
-    }, 0);
+  const getDiscountBaseTotal = () => getPosSubtotal(cart.filter((item) => !item.isDiscount));
 
   const parseOfferNumericValue = (value) => {
     if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
@@ -1189,6 +1204,29 @@ export default function POSView({
     return false; // No hay ofertas, sigue de largo
   };
 
+  const submitCheckoutForUser = async (saleUserId) => {
+    await handleCheckout?.({
+      saleUserId,
+      paymentLines: normalizedPaymentLines,
+      cashReceived: cashReceivedAmount || null,
+      cashChange: cashChangeAmount || 0,
+      saleExtras: hasPosBag ? [createPosBagSaleItem()] : [],
+    });
+  };
+
+  const chooseCheckoutUser = async (saleUserId) => {
+    if (!resolvePosSaleUser(userCatalog, saleUserId)) return;
+    setSelectedUserId?.(saleUserId);
+    setIsSaleUserDialogOpen(false);
+    if (!selectedClient) {
+      confirmedSaleUserIdRef.current = saleUserId;
+      openGuestPanel();
+      return;
+    }
+    confirmedSaleUserIdRef.current = null;
+    await submitCheckoutForUser(saleUserId);
+  };
+
   const proceedToCheckoutFlow = async () => {
     if (hasOverassignedPayments) {
       Swal.fire('Montos excedidos', 'La suma asignada supera el subtotal del pedido. Ajusta los tramos antes de cobrar.', 'warning');
@@ -1202,16 +1240,15 @@ export default function POSView({
       Swal.fire('Monto insuficiente', 'El efectivo recibido debe cubrir el tramo en efectivo de la compra.', 'warning');
       return;
     }
-    if (cart.length > 0 && !selectedClient) {
-      openGuestPanel();
-    } else {
-      await handleCheckout?.({
-        paymentLines: normalizedPaymentLines,
-        cashReceived: cashReceivedAmount || null,
-        cashChange: cashChangeAmount || 0,
-        saleExtras: hasPosBag ? [createPosBagSaleItem()] : [],
-      });
+    // The guest/member panel returns to the cart before the final charge.
+    // Keep the employee already confirmed for this attempt across that step.
+    const confirmedUserId = confirmedSaleUserIdRef.current;
+    if (selectedClient && confirmedUserId && String(selectedSaleUser?.id) === String(confirmedUserId)) {
+      confirmedSaleUserIdRef.current = null;
+      await submitCheckoutForUser(confirmedUserId);
+      return;
     }
+    setIsSaleUserDialogOpen(true);
   };
 
   const handlePreCheckout = async () => {
@@ -1223,7 +1260,7 @@ export default function POSView({
   const roundPaymentValue = (value) => Math.round((Number(value) || 0) * 100) / 100;
   const getDefaultSplitSecondaryMethod = (primaryMethod) => (primaryMethod === 'Efectivo' ? 'MercadoPago' : 'Efectivo');
 
-  const cartSubtotal = cart.reduce((t, i) => t + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
+  const cartSubtotal = getPosSubtotal(cart);
   const cartItemCount = cart.reduce(
     (acc, item) => acc + (item.product_type === 'weight' ? 1 : item.quantity),
     0,
@@ -1231,7 +1268,7 @@ export default function POSView({
   const posBagTotal = hasPosBag ? POS_BAG_PRICE : 0;
   const subtotal = cartSubtotal + posBagTotal;
   const cartDiscountTotal = cart.reduce(
-    (sum, item) => sum + ((item.isReward || item.isDiscount) ? Math.abs((Number(item.price) || 0) * (Number(item.quantity) || 0)) : 0),
+    (sum, item) => sum + ((item.isReward || item.isDiscount) ? Math.abs(getPosLineSubtotal(item)) : 0),
     0,
   );
   const displaySubtotal = cartSubtotal + cartDiscountTotal;
@@ -1267,10 +1304,10 @@ export default function POSView({
   const pointsHeaderTone = !hasVisibleSelectedClient
     ? ''
     : isGuestSelectedClient
-      ? 'border-amber-200 bg-amber-50 text-amber-700'
+      ? 'warning'
       : netPointsDelta >= 0
-        ? 'border-green-200 bg-green-50 text-green-700'
-        : 'border-rose-200 bg-rose-50 text-rose-700';
+        ? 'success'
+        : 'danger';
   const pointsHeaderText = !hasVisibleSelectedClient
     ? ''
     : isGuestSelectedClient
@@ -1379,16 +1416,16 @@ export default function POSView({
   };
 
   const handleSplitMethodChange = (lineIndex, methodId) => {
+    setActiveSplitLineIndex(lineIndex);
+    if (lineIndex === 0) {
+      setSelectedPayment?.(methodId);
+      setInstallments?.(methodId === 'Credito' ? Number(paymentLines[0]?.installments || 1) : 1);
+    }
     setPaymentLines((prev) => {
       const currentPrimary = prev[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
       const currentSecondary = prev[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(currentPrimary.method), amount: 0, cashReceived: '' });
       const nextPrimary = lineIndex === 0 ? { ...currentPrimary, method: methodId, installments: methodId === 'Credito' ? Number(currentPrimary.installments || 1) : 1, cashReceived: methodId === 'Efectivo' ? (currentPrimary.cashReceived ?? '') : '' } : currentPrimary;
       const nextSecondary = lineIndex === 1 ? { ...currentSecondary, method: methodId, installments: methodId === 'Credito' ? Number(currentSecondary.installments || 1) : 1, cashReceived: methodId === 'Efectivo' ? (currentSecondary.cashReceived ?? '') : '' } : currentSecondary;
-      setActiveSplitLineIndex(lineIndex);
-      if (lineIndex === 0) {
-        setSelectedPayment?.(methodId);
-        setInstallments?.(methodId === 'Credito' ? Number(nextPrimary.installments || 1) : 1);
-      }
       return buildTwoPaymentLines(nextPrimary, nextSecondary);
     });
   };
@@ -1403,14 +1440,12 @@ export default function POSView({
 
   const handleSplitInstallmentsChange = (lineIndex, value) => {
     const nextInstallments = Number(value) || 1;
+    if (lineIndex === 0) setInstallments?.(paymentLines[0]?.method === 'Credito' ? nextInstallments : 1);
     setPaymentLines((prev) => {
       const currentPrimary = prev[0] || createPaymentLine({ id: 'split_primary', method: selectedPayment || 'Efectivo', amount: subtotal, installments: installments || 1, cashReceived: '' });
       const currentSecondary = prev[1] || createPaymentLine({ id: 'split_secondary', method: getDefaultSplitSecondaryMethod(currentPrimary.method), amount: 0, cashReceived: '' });
       const nextPrimary = lineIndex === 0 ? { ...currentPrimary, installments: nextInstallments } : currentPrimary;
       const nextSecondary = lineIndex === 1 ? { ...currentSecondary, installments: nextInstallments } : currentSecondary;
-      if (lineIndex === 0) {
-        setInstallments?.(nextPrimary.method === 'Credito' ? nextInstallments : 1);
-      }
       return buildTwoPaymentLines(nextPrimary, nextSecondary);
     });
   };
@@ -1586,20 +1621,37 @@ export default function POSView({
 
       return serializeLines([currentLine]) === serializeLines([nextLine]) ? prev : [nextLine];
     });
-  }, [buildTwoPaymentLines, cart.length, isSplitPaymentMode, subtotal, selectedPayment, installments]);
+  }, [buildTwoPaymentLines, cart.length, isSplitPaymentMode, subtotal, selectedPayment, installments, setPaymentLines]);
+
+  if (pendingCheckout) {
+    return (
+      <div className="pos-view flex h-full items-center justify-center bg-slate-100 p-6">
+        <div className="max-w-lg rounded-xl border bg-white p-6">
+          <h2 className="text-xl font-bold">Cobro pendiente de confirmar</h2>
+          <p className="my-4 text-sm">Vamos a verificar el pedido original con la nube antes de permitir otro cobro. Los productos y pagos del intento quedaron guardados.</p>
+          <AsyncActionButton
+            className="w-full rounded-lg bg-slate-900 px-4 py-3 font-bold text-white"
+            pending={isPending('checkout:recovery') || isPending('checkout:pos')}
+            loadingLabel="Verificando venta…"
+            onAction={() => runAction('checkout:recovery', () => handleCheckout({ recover: true }))}
+          >Verificar venta</AsyncActionButton>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="pos-view flex h-full overflow-hidden bg-slate-100 relative">
+    <div className="pos-view flex h-full min-h-0 min-w-0 overflow-hidden bg-slate-100 relative">
       
       {/* COLUMNA IZQUIERDA: CATÁLOGO */}
-      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+      <div className="pos-catalog flex-1 min-w-0 min-h-0 flex flex-col">
         
         {/* Header POS */}
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 bg-white border-b p-2 min-[1920px]:gap-3 min-[1920px]:p-3 shrink-0 z-30 relative">
+        <div className="pos-catalog-toolbar grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 bg-white border-b p-2 min-[1920px]:gap-3 min-[1920px]:p-3 shrink-0 z-30 relative">
           
           {/* BOTÓN DE OFERTAS */}
-          <div className="grid min-w-0 grid-cols-[max-content_220px_176px_218px] min-[1536px]:grid-cols-[max-content_240px_190px_230px] min-[1920px]:grid-cols-[max-content_280px_220px_250px] items-center gap-1.5 min-[1920px]:gap-2">
-          <div className="flex min-w-0 items-center gap-1.5 shrink-0">
+          <div className="pos-catalog-filters grid min-w-0 items-center gap-1.5 min-[1920px]:gap-2">
+          <div className="pos-catalog-offers flex min-w-0 items-center gap-1.5 shrink-0">
             {selectableOffers.length > 0 && (
               <button 
                 onClick={() => setIsOffersDrawerOpen(true)}
@@ -1625,7 +1677,7 @@ export default function POSView({
             </button>
           </div>
 
-          <div className="relative min-w-0">
+          <div className="pos-catalog-search relative min-w-0">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
             <input
               type="text"
@@ -1647,7 +1699,7 @@ export default function POSView({
               </button>
             )}
           </div>
-          <div className="relative min-w-0">
+          <div className="pos-catalog-category relative min-w-0">
             <button
               type="button"
               onClick={() => setShowCategoryMenu((prev) => !prev)}
@@ -1720,7 +1772,7 @@ export default function POSView({
             )}
           </div>
 
-          <div className="relative min-w-0">
+          <div className="pos-catalog-sort relative min-w-0">
             <button
               type="button"
               onClick={() => setShowSortMenu((prev) => !prev)}
@@ -1786,7 +1838,7 @@ export default function POSView({
             <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">?</div>
           </div>
           </div>
-          <div className="flex items-center gap-1.5 min-[1920px]:gap-2">
+          <div className="pos-catalog-tools flex items-center gap-1.5 min-[1920px]:gap-2">
             {posViewMode === 'grid' && (
               <div className="relative">
                 <button onClick={() => setShowGridMenu(!showGridMenu)} className={`flex h-8 min-[1920px]:h-9 w-9 items-center justify-center rounded-lg border transition-all ${showGridMenu ? 'bg-slate-100 ring-2 ring-slate-200' : 'bg-white hover:bg-slate-50'}`}><SlidersHorizontal size={17} className="text-slate-600" /></button>
@@ -1856,7 +1908,7 @@ export default function POSView({
           )}
           
           {posViewMode === 'grid' ? (
-            <div className="grid gap-2 transition-all duration-300 min-[1920px]:gap-2.5" style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}>
+            <div className="pos-product-grid grid gap-2 min-[1920px]:gap-2.5" style={{ '--pos-grid-columns': gridColumns }}>
               
               {/* TARJETA: ARTÍCULO PERSONALIZADO (GRILLA) */}
               <button
@@ -2136,12 +2188,11 @@ export default function POSView({
 
       {/* COLUMNA DERECHA: CARRITO */}
       <div
-        style={{ width: `${cartPanelWidth}px` }}
-        className="bg-white border-l flex flex-col min-h-0 shadow-2xl z-20 shrink-0"
+        style={{ '--pos-cart-width': `${cartPanelWidth}px` }}
+        className="pos-cart-panel bg-white border-l flex flex-col min-h-0 min-w-0 shadow-2xl z-20 shrink-0"
       >
         
-        <div className="border-b bg-white px-3 pb-2">
-          {hasMultipleCartTabs && (
+        <div className="pos-cart-header shrink-0 border-b bg-white px-3 pb-2">
             <div
               className="pos-cart-tabs is-multiple -mx-3 flex min-w-0 items-end gap-1 overflow-hidden px-2 pt-1"
               role="tablist"
@@ -2207,103 +2258,20 @@ export default function POSView({
                 <Plus size={14} strokeWidth={2.5} />
               </button>
             </div>
-          )}
-          <div className={`${hasMultipleCartTabs ? 'mt-1' : 'pt-1'} flex min-w-0 items-center justify-between gap-2`}>
-            <div className="min-w-0 flex-1">
-              {hasVisibleSelectedClient ? (
-              isGuestSelectedClient ? (
-                <div className="flex items-center gap-1.5">
-                  <div className="inline-flex h-5 items-center gap-1 rounded-md border border-slate-300 bg-slate-50 px-1.5 text-[9px] font-bold text-slate-600 shadow-sm min-[1920px]:h-6 min-[1920px]:py-1 min-[1920px]:text-[10px]">
-                    <User size={11} /> Consumidor final
-                  </div>
-                  <button
-                    onClick={() => setSelectedClient && setSelectedClient(null)}
-                    className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-400 transition-colors hover:text-red-500"
-                    title="Quitar identificacion"
-                  >
-                    <UserMinus size={12} />
-                  </button>
-                </div>
-              ) : (
-                <div className="rounded-lg border border-fuchsia-200 bg-fuchsia-50/40 px-2 py-1 shadow-sm transition-colors min-[1920px]:py-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div>
-                        <div className="flex min-w-0 items-center gap-2">
-                          <div className="flex min-w-0 flex-1 items-center gap-2">
-                            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white text-fuchsia-500 shadow-sm">
-                              <User size={11} />
-                            </span>
-                  <span className="truncate text-[12px] font-bold text-slate-800 min-[1920px]:text-[13px]">
-                              {selectedClient.name}
-                              {selectedClient.memberNumber ? ` #${selectedClient.memberNumber}` : ''}
-                            </span>
-                          </div>
-                          <div className="ml-auto flex shrink-0 items-center justify-end">
-                            <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[9px] font-bold text-slate-600 min-[1920px]:text-[10px]">
-                              {selectedClient.points} Puntos
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 gap-1.5">
-                      <button
-                        onClick={openMemberRedeemPanel}
-                        className="rounded-md border border-fuchsia-200 bg-white px-1.5 py-0.5 text-[9px] font-bold text-fuchsia-600 transition-colors hover:bg-fuchsia-50 min-[1920px]:text-[10px]"
-                      >
-                        Canjear
-                      </button>
-                      <button
-                        onClick={() => setSelectedClient && setSelectedClient(null)}
-                        className="rounded-md border border-slate-200 bg-white p-1 text-slate-400 transition-colors hover:text-red-500"
-                        title="Quitar socio"
-                      >
-                        <UserMinus size={11} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )
-            ) : (
-              <div>
-                <button
-                  onClick={openMemberSelectPanel}
-                  className="inline-flex h-5 items-center gap-1 rounded-md border border-fuchsia-200 bg-fuchsia-50 px-1.5 text-[9px] font-bold text-fuchsia-600 transition-colors hover:bg-fuchsia-100 hover:text-fuchsia-700 min-[1920px]:h-6 min-[1920px]:py-1 min-[1920px]:text-[10px]"
-                >
-                  <User size={11} /> Asignar socio
-                </button>
-              </div>
-            )}
-            </div>
-            <div className="flex shrink-0 items-center gap-1.5">
-              {pointsHeaderText && (
-                <span
-                  className={`inline-flex h-5 max-w-[112px] shrink items-center truncate rounded-full border px-1.5 text-[9px] font-bold leading-none min-[1920px]:h-6 min-[1920px]:max-w-[132px] min-[1920px]:text-[10px] ${pointsHeaderTone}`}
-                  title={pointsHeaderText}
-                >
-                  {pointsHeaderText}
-                </span>
-              )}
-              <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-fuchsia-100 px-1.5 text-[10px] font-bold leading-none text-fuchsia-700 min-[1920px]:h-6 min-[1920px]:text-[11px]">
-                {cartItemCount} {cartItemCount === 1 ? 'ítem' : 'ítems'}
-              </span>
-              {!hasMultipleCartTabs && (
-                <button
-                  type="button"
-                  onClick={onAddCart}
-                  className="pos-cart-add pos-cart-add-standalone inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border focus:outline-none focus:ring-2 focus:ring-fuchsia-400/40"
-                  aria-label="Abrir nuevo carrito"
-                  title="Abrir nuevo carrito"
-                >
-                  <Plus size={13} strokeWidth={2.5} />
-                </button>
-              )}
-            </div>
-          </div>
+          <PosSaleUserPicker users={saleUsers} selectedUser={selectedSaleUser} onSelect={setSelectedUserId} cartId={activeCartId} disabled={isPending('checkout:pos')} />
+          <PosClientSummary
+            client={selectedClient}
+            isGuest={isGuestSelectedClient}
+            onAssign={openMemberSelectPanel}
+            onRemove={() => setSelectedClient?.(null)}
+            onRedeem={openMemberRedeemPanel}
+            pointsText={pointsHeaderText}
+            pointsTone={pointsHeaderTone}
+            itemCount={cartItemCount}
+          />
         </div>
 
-        <div className="flex-1 overflow-y-auto space-y-1.5 p-2 min-[1920px]:space-y-2 min-[1920px]:p-2.5">
+        <div className="min-h-0 flex-1 overflow-y-auto space-y-1.5 p-2 min-[1920px]:space-y-2 min-[1920px]:p-2.5">
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-300">
               <ShoppingCart size={64} className="mb-4 opacity-50" />
@@ -2335,7 +2303,7 @@ export default function POSView({
                 : [];
 
               return (
-                <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`group flex gap-1.5 rounded-lg border p-1.5 shadow-sm transition-colors min-[1920px]:gap-2 min-[1920px]:p-2 ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : isDiscount ? 'bg-emerald-50/50 border-emerald-200' : isCustom ? 'bg-indigo-50/40 border-indigo-100' : isCombo ? 'bg-violet-50/50 border-violet-200' : 'bg-white hover:border-fuchsia-200'}`}>
+                <div key={`${item.id}-${item.isReward ? 'r' : 'p'}`} className={`pos-cart-item group flex gap-1.5 rounded-lg border p-1.5 shadow-sm transition-colors min-[1920px]:gap-2 min-[1920px]:p-2 ${item.isReward ? 'bg-fuchsia-50 border-fuchsia-100' : isWeight ? 'bg-amber-50/30 border-amber-100' : isDiscount ? 'bg-emerald-50/50 border-emerald-200' : isCustom ? 'bg-indigo-50/40 border-indigo-100' : isCombo ? 'bg-violet-50/50 border-violet-200' : 'bg-white hover:border-fuchsia-200'}`}>
                   <div className={`relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border min-[1920px]:h-10 min-[1920px]:w-10 ${item.isReward ? 'bg-fuchsia-100' : isCombo ? 'bg-violet-100' : isDiscount ? 'bg-emerald-100' : 'bg-slate-50'}`}>
                     {cartItemImage ? (
                       <img src={cartItemImage} alt="" loading="lazy" decoding="async" fetchpriority="low" className="w-full h-full object-cover" />
@@ -2409,7 +2377,7 @@ export default function POSView({
                           )}
                         </div>
                       ) : (
-                        <div className="flex items-center gap-1 rounded-md border bg-slate-50 p-[2px]">
+                        <div className="pos-cart-quantity flex items-center gap-1 rounded-md border bg-slate-50 p-[2px]">
                           <button onClick={() => updateCartItemQty(item.id, item.quantity - 1)} className="flex h-4 w-4 items-center justify-center rounded bg-white shadow-sm hover:text-red-500 disabled:opacity-50 min-[1920px]:h-5 min-[1920px]:w-5" disabled={item.quantity <= 1 || item.isReward || isDiscount}><Minus size={10} /></button>
                           <input
                             type="number"
@@ -2426,12 +2394,12 @@ export default function POSView({
                           <button onClick={() => updateCartItemQty(item.id, item.quantity + 1)} className="flex h-4 w-4 items-center justify-center rounded bg-white shadow-sm hover:text-green-500 disabled:opacity-50 min-[1920px]:h-5 min-[1920px]:w-5" disabled={item.isReward || isCombo || isDiscount}><Plus size={10} /></button>
                         </div>
                       )}
-                      <p className={`text-[12px] font-bold min-[1920px]:text-[13px] ${item.isReward ? 'text-fuchsia-600' : isDiscount ? 'text-emerald-600' : isCombo ? 'text-violet-700' : 'text-slate-800'}`}>
+                      <p className={`pos-line-price text-[12px] font-bold min-[1920px]:text-[13px] ${item.isReward ? 'text-fuchsia-600' : isDiscount ? 'text-emerald-600' : isCombo ? 'text-violet-700' : 'text-slate-800'}`}>
                         {item.isReward ? (
-                          <span className="font-black text-fuchsia-600">-<FancyPrice amount={Math.abs(item.price * item.quantity)} /></span>
+                          <span className="font-black text-fuchsia-600">-<FancyPrice amount={Math.abs(getPosLineSubtotal(item))} /></span>
                         ) : isDiscount ? (
-                          <span className="text-emerald-600 font-black">-<FancyPrice amount={Math.abs(item.price * item.quantity)} /></span>
-                        ) : <FancyPrice amount={item.price * item.quantity} />}
+                          <span className="text-emerald-600 font-black">-<FancyPrice amount={Math.abs(getPosLineSubtotal(item))} /></span>
+                        ) : <FancyPrice amount={getPosLineSubtotal(item)} />}
                       </p>
                     </div>
                   </div>
@@ -2442,7 +2410,7 @@ export default function POSView({
         </div>
 
         {/* Footer */}
-        <div className="space-y-1 border-t bg-slate-50/95 p-1.5 min-[1920px]:space-y-1.5 min-[1920px]:p-2">
+        <div className="pos-cart-checkout shrink-0 border-t bg-slate-50/95 p-1.5 min-[1920px]:p-2">
           <button
             type="button"
             role="checkbox"
@@ -2487,7 +2455,7 @@ export default function POSView({
             </span>
           </button>
 
-          <div className="grid grid-cols-5 gap-1">
+          <div className="pos-payment-methods grid grid-cols-5 gap-1">
             {PAYMENT_METHODS.map((method) => {
               const activeMethod = isSplitPaymentMode ? (activeSplitLineIndex === 1 ? rawSplitSecondaryLine.method : rawSplitPrimaryLine.method) : currentPaymentMethod;
               const isSelected = activeMethod === method.id;
@@ -2514,8 +2482,9 @@ export default function POSView({
             </button>
           </div>
 
+          <div className="pos-payment-editor">
           {isSplitPaymentMode ? (
-            <div className="grid grid-cols-2 gap-1 animate-in fade-in slide-in-from-bottom-2">
+            <div className="pos-split-payment-grid grid grid-cols-2 gap-1">
               {[
                 { key: 'primary', line: rawSplitPrimaryLine, normalizedLine: splitPrimaryLine, index: 0, amountEditable: true },
                 { key: 'secondary', line: rawSplitSecondaryLine, normalizedLine: splitSecondaryLine, index: 1, amountEditable: false },
@@ -2609,7 +2578,10 @@ export default function POSView({
             </>
           )}
 
-          <div className="space-y-1 border-t border-slate-200 pt-1.5 min-[1920px]:space-y-1.5 min-[1920px]:pt-2">
+          </div>
+
+          <div className="pos-checkout-totals border-t border-slate-200">
+            <div className="pos-checkout-details">
             <div className="flex justify-between text-[11px] text-slate-500 min-[1920px]:text-xs"><span>Subtotal</span><span><FancyPrice amount={displaySubtotal} /></span></div>
             {cartDiscountTotal > 0 && (
               <div className="flex justify-between text-[11px] font-bold text-fuchsia-600 min-[1920px]:text-xs">
@@ -2627,13 +2599,14 @@ export default function POSView({
             {paymentTotals.surchargeTotal > 0 && (<div className="flex justify-between text-[11px] font-bold text-amber-600 min-[1920px]:text-xs"><span>Recargo credito</span><span>+<FancyPrice amount={paymentTotals.surchargeTotal} /></span></div>)}
             {!isSplitPaymentMode && cashReceivedAmount > 0 && <div className="flex justify-between text-[11px] text-slate-500 min-[1920px]:text-xs"><span>Efectivo recibido</span><span><FancyPrice amount={cashReceivedAmount} /></span></div>}
             {!isSplitPaymentMode && cashChangeAmount > 0 && <div className="flex justify-between text-[11px] font-bold text-emerald-600 min-[1920px]:text-xs"><span>Devolucion</span><span><FancyPrice amount={cashChangeAmount} /></span></div>}
-            <div className="flex justify-between items-end pt-1.5 min-[1920px]:pt-2">
+            </div>
+            <div className="pos-checkout-total flex justify-between items-end">
               <span className="text-[13px] font-bold text-slate-800 uppercase min-[1920px]:text-sm">Total a Pagar</span>
               <span className="text-[22px] font-black text-slate-900 min-[1920px]:text-[24px]"><FancyPrice amount={total} /></span>
             </div>
           </div>
 
-          <AsyncActionButton onAction={() => runAction('checkout:pos', handlePreCheckout)} pending={isPending('checkout:pos')} loadingLabel="Cobrando..." disabled={cart.length === 0 || Math.abs(remainingBaseAmount) > 0.009 || hasOverassignedPayments || cashMissingAmount > 0} className="group flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-slate-900 to-slate-800 py-2.5 text-[14px] font-bold text-white shadow-lg transition-all hover:from-black hover:to-slate-900 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50 min-[1920px]:py-3 min-[1920px]:text-[15px]">
+          <AsyncActionButton onAction={() => runAction('checkout:pos', handlePreCheckout)} pending={isPending('checkout:pos')} loadingLabel="Cobrando..." disabled={cart.length === 0 || Math.abs(remainingBaseAmount) > 0.009 || hasOverassignedPayments || cashMissingAmount > 0} className="pos-charge-button group flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-slate-900 to-slate-800 py-2.5 text-[14px] font-bold text-white shadow-lg transition-all hover:from-black hover:to-slate-900 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50 min-[1920px]:py-3 min-[1920px]:text-[15px]">
             <CheckCircle className="group-hover:scale-110 transition-transform" />
             {cart.length === 0 ? 'CARRITO VACIO' : 'COBRAR'}
           </AsyncActionButton>
@@ -2641,6 +2614,15 @@ export default function POSView({
         </div>
 
       {/* Modales */}
+      {isSaleUserDialogOpen && (
+        <PosSaleUserDialog
+          users={saleUsers}
+          selectedUser={selectedSaleUser}
+          pending={isPending('checkout:pos')}
+          onChoose={(userId) => runAction('checkout:pos', () => chooseCheckoutUser(userId))}
+          onClose={() => setIsSaleUserDialogOpen(false)}
+        />
+      )}
       {weightModalProduct && (
         <WeightInputModal
           product={weightModalProduct}

@@ -1,5 +1,19 @@
 let posCartIdSequence = 0;
 
+export const createPosCheckoutDraft = (draft = {}, selectedPayment = 'Efectivo', installments = 1) => ({
+  hasPosBag: draft?.hasPosBag === true,
+  paymentLines: Array.isArray(draft?.paymentLines) && draft.paymentLines.length > 0
+    ? draft.paymentLines.map((line) => ({ ...line }))
+    : [{ id: 'primary', method: selectedPayment, amount: 0, installments, cashReceived: '' }],
+  isSplitPaymentMode: draft?.isSplitPaymentMode === true,
+  activeSplitLineIndex: draft?.activeSplitLineIndex === 1 ? 1 : 0,
+});
+
+export const updatePosCheckoutDraftField = (draft, field, valueOrUpdater) => {
+  const nextValue = typeof valueOrUpdater === 'function' ? valueOrUpdater(draft[field]) : valueOrUpdater;
+  return Object.is(draft[field], nextValue) ? draft : { ...draft, [field]: nextValue };
+};
+
 export const createPosCartId = () => {
   posCartIdSequence += 1;
   return `pos-cart-${Date.now()}-${posCartIdSequence}`;
@@ -10,15 +24,19 @@ export const createPosCartTab = ({
   sequence = 1,
   cart = [],
   selectedClient = null,
+  selectedUserId = '',
   selectedPayment = 'Efectivo',
   installments = 1,
+  checkoutDraft = null,
 } = {}) => ({
   id: String(id),
   sequence: Math.max(1, Number(sequence) || 1),
   cart: Array.isArray(cart) ? cart : [],
   selectedClient: selectedClient || null,
+  selectedUserId: selectedUserId ? String(selectedUserId) : '',
   selectedPayment: selectedPayment || 'Efectivo',
   installments: Math.max(1, Number(installments) || 1),
+  checkoutDraft: createPosCheckoutDraft(checkoutDraft, selectedPayment || 'Efectivo', installments),
 });
 
 export const createPosCartWorkspace = ({ id = createPosCartId() } = {}) => ({
@@ -46,6 +64,7 @@ export const normalizePosCartWorkspace = (snapshot = {}) => {
       selectedClient: snapshot.selectedClient,
       selectedPayment: snapshot.selectedPayment,
       installments: snapshot.installments,
+      checkoutDraft: snapshot.checkoutDraft,
     });
     return { tabs: [legacyTab], activeId: legacyTab.id, nextSequence: 2 };
   }

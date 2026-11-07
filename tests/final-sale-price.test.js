@@ -20,14 +20,17 @@ test('lleva el precio de venta al escalon comercial de $10', () => {
   assert.equal(normalizeFinalSalePrice('invalid'), 0);
 });
 
-test('keeps weight storage precise while the commercial price per kilo is whole', () => {
-  assert.equal(getVisibleProductSalePrice(1.2543, 'weight'), 1260);
-  assert.equal(getStoredProductSalePrice(1254.01, 'weight'), 1.26);
-  assert.equal(normalizeStoredProductSalePrice(1.2543, 'weight'), 1.26);
-  assert.equal(normalizeStoredProductSalePrice(680.16, 'quantity'), 680);
+test('el precio elegido para un producto se conserva, incluso cero y por kilo', () => {
+  assert.equal(getStoredProductSalePrice(0), 0);
+  assert.equal(normalizeStoredProductSalePrice(0), 0);
+  assert.equal(getStoredProductSalePrice(3503), 3503);
+  assert.equal(normalizeStoredProductSalePrice(680.16), 680.16);
+  assert.equal(getVisibleProductSalePrice(1.2543, 'weight'), 1254.3);
+  assert.equal(getStoredProductSalePrice(1254.01, 'weight'), 1.25401);
+  assert.equal(normalizeStoredProductSalePrice(1.2543, 'weight'), 1.2543);
 });
 
-test('inventory hydration normalizes sale price and current purchase cost independently', async () => {
+test('inventory hydration preserves sale price and normalizes purchase cost independently', async () => {
   const mapperSource = await readFile(
     new URL('../src/utils/cloudMappers.js', import.meta.url),
     'utf8',
@@ -62,6 +65,18 @@ test('incremental migration changes the database guard to commercial tens', asyn
   assert.match(migration, /ceil\(new\.web_price \/ 10\) \* 10/);
   assert.doesNotMatch(migration, /update\s+public\.sale_items/i);
   assert.doesNotMatch(migration, /update\s+public\.sales/i);
+});
+
+test('la nueva migracion deja de redondear los precios de productos en la base', async () => {
+  const migration = await readFile(
+    new URL('../supabase/migrations/20261019144329_optional_product_sale_price.sql', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(migration, /create or replace function private\.enforce_product_final_sale_price\(\)/);
+  assert.match(migration, /new\.price := greatest\(0, new\.price\)/);
+  assert.doesNotMatch(migration, /ceil\(|floor\(/);
+  assert.doesNotMatch(migration, /update public\.products/);
 });
 
 test('integer FancyPrice values omit the artificial cents label', async () => {
@@ -114,9 +129,8 @@ test('un resto de $1 o $2 baja al escalon; de $3 para arriba sube', () => {
   assert.equal(normalizeFinalSalePrice(-50), 0);
 });
 
-test('la regla nueva tambien vale para los productos por peso', () => {
-  // 3,501 por gramo son $3.501 el kilo -> tiene que quedar en $3.500.
-  assert.equal(getVisibleProductSalePrice(3.501, 'weight'), 3500);
-  assert.equal(getStoredProductSalePrice(3501, 'weight'), 3.5);
+test('la sugerencia comercial tambien sirve para productos por peso', () => {
+  assert.equal(getVisibleProductSalePrice(3.501, 'weight'), 3501);
+  assert.equal(getStoredProductSalePrice(3501, 'weight'), 3.501);
   assert.equal(applyPercentageToSalePrice(3200, 9.4), 3500); // 3500,8 -> baja al escalon
 });

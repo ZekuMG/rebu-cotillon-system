@@ -5,8 +5,61 @@ import test from 'node:test';
 import {
   assessSecureSession,
   getExpectedAuthUserId,
+  reauthenticateCloudUser,
   SECURE_SESSION_STATUS,
 } from '../src/utils/secureSession.js';
+
+const reconnectUser = { id: 'rebu-1', isActive: true, authUserId: 'auth-1' };
+
+test('reconectar abre sesión únicamente con la identidad verificada del usuario actual', async () => {
+  const calls = [];
+  const result = await reauthenticateCloudUser({
+    userId: reconnectUser.id, password: 'test-password',
+    verifyUser: async (input) => { calls.push(input); return reconnectUser; },
+    signIn: async (input) => { calls.push(input); return { session: { access_token: 'token', user: { id: 'auth-1' } } }; },
+  });
+  assert.equal(result.user, reconnectUser);
+  assert.equal(result.assessment.isUsable, true);
+  assert.deepEqual(calls, [{ userId: 'rebu-1', password: 'test-password' }, { user: reconnectUser, password: 'test-password' }]);
+});
+
+test('reconectar rechaza clave incorrecta, otro usuario o cuenta inactiva sin intentar abrir sesión', async () => {
+  for (const user of [null, { ...reconnectUser, id: 'other' }, { ...reconnectUser, isActive: false }]) {
+    await assert.rejects(reauthenticateCloudUser({
+      userId: reconnectUser.id, password: 'bad', verifyUser: async () => user,
+      signIn: async () => assert.fail('No debe autenticar una identidad rechazada'),
+    }), /clave no es correcta/);
+  }
+});
+
+test('reconectar conserva el error de autenticación de la nube', async () => {
+  const error = new Error('Failed to fetch');
+  await assert.rejects(reauthenticateCloudUser({
+    userId: reconnectUser.id, password: 'test', verifyUser: async () => reconnectUser,
+    signIn: async () => ({ error }),
+  }), (received) => received === error);
+});
+
+test('reconectar descarta una sesión que pertenece a otra cuenta', async () => {
+  let cleared = 0;
+  await assert.rejects(reauthenticateCloudUser({
+    userId: reconnectUser.id, password: 'test', verifyUser: async () => reconnectUser,
+    signIn: async () => ({ session: { access_token: 'token', user: { id: 'wrong-auth-id' } } }),
+    clearSession: async (options) => { assert.equal(options.scope, 'local'); cleared++; },
+  }), /pertenece a otro usuario/);
+  assert.equal(cleared, 1);
+});
+
+test('reconectar no acepta una respuesta sin sesión ni una cuenta sin vínculo', async () => {
+  await assert.rejects(reauthenticateCloudUser({
+    userId: reconnectUser.id, password: 'test', verifyUser: async () => reconnectUser,
+    signIn: async () => ({ session: null }),
+  }), /no esta disponible/);
+  await assert.rejects(reauthenticateCloudUser({
+    userId: reconnectUser.id, password: 'test', verifyUser: async () => ({ ...reconnectUser, authUserId: null }),
+    signIn: async () => assert.fail('No debe autenticar una cuenta sin vínculo'),
+  }), /no tiene un acceso/);
+});
 
 const appSource = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
 

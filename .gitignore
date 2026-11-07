@@ -69,3 +69,10 @@ _rebu_analysis_temp/
 /hotfix-build-v1.2.32/
 /supabase/.temp/
 /src/*.bak-*
+/mobile/dist/
+
+# Local release checks and Python bytecode.
+/.codex-tmp/
+/.codex-build-check/
+__pycache__/
+*.pyc

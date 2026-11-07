@@ -259,25 +259,20 @@ export const formatLocalDateOnlyAR = (value, options = {}) => {
  */
 export const formatStock = (product) => {
   if (product.product_type === 'weight') {
-    const stock = Number(product.stock) || 0;
-    if (stock >= 1000) {
-      const kg = stock / 1000;
-      return kg % 1 === 0 ? `${kg}kg` : `${kg.toFixed(1)}kg`;
-    }
-    return `${stock}g`;
+    return formatWeight(product.stock);
   }
   return `${product.stock} u.`;
 };
 
 /**
  * Formatea gramos de forma legible.
- * 105 → "105g" | 1000 → "1kg" | 1500 → "1.5kg"
+ * 105 → "105g" | 1000 → "1kg" | 1050 → "1.05kg"
  */
 export const formatWeight = (grams) => {
   const g = Number(grams) || 0;
   if (g >= 1000) {
     const kg = g / 1000;
-    return kg % 1 === 0 ? `${kg}kg` : `${kg.toFixed(1)}kg`;
+    return `${Number(kg.toFixed(3))}kg`;
   }
   return `${g}g`;
 };
