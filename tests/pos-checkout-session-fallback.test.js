@@ -11,14 +11,13 @@ test('checkout does not block the POS with a full-screen secure-session warning'
   assert.doesNotMatch(appSource, /Swal\.fire\(\s*['"]Sesion segura requerida['"]/);
 });
 
-test('checkout uses the transaction RPC independently from a JWT session', () => {
+test('checkout fails closed when the transaction RPC is unavailable', () => {
   const registerSaleStart = appSource.indexOf('const registerSaleTransactionCloud = async');
   const registerSaleEnd = appSource.indexOf('const editSaleTransactionCloud = async', registerSaleStart);
   const registerSaleSource = appSource.slice(registerSaleStart, registerSaleEnd);
 
   assert.ok(registerSaleStart >= 0 && registerSaleEnd > registerSaleStart);
-  assert.match(
-    registerSaleSource,
-    /if \(!\(await canUseTransactionRpcs\(\)\)\) \{\s*console\.warn\([\s\S]*?return null;\s*\}/,
-  );
+  assert.match(registerSaleSource,
+    /if \(!\(await canUseTransactionRpcs\(\)\)\) \{\s*throw createTransactionRpcRequiredError\('registrar ventas'\);\s*\}/);
+  assert.doesNotMatch(registerSaleSource, /console\.warn\([\s\S]*?return null;/);
 });

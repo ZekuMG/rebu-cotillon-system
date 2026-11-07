@@ -1,10 +1,13 @@
 const { test, expect } = require('playwright/test');
+const { pbkdf2Sync } = require('node:crypto');
 
 test('reconectar recupera la sesión del mismo usuario y conserva el carrito y los pagos', async ({ page }) => {
   test.setTimeout(60000);
   const userId = '00000000-0000-4000-8000-000000000123';
   const authId = '00000000-0000-4000-8000-000000000456';
   const password = 'reconnect-fixture';
+  const salt = '00112233445566778899aabbccddeeff';
+  const digest = pbkdf2Sync(`rebu-offline-login-v2:${userId}:${password}`, Buffer.from(salt, 'hex'), 150000, 32, 'sha256').toString('hex');
   const now = new Date().toISOString();
   const user = { id: userId, name: 'Usuario de prueba', displayName: 'Usuario de prueba', role: 'owner', isActive: true, authUserId: authId, authEmail: 'fixture@example.invalid' };
   const cloudUser = { ...user, display_name: user.name, is_active: true, auth_user_id: authId, auth_email: user.authEmail };
@@ -12,6 +15,7 @@ test('reconectar recupera la sesión del mismo usuario y conserva el carrito y l
   const session = { sessionId: 'remembered-fixture', userId, userName: user.name, role: user.role, rememberedSession: true, supabaseAuth: { signedIn: true, authUserId: authId } };
   const local = {
     rebu_local_demo_mode: 'false',
+    party_offline_login_verifiers_v1: { savedAt: now, verifiers: { [userId]: { userId, algorithm: 'PBKDF2-SHA256', iterations: 150000, salt, digest, updatedAt: now } } },
     party_shared_users_snapshot_v1: { savedAt: now, authMode: 'supabase', scope: 'active', users: [user] },
     party_cloud_snapshot_core_v2: { savedAt: now, inventoryScope: 'full', inventory: [], categories: [], rewards: [], members: [], offers: [], registerState: register },
     party_cloud_snapshot_transactions_v1: { savedAt: now, transactionsScope: 'full', transactions: [] },
@@ -25,6 +29,7 @@ test('reconectar recupera la sesión del mismo usuario y conserva el carrito y l
     }] },
   };
   await page.addInitScript(({ local, remembered }) => {
+    Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => false });
     for (const [key, value] of Object.entries(local)) localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
     sessionStorage.setItem('party_remembered_session_v1', JSON.stringify(remembered));
   }, { local, remembered: { userId, sessionMeta: session } });
@@ -54,12 +59,20 @@ test('reconectar recupera la sesión del mismo usuario y conserva el carrito y l
     return route.fulfill({ json: (req.headers().accept || '').includes('vnd.pgrst.object') ? rows[0] || null : rows });
   });
   await page.goto(process.env.REBU_RECONNECT_URL || 'http://127.0.0.1:5174/?demo=0', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: user.name, exact: false }).click();
+  await page.locator('input[type="password"]').fill(password);
+  await page.getByRole('button', { name: /^Ingresar$/i }).click();
   await expect(page.getByText('Modo local activo - solo lectura', { exact: true })).toBeVisible({ timeout: 40000 });
   await page.getByRole('button', { name: /Punto de Venta/i }).click();
   await expect(page.locator('.pos-cart-panel')).toContainText('Pedido conservado');
   const anchors = async () => page.locator('main, .pos-cart-header, .pos-cart-checkout, .pos-charge-button')
     .evaluateAll((nodes) => nodes.map((node) => { const { x, y, width, height } = node.getBoundingClientRect(); return { x, y, width, height }; }));
+  await expect(page.locator('.pos-cart-header')).toBeVisible();
   const beforeReconnect = await anchors();
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => true });
+    window.dispatchEvent(new Event('online'));
+  });
   await page.getByRole('button', { name: 'Reconectar', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Volvé a ingresar tu clave' });
   await expect(dialog).toBeVisible();

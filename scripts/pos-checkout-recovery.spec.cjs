@@ -6,11 +6,15 @@ test.setTimeout(60000);
 for (const failure of ['lost-response', 'receipt-read']) {
   test(`el cobro real se recupera tras reiniciar sin duplicarse: ${failure}`, async ({ page }) => {
     const userId = 'checkout-recovery-audit-user';
+    const authId = '00000000-0000-4000-8000-000000000789';
     const password = 'audit-4321';
     const salt = '00112233445566778899aabbccddeeff';
     const savedAt = new Date().toISOString();
-    const user = { id: userId, name: 'Prueba recuperación', displayName: 'Prueba recuperación', role: 'owner', isActive: true, permissionsVersion: 1 };
-    const cloudUser = { ...user, display_name: user.name, is_active: true, permissions_version: 1 };
+    const user = { id: userId, name: 'Prueba recuperación', displayName: 'Prueba recuperación', role: 'owner', isActive: true, permissionsVersion: 1, authUserId: authId, authEmail: 'recovery@example.invalid' };
+    const cloudUser = { ...user, display_name: user.name, is_active: true, permissions_version: 1, auth_user_id: authId, auth_email: user.authEmail };
+    const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+    const token = `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub: authId, aud: 'authenticated', role: 'authenticated', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600 })}.fixture`;
+    const authUser = { id: authId, aud: 'authenticated', role: 'authenticated', email: user.authEmail, app_metadata: { provider: 'email' }, user_metadata: {} };
     const register = { id: 1, is_open: true, opening_balance: 0, closing_time: '23:59' };
     const product = { id: 'custom_recovery', title: 'Pedido original', price: 3500, quantity: 1, product_type: 'quantity', isCustom: true, cost: 0 };
     const digest = pbkdf2Sync(`rebu-offline-login-v2:${userId}:${password}`, Buffer.from(salt, 'hex'), 150000, 32, 'sha256').toString('hex');
@@ -38,6 +42,8 @@ for (const failure of ['lost-response', 'receipt-read']) {
       const req = route.request();
       const url = new URL(req.url());
       if (['127.0.0.1', 'localhost'].includes(url.hostname) || !url.protocol.startsWith('http')) return route.continue();
+      if (url.pathname === '/auth/v1/token') return route.fulfill({ json: { access_token: token, refresh_token: 'fixture-refresh', token_type: 'bearer', expires_in: 3600, user: authUser } });
+      if (url.pathname === '/auth/v1/user') return route.fulfill({ json: authUser });
       if (!url.pathname.includes('/rest/v1/')) return route.abort('internetdisconnected');
       const endpoint = url.pathname.split('/').pop();
       if (endpoint.startsWith('verify_app_user_login')) return route.fulfill({ json: [cloudUser] });

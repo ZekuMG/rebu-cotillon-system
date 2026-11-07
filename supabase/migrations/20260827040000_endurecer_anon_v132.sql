@@ -5,7 +5,7 @@
 --     20260912210000_cerrar_anon_usuarios_y_funciones_viejas.sql)
 --   * grant de las cuatro RPC buenas a los tres roles ..... HECHO (ya estaba)
 --   * cerrar los permisos por defecto de funciones ........ PENDIENTE, va en
---     20260913040000_cerrar_anon_sobre_las_tablas_de_la_caja.sql
+--     20261020020000_cerrar_anon_sobre_las_tablas_de_la_caja.sql
 -- No aplicarla suelta: revisar antes que no pise nada de lo que ya esta.
 
 -- Cierre de la version 1.2.32 en modo temporal sin JWT.

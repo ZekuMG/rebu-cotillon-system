@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import {
   assessSecureSession,
+  decideSecureCloudWrite,
   getExpectedAuthUserId,
   reauthenticateCloudUser,
   SECURE_SESSION_STATUS,
@@ -97,6 +98,25 @@ test('uses remembered Supabase auth metadata when the public user lacks auth fie
   );
 });
 
+test('una interrupción temporal espera sin cerrar la sesión; una identidad ausente pide ingreso', () => {
+  assert.equal(decideSecureCloudWrite({
+    assessment: assessSecureSession({ error: new Error('Failed to fetch') }),
+  }), 'wait');
+  assert.equal(decideSecureCloudWrite({
+    assessment: assessSecureSession({ session: { access_token: 'token', user: { id: 'u1' } } }),
+    offline: true,
+  }), 'wait');
+  assert.equal(decideSecureCloudWrite({
+    assessment: assessSecureSession({ session: null }),
+  }), 'reauth');
+  assert.equal(decideSecureCloudWrite({
+    assessment: assessSecureSession({
+      session: { access_token: 'token', user: { id: 'u2' } },
+      expectedAuthUserId: 'u1',
+    }),
+  }), 'reauth');
+});
+
 test('session synchronization is event-driven and does not poll', () => {
   assert.match(appSource, /supabase\.auth\.onAuthStateChange/);
   assert.match(appSource, /visibilitychange/);
@@ -115,26 +135,21 @@ test('session synchronization is event-driven and does not poll', () => {
 // 685 KB del archivo entero a la consola.
 const contiene = (aguja) => appSource.includes(aguja);
 
-test('cobrar no depende de la sesion de Supabase Auth', () => {
-  // La migracion 20260826220000 le dio las RPC transaccionales a `anon`, asi que
-  // el cobro dejo de tener puerta: ni pide la clave ni se traba.
+test('cobrar exige sesion de Supabase Auth y conserva el carrito ante un rechazo', () => {
   assert.equal(contiene('SecureSessionReauthPanel'), false, 'volvio el panel que pide la clave');
   assert.equal(contiene('handleSecureSessionReauthentication'), false, 'volvio el handler de reautenticacion');
   assert.equal(contiene('pendingSecureCheckoutRef'), false, 'volvio la venta en espera');
   assert.equal(contiene('Sesion de venta no disponible'), false, 'volvio el cartel sin salida');
 
-  // La renovacion se dispara sin await: la venta no espera por ella.
-  // El .catch es obligatorio: DebugAppShell reemplaza la app entera ante una
-  // promesa rechazada, y se llevaria puesto el carrito en curso.
   assert.equal(
-    contiene('void recoverSecureSessionForCheckout().catch(() => {});'),
+    contiene('if (!(await requireSecureSessionForCloudWrite())) {'),
     true,
-    'el cobro deberia refrescar la sesion sin bloquear y sin poder rechazar',
+    'el cobro debe esperar la comprobacion de sesion',
   );
   assert.equal(
-    contiene('const secureSession = await recoverSecureSessionForCheckout();'),
-    false,
-    'el cobro volvio a esperar por la sesion',
+    /clearAuthenticatedState\(\{\s*preserveCart:\s*true,/.test(appSource),
+    true,
+    'la sesion rechazada debe volver al ingreso sin vaciar el carrito',
   );
 });
 

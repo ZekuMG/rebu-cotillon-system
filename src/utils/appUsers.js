@@ -227,22 +227,6 @@ const APP_USERS_PUBLIC_MINIMAL_SELECT = [
   'is_active',
 ].join(',');
 
-const APP_USERS_TABLE_MINIMAL_SELECT = [
-  'id',
-  'display_name',
-  'role',
-  'avatar',
-  'name_color',
-  'theme',
-  'is_active',
-  'permissions_override',
-  'permissions_version',
-  'force_reauth_permissions_version',
-  'created_at',
-  'updated_at',
-  'created_by',
-].join(',');
-
 const APP_USERS_PUBLIC_FORBIDDEN_COLUMNS = new Set([
   'permissions_override',
   'permissions_version',
@@ -262,11 +246,6 @@ const sanitizeAppUsersPublicSelect = (sourceName, selectColumns) => {
 
   return safeColumns.join(',') || APP_USERS_PUBLIC_MINIMAL_SELECT;
 };
-
-const isMissingPrivateUsersRpc = (error) =>
-  /list_app_users_private|verify_app_user_login_private|verify_app_user_login_auth_bridge|function .* does not exist|schema cache|PGRST202|permission denied|42501/i.test(
-    [error?.message, error?.details, error?.hint, error?.code].filter(Boolean).join(' '),
-  );
 
 const readAppUsersFromSource = async ({
   sourceName,
@@ -335,12 +314,7 @@ export const fetchAppUsersPrivate = async ({
     p_include_inactive: Boolean(includeInactive),
   });
 
-  if (error) {
-    if (isMissingPrivateUsersRpc(error)) {
-      return fetchAppUsersPublic({ includeInactive, includeAuditFields: includeInactive });
-    }
-    throw error;
-  }
+  if (error) throw error;
 
   return (Array.isArray(data) ? data : []).map(normalizeAppUserRecord).filter(Boolean);
 };
@@ -371,20 +345,6 @@ export const fetchAppUsersPublic = async ({
         includeInactive,
         orderUsers: false,
       }),
-    () =>
-      readAppUsersFromSource({
-        sourceName: 'app_users',
-        selectColumns: APP_USERS_TABLE_MINIMAL_SELECT,
-        includeInactive,
-        orderUsers: true,
-      }),
-    () =>
-      readAppUsersFromSource({
-        sourceName: 'app_users',
-        selectColumns: APP_USERS_TABLE_MINIMAL_SELECT,
-        includeInactive,
-        orderUsers: false,
-      }),
   ];
 
   let lastError = null;
@@ -409,28 +369,10 @@ export const bootstrapAppUsers = async ({ systemUser, sellerUser }) => {
 };
 
 const verifyAppUserLoginOnce = async ({ userId, password }) => {
-  let { data, error } = await supabase.rpc('verify_app_user_login_auth_bridge', {
+  const { data, error } = await supabase.rpc('verify_app_user_login_auth_bridge', {
     p_user_id: userId,
     p_password: password,
   });
-
-  if (error && isMissingPrivateUsersRpc(error)) {
-    const privateResult = await supabase.rpc('verify_app_user_login_private', {
-      p_user_id: userId,
-      p_password: password,
-    });
-    data = privateResult.data;
-    error = privateResult.error;
-  }
-
-  if (error && isMissingPrivateUsersRpc(error)) {
-    const legacyResult = await supabase.rpc('verify_app_user_login', {
-      p_user_id: userId,
-      p_password: password,
-    });
-    data = legacyResult.data;
-    error = legacyResult.error;
-  }
 
   if (error) throw error;
   if (Array.isArray(data)) return normalizeAppUserRecord(data[0] || null);
@@ -463,6 +405,14 @@ export const signInSupabaseAuthForAppUser = async ({ user, password }) => {
     session: data?.session || null,
     authUser: data?.user || null,
   };
+};
+
+export const activateAppUserPermissionsAfterLogin = async () => {
+  const { error } = await supabase.rpc('activate_app_user_permissions_after_login');
+  // La app se distribuye antes del corte RLS. La RPC aparece con ese corte.
+  if (error && !['PGRST202', '42883'].includes(String(error.code || ''))) {
+    throw error;
+  }
 };
 
 export const createAppUser = async ({ actorId, displayName, role, password, avatar, nameColor, theme, metricsViewMode }) => {

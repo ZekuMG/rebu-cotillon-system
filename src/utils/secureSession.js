@@ -66,3 +66,9 @@ export const reauthenticateCloudUser = async ({ userId, password, verifyUser, si
   }
   return { user, assessment };
 };
+
+export const decideSecureCloudWrite = ({ assessment, offline = false } = {}) => {
+  if (offline || assessment?.status === SECURE_SESSION_STATUS.ERROR) return 'wait';
+  if (assessment?.isUsable) return 'allow';
+  return 'reauth';
+};
