@@ -62,7 +62,7 @@ test('reconectar recupera la sesión del mismo usuario y conserva el carrito y l
   await page.getByRole('button', { name: user.name, exact: false }).click();
   await page.locator('input[type="password"]').fill(password);
   await page.getByRole('button', { name: /^Ingresar$/i }).click();
-  await expect(page.getByText('Modo local activo - solo lectura', { exact: true })).toBeVisible({ timeout: 40000 });
+  await expect(page.getByText('Sin conexión · acciones pendientes en esta PC', { exact: true })).toBeVisible({ timeout: 40000 });
   await page.getByRole('button', { name: /Punto de Venta/i }).click();
   await expect(page.locator('.pos-cart-panel')).toContainText('Pedido conservado');
   const anchors = async () => page.locator('main, .pos-cart-header, .pos-cart-checkout, .pos-charge-button')
@@ -87,7 +87,7 @@ test('reconectar recupera la sesión del mismo usuario y conserva el carrito y l
   expect(signIns).toBe(0);
   await dialog.locator('input[type="password"]').fill(password);
   await dialog.getByRole('button', { name: 'Reconectar', exact: true }).click();
-  await expect(page.getByText('Modo local activo - solo lectura', { exact: true })).toBeHidden({ timeout: 30000 });
+  await expect(page.getByText('Sin conexión · acciones pendientes en esta PC', { exact: true })).toBeHidden({ timeout: 30000 });
   expect(await anchors()).toEqual(beforeReconnect);
   await expect(page.locator('.pos-cart-panel')).toContainText('Pedido conservado');
   await expect(page.getByRole('checkbox', { name: /Lleva bolsita/i })).toHaveAttribute('aria-checked', 'true');

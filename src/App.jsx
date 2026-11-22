@@ -19,6 +19,11 @@ import {
 import Swal from 'sweetalert2';
 import logoRebuImg from './assets/logo-rebu.jpg';
 import appPackage from '../package.json';
+import useOfflineActionQueue from './hooks/useOfflineActionQueue';
+import { createOfflineRealtimeLifecycle } from './utils/offlineRealtimeLifecycle';
+import { buildOfflineReservedStockDelta, getLatestOfflineClientAttempt, getLatestOfflineCouponUpdate, hasPendingOfflineCoupon } from './utils/offlineSaleReservations';
+import { completeOfflineSaleAction, confirmOfflineAction, isOfflineActionOpen, offlineValueFingerprint } from './utils/offlineActionQueue';
+import { OFFLINE_ACTION_CATALOG, projectOfflineTarget, getOfflineActionSummary } from './utils/offlineActionCatalog';
 
 // --- CONEXIÓN A LA NUBE ---
 import { supabase, subscribeToRealtimeHeartbeat } from './supabase/client';
@@ -285,6 +290,7 @@ const lazyNamedComponent = (importer, exportName) =>
   lazy(() => importer().then((module) => ({ default: module[exportName] })));
 
 // Vistas: se cargan bajo demanda para que Electron no parse/ejecute toda la app al abrir.
+const OfflineActionsPanel = lazy(() => import('./components/OfflineActionsPanel'));
 const DashboardView = lazy(() => import('./views/DashboardView'));
 const InventoryView = lazy(() => import('./views/InventoryView'));
 const POSView = lazy(() => import('./views/POSView'));
@@ -3171,12 +3177,26 @@ export default function PartySupplyApp() {
       window.__REBU_APP_READY__ = false;
     };
   }, []);
-  
+
   const [isCloudLoading, setIsCloudLoading] = useState(false);
   const [isAuthBootLoading, setIsAuthBootLoading] = useState(true);
   const [isSoftReloading, setIsSoftReloading] = useState(false);
   const [isForceReloading, setIsForceReloading] = useState(false);
-  const [isOfflineReadOnly, setIsOfflineReadOnly] = useState(false);
+  const [isOfflineReadOnly, setOfflineReadOnlyState] = useState(false);
+  const offlineReadOnlyRef = useRef(false);
+  const realtimeCleanupRef = useRef({ pending: null });
+  const setIsOfflineReadOnly = useCallback((value) => {
+    const next = typeof value === 'function' ? value(offlineReadOnlyRef.current) : value;
+    offlineReadOnlyRef.current = !isLocalDemoMode() && isBrowserOffline() ? true : next;
+    setOfflineReadOnlyState(offlineReadOnlyRef.current);
+  }, []);
+  const offlineActions = useOfflineActionQueue();
+  const { setOpen: setOfflineActionsOpen } = offlineActions;
+  const offlineActionReplayRef = useRef(null);
+  const offlineActionConfirmationRef = useRef(false);
+  const offlineActionEntriesRef = useRef([]);
+  offlineActionEntriesRef.current = offlineActions.entries;
+  const wasOfflineForActionsRef = useRef(false);
   const [isReconnectAttempting, setIsReconnectAttempting] = useState(false);
   const [offlineSnapshotAt, setOfflineSnapshotAt] = useState(null);
   const [offlineDetectedAt, setOfflineDetectedAt] = useState(null);
@@ -3286,6 +3306,7 @@ export default function PartySupplyApp() {
       ...currentState,
       ...(nextPartial || {}),
     };
+    if (Object.keys(nextPartial || {}).every((key) => Object.is(currentState[key], nextState[key]))) return;
 
     moduleLoadStateRef.current = {
       ...moduleLoadStateRef.current,
@@ -3298,6 +3319,7 @@ export default function PartySupplyApp() {
     const nextPartial = typeof patch === 'function'
       ? patch(realtimeConnectionStateRef.current)
       : patch;
+    if (Object.keys(nextPartial || {}).every((key) => Object.is(realtimeConnectionStateRef.current[key], nextPartial[key]))) return;
     realtimeConnectionStateRef.current = {
       ...realtimeConnectionStateRef.current,
       ...(nextPartial || {}),
@@ -4995,6 +5017,14 @@ export default function PartySupplyApp() {
   const loadModuleForTab = async (tab, { force = false, requireCloud = false, full = false } = {}) => {
     const moduleKey = TAB_TO_DATA_MODULE[tab];
     hydrateDeferredModuleSnapshot(moduleKey);
+    if (!isLocalDemoMode() && isBrowserOffline()) {
+      if (!moduleKey) return !requireCloud;
+      if (moduleKey === 'transactions') await hydrateTransactionsFromIndexedDb();
+      const state = moduleLoadStateRef.current[moduleKey];
+      const hasLocalSnapshot = Number(state?.lastLoadedAt || 0) > 0;
+      setModuleState(moduleKey, { status: hasLocalSnapshot ? 'loaded' : 'error', dirty: true, cloudRefreshFailed: true });
+      return hasLocalSnapshot && !requireCloud;
+    }
 
     switch (moduleKey) {
       case 'transactions':
@@ -5231,10 +5261,10 @@ export default function PartySupplyApp() {
     let hasSubscribedOnce = false;
     const pendingSnapshotScopes = new Set();
     const reconcileCloudData = createSingleFlightTask(() =>
-      fetchCloudData(false, { force: true })
+      fetchCloudData(false, { force: true, forceCore: true })
     );
     const requestCloudReconciliation = (errorMessage) => {
-      if (disposed) return;
+      if (disposed || isBrowserOffline()) return;
       lastFetchTime = Date.now();
       void reconcileCloudData().catch((error) => {
         console.error(errorMessage, error);
@@ -5309,6 +5339,7 @@ export default function PartySupplyApp() {
     };
 
     const scheduleAffectedModuleSync = (moduleKeys = []) => {
+      if (disposed || isBrowserOffline()) return;
       const affectedModules = Array.from(new Set(moduleKeys.filter(Boolean)));
       markModulesDirty(affectedModules);
       if (!currentUserRef.current) return;
@@ -5321,6 +5352,7 @@ export default function PartySupplyApp() {
         const moduleToSync = TAB_TO_DATA_MODULE[tabToSync];
         if (!moduleToSync || !affectedModules.includes(moduleToSync)) return;
 
+        if (disposed || isBrowserOffline()) return;
         const syncTasks = [loadModuleForTab(tabToSync, { force: true })];
         if (tabToSync === 'history' && affectedModules.includes('transactions')) {
           syncTasks.push(loadTransactionsCloudData({ force: true }));
@@ -5333,10 +5365,11 @@ export default function PartySupplyApp() {
 
     const scheduleCoreSync = () => {
       setModuleState('core', (prev) => ({ ...prev, dirty: true }));
-      if (!currentUserRef.current) return;
+      if (disposed || isBrowserOffline() || !currentUserRef.current) return;
       if (realtimeCoreSyncTimer) window.clearTimeout(realtimeCoreSyncTimer);
       realtimeCoreSyncTimer = window.setTimeout(() => {
         realtimeCoreSyncTimer = null;
+        if (disposed || isBrowserOffline()) return;
         void loadCoreCloudData({ showSpinner: false, force: true }).catch((error) => {
           console.error('No se pudo reconciliar la base despues de Realtime:', error);
         });
@@ -5348,6 +5381,7 @@ export default function PartySupplyApp() {
       if (realtimeCategorySyncTimer) window.clearTimeout(realtimeCategorySyncTimer);
       realtimeCategorySyncTimer = window.setTimeout(() => {
         realtimeCategorySyncTimer = null;
+        if (disposed || isBrowserOffline()) return;
         void fetchRowsWithOptionalActiveFilter({
           table: 'categories',
           selectColumns: CLOUD_SELECTS.categories,
@@ -5380,6 +5414,7 @@ export default function PartySupplyApp() {
       if (realtimeUsersSyncTimer) window.clearTimeout(realtimeUsersSyncTimer);
       realtimeUsersSyncTimer = window.setTimeout(() => {
         realtimeUsersSyncTimer = null;
+        if (disposed || isBrowserOffline()) return;
         void loadAppUsers({
           force: true,
           includeInactive: activeTabRef.current === 'user-management',
@@ -5409,14 +5444,17 @@ export default function PartySupplyApp() {
     };
 
     const syncSaleIds = async (saleIds) => {
-      if (disposed || saleIds.length === 0) return;
+      if (disposed || isBrowserOffline() || saleIds.length === 0) return;
       setRealtimeSourceStatus('sales', 'syncing');
-      const payload = await fetchTransactionsCloudPayloadByIds(saleIds);
+      const payload = await fetchModuleCloudPayloadWithRetries({
+        label: 'Ventas notificadas por Realtime',
+        fetchPayload: ({ signal }) => fetchTransactionsCloudPayloadByIds(saleIds, { signal }),
+      });
       if (!payload?.hasCloudConnection || payload.transactions === null) {
         throw payload?.error || new Error('No se pudieron consultar las ventas notificadas por Realtime.');
       }
 
-      if (disposed) return;
+      if (disposed || isBrowserOffline()) return;
 
       setTransactions((prev) => {
         const next = applyLocalTransactionOverrides(
@@ -5438,7 +5476,7 @@ export default function PartySupplyApp() {
       delayMs: 275,
       onFlush: syncSaleIds,
       onError: (error) => {
-        if (disposed) return;
+        if (disposed || isBrowserOffline()) return;
         console.error('No se pudo aplicar el evento Realtime de ventas:', error);
         setRealtimeSourceStatus('sales', 'error');
         scheduleAffectedModuleSync(['transactions', 'dashboard', 'history', 'metrics']);
@@ -5626,7 +5664,10 @@ export default function PartySupplyApp() {
       }
     };
 
-    const channel = supabase
+    const realtimeLifecycle = createOfflineRealtimeLifecycle({
+      isOffline: isBrowserOffline,
+      cleanupState: realtimeCleanupRef.current,
+      subscribe: (isCurrent) => supabase
       .channel('app_realtime_updates')
       .on(
         'postgres_changes',
@@ -5676,7 +5717,7 @@ export default function PartySupplyApp() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rewards' }, handleRealtimeReward)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agenda_contacts' }, handleRealtimeAgendaContact)
       .subscribe((status, error) => {
-        if (disposed) return;
+        if (disposed || !isCurrent()) return;
         if (status === 'SUBSCRIBED') {
           const shouldReconcile = hasSubscribedOnce && shouldReconcileAfterSubscribe;
           hasSubscribedOnce = true;
@@ -5697,10 +5738,22 @@ export default function PartySupplyApp() {
         if (REALTIME_DEGRADED_STATUSES.has(status)) {
           markRealtimeChannelDegraded(status, error);
         }
-      });
+      }),
+      unsubscribe: async (channel) => {
+        await supabase.removeChannel(channel);
+        // The SDK can remain "disconnecting" for its 100ms close fallback
+        // after removing the channel. A subscribe during that state is skipped.
+        if (supabase.realtime.isDisconnecting()) {
+          await new Promise((resolve) => window.setTimeout(resolve, 150));
+        }
+      },
+      disconnect: () => supabase.realtime.disconnect(),
+      onError: (error) => console.warn('No se pudo suspender el canal de datos:', error),
+    });
+    realtimeLifecycle.resume();
 
     const unsubscribeHeartbeat = subscribeToRealtimeHeartbeat((heartbeat) => {
-      if (disposed) return;
+      if (disposed || isBrowserOffline()) return;
       if (heartbeat.status === 'ok') {
         const previousState = realtimeConnectionStateRef.current;
         const recoveredFromHeartbeat = (
@@ -5726,7 +5779,7 @@ export default function PartySupplyApp() {
         }
         setRealtimeConnection((prev) => reconcileRealtimeHeartbeatState(prev, heartbeat));
         markModulesDirty(['core', 'transactions', 'dashboard', 'history', 'orders', 'reports', 'metrics']);
-        if (heartbeat.status === 'disconnected') supabase.realtime.connect();
+        // Realtime owns its reconnect backoff; do not start another connection per heartbeat.
       }
     });
 
@@ -5737,7 +5790,7 @@ export default function PartySupplyApp() {
       const nextVisibilityState = document.visibilityState;
       const becameVisible = lastVisibilityState !== 'visible' && nextVisibilityState === 'visible';
       lastVisibilityState = nextVisibilityState;
-      if (!becameVisible) return;
+      if (!becameVisible || isBrowserOffline()) return;
 
       const elapsed = Date.now() - lastFetchTime;
       const realtimeIsDegraded = REALTIME_DEGRADED_STATUSES.has(
@@ -5746,7 +5799,10 @@ export default function PartySupplyApp() {
       if (elapsed < MIN_RESYNC_INTERVAL && !realtimeIsDegraded) return;
 
       lastFetchTime = Date.now();
-      if (realtimeIsDegraded) supabase.realtime.connect();
+      if (realtimeIsDegraded) {
+        realtimeLifecycle.pause();
+        realtimeLifecycle.resume();
+      }
       requestCloudReconciliation('No se pudo reconciliar al volver a Rebu:');
     };
 
@@ -5754,14 +5810,31 @@ export default function PartySupplyApp() {
       recordDiagnosticError('cloud:network', {
         message: 'El navegador informo que no hay conexion de red.',
       }, { browserOnline: false });
-      const recoveredFromCache = hydrateOfflineSnapshots();
-      if (recoveredFromCache || isBrowserOffline()) {
-        setIsOfflineReadOnly(true);
+      realtimeLifecycle.pause();
+      setRealtimeSourceState(REALTIME_SOURCE_DEFAULT_STATE);
+      // Keep the live cart and data: re-reading every cache on a disconnect can
+      // replace newer in-memory edits and repeatedly parse large histories.
+      const hasLiveCore = Number(moduleLoadStateRef.current.core.lastLoadedAt || 0) > 0
+        || (dataStateRef.current.inventory?.length || 0) > 0;
+      if (!hasLiveCore) hydrateOfflineSnapshots();
+      for (const [key, state] of Object.entries(moduleLoadStateRef.current)) {
+        if (state.status !== 'loading') continue;
+        beginModuleLoadRequest(key);
+        setModuleState(key, { status: Number(state.lastLoadedAt || 0) > 0 ? 'loaded' : 'error', dirty: true, cloudRefreshFailed: true });
       }
+      setIsOfflineReadOnly(true);
+      setIsCloudLoading(false);
+      setIsAuthBootLoading(false);
     };
 
     const handleBrowserOnline = () => {
-      supabase.realtime.connect();
+      if (isBrowserOffline()) return;
+      // A failed handshake can leave an online channel closed or joining.
+      // An explicit network recovery starts it with a fresh subscription.
+      if (REALTIME_DEGRADED_STATUSES.has(realtimeConnectionStateRef.current.status)) {
+        realtimeLifecycle.pause();
+      }
+      realtimeLifecycle.resume();
       requestCloudReconciliation('No se pudo reconciliar al recuperar internet:');
     };
 
@@ -5792,7 +5865,7 @@ export default function PartySupplyApp() {
       if (realtimeSnapshotTimer) {
         window.clearTimeout(realtimeSnapshotTimer);
       }
-      supabase.removeChannel(channel);
+      realtimeLifecycle.dispose();
       window.removeEventListener('visibilitychange', handleReSync);
       window.removeEventListener('offline', handleBrowserOffline);
       window.removeEventListener('online', handleBrowserOnline);
@@ -6515,6 +6588,15 @@ export default function PartySupplyApp() {
     recordDiagnosticError('cloud:fallback', { message }, { title, type });
   }
 
+  const showOfflineAwareActionDialog = (...args) => {
+    if (offlineActionReplayRef.current) {
+      const options = typeof args[0] === 'object' ? args[0] : { title: args[0], text: args[1], icon: args[2] };
+      if (options.icon === 'success') { offlineActionReplayRef.current.confirmed = true; return Promise.resolve({ isConfirmed: true }); }
+      if (['error', 'warning'].includes(options.icon) && !options.showCancelButton) throw new Error(options.text || options.title);
+    }
+    return Swal.fire(...args);
+  };
+
   const closeNotification = () => {
     setNotification(prev => ({ ...prev, isOpen: false }));
   };
@@ -6725,14 +6807,20 @@ export default function PartySupplyApp() {
     };
   };
 
-  const blockIfOfflineReadonly = (actionLabel = 'realizar cambios') => {
+  const blockIfOfflineReadonly = async (actionLabel = 'realizar cambios', command = null) => {
     if (isLocalDemoMode()) return false;
-    if (!isOfflineReadOnly) return false;
-    showNotification(
-      'info',
-      'Modo sin conexion',
-      `Estas viendo datos locales. Reconecta la nube antes de ${actionLabel}.`
-    );
+    if (!isOfflineReadOnly && !isBrowserOffline()) return false;
+    if (offlineActionReplayRef.current) throw new Error('Se interrumpió la conexión. Conservamos el pendiente.');
+    if (command) {
+      try {
+        await saveOfflineCommand(command);
+        showNotification('info', 'Guardado en pendientes', 'La acción quedó guardada en esta PC. Revisala y confirmala cuando vuelva internet. Todavía no modificó los datos del negocio.');
+      } catch (error) {
+        showNotification('error', 'No se pudo guardar el pendiente', error.message || 'Revisá el espacio disponible en esta PC.');
+      }
+      return true;
+    }
+    showNotification('info', 'Necesitás conexión', 'Reconectá la app antes de ' + actionLabel + '. Los pendientes guardados se conservan.');
     return true;
   };
 
@@ -6865,7 +6953,7 @@ export default function PartySupplyApp() {
       return;
     }
 
-    if (isOfflineReadOnly) {
+    if (offlineReadOnlyRef.current || isBrowserOffline()) {
       await handleReconnectCloud();
       return;
     }
@@ -6873,10 +6961,13 @@ export default function PartySupplyApp() {
     setIsSoftReloading(true);
     try {
       const moduleKey = TAB_TO_DATA_MODULE[activeTabRef.current];
-      if (moduleKey) {
-        await loadModuleForTab(activeTabRef.current, { force: true });
-      } else {
-        await loadCoreCloudData({ showSpinner: false, force: true });
+      const loaded = moduleKey
+        ? await loadModuleForTab(activeTabRef.current, { force: true })
+        : await loadCoreCloudData({ showSpinner: false, force: true });
+      if (isBrowserOffline() || offlineReadOnlyRef.current) return;
+      if (!loaded) {
+        showNotification('warning', 'No se pudo actualizar', 'Se conservan los datos cargados. Reintentá cuando vuelva la conexión.');
+        return;
       }
       showNotification(
         'success',
@@ -6884,6 +6975,7 @@ export default function PartySupplyApp() {
         moduleKey ? 'Se recargo el modulo visible.' : 'Se recargaron los datos base.'
       );
     } catch (error) {
+      if (isBrowserOffline() || error?.code === 'REBU_OFFLINE') return;
       console.error('No se pudo actualizar manualmente:', error);
       showNotification(
         'error',
@@ -7153,6 +7245,7 @@ export default function PartySupplyApp() {
   };
 
   const handleUpdateLogNote = async (logId, newNote) => {
+    if (await blockIfOfflineReadonly('editar notas', { type: 'handleUpdateLogNote', args: [logId, newNote] })) return;
     try {
       const { error } = await supabase.from('logs').update({ reason: newNote }).eq('id', logId);
       if (error) throw error;
@@ -7175,7 +7268,10 @@ export default function PartySupplyApp() {
       );
       
       showNotification('success', 'Nota Actualizada', 'La nota ha sido guardada correctamente.');
+
+      return true;
     } catch (err) {
+      if (offlineActionReplayRef.current) throw err;
       console.error("Error actualizando nota del log:", err);
       showNotification('error', 'Error', 'No se pudo actualizar la nota en la nube.');
     }
@@ -7415,7 +7511,7 @@ export default function PartySupplyApp() {
 
     // ? NUEVO: HANDLER PARA FIJAR PRODUCTO PERSONALIZADO DESDE EL PRESUPUESTO
   const handleCreateFixedProduct = async (title, price) => {
-    if (blockIfOfflineReadonly('crear productos')) return;
+    if (await blockIfOfflineReadonly('crear productos', { type: "handleCreateFixedProduct", args: [title, price] })) return;
     try {
       const payload = {
         title: title,
@@ -7445,6 +7541,7 @@ export default function PartySupplyApp() {
       
       return itemFormatted;
     } catch (err) {
+      if (offlineActionReplayRef.current) throw err;
       console.error('Error fijando producto:', err);
       showNotification('error', 'Error', 'No se pudo fijar el producto.');
       return null;
@@ -7452,7 +7549,7 @@ export default function PartySupplyApp() {
   };
 
   const handleCreateBudget = async (budgetData) => {
-    if (blockIfOfflineReadonly('crear presupuestos')) return;
+    if (await blockIfOfflineReadonly('crear presupuestos', { type: "handleCreateBudget", args: [budgetData] })) return;
     try {
       const payload = {
         member_id: toOptionalDbId(budgetData.memberId),
@@ -7511,6 +7608,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Presupuesto Creado', 'Se guardó correctamente en Pedidos.');
       return newBudget;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error creando presupuesto:', error);
       showNotification('error', 'Error', `No se pudo guardar el presupuesto. ${getCloudErrorMessage(error)}`);
       throw error;
@@ -7518,7 +7616,7 @@ export default function PartySupplyApp() {
   };
 
   const handleUpdateBudget = async (id, budgetData) => {
-    if (blockIfOfflineReadonly('editar presupuestos')) return;
+    if (await blockIfOfflineReadonly('editar presupuestos', { type: "handleUpdateBudget", args: [id, budgetData] })) return;
     try {
       const previousBudget = budgets.find((budget) => String(budget.id) === String(id)) || null;
       const payload = {
@@ -7564,6 +7662,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Presupuesto Actualizado', 'Los cambios se guardaron.');
       return updatedBudget;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error actualizando presupuesto:', error);
       showNotification('error', 'Error', `No se pudo actualizar el presupuesto. ${getCloudErrorMessage(error)}`);
       throw error;
@@ -7571,7 +7670,7 @@ export default function PartySupplyApp() {
   };
 
   const handleUpdateOrder = async (id, orderData) => {
-    if (blockIfOfflineReadonly('editar pedidos')) return;
+    if (await blockIfOfflineReadonly('editar pedidos', { type: "handleUpdateOrder", args: [id, orderData] })) return;
     try {
       const previousOrder = orders.find((order) => String(order.id) === String(id)) || null;
       if (!previousOrder) {
@@ -7654,7 +7753,7 @@ export default function PartySupplyApp() {
         deposit_amount: nextDepositAmount,
         paid_total: nextPaidTotal,
         remaining_amount: nextRemainingAmount,
-        pickup_date: previousOrder.pickupDate || null,
+        pickup_date: orderPreview.pickupDate || null,
         status: nextStatus,
       };
 
@@ -7735,6 +7834,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Pedido Actualizado', 'Los cambios del pedido se guardaron.');
       return updatedOrder;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error actualizando pedido:', error);
       showNotification('error', 'Error', `No se pudo actualizar el pedido. ${getCloudErrorMessage(error)}`);
       throw error;
@@ -7742,7 +7842,7 @@ export default function PartySupplyApp() {
   };
 
   const handleDeleteBudget = async (budgetRecord) => {
-    if (blockIfOfflineReadonly('eliminar presupuestos')) return;
+    if (await blockIfOfflineReadonly('eliminar presupuestos', { type: "handleDeleteBudget", args: [budgetRecord] })) return;
     try {
       const { data } = await updateWithSchemaFallback(
         'budgets',
@@ -7772,7 +7872,10 @@ export default function PartySupplyApp() {
         deletedBudget?.eventLabel || budgetRecord.eventLabel || 'Gestion de pedidos'
       );
       showNotification('success', 'Presupuesto Eliminado', 'El presupuesto fue eliminado de Pedidos.');
+
+      return true;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error eliminando presupuesto:', error);
       showNotification('error', 'Error', `No se pudo eliminar el presupuesto. ${getCloudErrorMessage(error)}`);
       throw error;
@@ -7949,7 +8052,13 @@ export default function PartySupplyApp() {
   };
 
   const applyStockEntriesCloudWithRollback = async (entries = []) => {
-    if (isLocalDemoMode()) return;
+    if (isLocalDemoMode()) {
+      for (const [id, delta] of entries) {
+        const product = getLocalDemoStore().products.find((entry) => String(entry.id) === String(id));
+        if (product) localDemoUpdateRow('products', id, { stock: Number(product.stock || 0) + Number(delta) });
+      }
+      return;
+    }
     const appliedEntries = [];
 
     try {
@@ -9031,7 +9140,10 @@ export default function PartySupplyApp() {
   };
 
   const handleConvertBudgetToOrder = async (budgetRecord, { pickupDate, depositPayment }) => {
-    if (blockIfOfflineReadonly('convertir presupuestos a pedidos')) return;
+    if (await blockIfOfflineReadonly('convertir presupuestos a pedidos', { type: "handleConvertBudgetToOrder", args: [budgetRecord, {
+  pickupDate,
+  depositPayment
+}] })) return;
     try {
       const existingLinkedOrder = orders.find(
         (order) => String(order.budgetId) === String(budgetRecord.id) && order.isActive !== false
@@ -9148,6 +9260,7 @@ export default function PartySupplyApp() {
       );
       return newOrder;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error convirtiendo presupuesto:', error);
       showNotification('error', 'Error', `No se pudo convertir el presupuesto en pedido. ${getCloudErrorMessage(error)}`);
       throw error;
@@ -9155,7 +9268,7 @@ export default function PartySupplyApp() {
   };
 
   const handleUpdateOrderDeposit = async (orderRecord, depositPayment) => {
-    if (blockIfOfflineReadonly('corregir se\u00f1as de pedidos')) return;
+    if (await blockIfOfflineReadonly('corregir se\u00f1as de pedidos', { type: "handleUpdateOrderDeposit", args: [orderRecord, depositPayment] })) return;
     try {
       if (!orderRecord?.id) throw new Error('No se encontró el pedido a actualizar.');
       if (['Pagado', 'Retirado', 'Cancelado'].includes(String(orderRecord.status || ''))) {
@@ -9285,9 +9398,11 @@ export default function PartySupplyApp() {
           await updateWithSchemaFallback('orders', orderRecord.id, orderPatch, CLOUD_SELECTS.orders)
         ).data;
       } catch (updateError) {
+      if (offlineActionReplayRef.current) throw updateError;
         try {
           if (stockTransition === 'restored') await reserveOrderStock(orderRecord);
         } catch (rollbackError) {
+      if (offlineActionReplayRef.current) throw rollbackError;
           console.error('No se pudo revertir el stock tras fallar la correcci\u00f3n de se\u00f1a:', rollbackError);
         }
         throw updateError;
@@ -9342,6 +9457,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Se\u00f1a Actualizada', 'Se recalcularon el abonado y el saldo restante.');
       return updatedOrder;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error corrigiendo se\u00f1a de pedido:', error);
       showNotification('error', 'Error', `No se pudo corregir la se\u00f1a. ${getCloudErrorMessage(error)}`);
       throw error;
@@ -9349,7 +9465,7 @@ export default function PartySupplyApp() {
   };
 
   const handleRegisterOrderPayment = async (orderRecord, paymentPayload) => {
-    if (blockIfOfflineReadonly('registrar pagos de pedidos')) return;
+    if (await blockIfOfflineReadonly('registrar pagos de pedidos', { type: "handleRegisterOrderPayment", args: [orderRecord, paymentPayload] })) return;
     try {
       const normalizedPayment = buildOrderPaymentRecord(paymentPayload, paymentPayload?.amount || 0);
       const paymentAmount = Number(normalizedPayment.amount || 0);
@@ -9470,7 +9586,9 @@ export default function PartySupplyApp() {
         'Cobro manual en Pedidos'
       );
       showNotification('success', 'Pago Registrado', 'El pedido fue actualizado.');
+      return updatedOrder;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error registrando pago de pedido:', error);
       showNotification('error', 'Error', `No se pudo registrar el pago. ${getCloudErrorMessage(error)}`);
       throw error;
@@ -9478,7 +9596,7 @@ export default function PartySupplyApp() {
   };
 
   const handleMarkOrderRetired = async (orderRecord) => {
-    if (blockIfOfflineReadonly('marcar pedidos como retirados')) return;
+    if (await blockIfOfflineReadonly('marcar pedidos como retirados', { type: "handleMarkOrderRetired", args: [orderRecord] })) return;
     try {
       const totalAmount = Number(orderRecord.totalAmount || 0);
       const paidTotal = Number(orderRecord.paidTotal || 0);
@@ -9491,7 +9609,7 @@ export default function PartySupplyApp() {
         (tx) => String(tx.orderId || '') === String(orderRecord.id) && tx.status === 'completed',
       );
       if (!hasLinkedSale) {
-        if (!hasDeferredOrderStockPolicy(orderRecord)) {
+        if (!hasDeferredOrderStockPolicy(orderRecord) && !isOrderStockReserved(orderRecord)) {
           showNotification(
             'warning',
             'Pedido Anterior',
@@ -9501,12 +9619,12 @@ export default function PartySupplyApp() {
         }
 
         const { stockIssues } = getOrderStockIssues(orderRecord);
-        if (stockIssues.length > 0) {
+        if (!isOrderStockReserved(orderRecord) && stockIssues.length > 0) {
           showNotification('error', 'Stock Insuficiente', `No se puede entregar el pedido: ${stockIssues.join(', ')}`);
           return null;
         }
 
-        await handleFinalizePaidOrder(orderRecord, { skipStockDeduction: false });
+        await handleFinalizePaidOrder(orderRecord, { skipStockDeduction: isOrderStockReserved(orderRecord) });
       }
 
       const retirePatch = { status: 'Retirado' };
@@ -9546,7 +9664,9 @@ export default function PartySupplyApp() {
         'Entrega finalizada'
       );
       showNotification('success', 'Pedido Retirado', 'El pedido quedó marcado como entregado.');
+      return retiredOrder;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error marcando pedido retirado:', error);
       showNotification('error', 'Error', `No se pudo marcar el pedido como retirado. ${getCloudErrorMessage(error)}`);
       throw error;
@@ -9554,7 +9674,9 @@ export default function PartySupplyApp() {
   };
 
   const handleCancelOrder = async (orderRecord, { keepDeposit }) => {
-    if (blockIfOfflineReadonly('cancelar pedidos')) return;
+    if (await blockIfOfflineReadonly('cancelar pedidos', { type: "handleCancelOrder", args: [orderRecord, {
+  keepDeposit
+}] })) return;
     try {
       let restoredStockChanges = [];
       const linkedOrderSale = transactions.find((tx) =>
@@ -9650,10 +9772,12 @@ export default function PartySupplyApp() {
           await updateWithSchemaFallback('orders', orderRecord.id, cancelPatch, CLOUD_SELECTS.orders)
         ).data;
       } catch (updateError) {
+      if (offlineActionReplayRef.current) throw updateError;
         if (!linkedOrderSale && restoredStockChanges.length > 0) {
           try {
             await reserveOrderStock(orderRecord);
           } catch (rollbackError) {
+      if (offlineActionReplayRef.current) throw rollbackError;
             console.error('No se pudo volver a reservar el stock tras fallar la cancelación:', rollbackError);
           }
         }
@@ -9708,7 +9832,9 @@ export default function PartySupplyApp() {
         'Pedido Cancelado',
         keepDeposit ? 'El pedido fue cancelado y la seña quedó retenida.' : 'El pedido fue cancelado y la seña fue devuelta.'
       );
+      return cancelledOrder;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error cancelando pedido:', error);
       showNotification('error', 'Error', `No se pudo cancelar el pedido. ${getCloudErrorMessage(error)}`);
       throw error;
@@ -9716,7 +9842,7 @@ export default function PartySupplyApp() {
   };
 
   const handleDeleteOrder = async (orderRecord) => {
-    if (blockIfOfflineReadonly('eliminar pedidos')) return;
+    if (await blockIfOfflineReadonly('eliminar pedidos', { type: "handleDeleteOrder", args: [orderRecord] })) return;
     try {
       let restoredStockChanges = [];
       const linkedOrderSale = transactions.find((tx) =>
@@ -9761,10 +9887,12 @@ export default function PartySupplyApp() {
           await updateWithSchemaFallback('orders', orderRecord.id, deletePatch, CLOUD_SELECTS.orders)
         ).data;
       } catch (updateError) {
+      if (offlineActionReplayRef.current) throw updateError;
         if (!linkedOrderSale && restoredStockChanges.length > 0) {
           try {
             await reserveOrderStock(orderRecord);
           } catch (rollbackError) {
+      if (offlineActionReplayRef.current) throw rollbackError;
             console.error('No se pudo volver a reservar el stock tras fallar la baja:', rollbackError);
           }
         }
@@ -9813,7 +9941,10 @@ export default function PartySupplyApp() {
       );
 
       showNotification('success', 'Pedido Eliminado', 'El pedido fue eliminado de Pedidos.');
+
+      return true;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error eliminando pedido:', error);
       showNotification('error', 'Error', `No se pudo eliminar el pedido. ${getCloudErrorMessage(error)}`);
       throw error;
@@ -9897,7 +10028,7 @@ export default function PartySupplyApp() {
   };
 
   const handleAddOffer = async (offerData) => {
-    if (blockIfOfflineReadonly('crear ofertas o descuentos')) return;
+    if (await blockIfOfflineReadonly('crear ofertas o descuentos', { type: "handleAddOffer", args: [offerData] })) return;
     try {
       const payload = {
         name: offerData.name,
@@ -9954,14 +10085,17 @@ export default function PartySupplyApp() {
       });
       
       showNotification('success', 'Oferta Creada', 'La oferta se guardó en el catálogo.');
+
+      return true;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error(e);
       showNotification('error', 'Error', 'No se pudo crear la oferta en la nube.');
     }
   };
 
   const handleUpdateOffer = async (id, updatedData) => {
-    if (blockIfOfflineReadonly('editar ofertas o descuentos')) return;
+    if (await blockIfOfflineReadonly('editar ofertas o descuentos', { type: "handleUpdateOffer", args: [id, updatedData] })) return;
     try {
       const oldOffer = offers.find(o => o.id === id) || {};
       const normalizedUpdatedData = normalizeOfferForPersistence(updatedData);
@@ -10007,14 +10141,17 @@ export default function PartySupplyApp() {
       });
 
       showNotification('success', 'Oferta Actualizada', 'Los cambios se guardaron.');
+
+      return true;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error(e);
       showNotification('error', 'Error', `No se pudo actualizar la oferta.${e?.message ? ` ${e.message}` : ''}`);
     }
   };
 
   const handleDeleteOffer = async (id) => {
-    if (blockIfOfflineReadonly('eliminar ofertas o descuentos')) return;
+    if (await blockIfOfflineReadonly('eliminar ofertas o descuentos', { type: "handleDeleteOffer", args: [id] })) return;
     try {
       const offerToDelete = offers.find(o => o.id === id);
       if (!offerToDelete) return;
@@ -10081,7 +10218,10 @@ export default function PartySupplyApp() {
       } else {
         showNotification('success', 'Oferta Eliminada', 'Se retiró del sistema y de los productos aplicados.');
       }
+
+      return true;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error(e);
       showNotification('error', 'Error al Eliminar', 'No se pudo eliminar la oferta.');
     }
@@ -10089,7 +10229,7 @@ export default function PartySupplyApp() {
 
 
   const handleAddExpense = async (expenseData) => {
-    if (blockIfOfflineReadonly('registrar gastos')) return;
+    if (await blockIfOfflineReadonly('registrar gastos', { type: "handleAddExpense", args: [expenseData] })) return;
     try {
       const userTypedNote = expenseData.note || ''; 
       const safeDescription = userTypedNote || expenseData.description || 'Gasto General';
@@ -10159,6 +10299,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Gasto Registrado', 'Se guardó correctamente en la nube.');
       return newExpense;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error(e);
       showNotification('error', 'Error', getCloudErrorMessage(e, 'No se pudo guardar el gasto. Verifique los datos.'));
       return null;
@@ -10170,7 +10311,7 @@ export default function PartySupplyApp() {
       showNotification('error', 'Sin permiso', 'No tenes permiso para editar gastos.');
       return null;
     }
-    if (blockIfOfflineReadonly('editar gastos')) return null;
+    if (await blockIfOfflineReadonly('editar gastos', { type: "handleUpdateExpense", args: [expenseId, expenseData] })) return null;
 
     try {
       const currentExpense = expenses.find((expense) => String(expense.id) === String(expenseId)) || expenseToEdit || {};
@@ -10259,6 +10400,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Gasto Actualizado', 'Los cambios se guardaron correctamente.');
       return updatedExpense;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error(e);
       showNotification('error', 'Error', getCloudErrorMessage(e, 'No se pudo actualizar el gasto.'));
       return null;
@@ -10266,7 +10408,7 @@ export default function PartySupplyApp() {
   };
 
   const handleAddMemberWithLog = async (data, options = {}) => {
-    if (blockIfOfflineReadonly('crear socios')) return;
+    if (await blockIfOfflineReadonly('crear socios', { type: "handleAddMemberWithLog", args: [data, options] })) return;
     let creationRequestKey = '';
 
     try {
@@ -10452,6 +10594,7 @@ export default function PartySupplyApp() {
            newClient = insertResult.data;
            break;
          } catch (insertError) {
+      if (offlineActionReplayRef.current) throw insertError;
            if (isMemberNumberDuplicateError(insertError) && attempt < maxMemberNumberAttempts - 1) {
              continue;
            }
@@ -10499,7 +10642,8 @@ export default function PartySupplyApp() {
        
        showNotification('success', 'Socio Creado', `#${memberNum}`);
        return clientFormatted;
-    } catch (e) { 
+    } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
        console.error(e);
        const constraint = String(e?.message || e?.details || e?.hint || '').toLowerCase();
        if (constraint.includes('member_number') || constraint.includes('clients_member')) {
@@ -10530,7 +10674,7 @@ export default function PartySupplyApp() {
   };
 
   const handleUpdateMemberWithLog = async (id, updates) => {
-    if (blockIfOfflineReadonly('editar socios')) return;
+    if (await blockIfOfflineReadonly('editar socios', { type: "handleUpdateMemberWithLog", args: [id, updates] })) return;
     try {
       const normalizedInput = {
         ...updates,
@@ -10741,7 +10885,8 @@ export default function PartySupplyApp() {
         ...normalizedUpdates,
         ...(hasInstagramUpdate || hasCouponUsageOverrideUpdate ? { socialConnections: nextSocialConnections } : {}),
       };
-    } catch (e) { 
+    } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error(e);
       const constraint = String(e?.message || e?.details || e?.hint || '').toLowerCase();
       if (constraint.includes('clients_dni_key')) {
@@ -10759,7 +10904,7 @@ export default function PartySupplyApp() {
   };
 
   const handleCheckMemberPointExpirations = async () => {
-    if (blockIfOfflineReadonly('auditar puntos de socios')) return null;
+    if (await blockIfOfflineReadonly('auditar puntos de socios')) return null;
 
     let pointEntries = [];
     if (!isLocalDemoMode() && ENABLE_TRANSACTION_RPCS) {
@@ -10878,7 +11023,7 @@ export default function PartySupplyApp() {
   };
 
   const handleDeleteMemberWithLog = async (id) => {
-    if (blockIfOfflineReadonly('eliminar socios')) return;
+    if (await blockIfOfflineReadonly('eliminar socios', { type: "handleDeleteMemberWithLog", args: [id] })) return;
     try {
       const memberToDelete = members.find(m => m.id === id);
 
@@ -10896,7 +11041,10 @@ export default function PartySupplyApp() {
         softDeleted: true,
       });
       showNotification('success', 'Socio Eliminado', 'Se quitó correctamente.');
+
+      return true;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error('Error eliminando socio:', e);
       showNotification('error', 'Error al Eliminar', `No se pudo borrar: ${e.message}`);
     }
@@ -10916,7 +11064,7 @@ export default function PartySupplyApp() {
   });
 
   const handleCreateAgendaContact = async (data) => {
-    if (blockIfOfflineReadonly('crear contactos de agenda')) return null;
+    if (await blockIfOfflineReadonly('crear contactos de agenda', { type: "handleCreateAgendaContact", args: [data] })) return null;
     try {
       const payload = buildAgendaPayload(data);
       if (!payload.name) {
@@ -10948,6 +11096,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Contacto creado', `${mappedContact.name} ya quedó en Agenda.`);
       return mappedContact;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error creando contacto de agenda:', error);
       const errorMessage = error?.message || 'Ha ocurrido un error desconocido. Revisa la consola.';
       showNotification('error', 'No se pudo crear el contacto', errorMessage);
@@ -10956,7 +11105,7 @@ export default function PartySupplyApp() {
   };
 
   const handleUpdateAgendaContact = async (id, updates) => {
-    if (blockIfOfflineReadonly('editar contactos de agenda')) return null;
+    if (await blockIfOfflineReadonly('editar contactos de agenda', { type: "handleUpdateAgendaContact", args: [id, updates] })) return null;
     try {
       const currentContact = agendaContacts.find((contact) => String(contact.id) === String(id));
       const payload = buildAgendaPayload(updates);
@@ -10994,6 +11143,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Agenda actualizada', 'Los cambios quedaron guardados.');
       return mappedContact;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error editando contacto de agenda:', error);
       showNotification('error', 'Error', 'No se pudo actualizar el contacto.');
       return null;
@@ -11001,7 +11151,7 @@ export default function PartySupplyApp() {
   };
 
   const handleDeleteAgendaContact = async (id) => {
-    if (blockIfOfflineReadonly('desactivar contactos de agenda')) return false;
+    if (await blockIfOfflineReadonly('desactivar contactos de agenda', { type: "handleDeleteAgendaContact", args: [id] })) return false;
     try {
       const currentContact = agendaContacts.find((contact) => String(contact.id) === String(id));
       const { data: updatedContact, error } = await supabase
@@ -11030,6 +11180,7 @@ export default function PartySupplyApp() {
       showNotification('success', 'Contacto desactivado', 'El registro quedó oculto de los activos.');
       return true;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error desactivando contacto de agenda:', error);
       showNotification('error', 'Error', 'No se pudo desactivar el contacto.');
       return false;
@@ -12574,7 +12725,12 @@ export default function PartySupplyApp() {
   };
 
   const toggleRegisterStatus = async () => {
-    if (blockIfOfflineReadonly('cambiar el estado de la caja')) return;
+    if (!isLocalDemoMode() && (isOfflineReadOnly || isBrowserOffline())) {
+      if (!canManageRegister) { showNotification('error', 'Sin permiso', 'No tenés permiso para gestionar la caja.'); return; }
+      if (isRegisterClosed) { setTempOpeningBalance('0'); setTempClosingTime('21:00'); setIsOpeningBalanceModalOpen(true); }
+      else setIsClosingCashModalOpen(true);
+      return;
+    }
     if (!canManageRegister) {
       showNotification('error', 'Acceso Denegado', 'No tenes permiso para gestionar la caja.');
       return;
@@ -12609,7 +12765,12 @@ export default function PartySupplyApp() {
   };
 
   const executeRegisterClose = async (isAuto = false) => {
-    if (blockIfOfflineReadonly('cerrar la caja')) return;
+    const otherPending = offlineActionEntriesRef.current.some((entry) => isOfflineActionOpen(entry) && entry.id !== offlineActionReplayRef.current?.id);
+    if (otherPending && !isOfflineReadOnly && !isBrowserOffline()) {
+      if (!isAuto) showNotification('warning', 'Hay acciones pendientes', 'Confirmá o descartá los pendientes sin conexión antes de cerrar la caja.');
+      return;
+    }
+    if (await blockIfOfflineReadonly('cerrar la caja', isAuto ? null : { type: "executeRegisterClose", args: [isAuto] })) return;
     if (!(await requireSecureSessionForCloudWrite())) return;
     if (!isAuto && !canManageRegister) {
       showNotification('error', 'Acceso Denegado', 'No tenes permiso para cerrar la caja.');
@@ -12727,7 +12888,7 @@ export default function PartySupplyApp() {
     
     if (!isAuto) {
         setIsClosingCashModalOpen(false);
-        const result = await Swal.fire({
+        const result = await showOfflineAwareActionDialog({
             title: '¿Generar informe de caja?',
             text: 'Si estás haciendo pruebas, podés elegir "Solo cerrar caja" para vaciarla sin guardar el reporte en tu historial.',
             icon: 'question',
@@ -12748,7 +12909,7 @@ export default function PartySupplyApp() {
             shouldSaveReport = false;
         }
 
-        Swal.fire({ title: 'Procesando cierre...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+        showOfflineAwareActionDialog({ title: 'Procesando cierre...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
     }
 
     try {
@@ -12893,7 +13054,10 @@ export default function PartySupplyApp() {
             showNotification('info', 'Caja Vaciada', 'Se cerró la caja sin dejar reportes (Silencioso).');
         }
 
+
+      return true;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
         console.error("Error guardando cierre:", e);
         Swal.close();
         setIsClosingCashModalOpen(false);
@@ -12909,6 +13073,7 @@ export default function PartySupplyApp() {
               }
             }
           } catch (refreshError) {
+      if (offlineActionReplayRef.current) throw refreshError;
             console.error('No se pudo verificar el estado de la caja:', refreshError);
           }
         }
@@ -12918,8 +13083,8 @@ export default function PartySupplyApp() {
 
   const handleConfirmCloseCash = () => executeRegisterClose(false);
 
-  const handleSaveOpeningBalance = async () => {
-    if (blockIfOfflineReadonly('abrir la caja')) return;
+  const handleSaveOpeningBalance = async (queuedOpening = { openingBalance: tempOpeningBalance, closingTime: tempClosingTime }) => {
+    if (await blockIfOfflineReadonly('abrir la caja', { type: "handleSaveOpeningBalance", args: [queuedOpening] })) return;
     if (!(await requireSecureSessionForCloudWrite())) return;
     if (!canManageRegister) {
       showNotification('error', 'Acceso Denegado', 'No tenes permiso para abrir la caja.');
@@ -12927,8 +13092,8 @@ export default function PartySupplyApp() {
       return;
     }
 
-    const value = Number(tempOpeningBalance);
-    if (!isNaN(value) && value >= 0 && tempClosingTime) {
+    const value = Number(queuedOpening.openingBalance);
+    if (!isNaN(value) && value >= 0 && queuedOpening.closingTime) {
       
       const now = new Date().toISOString();
 
@@ -12937,7 +13102,7 @@ export default function PartySupplyApp() {
             localDemoUpdateRow('register_state', 1, {
               is_open: true,
               opening_balance: value,
-              closing_time: tempClosingTime,
+              closing_time: queuedOpening.closingTime,
               opened_at: now,
               last_updated_by: currentUser?.name,
             });
@@ -12945,7 +13110,7 @@ export default function PartySupplyApp() {
             const { error } = await supabase.from('register_state').update({
               is_open: true,
               opening_balance: value,
-              closing_time: tempClosingTime,
+              closing_time: queuedOpening.closingTime,
               opened_at: now,
               last_updated_by: currentUser?.name
             }).eq('id', 1);
@@ -12953,12 +13118,14 @@ export default function PartySupplyApp() {
           }
 
           setOpeningBalance(value);
-          setClosingTime(tempClosingTime);
+          setClosingTime(queuedOpening.closingTime);
           setIsRegisterClosed(false);
           setIsOpeningBalanceModalOpen(false);
           setRegisterOpenedAt(now);
-          addLog('Apertura de Caja', { amount: value, scheduledClosingTime: tempClosingTime }, 'Inicio de operaciones');
+          addLog('Apertura de Caja', { amount: value, scheduledClosingTime: queuedOpening.closingTime }, 'Inicio de operaciones');
+          if (offlineActionReplayRef.current) offlineActionReplayRef.current.confirmed = true;
       } catch(e) {
+      if (offlineActionReplayRef.current) throw e;
           console.error("Error abriendo caja en nube:", e);
           showNotification('error', 'Error de Sincronizacion', 'No se pudo abrir la caja en la nube. Reintenta antes de vender.');
       }
@@ -12967,8 +13134,8 @@ export default function PartySupplyApp() {
     }
   };
 
-  const handleSaveClosingTime = async () => {
-    if (blockIfOfflineReadonly('editar el horario de cierre')) return;
+  const handleSaveClosingTime = async (queuedClosingTime = closingTime) => {
+    if (await blockIfOfflineReadonly('editar el horario de cierre', { type: "handleSaveClosingTime", args: [queuedClosingTime] })) return;
     if (!canManageRegister) {
       showNotification('error', 'Acceso Denegado', 'No tenes permiso para editar el horario de cierre.');
       setIsClosingTimeModalOpen(false);
@@ -12977,22 +13144,25 @@ export default function PartySupplyApp() {
 
     try {
         if (isLocalDemoMode()) {
-          localDemoUpdateRow('register_state', 1, { closing_time: closingTime });
+          localDemoUpdateRow('register_state', 1, { closing_time: queuedClosingTime });
         } else {
-          const { error } = await supabase.from('register_state').update({ closing_time: closingTime }).eq('id', 1);
+          const { error } = await supabase.from('register_state').update({ closing_time: queuedClosingTime }).eq('id', 1);
           if (error) throw error;
         }
-        addLog('Horario Modificado', `Nueva hora de cierre: ${closingTime}`, 'Ajuste de horario');
+        addLog('Horario Modificado', `Nueva hora de cierre: ${queuedClosingTime}`, 'Ajuste de horario');
         setIsClosingTimeModalOpen(false);
         showNotification('success', 'Horario Guardado', 'La hora de cierre se ha actualizado.');
+
+      return true;
     } catch(e) {
+      if (offlineActionReplayRef.current) throw e;
         console.error(e);
         showNotification('error', 'Error de Sincronizacion', 'No se pudo actualizar el horario de cierre.');
     }
   };
 
   const handleAddCategoryFromView = async (name) => {
-    if (blockIfOfflineReadonly('crear categorías')) return;
+    if (await blockIfOfflineReadonly('crear categorías', { type: "handleAddCategoryFromView", args: [name] })) return;
     if (name && !categories.includes(name)) {
       try {
         if (isLocalDemoMode()) {
@@ -13004,7 +13174,10 @@ export default function PartySupplyApp() {
         setCategories([...categories, name]);
         addLog('Categoría', { name, type: 'create' });
         showNotification('success', 'Categoría Creada', `Se agregó "${name}" correctamente.`);
-      } catch (e) {
+
+      return true;
+    } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
         console.error(e);
         showNotification('error', 'Error', 'No se pudo crear la categoría en la nube.');
       }
@@ -13014,7 +13187,7 @@ export default function PartySupplyApp() {
   };
 
   const handleDeleteCategoryFromView = async (name) => {
-    if (blockIfOfflineReadonly('eliminar categorías')) return;
+    if (await blockIfOfflineReadonly('eliminar categorías', { type: "handleDeleteCategoryFromView", args: [name] })) return;
     const inUse = inventory.some((p) =>
       Array.isArray(p.categories) ? p.categories.includes(name) : p.category === name
     );
@@ -13031,7 +13204,9 @@ export default function PartySupplyApp() {
         }
         setCategories(categories.filter((c) => c !== name));
         addLog('Categoría', { name, type: 'delete' });
+          if (offlineActionReplayRef.current) offlineActionReplayRef.current.confirmed = true;
       } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
         console.error(e);
         showNotification('error', 'Error', 'No se pudo eliminar de la nube.');
       }
@@ -13039,7 +13214,7 @@ export default function PartySupplyApp() {
   };
 
   const handleEditCategory = async (oldName, newName) => {
-    if (blockIfOfflineReadonly('editar categorías')) return;
+    if (await blockIfOfflineReadonly('editar categorías', { type: "handleEditCategory", args: [oldName, newName] })) return;
     try {
       const productChanges = inventory.flatMap((product) => {
         const previousCategories = Array.isArray(product.categories)
@@ -13122,14 +13297,17 @@ export default function PartySupplyApp() {
       
       addLog('Editar Categoría', { old: oldName, new: newName });
       showNotification('success', 'Categoría Actualizada', 'Nombre y productos actualizados.');
+
+      return true;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error(e);
       showNotification('error', 'No se pudo renombrar', e?.message || 'No se pudo renombrar la categoría.');
     }
   };
 
   const handleBatchUpdateProductCategory = async (changes) => {
-    if (blockIfOfflineReadonly('editar categorías de productos')) return;
+    if (await blockIfOfflineReadonly('editar categorías de productos', { type: "handleBatchUpdateProductCategory", args: [changes] })) return;
     try {
       const promises = changes.map(async (change) => {
         const { productId, categoryName, action } = change;
@@ -13164,15 +13342,18 @@ export default function PartySupplyApp() {
       addLog('Actualización Masiva', { count: changes.length, category: changes[0]?.categoryName }, 'Gestor de Categorías');
       showNotification('success', 'Productos Actualizados', `${changes.length} productos modificados.`);
 
+
+      return true;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error(e);
       showNotification('error', 'Error', 'Falló la actualización masiva.');
     }
   };
 
   const handleAddItem = async (e, overrideData = null) => {
-    if (blockIfOfflineReadonly('agregar productos al inventario')) return;
     e?.preventDefault?.();
+    if (await blockIfOfflineReadonly('agregar productos al inventario', { type: "handleAddItem", args: [null, (overrideData || newItem)] })) return;
     const itemData = overrideData || newItem;
     
     if (itemData.categories.length === 0) {
@@ -13217,15 +13398,18 @@ export default function PartySupplyApp() {
       });
       setIsModalOpen(false);
       showNotification('success', 'Producto Agregado', 'Guardado en la nube.');
+
+      return true;
     } catch (err) {
+      if (offlineActionReplayRef.current) throw err;
       console.error('Error agregando producto:', err);
       showNotification('error', 'Error', 'No se pudo guardar el producto.');
     }
   };
 
-  const saveEditProduct = async (e, overrideData = null) => {
-    if (blockIfOfflineReadonly('editar productos')) return;
+  const saveEditProduct = async (e, overrideData = null, queuedReason = editReason) => {
     e?.preventDefault?.();
+    if (await blockIfOfflineReadonly('editar productos', { type: "saveEditProduct", args: [null, (overrideData || editingProduct), queuedReason] })) return;
     const productData = overrideData || editingProduct;
     if (!productData) return;
     
@@ -13419,13 +13603,16 @@ export default function PartySupplyApp() {
         before: originalSnapshot,
         after: updatedSnapshot,
         changes: productChanges,
-      }, editReason);
+      }, queuedReason);
       
       setEditingProduct(null);
       setInventoryPanelCloseToken((prev) => prev + 1);
       setEditReason('');
       showNotification('success', 'Producto Editado', 'Cambios guardados en la nube.');
+
+      return true;
     } catch (err) {
+      if (offlineActionReplayRef.current) throw err;
       console.error('Error editando producto:', err);
       showNotification('error', 'Error', 'Fallo al guardar los cambios.');
     }
@@ -13444,7 +13631,7 @@ export default function PartySupplyApp() {
   };
 
   const handleRetireDeletedProduct = async (product, reason = '') => {
-    if (blockIfOfflineReadonly('eliminar ficha de producto')) return;
+    if (await blockIfOfflineReadonly('eliminar ficha de producto', { type: "handleRetireDeletedProduct", args: [product, reason] })) return;
     const safeReason = String(reason || '').trim();
     if (!product?.id || !safeReason) {
       showNotification('error', 'Motivo requerido', 'Escribi una razon para dejar el item eliminado.');
@@ -13507,7 +13694,10 @@ export default function PartySupplyApp() {
       setEditingProduct(null);
       setInventoryPanelCloseToken((prev) => prev + 1);
       showNotification('success', 'Item eliminado', 'Quedo solo la referencia con motivo.');
+
+      return true;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error compactando producto eliminado:', error);
       showNotification('error', 'No se pudo eliminar', error?.message || 'Fallo la baja del producto.');
     }
@@ -13518,7 +13708,7 @@ export default function PartySupplyApp() {
       showNotification('error', 'Permiso requerido', 'Necesitas permiso para crear productos desde Excel.');
       return { created: [], failed: [] };
     }
-    if (blockIfOfflineReadonly('crear productos desde Excel')) {
+    if (await blockIfOfflineReadonly('crear productos desde Excel', { type: "handleCreateExcelProducts", args: [draftsToCreate] })) {
       return { created: [], failed: [] };
     }
 
@@ -13580,6 +13770,7 @@ export default function PartySupplyApp() {
         if (barcode) reservedBarcodes.add(barcode);
         created.push({ rowId: draft.rowId, product });
       } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
         console.error('Error creando producto desde Excel:', error);
         failed.push({
           rowId: draft.rowId,
@@ -13621,7 +13812,7 @@ export default function PartySupplyApp() {
       showNotification('error', 'Permiso requerido', 'Necesitas permiso para modificar inventario desde Excel.');
       return { appliedRowIds: [] };
     }
-    if (blockIfOfflineReadonly('importar productos desde Excel')) return { appliedRowIds: [] };
+    if (await blockIfOfflineReadonly('importar productos desde Excel', { type: "handleExcelProductImport", args: [rowsToApply] })) return { appliedRowIds: [] };
     const safeRows = Array.isArray(rowsToApply) ? rowsToApply : [];
     if (safeRows.length === 0) return { appliedRowIds: [] };
     const productIds = safeRows.map((row) => String(row.productId));
@@ -13631,7 +13822,7 @@ export default function PartySupplyApp() {
     }
 
     try {
-      Swal.fire({
+      showOfflineAwareActionDialog({
         title: 'Aplicando importacion...',
         text: `Actualizando ${safeRows.length} producto(s).`,
         allowOutsideClick: false,
@@ -13951,8 +14142,9 @@ export default function PartySupplyApp() {
         })),
       };
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error importando productos desde Excel:', error);
-      Swal.fire('Error', error?.message || 'No se pudo aplicar la importacion.', 'error');
+      showOfflineAwareActionDialog('Error', error?.message || 'No se pudo aplicar la importacion.', 'error');
       return {
         appliedRowIds: [],
         failed: safeRows.map((row) => ({
@@ -13969,11 +14161,11 @@ export default function PartySupplyApp() {
       showNotification('error', 'Permiso requerido', 'Necesitas permiso para deshacer cambios de inventario.');
       return { undoneRowIds: [] };
     }
-    if (blockIfOfflineReadonly('deshacer importacion desde Excel')) return { undoneRowIds: [] };
+    if (await blockIfOfflineReadonly('deshacer importacion desde Excel', { type: "handleUndoExcelProductImport", args: [itemsToUndo] })) return { undoneRowIds: [] };
     const safeItems = Array.isArray(itemsToUndo) ? itemsToUndo : [];
     if (safeItems.length === 0) return { undoneRowIds: [] };
 
-    const confirmation = await Swal.fire({
+    const confirmation = await showOfflineAwareActionDialog({
       title: 'Deshacer aplicacion',
       text: `Se restauraran ${safeItems.length} producto(s) al estado anterior.`,
       icon: 'warning',
@@ -13986,7 +14178,7 @@ export default function PartySupplyApp() {
     if (!confirmation.isConfirmed) return { undoneRowIds: [], cancelled: true };
 
     try {
-      Swal.fire({
+      showOfflineAwareActionDialog({
         title: 'Deshaciendo cambios...',
         text: `Restaurando ${safeItems.length} producto(s).`,
         allowOutsideClick: false,
@@ -14110,8 +14302,9 @@ export default function PartySupplyApp() {
         failed: failedRows,
       };
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error deshaciendo importacion desde Excel:', error);
-      Swal.fire('Error', error?.message || 'No se pudo deshacer la importacion.', 'error');
+      showOfflineAwareActionDialog('Error', error?.message || 'No se pudo deshacer la importacion.', 'error');
       return { undoneRowIds: [] };
     }
   };
@@ -14173,7 +14366,7 @@ export default function PartySupplyApp() {
   };
 
   const handleApplyProductImageImports = async (rowsToApply = []) => {
-    if (blockIfOfflineReadonly('importar fotos de productos')) return { appliedIds: [], failedRows: [] };
+    if (await blockIfOfflineReadonly('importar fotos de productos', { type: "handleApplyProductImageImports", args: [rowsToApply] })) return { appliedIds: [], failedRows: [] };
 
     const safeRows = Array.isArray(rowsToApply)
       ? rowsToApply.filter((row) => row?.productId && row?.imageDataUrl)
@@ -14326,6 +14519,7 @@ export default function PartySupplyApp() {
             },
           });
         } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
           failedRows.push({ ...row, error: error?.message || 'No se pudo guardar la foto.' });
         }
 
@@ -14375,6 +14569,7 @@ export default function PartySupplyApp() {
         failedRows,
       };
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error importando imagenes de productos:', error);
       setImageImportTask((current) => ({
         ...(current || {}),
@@ -14388,7 +14583,12 @@ export default function PartySupplyApp() {
   };
 
   const handleRestoreProductImageVersion = async ({ productId, image, image_thumb: imageThumb, reason = '' } = {}) => {
-    if (blockIfOfflineReadonly('restaurar foto de producto')) {
+    if (await blockIfOfflineReadonly('restaurar foto de producto', { type: "handleRestoreProductImageVersion", args: [{
+  productId,
+  image,
+  image_thumb: imageThumb,
+  reason
+}] })) {
       return { success: false, error: 'Modo solo lectura.' };
     }
 
@@ -14450,6 +14650,7 @@ export default function PartySupplyApp() {
 
       return { success: true, product: updatedProduct };
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error restaurando imagen de producto:', error);
       showNotification('error', 'No se pudo restaurar', error?.message || 'La foto original no pudo volver al producto.');
       return { success: false, error: error?.message || 'No se pudo restaurar la foto.' };
@@ -14607,7 +14808,7 @@ export default function PartySupplyApp() {
   };
 
   const handleSaveSupplierPriceChecks = async (checksToSave = []) => {
-    if (blockIfOfflineReadonly('guardar chequeo de Casa Alberto')) return { products: [] };
+    if (await blockIfOfflineReadonly('guardar chequeo de Casa Alberto', { type: "handleSaveSupplierPriceChecks", args: [checksToSave] })) return { products: [] };
     const safeChecks = Array.isArray(checksToSave) ? checksToSave : [];
     if (safeChecks.length === 0) return { products: [] };
 
@@ -14714,7 +14915,7 @@ export default function PartySupplyApp() {
   };
 
   const handleExportSupplierPriceReport = async (days = 1) => {
-    if (blockIfOfflineReadonly('exportar el historial de precios de Casa Alberto')) {
+    if (await blockIfOfflineReadonly('exportar el historial de precios de Casa Alberto')) {
       return { success: false, offline: true };
     }
     if (!window.electronAPI?.saveSupplierPriceReportPdf) {
@@ -14791,7 +14992,7 @@ export default function PartySupplyApp() {
   };
 
   const handleApplySupplierPriceUpdates = async (updatesToApply = []) => {
-    if (blockIfOfflineReadonly('aprobar costos de Casa Alberto')) return { products: [] };
+    if (await blockIfOfflineReadonly('aprobar costos de Casa Alberto', { type: "handleApplySupplierPriceUpdates", args: [updatesToApply] })) return { products: [] };
     const safeUpdates = Array.isArray(updatesToApply) ? updatesToApply : [];
     if (safeUpdates.length === 0) return { products: [] };
 
@@ -14948,6 +15149,7 @@ export default function PartySupplyApp() {
 
       return { products: mergedProducts };
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error aprobando precios de Casa Alberto:', error);
       const message = error?.message || 'No se pudieron aprobar los costos.';
       showNotification('error', 'Error', message);
@@ -14956,7 +15158,7 @@ export default function PartySupplyApp() {
   };
 
   const handleUndoSupplierPriceUpdates = async (updatesToUndo = []) => {
-    if (blockIfOfflineReadonly('deshacer costos de Casa Alberto')) return { products: [] };
+    if (await blockIfOfflineReadonly('deshacer costos de Casa Alberto', { type: "handleUndoSupplierPriceUpdates", args: [updatesToUndo] })) return { products: [] };
     const safeUpdates = Array.isArray(updatesToUndo) ? updatesToUndo : [];
     if (safeUpdates.length === 0) return { products: [] };
 
@@ -15072,6 +15274,7 @@ export default function PartySupplyApp() {
 
       return { products: mergedProducts };
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error deshaciendo precios de Casa Alberto:', error);
       const message = error?.message || 'No se pudo deshacer la aprobacion.';
       showNotification('error', 'Error', message);
@@ -15080,7 +15283,10 @@ export default function PartySupplyApp() {
   };
 
   const handleUpdateCasaAlbertoLinks = async ({ productIds = [], link = {} } = {}) => {
-    if (blockIfOfflineReadonly('actualizar enlace Casa Alberto')) return { products: [] };
+    if (await blockIfOfflineReadonly('actualizar enlace Casa Alberto', { type: "handleUpdateCasaAlbertoLinks", args: [{
+  productIds,
+  link
+}] })) return { products: [] };
     const safeIds = Array.isArray(productIds) ? productIds : [];
     if (safeIds.length === 0) return { products: [] };
 
@@ -15129,6 +15335,7 @@ export default function PartySupplyApp() {
 
       return { products: mergedProducts };
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error actualizando enlace Casa Alberto:', error);
       const message = error?.message || 'No se pudo guardar el enlace.';
       showNotification('error', 'Error', message);
@@ -15137,7 +15344,7 @@ export default function PartySupplyApp() {
   };
 
   const handleBulkSaveSingle = async (product, editData) => {
-    if (blockIfOfflineReadonly('guardar cambios de productos')) return;
+    if (await blockIfOfflineReadonly('guardar cambios de productos', { type: "handleBulkSaveSingle", args: [product, editData] })) return;
     try {
       const finalPrice = getStoredProductSalePrice(editData.price, product.product_type);
       const finalCost = getStoredProductPurchaseCost(editData.purchasePrice, product.product_type);
@@ -15175,16 +15382,19 @@ export default function PartySupplyApp() {
       
       addLog('Edición Rápida', { id: product.id, title: product.title, changes: payload }, 'Editor Masivo');
       showNotification('success', 'Guardado', 'Producto actualizado.');
+
+      return true;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error(e);
       showNotification('error', 'Error', 'No se pudo actualizar el producto.');
     }
   };
 
   const handleBulkSaveMasive = async (bulkData) => {
-    if (blockIfOfflineReadonly('guardar cambios masivos')) return;
+    if (await blockIfOfflineReadonly('guardar cambios masivos', { type: "handleBulkSaveMasive", args: [bulkData] })) return;
     try {
-      Swal.fire({ title: 'Guardando masivamente...', text: `Actualizando ${bulkData.length} productos. Por favor espera.`, allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      showOfflineAwareActionDialog({ title: 'Guardando masivamente...', text: `Actualizando ${bulkData.length} productos. Por favor espera.`, allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       
       const promises = bulkData.map(async (item) => {
         const { product, edits } = item;
@@ -15255,33 +15465,39 @@ export default function PartySupplyApp() {
       
       Swal.close();
       showNotification('success', 'Actualización Masiva', `Se actualizaron ${bulkData.length} productos correctamente.`);
+
+      return true;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error(e);
-      Swal.fire('Error', 'Fallo la actualización masiva. Revisa tu conexión.', 'error');
+      showOfflineAwareActionDialog('Error', 'Fallo la actualización masiva. Revisa tu conexión.', 'error');
     }
   };
 
-  const confirmDeleteProduct = async (e) => {
-    if (blockIfOfflineReadonly('eliminar productos')) return;
+  const confirmDeleteProduct = async (e, queuedProduct = productToDelete, queuedReason = deleteProductReason) => {
     e?.preventDefault?.();
-    if (productToDelete) {
+    if (await blockIfOfflineReadonly('eliminar productos', { type: "confirmDeleteProduct", args: [null, queuedProduct, queuedReason] })) return;
+    if (queuedProduct) {
       try {
         const { error } = await supabase
           .from('products')
           .update({ is_active: false })
-          .eq('id', productToDelete.id);
+          .eq('id', queuedProduct.id);
         if (error) throw error;
 
-        if (productToDelete.image) {
-          await deleteProductImage(productToDelete.image).catch(() => {});
-          await deleteProductImage(productToDelete.image_thumb || productToDelete.imageThumb).catch(() => {});
+        if (queuedProduct.image) {
+          await deleteProductImage(queuedProduct.image).catch(() => {});
+          await deleteProductImage(queuedProduct.image_thumb || queuedProduct.imageThumb).catch(() => {});
         }
 
-        setInventory(inventory.filter((x) => x.id !== productToDelete.id));
-        addLog('Baja Producto', { id: productToDelete.id, title: productToDelete.title }, deleteProductReason || 'Sin motivo');
+        setInventory(inventory.filter((x) => x.id !== queuedProduct.id));
+        addLog('Baja Producto', { id: queuedProduct.id, title: queuedProduct.title }, queuedReason || 'Sin motivo');
         setProductToDelete(null);
         showNotification('success', 'Producto Eliminado', 'Se quitó del inventario.');
-      } catch (err) {
+
+      return true;
+    } catch (err) {
+      if (offlineActionReplayRef.current) throw err;
         console.error('Error eliminando producto:', err);
         showNotification('error', 'Error al Eliminar', `No se pudo borrar: ${err.message}`);
       }
@@ -15289,7 +15505,7 @@ export default function PartySupplyApp() {
   };
 
   const handleDuplicateProduct = async (originalProduct) => {
-    if (blockIfOfflineReadonly('duplicar productos')) return;
+    if (await blockIfOfflineReadonly('duplicar productos', { type: "handleDuplicateProduct", args: [originalProduct] })) return;
     if (!hasPermission(currentUserRef.current, 'inventory.create')) {
       showNotification('error', 'Permiso requerido', 'Necesitas permiso para crear productos para duplicarlos.');
       return;
@@ -15329,7 +15545,10 @@ export default function PartySupplyApp() {
       setEditReason('');
 
       showNotification('success', 'Producto Duplicado', `Se creó "${data.title}" como copia.`);
+
+      return true;
     } catch (err) {
+      if (offlineActionReplayRef.current) throw err;
       console.error('Error duplicando producto:', err);
       showNotification('error', 'Error al Duplicar', 'No se pudo crear la copia del producto.');
     }
@@ -15522,6 +15741,11 @@ export default function PartySupplyApp() {
     // Retain the completed record until the POS snapshot has durably removed
     // the original cart; a crash at any intermediate point remains recoverable.
     journal.patch(attempt.cartId, { status: 'completed' });
+    const offlineEntry = offlineActionEntriesRef.current.find((entry) => entry.type === 'offlineSale' && isOfflineActionOpen(entry)
+      && entry.args[0]?.cartId === attempt.cartId && entry.args[0]?.request?.operationKey === attempt.request.operationKey);
+    if (offlineEntry && offlineActionReplayRef.current?.id !== offlineEntry.id) {
+      await offlineActions.exclusive((queue) => completeOfflineSaleAction(queue, { ...attempt, saleId: tx.id, status: 'completed' }));
+    }
     setPosCheckoutAttempts(journal.read());
     setSaleSuccessModal(tx);
     closePosCartAfterCheckout(attempt.cartId);
@@ -15531,12 +15755,23 @@ export default function PartySupplyApp() {
 
   const handleCheckout = async (checkoutOptions = {}) => {
     if (isCheckoutInProgressRef.current) return;
+    const preparingOfflineSale = !isLocalDemoMode() && (isOfflineReadOnly || isBrowserOffline());
+    const queuedCart = offlineActionEntriesRef.current.find((entry) => entry.type === 'offlineSale' && entry.args[0]?.cartId === String(activePosCartId) && entry.status !== 'discarded');
+    if (queuedCart) {
+      closePosCartAfterCheckout(activePosCartId);
+      offlineActions.setOpen(true);
+      return;
+    }
     if (!isLocalDemoMode()) {
       try {
         const journal = createPosCheckoutJournal({ storage: window.localStorage });
         const entries = journal.read();
         const pending = entries[activePosCartId] || Object.values(entries).find((entry) => entry.status !== 'completed');
         if (pending) {
+          if (preparingOfflineSale) {
+            showNotification('warning', 'Cobro pendiente de verificar', 'Este cobro ya se intentó enviar. Reconectá para verificarlo antes de registrar otra venta.');
+            return;
+          }
           if (isRegisterClosed && !pending.saleId) {
             showNotification('warning', 'Caja cerrada', 'Abrí la caja para verificar el intento pendiente. Conservamos su identificación para evitar registrar la misma venta dos veces.');
             return;
@@ -15573,13 +15808,11 @@ export default function PartySupplyApp() {
     };
     isCheckoutInProgressRef.current = true;
     const checkoutPosCartId = activePosCartId;
-    if (blockIfOfflineReadonly('registrar ventas')) {
-      isCheckoutInProgressRef.current = false;
-      return;
-    }
-    if (!(await requireSecureSessionForCloudWrite())) {
-      isCheckoutInProgressRef.current = false;
-      return;
+    if (!preparingOfflineSale) {
+      if (!(await requireSecureSessionForCloudWrite())) {
+        isCheckoutInProgressRef.current = false;
+        return;
+      }
     }
 
     const merchandiseSubtotal = getPosSubtotal(cart);
@@ -15623,7 +15856,9 @@ export default function PartySupplyApp() {
     // ? MAGIA: Agrupamos todo el stock requerido (productos sueltos + los que están adentro de combos)
     const requiredStock = buildSaleRequiredStock(cart);
     const checkoutStockDelta = buildSaleStockDelta(requiredStock, -1);
-    const { stockIssues } = getSaleStockDeltaPreview(checkoutStockDelta);
+    const reservedStockDelta = preparingOfflineSale
+      ? buildOfflineReservedStockDelta(offlineActionEntriesRef.current, checkoutStockDelta) : checkoutStockDelta;
+    const { stockIssues } = getSaleStockDeltaPreview(reservedStockDelta);
 
     if (stockIssues.length > 0) { 
       isCheckoutInProgressRef.current = false;
@@ -15676,18 +15911,22 @@ export default function PartySupplyApp() {
           product_type: i.product_type || 'quantity',
           ...getSaleItemCostPayload(i),
       }));
-      const validatedItemsPayload = await sanitizeSaleItemProductIds(buildItemsPayload());
+      const validatedItemsPayload = preparingOfflineSale ? buildItemsPayload() : await sanitizeSaleItemProductIds(buildItemsPayload());
 
       let stockChanges = [];
       let updatedClientForTicket = null;
       let pointsChange = null;
-      const previousPoints = clientId ? Number(posSelectedClient?.points || 0) : 0;
+      const previousQueuedClient = preparingOfflineSale ? getLatestOfflineClientAttempt(offlineActionEntriesRef.current, clientId) : null;
+      const previousPoints = previousQueuedClient?.request.clientPointUpdates?.[0]?.points ?? (clientId ? Number(posSelectedClient?.points || 0) : 0);
       const newPoints = clientId ? previousPoints - pointsSpent + pointsEarned : 0;
-      const previousCouponOverrides = clientId ? getCouponUsageOverrides(posSelectedClient).reenabledCodes : [];
+      if (preparingOfflineSale && clientId && pointsSpent > previousPoints) throw new Error('Los puntos disponibles no alcanzan después de las ventas pendientes de este socio.');
+      if (preparingOfflineSale && hasPendingOfflineCoupon(offlineActionEntriesRef.current, clientId, saleCouponCodes)) throw new Error('Este cupón ya está incluido en una venta pendiente del socio. Confirmá o descartá esa venta antes de volver a usarlo.');
+      const previousOfflineCouponUpdate = preparingOfflineSale ? getLatestOfflineCouponUpdate(offlineActionEntriesRef.current, clientId) : null;
+      const previousClientSocialConnections = previousOfflineCouponUpdate?.next || getSocialConnections(posSelectedClient);
+      const previousCouponOverrides = clientId ? getCouponUsageOverrides({ ...posSelectedClient, socialConnections: previousClientSocialConnections }).reenabledCodes : [];
       const consumedCouponOverrides = new Set(saleCouponCodes);
       const nextCouponOverrides = previousCouponOverrides.filter((code) => !consumedCouponOverrides.has(code));
       const shouldConsumeCouponOverride = clientId && previousCouponOverrides.length !== nextCouponOverrides.length;
-      const previousClientSocialConnections = getSocialConnections(posSelectedClient);
       const nextClientSocialConnections = shouldConsumeCouponOverride
         ? buildSocialConnectionsWithCouponUsageOverrides(
             previousClientSocialConnections,
@@ -15713,7 +15952,7 @@ export default function PartySupplyApp() {
 
       if (!isLocalDemoMode() && ENABLE_TRANSACTION_RPCS) {
         const journal = createPosCheckoutJournal({ storage: window.localStorage });
-        const attempt = journal.ensure({
+        const attempt = {
           cartId: String(checkoutPosCartId),
           status: 'pending',
           createdAt: new Date().toISOString(),
@@ -15732,6 +15971,7 @@ export default function PartySupplyApp() {
             : null,
           logDetails: {
             sessionUser: getActorContext(),
+            couponCodes: saleCouponCodes,
             total, subtotal, merchandiseSubtotal,
             items: compactPosCheckoutItems(checkoutItemsSnapshot),
             saleExtras: checkoutSaleExtras,
@@ -15743,7 +15983,16 @@ export default function PartySupplyApp() {
             pointsEarned: clientId ? pointsEarned : 0, pointsSpent, pointsChange,
             stockChanges: getSaleStockDeltaPreview(checkoutStockDelta).stockChanges,
           },
-        });
+        };
+        if (preparingOfflineSale) {
+          await saveOfflineCommand({ type: 'offlineSale', args: [attempt] });
+          closePosCartAfterCheckout(checkoutPosCartId);
+          setPosSearch('');
+          Swal.close();
+          showNotification('info', 'Venta guardada en pendientes', 'Guardamos los productos, el importe y el responsable en esta PC. La venta se registra al confirmarla con internet desde Pendientes.');
+          return;
+        }
+        journal.ensure(attempt);
         setPosCheckoutAttempts(journal.read());
         await finishDurablePosCheckout(attempt);
         return;
@@ -15945,10 +16194,10 @@ export default function PartySupplyApp() {
     setRefundReason('');
   };
   
-  const handleConfirmRefund = async (e) => {
-    if (blockIfOfflineReadonly('anular o eliminar ventas')) return;
+  const handleConfirmRefund = async (e, queuedTransaction = transactionToRefund, queuedReason = refundReason) => {
     e?.preventDefault?.();
-    const tx = transactionToRefund;
+    if (await blockIfOfflineReadonly('anular o eliminar ventas', { type: "handleConfirmRefund", args: [null, queuedTransaction, queuedReason] })) return;
+    const tx = queuedTransaction;
     if (!tx) return;
     if (tx.orderId) {
       showNotification(
@@ -15964,7 +16213,7 @@ export default function PartySupplyApp() {
       // 1. FLUJO DE BORRADO PERMANENTE (PURGA)
       // ==========================================
       if (tx.status === 'voided') {
-        Swal.fire({ title: 'Borrando...', text: 'Eliminando registro permanentemente...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+        showOfflineAwareActionDialog({ title: 'Borrando...', text: 'Eliminando registro permanentemente...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
         await updateWithSchemaFallback(
           'sales',
@@ -15999,7 +16248,7 @@ export default function PartySupplyApp() {
             memberNumber: clientNum,
             pointsEarned: tx.pointsEarned || 0,
             pointsSpent: tx.pointsSpent || 0
-        }, refundReason || 'Eliminación permanente');
+        }, queuedReason || 'Eliminación permanente');
 
         setTransactionToRefund(null);
         setRefundReason('');
@@ -16011,7 +16260,7 @@ export default function PartySupplyApp() {
       // ==========================================
       // 2. FLUJO DE ANULACIÓN NORMAL
       // ==========================================
-      Swal.fire({ title: 'Anulando...', text: 'Preparando anulación...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      showOfflineAwareActionDialog({ title: 'Anulando...', text: 'Preparando anulación...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       const refundRequiredStock = buildSaleRequiredStock(tx.items || []);
       const refundStockDelta = buildSaleStockDelta(refundRequiredStock, 1);
       const { stockChanges: restoredStockChangesPreview, stockIssues: refundStockIssues } =
@@ -16043,7 +16292,7 @@ export default function PartySupplyApp() {
         }
       }
 
-      Swal.fire({ title: 'Anulando...', text: 'Guardando anulación...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      showOfflineAwareActionDialog({ title: 'Anulando...', text: 'Guardando anulación...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
       const voidedAt = new Date().toISOString();
       const transactionalVoid = await voidSaleTransactionCloud({
@@ -16087,7 +16336,7 @@ export default function PartySupplyApp() {
       }
       setMembers(updatedMembers);
 
-      Swal.fire({ title: 'Anulando...', text: 'Paso 4: Creando el registro final...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      showOfflineAwareActionDialog({ title: 'Anulando...', text: 'Paso 4: Creando el registro final...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       
       let clientName = null;
       if (tx.client && typeof tx.client === 'object') clientName = tx.client.name;
@@ -16133,7 +16382,7 @@ export default function PartySupplyApp() {
         stockChanges: restoredStockChanges,
       };
       
-      addLog('Venta Anulada', logDetails, refundReason || 'Anulación manual');
+      addLog('Venta Anulada', logDetails, queuedReason || 'Anulación manual');
 
       const exists = transactions.some(t => String(t.id) === String(tx.id));
       if (exists) {
@@ -16165,9 +16414,12 @@ export default function PartySupplyApp() {
         showNotification('warning', 'Actualizacion parcial', 'La venta se guardo, pero no se pudo refrescar todo el historial automaticamente.');
       }
 
+
+      return true;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error("? ERROR CRÍTICO EN ANULACIÓN:", error);
-      Swal.fire({
+      showOfflineAwareActionDialog({
         icon: 'error',
         title: 'Error de Anulación',
         text: error.message || 'Ocurrió un error desconocido. Revisa la consola (F12).',
@@ -16178,7 +16430,7 @@ export default function PartySupplyApp() {
   };
   
   const handleRestoreTransaction = async (tx) => {
-    if (blockIfOfflineReadonly('restaurar ventas')) return;
+    if (await blockIfOfflineReadonly('restaurar ventas', { type: "handleRestoreTransaction", args: [tx] })) return;
     if (tx?.orderId) {
       showNotification(
         'warning',
@@ -16187,7 +16439,7 @@ export default function PartySupplyApp() {
       );
       return;
     }
-    const result = await Swal.fire({
+    const result = await showOfflineAwareActionDialog({
       title: '¿Restaurar Venta?',
       text: 'Se volverá a registrar la venta en el sistema, ocupará su fecha original, se descontará el stock nuevamente y se le devolverán los puntos al socio. ¿Estás seguro?',
       icon: 'warning',
@@ -16205,11 +16457,11 @@ export default function PartySupplyApp() {
     const { stockIssues } = getSaleStockDeltaPreview(restoreStockDelta);
     
     if (stockIssues.length > 0) {
-      Swal.fire('Stock Insuficiente', `No hay stock suficiente actualmente para restaurar esta venta:\n\n${stockIssues.join('\n')}`, 'error');
+      showOfflineAwareActionDialog('Stock Insuficiente', `No hay stock suficiente actualmente para restaurar esta venta:\n\n${stockIssues.join('\n')}`, 'error');
       return;
     }
 
-    Swal.fire({ title: 'Restaurando...', text: 'Ajustando base de datos...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    showOfflineAwareActionDialog({ title: 'Restaurando...', text: 'Ajustando base de datos...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
     try {
       let clientId = null;
@@ -16230,7 +16482,8 @@ export default function PartySupplyApp() {
           const timeParts = (tx.time || tx.timestamp || '00:00').split(':');
           const origDate = new Date(fullYear, parseInt(month, 10) - 1, parseInt(day, 10), parseInt(timeParts[0], 10), parseInt(timeParts[1] || 0, 10), parseInt(timeParts[2] || 0, 10));
           origCreatedAt = origDate.toISOString();
-      } catch(e) { console.error("Error parsing date", e); }
+      } catch(e) {
+      if (offlineActionReplayRef.current) throw e; console.error("Error parsing date", e); }
 
       const salePayload = {
           total: tx.total,
@@ -16390,9 +16643,12 @@ export default function PartySupplyApp() {
       Swal.close();
       showNotification('success', 'Venta Restaurada', 'La venta vuelve a estar activa con su fecha original.');
 
+
+      return true;
     } catch (err) {
+      if (offlineActionReplayRef.current) throw err;
       console.error(err);
-      Swal.fire('Error', 'No se pudo restaurar la venta. Verifique su conexión y la consola.', 'error');
+      showOfflineAwareActionDialog('Error', 'No se pudo restaurar la venta. Verifique su conexión y la consola.', 'error');
     }
   };
 
@@ -16498,7 +16754,7 @@ export default function PartySupplyApp() {
     };
 
     try {
-      Swal.fire({ title: 'Cambiando la fecha...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      showOfflineAwareActionDialog({ title: 'Cambiando la fecha...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
       await changeSaleDateCloud({ saleId: originalTx.id, createdAt: saleDateLogChange.new });
 
       const finalTx = {
@@ -16548,9 +16804,12 @@ export default function PartySupplyApp() {
       setEditReason('');
       Swal.close();
       showNotification('success', 'Fecha cambiada', `La venta #${originalTx.id} quedó el ${finalTx.date} a las ${finalTx.time}.`);
+
+      return true;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error('Error cambiando la fecha de una venta de pedido:', error);
-      Swal.fire({
+      showOfflineAwareActionDialog({
         icon: 'error',
         title: 'No se pudo cambiar la fecha',
         text: error.message || 'Error desconocido guardando en la nube.',
@@ -16559,25 +16818,24 @@ export default function PartySupplyApp() {
     }
   };
 
-  const handleSaveEditedTransaction = async (e) => {
-    if (blockIfOfflineReadonly('editar ventas')) return;
+  const handleSaveEditedTransaction = async (e, queuedTransaction = editingTransaction, queuedReason = editReason) => {
     e?.preventDefault?.();
-    if (!editingTransaction) return;
+    if (await blockIfOfflineReadonly('editar ventas', { type: "handleSaveEditedTransaction", args: [null, queuedTransaction, queuedReason] })) return;
+    if (!queuedTransaction) return;
 
     const originalTx =
-      transactions.find((t) => String(t.id) === String(editingTransaction.id)) ||
-      editingTransaction;
+      transactions.find((t) => String(t.id) === String(queuedTransaction.id)) ||
+      queuedTransaction;
     if (originalTx?.orderId) {
       // De una venta de pedido solo se cambia la fecha; el resto lo maneja el pedido.
-      await handleSaveOrderSaleDate(originalTx);
-      return;
+      return await handleSaveOrderSaleDate(originalTx);
     }
-    const editedBaseTotal = getEditedTransactionTotal(editingTransaction.items, 'Efectivo');
-    const editedPaymentBreakdown = buildEditedTransactionPaymentBreakdown(editingTransaction, editedBaseTotal);
+    const editedBaseTotal = getEditedTransactionTotal(queuedTransaction.items, 'Efectivo');
+    const editedPaymentBreakdown = buildEditedTransactionPaymentBreakdown(queuedTransaction, editedBaseTotal);
     const editedPaymentTotals = getPaymentBreakdownTotals(editedPaymentBreakdown);
     const finalTotal = editedPaymentTotals.baseTotal > 0
       ? editedPaymentTotals.chargedTotal
-      : getEditedTransactionTotal(editingTransaction.items, editingTransaction.payment);
+      : getEditedTransactionTotal(queuedTransaction.items, queuedTransaction.payment);
 
     const safeCashReceived = editedPaymentTotals.cashReceivedTotal || 0;
     const safeCashChange = editedPaymentTotals.cashChangeTotal || 0;
@@ -16587,7 +16845,7 @@ export default function PartySupplyApp() {
       return;
     }
 
-    const saleDateChange = getSaleDateChange(parseTxDate(originalTx), editingTransaction.saleDateInput);
+    const saleDateChange = getSaleDateChange(parseTxDate(originalTx), queuedTransaction.saleDateInput);
     if (saleDateChange.error) {
       showNotification('warning', 'Fecha de la venta', saleDateChange.error);
       return;
@@ -16605,14 +16863,14 @@ export default function PartySupplyApp() {
     let saleDateSaved = false;
 
     try {
-      Swal.fire({ title: 'Guardando cambios...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      showOfflineAwareActionDialog({ title: 'Guardando cambios...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
       // 1. Detección de cambios básicos
       const changes = {};
       if (originalTx.total !== finalTotal) changes.total = { old: originalTx.total, new: finalTotal };
-      if (originalTx.payment !== editingTransaction.payment) changes.payment = { old: originalTx.payment, new: editingTransaction.payment };
-      if (Number(originalTx.installments || 0) !== Number(editingTransaction.installments || 0)) {
-        changes.installments = { old: Number(originalTx.installments || 0), new: Number(editingTransaction.installments || 0) };
+      if (originalTx.payment !== queuedTransaction.payment) changes.payment = { old: originalTx.payment, new: queuedTransaction.payment };
+      if (Number(originalTx.installments || 0) !== Number(queuedTransaction.installments || 0)) {
+        changes.installments = { old: Number(originalTx.installments || 0), new: Number(queuedTransaction.installments || 0) };
       }
       if (Number(originalTx.cashReceived || 0) !== safeCashReceived) {
         changes.cashReceived = { old: Number(originalTx.cashReceived || 0), new: safeCashReceived };
@@ -16623,7 +16881,7 @@ export default function PartySupplyApp() {
       if (saleDateLogChange) changes.createdAt = saleDateLogChange;
 
       // 2. Normalización absoluta de items
-      const finalItems = editingTransaction.items.map((i) => {
+      const finalItems = queuedTransaction.items.map((i) => {
         const normalizedItem = {
           ...clearSaleLineDerivedTotals(i),
           qty: Number(i.qty ?? i.quantity ?? 0),
@@ -16649,7 +16907,7 @@ export default function PartySupplyApp() {
 
       // [Cálculo de puntos]
       let pointsChange = null;
-      let clientObj = editingTransaction.client || null;
+      let clientObj = queuedTransaction.client || null;
       let cName = null; let cNum = null;
       const getMemberIdFromTx = (tx) => {
         if (tx?.client && typeof tx.client === 'object' && tx.client.id) return tx.client.id;
@@ -16661,7 +16919,7 @@ export default function PartySupplyApp() {
       const originalClientId = getMemberIdFromTx(originalTx);
       const nextClientId = clientObj && typeof clientObj === 'object' && clientObj.id ? clientObj.id : null;
       const nextPointsEarned = nextClientId ? Math.floor(finalTotal / 500) : 0;
-      const nextPointsSpent = nextClientId ? Number(editingTransaction.pointsSpent || 0) : 0;
+      const nextPointsSpent = nextClientId ? Number(queuedTransaction.pointsSpent || 0) : 0;
       const previousPointsEarned = Number(originalTx.pointsEarned || 0);
       const previousPointsSpent = Number(originalTx.pointsSpent || 0);
 
@@ -16691,9 +16949,9 @@ export default function PartySupplyApp() {
       
       const salePatch = {
         total: finalTotal,
-        payment_method: editingTransaction.payment,
+        payment_method: queuedTransaction.payment,
         payment_breakdown: editedPaymentBreakdown || null,
-        installments: editingTransaction.installments || 0,
+        installments: queuedTransaction.installments || 0,
         client_id: toOptionalDbId(nextClientId),
         points_earned: nextPointsEarned,
         points_spent: nextPointsSpent,
@@ -16702,7 +16960,7 @@ export default function PartySupplyApp() {
       };
 
       const newItemsPayload = await sanitizeSaleItemProductIds(finalItems.map(i => ({
-          sale_id: editingTransaction.id,
+          sale_id: queuedTransaction.id,
           product_id: getSaleItemDatabaseProductId(i),
           product_title: i.title,
           quantity: i.qty,
@@ -16738,13 +16996,13 @@ export default function PartySupplyApp() {
 
       // La fecha va primero: si falla, no se tocó nada de la venta.
       if (saleDateChange.changed) {
-        await changeSaleDateCloud({ saleId: editingTransaction.id, createdAt: saleDateLogChange.new });
+        await changeSaleDateCloud({ saleId: queuedTransaction.id, createdAt: saleDateLogChange.new });
         saleDateSaved = true;
       }
 
       let stockChanges = [];
       const transactionalEdit = await editSaleTransactionCloud({
-        saleId: editingTransaction.id,
+        saleId: queuedTransaction.id,
         salePatch,
         itemsPayload: newItemsPayload,
         stockDeltaByProduct,
@@ -16761,14 +17019,15 @@ export default function PartySupplyApp() {
         );
         void syncStockLifecycleForDeltas(stockDeltaByProduct, { trackDepletion: true });
       } else {
-        await updateWithSchemaFallback('sales', editingTransaction.id, salePatch, 'id');
+        await updateWithSchemaFallback('sales', queuedTransaction.id, salePatch, 'id');
 
-        const { error: delErr } = await supabase.from('sale_items').delete().eq('sale_id', editingTransaction.id);
+        const { error: delErr } = await supabase.from('sale_items').delete().eq('sale_id', queuedTransaction.id);
         if (delErr) throw new Error("Fallo limpiando base: " + delErr.message);
 
         try {
           await insertRowsWithSchemaFallback('sale_items', newItemsPayload);
         } catch (insertErr) {
+      if (offlineActionReplayRef.current) throw insertErr;
           throw new Error("Supabase rechazó los productos: " + insertErr.message);
         }
 
@@ -16804,7 +17063,7 @@ export default function PartySupplyApp() {
 
       // F. Sincronizar UI Inmediatamente
       const finalTx = {
-         ...editingTransaction,
+         ...queuedTransaction,
          total: finalTotal,
          paymentBreakdown: editedPaymentBreakdown,
          items: finalItems, 
@@ -16829,8 +17088,8 @@ export default function PartySupplyApp() {
       const currentTransactionsSnapshot = Array.isArray(dataStateRef.current.transactions)
         ? dataStateRef.current.transactions
         : [];
-      const nextTransactionsSnapshot = currentTransactionsSnapshot.some((t) => String(t.id) === String(editingTransaction.id))
-        ? currentTransactionsSnapshot.map((t) => (String(t.id) === String(editingTransaction.id) ? finalTx : t))
+      const nextTransactionsSnapshot = currentTransactionsSnapshot.some((t) => String(t.id) === String(queuedTransaction.id))
+        ? currentTransactionsSnapshot.map((t) => (String(t.id) === String(queuedTransaction.id) ? finalTx : t))
         : [finalTx, ...currentTransactionsSnapshot];
 
       rememberLocalTransactionOverride(finalTx);
@@ -16850,20 +17109,20 @@ export default function PartySupplyApp() {
 
       // G. Log
       const logDetails = {
-         transactionId: editingTransaction.id, client: cName, memberNumber: cNum,
+         transactionId: queuedTransaction.id, client: cName, memberNumber: cNum,
          total: finalTotal,
          previousTotal: Number(originalTx.total || 0),
          newTotal: finalTotal,
-         payment: editingTransaction.payment,
+         payment: queuedTransaction.payment,
          paymentBreakdown: editedPaymentBreakdown,
-         installments: editingTransaction.installments || 0,
+         installments: queuedTransaction.installments || 0,
          pointsEarned: nextPointsEarned,
          pointsSpent: nextPointsSpent,
          cashReceived: safeCashReceived,
          cashChange: safeCashChange,
          changes, productChanges, stockChanges, itemsSnapshot: finalItems, pointsChange
       };
-      addLog('Modificación Pedido', logDetails, editReason || 'Ajuste manual');
+      addLog('Modificación Pedido', logDetails, queuedReason || 'Ajuste manual');
 
       await lastLogWritePromiseRef.current;
 
@@ -16882,18 +17141,21 @@ export default function PartySupplyApp() {
       Swal.close();
       showNotification('success', 'Pedido Actualizado', 'Modificación exitosa.');
 
+
+      return true;
     } catch (error) {
+      if (offlineActionReplayRef.current) throw error;
       console.error("Error crítico al actualizar:", error);
       if (saleDateSaved) {
         // La fecha ya quedó cambiada en la base: se anota igual y se recarga.
         addLog('Modificación Pedido', {
-          transactionId: editingTransaction.id,
+          transactionId: queuedTransaction.id,
           total: Number(originalTx.total || 0),
           changes: { createdAt: saleDateLogChange },
         }, 'Cambio de fecha (el resto de la edición no se guardó)');
         void loadTransactionsCloudData({ force: true });
       }
-      Swal.fire({
+      showOfflineAwareActionDialog({
         icon: 'error',
         title: 'Error de Sincronización',
         text: `${error.message || 'Error desconocido guardando en la nube.'}${saleDateSaved ? ' La fecha de la venta sí se cambió.' : ''}`,
@@ -16906,7 +17168,7 @@ export default function PartySupplyApp() {
   // ? HANDLERS DE PREMIOS (Restaurados)
   // ==========================================
   const handleAddReward = async (rewardData) => {
-    if (blockIfOfflineReadonly('crear premios')) return;
+    if (await blockIfOfflineReadonly('crear premios', { type: "handleAddReward", args: [rewardData] })) return;
     try {
       const payload = {
         title: rewardData.title,
@@ -16924,14 +17186,17 @@ export default function PartySupplyApp() {
       setRewards([...rewards, newReward]);
       addLog('Nuevo Premio', { title: newReward.title, description: newReward.description, pointsCost: newReward.pointsCost, type: newReward.type, stock: newReward.stock }, 'Gestión Catálogo');
       showNotification('success', 'Premio Creado', 'Se ha añadido al catálogo.');
+
+      return true;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error(e);
       showNotification('error', 'Error', 'No se pudo crear el premio.');
     }
   };
 
   const handleUpdateReward = async (id, updatedData) => {
-    if (blockIfOfflineReadonly('editar premios')) return;
+    if (await blockIfOfflineReadonly('editar premios', { type: "handleUpdateReward", args: [id, updatedData] })) return;
     try {
       const payload = {
         title: updatedData.title,
@@ -16947,14 +17212,17 @@ export default function PartySupplyApp() {
       setRewards(rewards.map(r => r.id === id ? { ...r, ...updatedData } : r));
       addLog('Editar Premio', { title: updatedData.title, pointsCost: updatedData.pointsCost, type: updatedData.type, stock: updatedData.stock });
       showNotification('success', 'Premio Actualizado', 'Cambios guardados.');
+
+      return true;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error(e);
       showNotification('error', 'Error', 'No se pudo actualizar el premio.');
     }
   };
 
   const handleDeleteReward = async (id) => {
-    if (blockIfOfflineReadonly('eliminar premios')) return;
+    if (await blockIfOfflineReadonly('eliminar premios', { type: "handleDeleteReward", args: [id] })) return;
     try {
       if (isLocalDemoMode()) {
         localDemoUpdateRow('rewards', id, { is_active: false });
@@ -16966,7 +17234,10 @@ export default function PartySupplyApp() {
       setRewards(rewards.filter(r => r.id !== id));
       addLog('Eliminar Premio', { id, title: deletedReward?.title || 'Premio eliminado', softDeleted: true });
       showNotification('success', 'Premio Eliminado', 'Se quitó del catálogo.');
+
+      return true;
     } catch (e) {
+      if (offlineActionReplayRef.current) throw e;
       console.error(e);
       showNotification('error', 'Error', 'No se pudo eliminar el premio.');
     }
@@ -17036,6 +17307,8 @@ export default function PartySupplyApp() {
   const isCoreHydratingForSession =
     Boolean(currentUser) &&
     moduleLoadState.core.status === 'loading' &&
+    !isOfflineReadOnly &&
+    !isBrowserOffline() &&
     inventory.length === 0 &&
     categories.length === 0 &&
     members.length === 0 &&
@@ -17166,6 +17439,200 @@ export default function PartySupplyApp() {
     orders.length === 0
       ? 'Sin conexion y sin snapshot local de metricas. Volve a intentarlo con internet.'
       : '';
+
+  const getOfflineActionPermission = (entry) => entry.type === 'handleConfirmRefund' && entry.args[1]?.status === 'voided'
+    ? 'history.deleteSale' : OFFLINE_ACTION_CATALOG[entry.type]?.permission;
+  const canConfirmOfflineAction = (entry) => {
+    const user = currentUserRef.current;
+    return Boolean(user && (String(user.id) === String(entry.actor.userId) || hasOwnerAccess(user))
+      && hasPermission(user, getOfflineActionPermission(entry)));
+  };
+  const saveOfflineCommand = async ({ type, args, targets: extraTargets = [] }) => {
+    const config = OFFLINE_ACTION_CATALOG[type];
+    const actor = getActorContext();
+    if (!config || !hasPermission(currentUserRef.current, getOfflineActionPermission({ type, args }))) throw new Error('No tenés permiso para guardar esta acción.');
+    const sources = { products: inventory, clients: members, agenda_contacts: agendaContacts, budgets, orders, expenses, offers, rewards, sales: transactions, logs: [...dailyLogs, ...historyLogs] };
+    const targets = [...extraTargets];
+    if (config.table) {
+      const ids = [...new Set(config.ids(args).filter((id) => id !== null && id !== undefined).map(String))];
+      if (!ids.length) throw new Error('No se identificaron los registros del cambio. Conservá el formulario y reintentá con conexión.');
+      for (const id of ids) {
+        const record = config.table === 'register_state'
+          ? { isRegisterClosed, openingBalance, closingTime, registerOpenedAt }
+          : sources[config.table]?.find((item) => String(item.id) === id);
+        if (!record) throw new Error('Faltan datos locales del registro. Abrilo con conexión antes de editarlo sin internet.');
+        targets.push({ table: config.table, id, label: record.title || record.name || record.description || config.label, value: projectOfflineTarget(config.table, record) });
+      }
+    }
+    if (['handleAddCategoryFromView', 'handleEditCategory', 'handleDeleteCategoryFromView'].includes(type)) {
+      targets.push({ table: 'categories', id: 'all', label: 'Categorías', value: [...categories].sort() });
+      if (type !== 'handleAddCategoryFromView') inventory.filter((item) => (item.categories || []).includes(args[0])).forEach((record) => targets.push({ table: 'products', id: String(record.id), label: record.title, value: projectOfflineTarget('products', record) }));
+    }
+    // Clone before accepting, and reject non-serializable form objects instead
+    // of losing files or callbacks silently during JSON serialization.
+    const frozenArgs = JSON.parse(JSON.stringify(args, (_key, value) => {
+      if (typeof value === 'function' || (typeof Blob !== 'undefined' && value instanceof Blob)) throw new Error('Este formulario incluye un archivo que necesita conexión. Guardá el archivo en la PC y reintentá con internet.');
+      return value;
+    }));
+    return offlineActions.exclusive((queue) => queue.enqueue({
+      type, args: frozenArgs, label: config.label, actor, targets,
+      summary: getOfflineActionSummary(type, frozenArgs),
+      dedupeKey: type === 'offlineSale' ? `offline-sale:${frozenArgs[0].cartId}` : offlineValueFingerprint({ type, args: frozenArgs, actor: actor.userId, targets }),
+    }));
+  };
+  const loadOfflineTargetFromCloud = async (target) => {
+    if (target.table === 'categories') {
+      const { data, error } = await supabase.from('categories').select('name');
+      if (error) throw error;
+      return (data || []).map((row) => row.name).sort();
+    }
+    if (target.table === 'sales') {
+      const payload = await fetchTransactionsCloudPayloadByIds([target.id]);
+      if (!payload.hasCloudConnection) throw payload.error || new Error('No se pudo verificar la venta.');
+      return projectOfflineTarget('sales', payload.transactions?.find((row) => String(row.id) === String(target.id)));
+    }
+    const maps = { products: mapInventoryRecords, clients: mapMemberRecords, agenda_contacts: mapAgendaContactRecords, budgets: mapBudgetRecords, orders: mapOrderRecords, expenses: mapExpenseRecords, offers: mapOfferRecords, rewards: mapRewardRecords, logs: mapLogRecords };
+    const selectKey = target.table === 'agenda_contacts' ? 'agendaContacts' : target.table;
+    const result = await runSelectWithSchemaFallback(
+      (columns) => supabase.from(target.table).select(columns).eq('id', target.id),
+      CLOUD_SELECTS[selectKey] || '*',
+    );
+    if (result.error) throw result.error;
+    const row = result.data?.[0];
+    const record = row ? target.table === 'register_state' ? mapRegisterState(row) : maps[target.table]?.([row])[0] : null;
+    return projectOfflineTarget(target.table, record);
+  };
+  const handleConfirmOfflineAction = async (id) => {
+    if (offlineActionConfirmationRef.current) return;
+    offlineActionConfirmationRef.current = true;
+    try {
+      if (!await ensureCloudSessionForReconnect()) return;
+      if (!await requireSecureSessionForCloudWrite()) return;
+      await offlineActions.exclusive(async (queue) => {
+        const saved = queue.read().find((entry) => entry.id === id);
+        if (!saved) throw new Error('No se encontró la acción.');
+        if (saved.type === 'executeRegisterClose' && queue.read().some((entry) => entry.id !== id && isOfflineActionOpen(entry))) throw new Error('Resolvé los demás pendientes antes de cerrar la caja.');
+        if (saved.type === 'offlineSale' && queue.read().slice(0, queue.read().findIndex((entry) => entry.id === id)).some((entry) => entry.type === 'offlineSale' && isOfflineActionOpen(entry))) throw new Error('Confirmá primero las ventas anteriores de la bandeja para conservar el orden de los cobros.');
+        const result = await confirmOfflineAction({
+          queue, id, retrySafe: saved.type === 'offlineSale',
+          isOnline: () => !isBrowserOffline() && !isOfflineReadOnly,
+          authorize: async (entry) => { if (!canConfirmOfflineAction(entry)) throw new Error('Tu usuario no tiene permiso para confirmar esta acción.'); },
+          loadTarget: loadOfflineTargetFromCloud,
+          apply: async (entry) => {
+            if (!canConfirmOfflineAction(entry)) throw new Error('El usuario cambió. Volvé a ingresar antes de confirmar.');
+            offlineActionReplayRef.current = { id: entry.id, confirmed: false };
+            try {
+              if (entry.type === 'offlineSale') {
+                const saleJournal = createPosCheckoutJournal({ storage: window.localStorage });
+                if (isRegisterClosed && !saleJournal.get(entry.args[0].cartId)?.saleId) throw new Error('Abrí la caja antes de confirmar la venta.');
+                const pending = Object.values(saleJournal.read()).find((attempt) => attempt.status !== 'completed' && attempt.cartId !== entry.args[0].cartId);
+                if (pending) throw new Error('Verificá primero el cobro pendiente en Punto de Venta.');
+                try { await finishDurablePosCheckout(entry.args[0]); }
+                finally {
+                  try { setPosCheckoutAttempts(saleJournal.read()); }
+                  catch (error) { recordDiagnosticError('checkout:offline-journal', error); }
+                }
+              } else {
+                if (entry.type === 'executeRegisterClose') {
+                  const loaded = await loadDashboardCloudData({ force: true, full: true, requireCloud: true });
+                  if (!loaded) throw new Error('No se pudieron actualizar las ventas y gastos para el cierre.');
+                }
+                const handlers = {
+      handleCreateFixedProduct,
+      handleAddItem,
+      saveEditProduct,
+      handleRetireDeletedProduct,
+      confirmDeleteProduct,
+      handleDuplicateProduct,
+      handleBulkSaveSingle,
+      handleBulkSaveMasive,
+      handleBatchUpdateProductCategory,
+      handleCreateExcelProducts,
+      handleExcelProductImport,
+      handleUndoExcelProductImport,
+      handleApplyProductImageImports,
+      handleRestoreProductImageVersion,
+      handleSaveSupplierPriceChecks,
+      handleApplySupplierPriceUpdates,
+      handleUndoSupplierPriceUpdates,
+      handleUpdateCasaAlbertoLinks,
+      handleCreateBudget,
+      handleUpdateBudget,
+      handleDeleteBudget,
+      handleConvertBudgetToOrder,
+      handleUpdateOrder,
+      handleUpdateOrderDeposit,
+      handleRegisterOrderPayment,
+      handleMarkOrderRetired,
+      handleCancelOrder,
+      handleDeleteOrder,
+      handleAddExpense,
+      handleUpdateExpense,
+      handleAddMemberWithLog,
+      handleUpdateMemberWithLog,
+      handleDeleteMemberWithLog,
+      handleCreateAgendaContact,
+      handleUpdateAgendaContact,
+      handleDeleteAgendaContact,
+      handleAddOffer,
+      handleUpdateOffer,
+      handleDeleteOffer,
+      handleAddReward,
+      handleUpdateReward,
+      handleDeleteReward,
+      handleAddCategoryFromView,
+      handleDeleteCategoryFromView,
+      handleEditCategory,
+      handleSaveOpeningBalance,
+      handleSaveClosingTime,
+      executeRegisterClose,
+      handleConfirmRefund,
+      handleRestoreTransaction,
+      handleSaveEditedTransaction,
+      handleUpdateLogNote
+                };
+                if (!handlers[entry.type]) throw new Error('Esta versión no reconoce la acción. El pendiente se conserva.');
+                const result = await handlers[entry.type](...entry.args);
+                if (result === false || result?.success === false || result?.failed?.length || result?.failedRows?.length) throw new Error('No se pudo aplicar toda la acción. Revisá los resultados antes de repetirla.');
+                const confirmed = offlineActionReplayRef.current.confirmed || result === true || result?.id || result?.success === true || result?.created?.length || result?.appliedRowIds?.length || result?.undoneRowIds?.length || result?.appliedIds?.length || result?.products?.length;
+                if (!confirmed) throw new Error('La acción no confirmó cambios. Revisá el registro del negocio antes de repetirla.');
+              }
+            } finally { offlineActionReplayRef.current = null; }
+          },
+        });
+        if (result.status === 'applied') {
+          void addLog('Acción sin conexión confirmada', { offlineActionId: result.id, action: result.label, savedAt: result.createdAt, originalActor: result.actor, confirmedBy: getActorContext() }, result.summary).catch((error) => console.warn('La acción fue aplicada; falta guardar su confirmación en el registro:', error));
+          ['core', 'transactions', 'dashboard', 'history', 'orders', 'reports', 'metrics'].forEach((moduleKey) => setModuleState(moduleKey, { dirty: true }));
+          // Refresh failure cannot turn a confirmed write back into a retry.
+          void loadModuleForTab(activeTabRef.current, { force: true }).catch((error) => console.warn('El cambio fue aplicado; falta actualizar la vista:', error));
+        }
+      });
+    } catch (error) {
+      showNotification('warning', 'El pendiente se conserva', error.message || 'No se pudo confirmar la acción.');
+    } finally { offlineActionConfirmationRef.current = false; }
+  };
+  const handleDiscardOfflineAction = async (id) => {
+    try {
+      await offlineActions.exclusive((queue) => {
+        const entry = queue.read().find((item) => item.id === id);
+        if (!entry || !canConfirmOfflineAction(entry)) throw new Error('No tenés permiso para descartar esta acción.');
+        if (entry.type === 'offlineSale') {
+          const attempt = createPosCheckoutJournal({ storage: window.localStorage }).get(entry.args[0].cartId);
+          if (attempt?.submitted && attempt.status !== 'completed') throw new Error('La venta ya se intentó enviar. Verificá el cobro antes de descartarlo.');
+        }
+        queue.discard(id);
+      });
+    } catch (error) { showNotification('warning', 'No se pudo descartar', error.message); }
+  };
+  const pendingOfflineActionCount = offlineActions.entries.filter(isOfflineActionOpen).length;
+  useEffect(() => {
+    if (isOfflineReadOnly) wasOfflineForActionsRef.current = true;
+    else if (currentUser && wasOfflineForActionsRef.current && pendingOfflineActionCount > 0) {
+      wasOfflineForActionsRef.current = false;
+      setOfflineActionsOpen(true);
+    }
+  }, [currentUser, isOfflineReadOnly, pendingOfflineActionCount, setOfflineActionsOpen]);
+
   const cloudStatusMeta = (() => {
     if (isLocalDemoMode()) {
       return {
@@ -17187,18 +17654,7 @@ export default function PartySupplyApp() {
       moduleLoadState.reports.status === 'loading' ||
       moduleLoadState.metrics.status === 'loading';
 
-    if (isAuthBootLoading || isCloudLoading || isAnyModuleLoading || isReconnectAttempting) {
-      return {
-        shellClass: 'is-loading',
-        iconClass: '',
-        dotClass: '',
-        title: 'Conectando',
-        detail: isReconnectAttempting ? 'Recuperando conexión...' : 'Actualizando datos...',
-        icon: 'loading',
-      };
-    }
-
-    if (isOfflineReadOnly) {
+    if ((isOfflineReadOnly || isBrowserOffline()) && !isReconnectAttempting) {
       return {
         shellClass: 'is-offline',
         iconClass: '',
@@ -17208,6 +17664,17 @@ export default function PartySupplyApp() {
           ? `Copia guardada: ${formatDateAR(offlineSnapshotAt)}`
           : 'Mostrando una copia guardada.',
         icon: 'offline',
+      };
+    }
+
+    if (isAuthBootLoading || isCloudLoading || isAnyModuleLoading || isReconnectAttempting) {
+      return {
+        shellClass: 'is-loading',
+        iconClass: '',
+        dotClass: '',
+        title: 'Conectando',
+        detail: isReconnectAttempting ? 'Recuperando conexión...' : 'Actualizando datos...',
+        icon: 'loading',
       };
     }
 
@@ -17253,7 +17720,7 @@ export default function PartySupplyApp() {
     'user-management': 'Gestión de usuarios',
   };
 
-  if (!currentUser && (isAuthBootLoading || isCloudLoading)) return <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-100"><RefreshCw className="animate-spin text-fuchsia-600 mb-4" size={48} /><h2 className="text-xl font-bold">Cargando Nube...</h2></div>;
+  if (!currentUser && (isAuthBootLoading || (isCloudLoading && !isOfflineReadOnly))) return <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-100"><RefreshCw className="animate-spin text-fuchsia-600 mb-4" size={48} /><h2 className="text-xl font-bold">Cargando Nube...</h2></div>;
 
   if (!currentUser) {
     if (loginStep === 'password') {
@@ -17497,6 +17964,8 @@ export default function PartySupplyApp() {
               )}
             </div>
             <div className="app-topbar-tools flex shrink-0 items-center gap-3">
+              {!isLocalDemoMode() && <button type="button" onClick={() => offlineActions.setOpen(true)} className={`app-topbar-action ${pendingOfflineActionCount ? 'text-amber-600' : ''}`} title="Revisar acciones guardadas en esta PC"><Clock size={13} /><span>Pendientes{pendingOfflineActionCount ? ` (${pendingOfflineActionCount})` : ''}</span>{offlineActions.error && <AlertTriangle size={13} />}</button>}
+
               {imageImportTask && (
                 <div className="relative">
                   <button
@@ -17737,6 +18206,7 @@ export default function PartySupplyApp() {
           </header>
           <AppWorkspaceStatus
             offline={isOfflineReadOnly}
+            canQueueOfflineActions={!isLocalDemoMode()}
             offlineDetail={`Desde ${formatDateAR(offlineNoticeStartedAt)} ${formatTimeAR(offlineNoticeStartedAt)} · ${offlineNoticeElapsed}`}
             demo={isLocalDemoMode()}
             test={isTestActive}
@@ -17825,6 +18295,7 @@ export default function PartySupplyApp() {
                   contacts={agendaContacts}
                   currentUser={currentUser}
                   isOfflineReadOnly={isOfflineReadOnly}
+                  canQueueOfflineActions={!isLocalDemoMode()}
                   onCreateContact={handleCreateAgendaContact}
                   onUpdateContact={handleUpdateAgendaContact}
                   onDeleteContact={handleDeleteAgendaContact}
@@ -17984,6 +18455,7 @@ export default function PartySupplyApp() {
       {/* --- MODALES NORMALES DE LA APP (NO SE IMPRIMEN) --- */}
       <div className="print:hidden">
         <Suspense fallback={null}>
+          {offlineActions.open && <OfflineActionsPanel entries={offlineActions.entries.filter((entry) => String(entry.actor.userId) === String(currentUser.id) || hasOwnerAccess(currentUser))} error={offlineActions.error} offline={isOfflineReadOnly || isBrowserOffline()} busy={offlineActions.busy} onClose={() => offlineActions.setOpen(false)} onConfirm={handleConfirmOfflineAction} onDiscard={handleDiscardOfflineAction} canConfirm={canConfirmOfflineAction} onReconnect={handleReconnectCloud} reconnecting={isReconnectAttempting} />}
           {notification.isOpen && <NotificationModal isOpen onClose={closeNotification} type={notification.type} title={notification.title} message={notification.message} />}
           {isOpeningBalanceModalOpen && <OpeningBalanceModal isOpen onClose={() => setIsOpeningBalanceModalOpen(false)} tempOpeningBalance={tempOpeningBalance} setTempOpeningBalance={setTempOpeningBalance} tempClosingTime={tempClosingTime} setTempClosingTime={setTempClosingTime} onSave={handleSaveOpeningBalance} />}
           {isClosingTimeModalOpen && <ClosingTimeModal isOpen onClose={() => setIsClosingTimeModalOpen(false)} closingTime={closingTime} setClosingTime={setClosingTime} onSave={handleSaveClosingTime} />}

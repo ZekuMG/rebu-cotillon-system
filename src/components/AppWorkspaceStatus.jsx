@@ -1,11 +1,11 @@
 import React from 'react';
 import { AlertTriangle, CheckCircle2, RefreshCw, WifiOff } from 'lucide-react';
 
-export default function AppWorkspaceStatus({ offline, offlineDetail, demo, test, connection, reconnecting, onReconnect, onCopyDiagnostic }) {
+export default function AppWorkspaceStatus({ offline, offlineDetail, demo, test, connection, reconnecting, onReconnect, onCopyDiagnostic, canQueueOfflineActions = false }) {
   const tone = offline ? 'danger' : test ? 'warning' : demo ? 'demo' : 'neutral';
   const Icon = offline ? WifiOff : test ? AlertTriangle : CheckCircle2;
-  const title = offline ? 'Modo local activo - solo lectura' : test ? 'Compra de prueba' : demo ? 'Modo demo local' : connection.title;
-  const detail = offline ? 'No se puede cobrar ni guardar cambios.'
+  const title = offline ? (canQueueOfflineActions ? 'Sin conexión · acciones pendientes en esta PC' : 'Modo local activo - solo lectura') : test ? 'Compra de prueba' : demo ? 'Modo demo local' : connection.title;
+  const detail = offline ? (canQueueOfflineActions ? 'Los cambios se guardan para revisar y confirmar al reconectar.' : 'No se puede cobrar ni guardar cambios.')
     : test ? 'Esta operación no se contabiliza en los resultados.'
       : demo ? 'No se lee ni se escribe en Supabase. Para salir, abrí la app con ?demo=0.' : connection.detail;
   return (

@@ -60,6 +60,20 @@ Do not automatically backfill the complete dashboard when entering the view or s
 
 If offline mode has no dashboard snapshot and no local dashboard data, `dashboardOfflineEmptyMessage` is passed to `DashboardView`.
 
+### Offline actions awaiting confirmation
+
+Offline snapshots remain copies of confirmed cloud data. Business commands saved during an outage live separately in the durable `rebu_offline_actions_v1` journal (`src/utils/offlineActionQueue.js`); they do not enter dashboard figures until explicitly confirmed. `src/utils/offlineActionCatalog.js` declares supported commands, permissions, and original-record projections. `App.jsx` captures immutable form inputs through `blockIfOfflineReadonly`, and `OfflineActionsPanel` exposes review, confirmation, discard, and reconnect. Reconnection only refreshes cloud data and opens review; it must never replay the queue automatically.
+
+Confirmation rechecks the current user's permission and compares original records against fresh cloud reads. Conflicts remain visible. Generic commands with uncertain results enter `review` and cannot be submitted again from the journal. Offline sale requests reuse the existing idempotent POS checkout journal and operation key; a retry preserves the original items and amount. Pending sales reserve stock and carry forward member points/coupon consumption locally, but become registered sales only when confirmed. Register closing is blocked until other pending actions are resolved.
+
+Supported command handlers must explicitly return a successful result after the write completes; displaying a notification is not a persistence acknowledgement. Form callbacks must cancel submission synchronously before awaiting the offline guard. Recovering an already-approved offline sale from the POS must also settle its matching queue entry, using the original operation key. Another window must display an active confirmation as busy and must not recover it as an interrupted operation while its Web Lock is held.
+
+Discard member sales in reverse capture order: a later pending sale can contain points and coupon expectations derived from an earlier one. The queue rejects discarding the earlier request until the member's later requests are resolved or discarded; guest sales and other members remain independent.
+
+Readiness boundaries: the record comparison above is a client-side preflight, not an atomic compare-and-set for subsequent ordinary REST updates (`updateWithSchemaFallback` currently filters by record ID). Cross-PC changes between that read and the write still require server-side hardening. Offline sale requests currently do not preserve a register-cycle identifier, and the sale RPC in `20261030030809_pos_sale_user_selection.sql` assigns the server's confirmation time. Overnight confirmation and a register closed/reopened by another PC need an explicit policy and server verification. Pending actions are local to the app's profile and do not yet have an independent export/restore backup. Browser fixtures do not establish installed Electron or production database behavior.
+
+Never compact or evict pending actions with snapshot-cache cleanup. Queue writes must succeed before accepting an action or sending its confirmation. Run `node --test tests/offline-action-queue.test.js tests/offline-form-submission.test.js tests/pos-checkout-recovery.test.js` and, against the development server on port 5174, `python scripts/offline-actions-smoke.py` plus `python scripts/offline-actions-qa.py`. Browser checks intercept remote requests with fixtures and do not write to the live database. The extended checks cover a real product form, ambiguous expense writes, interrupted confirmation, rapid confirmation, concurrent windows, quota failures, corrupt journals, permission changes, and pending stock reservations.
+
 ## Active Dashboard State
 
 `DashboardView` manages:
@@ -360,6 +374,10 @@ Avoid turning dashboard widgets into generic oversized marketing cards. Keep den
 - Keep Realtime reconciliation ID-based. Do not depend on `created_at` to detect UPDATE or DELETE events.
 - Preserve targeted sale refreshes and the trailing-batch behavior in `createRealtimeIdBatcher`; they prevent dropped events during bursts.
 - Treat Realtime as an invalidation/update signal, not as the only source of truth. Recovery must retain a forced REST catch-up path.
+- Browser offline events must pause/remove the Realtime channel and abort cloud reads immediately. Recreate one fresh channel on reconnect; let the SDK own online retry backoff. Preserve the live cart and cached data instead of rehydrating every snapshot on each disconnect.
+- Await channel removal and the SDK's pending disconnect before replacing the same topic, sharing cleanup across StrictMode effect lifetimes. Reconciliation must pass `forceCore: true`; a fresh cache alone cannot restore cloud connectivity.
+- Cloud/module loading indicators must yield to offline mode. Reset transient Realtime source loading on disconnect, and never report an interrupted manual refresh as successful.
+- Run `python scripts/offline-loading-qa.py` against the local Vite server to cover cold offline startup, live disconnect, interrupted HTTP reads, Wi-Fi without WAN, preservation of a newer live cart, and one fresh subscription on recovery without automatic action approval.
 - Preserve the annual full-transaction reload path from dashboard `year` filter unless another complete-data strategy replaces it.
 - Preserve test-record filtering before calculations.
 - If adding a new widget, update default order, normalization, layout persistence, and `renderWidget`.

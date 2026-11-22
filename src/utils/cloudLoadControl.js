@@ -6,6 +6,11 @@ const createTimeoutError = (label, timeoutMs) => {
   return error;
 };
 
+const createOfflineLoadError = () => Object.assign(
+  new Error('Sin conexión. Se conservan los datos locales.'),
+  { code: 'REBU_OFFLINE' },
+);
+
 const waitFor = (delayMs, setTimeoutFn) =>
   new Promise((resolve) => {
     setTimeoutFn(resolve, delayMs);
@@ -233,6 +238,7 @@ export const fetchCloudPayloadWithRetries = async ({
   isRecoverableError = () => false,
   isOffline = () => false,
   createAbortController = () => new AbortController(),
+  offlineEventTarget = typeof window === 'undefined' ? null : window,
   setTimeoutFn = globalThis.setTimeout.bind(globalThis),
   clearTimeoutFn = globalThis.clearTimeout.bind(globalThis),
 } = {}) => {
@@ -240,50 +246,71 @@ export const fetchCloudPayloadWithRetries = async ({
     throw new TypeError('fetchPayload debe ser una funcion.');
   }
 
-  let lastPayload = null;
-  let lastError = null;
+  if (isOffline()) throw createOfflineLoadError();
+  let activeController = null;
+  let rejectOffline;
+  const offlinePromise = new Promise((_, reject) => { rejectOffline = reject; });
+  const handleOffline = () => {
+    rejectOffline(createOfflineLoadError());
+    activeController?.abort();
+  };
+  offlineEventTarget?.addEventListener('offline', handleOffline);
 
-  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
-    const controller = createAbortController();
-    const attemptLabel = attempt === 0 ? label : `${label} (reintento ${attempt})`;
-    let timeoutId = null;
+  try {
+    let lastPayload = null;
+    let lastError = null;
 
-    try {
-      const timeoutPromise = new Promise((_, reject) => {
-        timeoutId = setTimeoutFn(() => {
-          controller.abort();
-          reject(createTimeoutError(attemptLabel, timeoutMs));
-        }, timeoutMs);
-      });
-      const payload = await Promise.race([
-        Promise.resolve().then(() => fetchPayload({ signal: controller.signal, attempt })),
-        timeoutPromise,
-      ]);
-      lastPayload = payload;
+    for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+      if (isOffline()) throw createOfflineLoadError();
+      const controller = createAbortController();
+      activeController = controller;
+      const attemptLabel = attempt === 0 ? label : `${label} (reintento ${attempt})`;
+      let timeoutId = null;
 
-      if (!shouldRetryPayload(payload) || attempt === retryCount || isOffline()) {
-        return payload;
+      try {
+        const timeoutPromise = new Promise((_, reject) => {
+          timeoutId = setTimeoutFn(() => {
+            controller.abort();
+            reject(createTimeoutError(attemptLabel, timeoutMs));
+          }, timeoutMs);
+        });
+        const payload = await Promise.race([
+          Promise.resolve().then(() => {
+            if (controller.signal.aborted || isOffline()) throw createOfflineLoadError();
+            return fetchPayload({ signal: controller.signal, attempt });
+          }),
+          timeoutPromise,
+          offlinePromise,
+        ]);
+        lastPayload = payload;
+
+        if (!shouldRetryPayload(payload) || attempt === retryCount || isOffline()) {
+          return payload;
+        }
+      } catch (error) {
+        lastError = error;
+
+        // A timed-out request is already aborted. Retrying it immediately would
+        // recreate the same expensive query and delay the local fallback.
+        if (
+          error?.code === 'REBU_TIMEOUT' ||
+          error?.code === 'REBU_OFFLINE' ||
+          attempt === retryCount ||
+          isOffline() ||
+          !isRecoverableError(error)
+        ) {
+          throw error;
+        }
+      } finally {
+        if (timeoutId !== null) clearTimeoutFn(timeoutId);
       }
-    } catch (error) {
-      lastError = error;
 
-      // A timed-out request is already aborted. Retrying it immediately would
-      // recreate the same expensive query and delay the local fallback.
-      if (
-        error?.code === 'REBU_TIMEOUT' ||
-        attempt === retryCount ||
-        isOffline() ||
-        !isRecoverableError(error)
-      ) {
-        throw error;
-      }
-    } finally {
-      if (timeoutId !== null) clearTimeoutFn(timeoutId);
+      await Promise.race([waitFor(retryDelayMs, setTimeoutFn), offlinePromise]);
     }
 
-    await waitFor(retryDelayMs, setTimeoutFn);
+    if (lastPayload) return lastPayload;
+    throw lastError || new Error(`${label} no pudo conectar con Supabase.`);
+  } finally {
+    offlineEventTarget?.removeEventListener('offline', handleOffline);
   }
-
-  if (lastPayload) return lastPayload;
-  throw lastError || new Error(`${label} no pudo conectar con Supabase.`);
 };

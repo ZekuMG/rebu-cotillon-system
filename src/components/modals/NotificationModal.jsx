@@ -44,8 +44,8 @@ export const NotificationModal = ({ isOpen, onClose, type, title, message }) => 
   const style = NOTIFICATION_STYLES[type] || NOTIFICATION_STYLES.info;
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[100] p-4 backdrop-blur-[2px] animate-in fade-in duration-200">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden scale-100 transform transition-all">
+    <div data-rebu-notification className="fixed inset-0 bg-black/40 flex items-center justify-center z-[100] p-4 backdrop-blur-[2px] animate-in fade-in duration-200">
+      <div role="alertdialog" aria-modal="true" aria-labelledby="rebu-notification-title" aria-describedby="rebu-notification-message" className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden scale-100 transform transition-all">
         <div className={`h-2 w-full ${style.bgHeader}`}></div>
         
         <div className="p-6 flex flex-col items-center text-center">
@@ -53,15 +53,16 @@ export const NotificationModal = ({ isOpen, onClose, type, title, message }) => 
             {style.icon}
           </div>
           
-          <h3 className="text-lg font-bold text-slate-800 mb-2 leading-tight">
+          <h3 id="rebu-notification-title" className="text-lg font-bold text-slate-800 mb-2 leading-tight">
             {title}
           </h3>
           
-          <p className="text-sm text-slate-500 mb-6 leading-relaxed">
+          <p id="rebu-notification-message" className="text-sm text-slate-500 mb-6 leading-relaxed">
             {message}
           </p>
 
           <button 
+            autoFocus
             onClick={onClose}
             className={`w-full py-2.5 rounded-lg text-white font-bold text-sm shadow-md transition-all active:scale-95 ${style.btnClass}`}
           >

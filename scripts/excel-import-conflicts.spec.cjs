@@ -85,7 +85,7 @@ test('importador identifica, navega y consolida filas del mismo producto', async
   await page.getByRole('button', { name: 'Deshacer', exact: true }).click();
   await expect(notice).toBeVisible();
   await expect(notice).toContainText('Fila 81: Compra de globos dos');
-  if (await notificationClose.isVisible()) await notificationClose.click();
+  await page.getByRole('alertdialog', { name: 'Importacion deshecha' }).getByRole('button', { name: 'Entendido' }).click();
   await notice.getByRole('button', { name: 'Consolidar compras' }).click();
   await preview.getByLabel('Costo final').selectOption({ index: 2 });
   await preview.getByLabel('Venta final').selectOption({ index: 3 });

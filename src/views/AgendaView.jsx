@@ -99,6 +99,7 @@ function AgendaFormModal({
   onSubmit,
   submitPending = false,
   isOfflineReadOnly = false,
+  canQueueOfflineActions = false,
 }) {
   if (!isOpen) return null;
 
@@ -241,7 +242,7 @@ function AgendaFormModal({
 
         <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-6 py-4 shrink-0 bg-white">
           <p className="text-xs font-semibold text-slate-500">
-            {isOfflineReadOnly ? 'Modo solo lectura activo.' : 'Los cambios impactan en Supabase y en el snapshot offline.'}
+            {isOfflineReadOnly ? (canQueueOfflineActions ? 'Se guardará en Pendientes para confirmar con conexión.' : 'Modo solo lectura activo.') : 'Los cambios impactan en Supabase y en el snapshot offline.'}
           </p>
           <div className="flex items-center gap-2">
             <button
@@ -255,7 +256,7 @@ function AgendaFormModal({
               type="button"
               onAction={onSubmit}
               pending={submitPending}
-              disabled={isOfflineReadOnly}
+              disabled={isOfflineReadOnly && !canQueueOfflineActions}
               loadingLabel={isEdit ? 'Guardando...' : 'Creando...'}
               className="inline-flex items-center gap-2 rounded-[14px] border border-emerald-200 bg-emerald-600 px-4 py-2 text-sm font-black text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -273,6 +274,7 @@ export default function AgendaView({
   contacts = [],
   currentUser,
   isOfflineReadOnly = false,
+  canQueueOfflineActions = false,
   onCreateContact,
   onUpdateContact,
   onDeleteContact,
@@ -287,9 +289,9 @@ export default function AgendaView({
   const [modalMode, setModalMode] = useState('create');
   const [formData, setFormData] = useState(DEFAULT_FORM);
 
-  const canCreateAgenda = hasPermission(currentUser, 'agenda.create') && !isOfflineReadOnly;
-  const canEditAgenda = hasPermission(currentUser, 'agenda.edit') && !isOfflineReadOnly;
-  const canDeleteAgenda = hasPermission(currentUser, 'agenda.delete') && !isOfflineReadOnly;
+  const canCreateAgenda = hasPermission(currentUser, 'agenda.create') && (!isOfflineReadOnly || canQueueOfflineActions);
+  const canEditAgenda = hasPermission(currentUser, 'agenda.edit') && (!isOfflineReadOnly || canQueueOfflineActions);
+  const canDeleteAgenda = hasPermission(currentUser, 'agenda.delete') && (!isOfflineReadOnly || canQueueOfflineActions);
 
   const sortedContacts = useMemo(() => {
     const normalizedSearch = normalizeText(searchTerm);
@@ -740,6 +742,7 @@ export default function AgendaView({
         onSubmit={() => runAction(`agenda-form:${modalMode}:${selectedContact?.id || 'create'}`, handleSubmit)}
         submitPending={isPending(`agenda-form:${modalMode}:${selectedContact?.id || 'create'}`)}
         isOfflineReadOnly={isOfflineReadOnly}
+        canQueueOfflineActions={canQueueOfflineActions}
       />
     </div>
   );
